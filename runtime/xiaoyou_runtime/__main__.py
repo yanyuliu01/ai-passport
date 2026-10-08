@@ -3,6 +3,7 @@
 import argparse
 import ipaddress
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -23,6 +24,18 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _lan_address() -> str:
+    """这台机器在局域网里的地址；查不到时返回 127.0.0.1。不会真的发出数据包。"""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))
+        return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        probe.close()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="xiaoyou_runtime", description="小幽 Runtime")
     parser.add_argument(
@@ -30,6 +43,10 @@ def main(argv=None) -> int:
         help="配置文件路径（默认 ./config.json，或环境变量 XIAOYOU_CONFIG）",
     )
     parser.add_argument("--check", action="store_true", help="只检查配置，然后退出")
+    parser.add_argument(
+        "--pair", action="store_true",
+        help="打印给手机 App 粘贴的连接串（含令牌，别发给别人），然后退出",
+    )
     parser.add_argument("--once", metavar="TEXT", help="不启动服务，直接说一句话并打印回复")
     parser.add_argument("--conversation", default="default", help="--once 使用的对话名")
     parser.add_argument("--version", action="version", version=__version__)
@@ -45,6 +62,19 @@ def main(argv=None) -> int:
             config.backend, config.host, config.port,
             "、".join(tool.name for tool in config.tools) or "无",
         ))
+        return 0
+
+    if args.pair:
+        # 监听本机或所有地址时，手机要连的是这台机器在局域网里的地址。
+        local_only = _is_loopback(config.host) or config.host in ("0.0.0.0", "::")
+        host = _lan_address() if local_only else config.host
+        print("http://%s:%d#%s" % (host, config.port, config.token))
+        if _is_loopback(config.host):
+            print(
+                "注意：现在只监听本机（%s），手机连不上。启动时把 server.host 改成 0.0.0.0，"
+                "或设置环境变量 XIAOYOU_HOST=0.0.0.0。" % config.host,
+                file=sys.stderr,
+            )
         return 0
 
     try:

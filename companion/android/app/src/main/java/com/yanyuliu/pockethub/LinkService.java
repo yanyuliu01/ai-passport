@@ -159,8 +159,12 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         HubStore.Ask ask = store.currentAsk();
         BuddyProtocol.Prompt prompt = ask == null ? null
                 : new BuddyProtocol.Prompt(ask.id, ask.source, ask.text);
-        String message = recent.isEmpty() ? "" : recent.get(0).summary();
-        String heartbeat = BuddyProtocol.heartbeat(Sources.enabledCount(this), 0, store.waiting(),
+        // 小幽在想的时候，设备显示“干活中”和我刚问的那句话。
+        boolean busy = store.busy();
+        String message = busy ? "在想：" + store.busyText()
+                : (recent.isEmpty() ? "" : recent.get(0).summary());
+        String heartbeat = BuddyProtocol.heartbeat(Sources.enabledCount(this), busy ? 1 : 0,
+                store.waiting(),
                 message, entries, 0, store.todayCount(), prompt);
         if (!heartbeat.equals(lastHeartbeat)) {
             lastHeartbeat = heartbeat;

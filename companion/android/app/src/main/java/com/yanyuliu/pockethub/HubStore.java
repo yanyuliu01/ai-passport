@@ -25,8 +25,15 @@ public final class HubStore {
         public final String title;
         public final String text;
         public final long time;
+        /** 小幽自己说的话带一句简报；别的来源的通知没有，为 null。 */
+        public final String brief;
 
         Event(String key, String source, String title, String text, long time) {
+            this(key, source, title, text, time, null);
+        }
+
+        Event(String key, String source, String title, String text, long time, String brief) {
+            this.brief = brief;
             this.key = key;
             this.source = source;
             this.title = title;
@@ -36,6 +43,9 @@ public final class HubStore {
 
         /** “来源：标题 正文”，用于首页说明行。 */
         public String summary() {
+            if (brief != null) {
+                return brief.replace('\n', ' ');
+            }
             String body = title.isEmpty() ? text : (text.isEmpty() ? title : title + " " + text);
             return source + "：" + body.replace('\n', ' ');
         }
@@ -46,6 +56,9 @@ public final class HubStore {
         }
 
         public String full() {
+            if (brief != null) {
+                return text;
+            }
             StringBuilder out = new StringBuilder(source);
             if (!title.isEmpty()) {
                 out.append(" · ").append(title);
@@ -80,6 +93,8 @@ public final class HubStore {
 
     private static final int EVENT_LIMIT = 40;
     private static final int LOG_LIMIT = 60;
+    private static final int CHAT_LIMIT = 60;
+    private static final String CHAT_SOURCE = "小幽";
     private static final HubStore INSTANCE = new HubStore();
 
     private final List<Event> events = new ArrayList<>();
@@ -88,7 +103,10 @@ public final class HubStore {
     private final List<String> log = new ArrayList<>();
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final List<String> chat = new ArrayList<>();
     private String linkState = "未启动";
+    private boolean busy;
+    private String busyText = "";
     private long sequence;
 
     private HubStore() {
@@ -180,6 +198,73 @@ public final class HubStore {
                 + (sent ? "" : "，但对应的通知按钮已失效"));
         notifyChanged();
         return sent;
+    }
+
+    // ---- 和小幽聊天 ----
+
+    /** 我说了一句话，小幽开始想。 */
+    public void chatAsked(String text) {
+        synchronized (this) {
+            busy = true;
+            busyText = text;
+            appendChat("我：" + text);
+        }
+        notifyChanged();
+    }
+
+    /** 小幽答完了：brief 给小屏幕，reply 是完整回复。 */
+    public void chatAnswered(String brief, String reply) {
+        synchronized (this) {
+            busy = false;
+            String shown = reply.isEmpty() ? brief : reply;
+            events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
+                    System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
+            trimEvents();
+            appendChat(CHAT_SOURCE + "：" + shown);
+        }
+        notifyChanged();
+    }
+
+    /** 这一轮没成功。asked 不为 null 表示这句话还没来得及记进聊天记录。 */
+    public void chatFailed(String asked, String error) {
+        synchronized (this) {
+            busy = false;
+            if (asked != null) {
+                appendChat("我：" + asked);
+            }
+            events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", "没成功：" + error,
+                    System.currentTimeMillis(), "没成功：" + error));
+            trimEvents();
+            appendChat("（没成功）" + error);
+            appendLog("聊天失败：" + error);
+        }
+        notifyChanged();
+    }
+
+    public synchronized boolean busy() {
+        return busy;
+    }
+
+    public synchronized String busyText() {
+        return busyText;
+    }
+
+    /** 聊天记录，旧的在前。 */
+    public synchronized List<String> chatLines() {
+        return new ArrayList<>(chat);
+    }
+
+    private void appendChat(String line) {
+        chat.add(line);
+        while (chat.size() > CHAT_LIMIT) {
+            chat.remove(0);
+        }
+    }
+
+    private void trimEvents() {
+        while (events.size() > EVENT_LIMIT) {
+            events.remove(events.size() - 1);
+        }
     }
 
     public synchronized List<Event> recent(int count) {

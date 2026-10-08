@@ -35,6 +35,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private EditText packageInput;
     private EditText labelInput;
     private int testCount;
+    private TextView chatView;
+    private EditText chatInput;
+    private EditText pairingInput;
+    private TextView runtimeStatus;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,10 +49,27 @@ public class MainActivity extends Activity implements HubStore.Listener {
         root.setPadding(pad, pad, pad, pad);
 
         root.addView(text("小幽中枢", 24, true));
-        root.addView(text("把手机上 Claude、Codex 等来源的通知转给小幽设备。", 14, false));
+        root.addView(text("和小幽聊天，并把她的回复和各个来源的通知转给随身设备。", 14, false));
         status = text("", 15, false);
         status.setPadding(0, dp(12), 0, dp(8));
         root.addView(status);
+
+        root.addView(heading("和小幽聊天"));
+        chatView = text("", 15, false);
+        chatView.setTextIsSelectable(true);
+        root.addView(chatView);
+        chatInput = input("想跟小幽说什么");
+        chatInput.setSingleLine(false);
+        chatInput.setMaxLines(4);
+        root.addView(chatInput);
+        root.addView(button("发送", view -> sendChat()));
+
+        root.addView(heading("Runtime"));
+        runtimeStatus = text("", 13, false);
+        root.addView(runtimeStatus);
+        pairingInput = input("粘贴连接串：http://地址:端口#令牌");
+        root.addView(pairingInput);
+        root.addView(button("保存连接串", view -> savePairing()));
 
         root.addView(heading("设置"));
         root.addView(button("① 授权蓝牙", view -> requestBluetooth()));
@@ -108,11 +129,44 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 + "\n通知读取：" + (listenerEnabled() ? "已开启" : "未开启")
                 + "\n设备连接：" + store.linkState()
                 + "\n未处理的消息：" + store.waiting() + " 条");
+        StringBuilder talk = new StringBuilder();
+        for (String line : store.chatLines()) {
+            talk.append(line).append("\n\n");
+        }
+        if (store.busy()) {
+            talk.append("小幽正在想…");
+        }
+        chatView.setText(talk.length() == 0 ? "（还没有聊过）" : talk.toString().trim());
+        String url = RuntimeClient.savedUrl(this);
+        runtimeStatus.setText(url == null ? "还没有设置。在电脑上运行 python3 -m xiaoyou_runtime --pair"
+                + " 得到连接串。" : "已设置：" + url);
+
         StringBuilder lines = new StringBuilder();
         for (String line : store.logLines()) {
             lines.append(line).append('\n');
         }
         logView.setText(lines.length() == 0 ? "（还没有记录）" : lines.toString());
+    }
+
+    private void sendChat() {
+        String message = chatInput.getText().toString().trim();
+        if (message.isEmpty() || HubStore.get().busy()) {
+            return;
+        }
+        chatInput.setText("");
+        RuntimeClient.send(this, message);
+    }
+
+    private void savePairing() {
+        String problem = RuntimeClient.savePairing(this, pairingInput.getText().toString());
+        if (problem != null) {
+            HubStore.get().log(problem);
+            runtimeStatus.setText(problem);
+            return;
+        }
+        // 令牌不留在输入框里。
+        pairingInput.setText("");
+        HubStore.get().log("已保存 Runtime 连接串");
     }
 
     private void connect() {

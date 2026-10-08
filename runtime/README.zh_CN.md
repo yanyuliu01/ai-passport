@@ -57,6 +57,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `turn_timeout_seconds` | `600` | 一轮超过这么久就停止（10 到 7200）。 |
 | `claude_code.command` | `["claude"]` | 要运行的命令，写成列表。 |
 | `claude_code.workdir` | `workdir` | Claude Code 的工作目录，不存在会自动创建。 |
+| `claude_code.config_dir` | `null` | 可选，Claude Code 的配置目录，以 `CLAUDE_CONFIG_DIR` 传给它。见[使用单独的 Claude 登录](#使用单独的-claude-登录)。 |
 | `claude_code.model` | `null` | 可选，作为 `--model` 传入。 |
 | `claude_code.permission_mode` | `dontAsk` | 作为 `--permission-mode` 传入。 |
 | `claude_code.allowed_tools` | `[]` | 作为 `--allowedTools` 传入的规则。 |
@@ -64,7 +65,23 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `tools[]` | `[]` | 小幽可以把活交出去的代理：`name`、`description`、`allowed_tools`、`enabled`。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
-`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`。
+`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`、
+`XIAOYOU_CLAUDE_CONFIG_DIR`。
+
+### 使用单独的 Claude 登录
+
+Claude Code 从 `~/.claude` 读取登录信息和设置。如果那个目录已经配成别的用途（比如
+通过 `ANTHROPIC_BASE_URL` 走公司网关，或者配了 API 密钥），不要改它，给小幽单独准备
+一个目录：
+
+```bash
+mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # 任意文件夹，但不能是主目录
+CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # 用订阅账号登录，/status 确认后退出
+```
+
+然后在 `claude_code` 下设置 `"config_dir": "~/.claude-xiaoyou"`。登录时不要待在主目录：
+Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设置加载，而在主目录里，
+这正是你想绕开的那个文件。
 
 ### 把一个代理接成工具
 
@@ -100,6 +117,19 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "你好", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## 和手机 App 配对
+
+```bash
+XIAOYOU_HOST=0.0.0.0 python3 -m xiaoyou_runtime --config config.json   # 在局域网上监听
+python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 http://<地址>:<端口>#<令牌>
+```
+
+把打印出来的那一行粘贴到小幽中枢 App 里（见
+[`companion/README.zh_CN.md`](../companion/README.zh_CN.md)）。这一行里带着令牌，要像
+密码一样对待。手机要和这台机器在同一个网络里，而且传输是不加密的 HTTP，只在你信任的
+网络里这样用。`--pair` 给出的本机地址是猜的；机器有多块网卡时，确认一下那是手机连得到
+的地址。
 
 ## 一轮对话是怎么走的
 
@@ -137,8 +167,10 @@ curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bear
 没有验证：
 
 - 真实的 Codex 命令行；派活的验证用的是一个替身脚本。
-- macOS、虚拟机，以及连续运行多天的情况。
-- 从手机 App 调用（App 目前还没有接这个服务）。
+- 虚拟机，以及连续运行多天的情况。macOS 上只由主人跑过一次 `--once`（用的是单独的
+  `config_dir`），HTTP 服务还没有跑过。
+- 从手机上调用。App 里发请求的那段代码在电脑的 Java 环境里对着本服务的 `echo` 后端
+  跑过（发送、等待、错误令牌），但 App 本身还没有在手机上运行过。
 - 被派出去的工具很慢、失败或输出很长时，模型的表现。
 
 已知风险：

@@ -6,6 +6,7 @@ echo（不调用任何模型，用来测试整条链路）。以后接别的代�
 """
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -138,10 +139,16 @@ class ClaudeCodeBackend(Backend):
     def turn(self, text: str, session_id: Optional[str]) -> Turn:
         config = self._config
         config.claude_workdir.mkdir(parents=True, exist_ok=True)
+        extra = {}
+        if config.claude_config_dir is not None:
+            # 让这台机器上的 Claude Code 用一套单独的登录和设置，
+            # 不受（也不影响）使用者平时那套 ~/.claude 配置。
+            extra["env"] = dict(os.environ, CLAUDE_CONFIG_DIR=str(config.claude_config_dir))
         try:
             done = self._run(
                 self.command(session_id),
                 input=text,
+                **extra,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

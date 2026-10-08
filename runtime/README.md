@@ -61,6 +61,7 @@ Relative paths are resolved against the directory of the configuration file.
 | `turn_timeout_seconds` | `600` | A turn is stopped after this long (10 to 7200). |
 | `claude_code.command` | `["claude"]` | Command to run, as a list. |
 | `claude_code.workdir` | `workdir` | Working directory for Claude Code; created if missing. |
+| `claude_code.config_dir` | `null` | Optional Claude Code configuration directory, passed to it as `CLAUDE_CONFIG_DIR`. See [Using a separate Claude login](#using-a-separate-claude-login). |
 | `claude_code.model` | `null` | Optional model name passed as `--model`. |
 | `claude_code.permission_mode` | `dontAsk` | Passed as `--permission-mode`. |
 | `claude_code.allowed_tools` | `[]` | Rules passed as `--allowedTools`. |
@@ -69,7 +70,25 @@ Relative paths are resolved against the directory of the configuration file.
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
-`XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`, `XIAOYOU_BACKEND`.
+`XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`, `XIAOYOU_BACKEND`,
+`XIAOYOU_CLAUDE_CONFIG_DIR`.
+
+### Using a separate Claude login
+
+Claude Code reads its login and settings from `~/.claude`. If that directory is
+set up for something else (for example a company gateway through
+`ANTHROPIC_BASE_URL` or an API key), give Xiaoyou its own directory instead of
+changing it:
+
+```bash
+mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # any folder except your home folder
+CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # log in with the subscription, check /status, quit
+```
+
+Then set `"config_dir": "~/.claude-xiaoyou"` under `claude_code`. Do the login
+from a folder other than your home folder: Claude Code also loads
+`<current folder>/.claude/settings.json` as project settings, and in the home
+folder that is the very file you are trying to avoid.
 
 ### Adding an agent as a tool
 
@@ -109,6 +128,20 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "hello", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Pairing the phone app
+
+```bash
+XIAOYOU_HOST=0.0.0.0 python3 -m xiaoyou_runtime --config config.json   # listen on the local network
+python3 -m xiaoyou_runtime --config config.json --pair                 # prints http://<address>:<port>#<token>
+```
+
+Paste the printed line into the Pocket Hub app (see
+[`companion/README.md`](../companion/README.md)). The line contains the token;
+treat it like a password. The phone must be on the same network as this
+machine, and the traffic is unencrypted HTTP, so do this only on a network you
+trust. `--pair` guesses the machine's local address; if the machine has several
+network interfaces, check that the address is the one the phone can reach.
 
 ## How a turn works
 
@@ -154,8 +187,12 @@ workspace rather than on the intended computer:
 Not verified:
 
 - The real Codex command line; the delegation check used a stand-in script.
-- macOS, a virtual machine, and a long-running service over days.
-- Use from the phone app (the app does not call this service yet).
+- A virtual machine, and a long-running service over days. On macOS only a
+  single `--once` turn has been run (by the owner, with a separate
+  `config_dir`); the HTTP service has not.
+- Use from a phone. The app's request code was run on a desktop Java runtime
+  against this service with the `echo` backend (send, wait, wrong token), but
+  the app itself has not been run on a phone.
 - How the model behaves when a delegated tool is slow, fails, or returns a
   large output.
 

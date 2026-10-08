@@ -12,6 +12,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -226,6 +227,37 @@ class ClaudeCodeBackendTests(TempDirCase):
         backend = backends.create(config_module.load(self.folder / "config.json", {}))
         with self.assertRaisesRegex(backends.BackendError, "no-such-claude"):
             backend.turn("x", None)
+
+    def test_config_dir_is_passed_to_claude_code_only_when_set(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        plain = config_module.load(write_config(self.folder, backend="claude_code"), {})
+        self.assertIsNone(plain.claude_config_dir)
+        backends.ClaudeCodeBackend(plain, run=fake_run).turn("x", None)
+        self.assertNotIn("env", seen[-1])
+
+        separate = config_module.load(
+            write_config(self.folder, backend="claude_code",
+                         claude_code={"config_dir": "claude-home"}), {})
+        self.assertEqual(separate.claude_config_dir, (self.folder / "claude-home").resolve())
+        backends.ClaudeCodeBackend(separate, run=fake_run).turn("x", None)
+        self.assertEqual(seen[-1]["env"]["CLAUDE_CONFIG_DIR"],
+                         str((self.folder / "claude-home").resolve()))
+        # 其余环境变量原样保留，否则连 PATH 都没有。
+        self.assertEqual(seen[-1]["env"].get("PATH"), os.environ.get("PATH"))
+
+        from_env = config_module.load(
+            write_config(self.folder, backend="claude_code"),
+            {"XIAOYOU_CLAUDE_CONFIG_DIR": str(self.folder / "other")})
+        self.assertEqual(from_env.claude_config_dir, self.folder / "other")
+        with self.assertRaisesRegex(config_module.ConfigError, "config_dir"):
+            config_module.load(
+                write_config(self.folder, backend="claude_code",
+                             claude_code={"config_dir": " "}), {})
 
     def test_no_tools_prompt_and_no_allowed_tools_flag(self):
         loaded = config_module.load(write_config(self.folder, backend="claude_code"), {})

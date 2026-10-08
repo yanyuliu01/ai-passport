@@ -37,6 +37,8 @@ class Config:
     # claude_code 后端
     claude_command: List[str]
     claude_workdir: Path
+    # Claude Code 自己的配置目录；None 表示用它的默认位置（~/.claude）
+    claude_config_dir: Optional[Path]
     claude_model: Optional[str]
     claude_permission_mode: str
     claude_allowed_tools: List[str]
@@ -145,6 +147,13 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         claude.get("permission_mode", "dontAsk"), str, "claude_code.permission_mode"
     )
 
+    config_dir = claude.get("config_dir")
+    if config_dir is not None:
+        _expect(config_dir, str, "claude_code.config_dir")
+        if not config_dir.strip():
+            raise ConfigError("claude_code.config_dir 不能是空字符串；不需要就删掉这一项")
+    config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
+
     tools: List[Tool] = []
     seen: Dict[str, bool] = {}
     for index, item in enumerate(_expect(raw.get("tools", []), list, "tools")):
@@ -177,6 +186,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         turn_timeout_seconds=timeout,
         claude_command=command,
         claude_workdir=_path(_expect(claude.get("workdir", "workdir"), str, "claude_code.workdir"), base),
+        claude_config_dir=_path(config_dir, base) if config_dir else None,
         claude_model=model,
         claude_permission_mode=permission_mode,
         claude_allowed_tools=_strings(claude.get("allowed_tools", []), "claude_code.allowed_tools"),

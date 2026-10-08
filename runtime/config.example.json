@@ -12,6 +12,7 @@
   "claude_code": {
     "command": ["claude"],
     "workdir": "workdir",
+    "config_dir": null,
     "model": null,
     "permission_mode": "dontAsk",
     "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
