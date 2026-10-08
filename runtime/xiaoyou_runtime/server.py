@@ -146,6 +146,16 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                 return
             self._fail(404, "没有这个地址")
 
-    server = ThreadingHTTPServer((config.host, config.port), Handler)
+    class Server(ThreadingHTTPServer):
+        def handle_error(self, request: Any, client_address: Any) -> None:
+            # 客户端自己断开连接（手机切后台、关掉空闲连接）很常见，不是故障：
+            # 记一行就够了，不打印整段调用栈。其他异常照常打印。
+            error = sys.exc_info()[1]
+            if isinstance(error, (ConnectionError, TimeoutError)):
+                sys.stderr.write("%s 断开了连接（%s）\n" % (client_address[0], type(error).__name__))
+                return
+            super().handle_error(request, client_address)
+
+    server = Server((config.host, config.port), Handler)
     server.daemon_threads = True
     return server
