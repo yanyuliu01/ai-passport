@@ -105,7 +105,8 @@ public final class HubStore {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<String> chat = new ArrayList<>();
     private String linkState = "未启动";
-    private boolean busy;
+    /** 已经发给 Runtime、还没等到结果的消息数。 */
+    private int pending;
     private String busyText = "";
     private long sequence;
 
@@ -205,9 +206,25 @@ public final class HubStore {
     /** 我说了一句话，小幽开始想。 */
     public void chatAsked(String text) {
         synchronized (this) {
-            busy = true;
+            ++pending;
             busyText = text;
             appendChat("我：" + text);
+        }
+        notifyChanged();
+    }
+
+    /** 语音识别出了我刚才说的话：把聊天记录里的占位换成原话。 */
+    public void chatHeard(String placeholder, String heard) {
+        synchronized (this) {
+            for (int position = chat.size() - 1; position >= 0; --position) {
+                if (chat.get(position).equals("我：" + placeholder)) {
+                    chat.set(position, "我：" + heard);
+                    break;
+                }
+            }
+            if (pending > 0) {
+                busyText = heard;
+            }
         }
         notifyChanged();
     }
@@ -215,7 +232,7 @@ public final class HubStore {
     /** 小幽答完了：brief 给小屏幕，reply 是完整回复。 */
     public void chatAnswered(String brief, String reply) {
         synchronized (this) {
-            busy = false;
+            pending = Math.max(0, pending - 1);
             String shown = reply.isEmpty() ? brief : reply;
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
@@ -228,9 +245,10 @@ public final class HubStore {
     /** 这一轮没成功。asked 不为 null 表示这句话还没来得及记进聊天记录。 */
     public void chatFailed(String asked, String error) {
         synchronized (this) {
-            busy = false;
             if (asked != null) {
                 appendChat("我：" + asked);
+            } else {
+                pending = Math.max(0, pending - 1);
             }
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", "没成功：" + error,
                     System.currentTimeMillis(), "没成功：" + error));
@@ -242,7 +260,7 @@ public final class HubStore {
     }
 
     public synchronized boolean busy() {
-        return busy;
+        return pending > 0;
     }
 
     public synchronized String busyText() {

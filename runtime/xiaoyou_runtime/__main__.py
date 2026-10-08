@@ -5,9 +5,10 @@ import ipaddress
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, stt
 from .backends import BackendError, create
 from .config import ConfigError, load
 from .server import make_server
@@ -49,6 +50,9 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--once", metavar="TEXT", help="不启动服务，直接说一句话并打印回复")
     parser.add_argument("--conversation", default="default", help="--once 使用的对话名")
+    parser.add_argument(
+        "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
 
@@ -58,10 +62,27 @@ def main(argv=None) -> int:
         print("配置有问题：%s" % error, file=sys.stderr)
         return 2
     if args.check:
-        print("配置没问题：后端 %s，监听 %s:%d，工具 %s" % (
+        print("配置没问题：后端 %s，监听 %s:%d，工具 %s，语音识别 %s" % (
             config.backend, config.host, config.port,
-            "、".join(tool.name for tool in config.tools) or "无",
+            "、".join(tool.name for tool in config.tools) or "无", config.stt_engine,
         ))
+        problem = stt.check(stt.create(config))
+        if problem:
+            print("语音识别还用不了：%s" % problem, file=sys.stderr)
+            return 2
+        return 0
+
+    if args.stt is not None:
+        try:
+            seconds = stt.describe_wav(Path(args.stt))
+            started = time.monotonic()
+            text = stt.create(config).transcribe(Path(args.stt))
+        except stt.SttError as error:
+            print("没成功：%s" % error, file=sys.stderr)
+            return 1
+        print(text)
+        print("（录音 %.1f 秒，识别用了 %.1f 秒，含加载模型）" % (
+            seconds, time.monotonic() - started), file=sys.stderr)
         return 0
 
     if args.pair:
@@ -97,14 +118,19 @@ def main(argv=None) -> int:
         print(turn.reply)
         return 0
 
-    service = Service(backend, store)
+    recognizer = stt.create(config)
+    problem = stt.check(recognizer)
+    if problem:
+        print("注意：语音识别还用不了，语音消息会失败：%s" % problem, file=sys.stderr)
+    service = Service(backend, store, recognizer)
     try:
         server = make_server(config, service)
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         return 1
-    print("小幽 Runtime %s 已启动：http://%s:%d（后端 %s）" % (
-        __version__, config.host, config.port, config.backend), file=sys.stderr)
+    print("小幽 Runtime %s 已启动：http://%s:%d（后端 %s，语音识别 %s）" % (
+        __version__, config.host, config.port, config.backend, config.stt_engine),
+        file=sys.stderr)
     if not _is_loopback(config.host):
         print(
             "注意：正在监听非本机地址，而这个服务本身只有明文 HTTP。"

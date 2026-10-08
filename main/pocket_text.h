@@ -109,12 +109,28 @@
 #define PT_CONFIRM_YES     "确定"
 #define PT_CONFIRM_NO      "算了"
 
+// ---- 小幽的对话：按住说话 ----
+#define PT_VOICE_PREPARING "等一下下\n我竖起耳朵…"
+#define PT_VOICE_LISTENING "我在听\n说吧！"
+#define PT_VOICE_SENDING   "收到！\n正在交给手机…"
+#define PT_VOICE_STATE_PREPARING "准备中"
+#define PT_VOICE_STATE_SENDING   "发送中"
+#define PT_VOICE_RELEASE   "松开发送"
+// 结果和提示（显示在首页说明行，每行最多 13 个汉字）
+#define PT_VOICE_SENT        "发出去啦，等小幽回话"
+#define PT_VOICE_LIMIT       "说得有点久，先发这些"
+#define PT_VOICE_TOO_SHORT   "按住确认键再说话哦"
+#define PT_VOICE_NEED_LINK   "先连上手机才能说话哦"
+#define PT_VOICE_NO_HOST     "这个连接不能传语音\n要连手机上的小幽中枢"
+#define PT_VOICE_FAILED_MIC  "麦克风没准备好\n再试一次吧"
+#define PT_VOICE_FAILED_LINK "没发出去，连接不太稳"
+
 // ---- 底部按键提示 ----
 #define PT_KEY_SEPARATOR   " · "
 #define PT_KEY_UP          "上键"
 #define PT_KEY_DOWN        "下键"
 #define PT_KEY_OK          "确认键"
-#define PT_HINT_PAGES      "上/下 翻页 · 长按确认键 设置"
+#define PT_HINT_PAGES      "按住确认键说话 · 长按上键设置"
 #define PT_HINT_SETTINGS   "上/下 选择 · 确认键 执行"
 #define PT_HINT_GUIDE      "上/下 滚动 · 确认键 返回"
 #define PT_HINT_APPROVAL   "上键 翻看全文"

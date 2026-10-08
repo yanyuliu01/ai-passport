@@ -2,6 +2,7 @@
 
   GET  /healthz                         不需要令牌，只说明服务活着
   POST /v1/messages                     {"text", "conversation"?, "client_id"?} → 202 + 消息
+  POST /v1/voice?conversation=&client_id=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>      查结果；wait 最多 60 秒，处理完会提前返回
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
 
@@ -17,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from .config import Config
-from .service import RequestError, Service
+from .service import MAX_AUDIO_BYTES, RequestError, Service
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_WAIT_SECONDS = 60.0
@@ -94,9 +95,36 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                 return
             self._fail(404, "没有这个地址")
 
+        def _voice(self, query: Dict[str, Any]) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                self._fail(411, "需要 Content-Length")
+                return
+            if length <= 0 or length > MAX_AUDIO_BYTES:
+                self._fail(413, "录音是空的或者太大")
+                return
+            audio = self.rfile.read(length)
+            if len(audio) != length:
+                self._fail(400, "录音没有传完")
+                return
+            try:
+                message = service.submit_voice(
+                    audio, query.get("conversation", ["default"])[0],
+                    query.get("client_id", [None])[0],
+                )
+            except RequestError as error:
+                self._fail(400, str(error))
+                return
+            self._send(202, message)
+
         def do_POST(self) -> None:
-            parts = [part for part in urlsplit(self.path).path.split("/") if part]
+            url = urlsplit(self.path)
+            parts = [part for part in url.path.split("/") if part]
             if not self._authorized():
+                return
+            if parts == ["v1", "voice"]:
+                self._voice(parse_qs(url.query))
                 return
             ok, body = self._body()
             if not ok:

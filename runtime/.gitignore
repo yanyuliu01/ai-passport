@@ -1,4 +1,5 @@
 config.json
 state/
+stt-models/
 workdir/
 __pycache__/

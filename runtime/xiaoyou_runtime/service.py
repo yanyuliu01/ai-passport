@@ -1,5 +1,7 @@
 """收消息、排队、一条一条交给后端，并让调用方能等到结果。
 
+语音消息多一步：先把录音交给语音识别，得到文字后和打字的消息走同一条路。
+
 所有消息排成一队、由一个工作线程顺序处理：同一个对话里的两句话不会同时去续同一个
 会话。验证阶段只有一个用户，这样最简单也最不容易出错。
 """
@@ -13,8 +15,10 @@ from typing import Any, Dict, Optional
 
 from .backends import Backend, BackendError
 from .store import Store
+from .stt import Stt, SttError, describe_wav
 
 MAX_TEXT_CHARS = 8000
+MAX_AUDIO_BYTES = 4 * 1024 * 1024
 MAX_KEPT_MESSAGES = 200
 MAX_NAME_CHARS = 64
 
@@ -32,9 +36,11 @@ def _name(value: Any, what: str) -> str:
 
 
 class Service:
-    def __init__(self, backend: Backend, store: Store):
+    def __init__(self, backend: Backend, store: Store, stt: Optional[Stt] = None):
         self._backend = backend
         self._store = store
+        self._stt = stt if stt is not None else Stt()
+        self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
         self._messages = OrderedDict()  # type: OrderedDict[str, Dict[str, Any]]
         self._by_client_id: Dict[str, str] = {}
@@ -48,16 +54,45 @@ class Service:
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
+        return self._enqueue("text", text, None, conversation, client_id)
+
+    def submit_voice(self, audio: Any, conversation: Any = "default",
+                     client_id: Any = None) -> Dict[str, Any]:
+        """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
+        if not isinstance(audio, (bytes, bytearray)) or not audio:
+            raise RequestError("录音是空的")
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise RequestError("录音不能超过 %d MB" % (MAX_AUDIO_BYTES // (1024 * 1024)))
+        if self._stt.name == "none":
+            raise RequestError(
+                "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
+            )
+        return self._enqueue("voice", "", bytes(audio), conversation, client_id)
+
+    def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
+                 client_id: Any) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         if client_id is not None:
             client_id = _name(client_id, "client_id")
         with self._changed:
             if client_id is not None and client_id in self._by_client_id:
                 return dict(self._messages[self._by_client_id[client_id]])
+            message_id = uuid.uuid4().hex
+            if audio is not None:
+                # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
+                path = self._store.voice_file(message_id)
+                path.write_bytes(audio)
+                try:
+                    describe_wav(path)
+                except SttError as error:
+                    path.unlink()
+                    raise RequestError(str(error))
+                self._audio[message_id] = path
             message = {
-                "id": uuid.uuid4().hex,
+                "id": message_id,
                 "client_id": client_id,
                 "conversation": conversation,
+                "kind": kind,
                 "status": "queued",
                 "text": text,
                 "reply": None,
@@ -124,7 +159,32 @@ class Service:
                 if message is None:
                     continue
                 text, conversation = message["text"], message["conversation"]
-            self._update(message_id, status="running")
+                audio = self._audio.pop(message_id, None)
+            if audio is not None:
+                self._update(message_id, status="transcribing")
+                try:
+                    text = self._stt.transcribe(audio)
+                    if not text:
+                        raise SttError("没听清，再说一次吧")
+                except SttError as error:
+                    self._update(
+                        message_id, status="failed", error=str(error), mood="oops",
+                        finished_at=time.time(),
+                    )
+                    continue
+                except Exception as error:
+                    self._update(
+                        message_id, status="failed", mood="oops", finished_at=time.time(),
+                        error="语音识别出错：%s: %s" % (type(error).__name__, error),
+                    )
+                    continue
+                finally:
+                    try:
+                        audio.unlink()
+                    except OSError:
+                        pass
+                text = text[:MAX_TEXT_CHARS]
+            self._update(message_id, status="running", text=text)
             try:
                 turn = self._backend.turn(text, self._store.session(conversation))
                 if turn.session_id:

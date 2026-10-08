@@ -424,6 +424,94 @@ static void buddy_apply_permission_result(buddy_state_t *state,
     buddy_set_ui_refresh(action);
 }
 
+/* Long press. OK is push-to-talk on the browsable pages; UP opens the settings.
+ * On the settings and guide pages either key goes back to the home page. */
+static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
+{
+    bool woke = state->screen_off;
+
+    if (state->confirmation != BUDDY_CONFIRM_NONE || buddy_has_prompt(state) ||
+        state->passkey_visible || state->voice_phase != BUDDY_VOICE_IDLE ||
+        (key != BUDDY_KEY_OK && key != BUDDY_KEY_UP)) {
+        return;
+    }
+    /* A long press on a dark screen wakes it; holding OK goes straight on to talking. */
+    state->screen_off = false;
+    buddy_set_ui_refresh(action);
+    if (state->page == BUDDY_PAGE_SETTINGS || state->page == BUDDY_PAGE_GUIDE) {
+        if (!woke) {
+            state->page = BUDDY_PAGE_HOME;
+        }
+        return;
+    }
+    if (key == BUDDY_KEY_UP) {
+        if (!woke) {
+            state->page = BUDDY_PAGE_SETTINGS;
+            state->settings_selection = BUDDY_SETTINGS_BRIGHTNESS;
+        }
+        return;
+    }
+    state->page = BUDDY_PAGE_HOME;
+    if (!state->ble_connected || !state->ble_encrypted) {
+        buddy_copy(state->message, sizeof(state->message), PT_VOICE_NEED_LINK);
+        return;
+    }
+    if (!state->host_voice) {
+        buddy_copy(state->message, sizeof(state->message), PT_VOICE_NO_HOST);
+        return;
+    }
+    state->voice_phase = BUDDY_VOICE_PREPARING;
+    state->voice_connection_generation = state->ble_connection_generation;
+    state->voice_listening_since_ms = 0;
+    if (action != NULL) {
+        action->type = BUDDY_ACTION_VOICE_START;
+        action->connection_generation = state->ble_connection_generation;
+    }
+}
+
+static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
+                              uint64_t now_ms, buddy_action_t *action)
+{
+    const char *message = NULL;
+
+    if (state->voice_phase == BUDDY_VOICE_IDLE ||
+        event->ble.connection_generation != state->voice_connection_generation) {
+        return;
+    }
+    switch (event->voice_status) {
+    case BUDDY_VOICE_STARTED:
+        /* The key may already be up again; then the tail is on its way out. */
+        if (state->voice_phase == BUDDY_VOICE_PREPARING) {
+            state->voice_phase = BUDDY_VOICE_LISTENING;
+            state->voice_listening_since_ms = now_ms;
+        }
+        buddy_set_ui_refresh(action);
+        return;
+    case BUDDY_VOICE_FINISHED:
+        message = PT_VOICE_SENT;
+        break;
+    case BUDDY_VOICE_LIMIT:
+        message = PT_VOICE_LIMIT;
+        break;
+    case BUDDY_VOICE_TOO_SHORT:
+        message = PT_VOICE_TOO_SHORT;
+        break;
+    case BUDDY_VOICE_CANCELLED:
+        break;
+    case BUDDY_VOICE_FAILED_MIC:
+        message = PT_VOICE_FAILED_MIC;
+        break;
+    case BUDDY_VOICE_FAILED_LINK:
+        message = PT_VOICE_FAILED_LINK;
+        break;
+    }
+    state->voice_phase = BUDDY_VOICE_IDLE;
+    if (message != NULL) {
+        buddy_copy(state->message, sizeof(state->message), message);
+    }
+    buddy_set_ui_refresh(action);
+}
+
 void buddy_state_init(buddy_state_t *state, const buddy_settings_snapshot_t *settings)
 {
     if (state == NULL) {
@@ -505,6 +593,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
                 buddy_close_confirmation(state);
             }
         }
+        if (state->ble_connection_generation != event->ble.connection_generation) {
+            state->host_voice = false;
+        }
         state->ble_connection_generation = event->ble.connection_generation;
         state->ble_connected = true;
         state->ble_encrypted = false;
@@ -526,7 +617,17 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         } else if (state->confirmation == BUDDY_CONFIRM_NONE) {
             state->connection = BUDDY_CONNECTION_OFFLINE;
         }
+        state->host_voice = false;
         buddy_set_ui_refresh(action);
+        if (state->voice_phase != BUDDY_VOICE_IDLE) {
+            /* The worker notices the lost link itself; this makes sure it stops. */
+            state->voice_phase = BUDDY_VOICE_IDLE;
+            buddy_copy(state->message, sizeof(state->message), PT_VOICE_FAILED_LINK);
+            if (action != NULL) {
+                action->type = BUDDY_ACTION_VOICE_STOP;
+                action->voice_cancel = true;
+            }
+        }
         break;
     case BUDDY_EVENT_BLE_PASSKEY:
         if (event->ble.connection_generation != state->ble_connection_generation) {
@@ -563,6 +664,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         buddy_apply_permission_result(state, &event->permission_result, now_ms, action);
         break;
     case BUDDY_EVENT_KEY_CLICK:
+        if (state->voice_phase != BUDDY_VOICE_IDLE) {
+            break;
+        }
         if (state->screen_off) {
             state->screen_off = false;
             if (action != NULL) {
@@ -609,19 +713,26 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         }
         break;
     case BUDDY_EVENT_KEY_LONG:
-        if (state->screen_off) {
-            break;
-        }
-        if (event->key == BUDDY_KEY_OK && state->confirmation == BUDDY_CONFIRM_NONE &&
-            !buddy_has_prompt(state)) {
-            if (state->page == BUDDY_PAGE_SETTINGS || state->page == BUDDY_PAGE_GUIDE) {
-                state->page = BUDDY_PAGE_HOME;
-            } else {
-                state->page = BUDDY_PAGE_SETTINGS;
-                state->settings_selection = BUDDY_SETTINGS_BRIGHTNESS;
+        buddy_long_press(state, event->key, action);
+        break;
+    case BUDDY_EVENT_KEY_RELEASE:
+        if (event->key == BUDDY_KEY_OK &&
+            (state->voice_phase == BUDDY_VOICE_PREPARING ||
+             state->voice_phase == BUDDY_VOICE_LISTENING)) {
+            state->voice_phase = BUDDY_VOICE_SENDING;
+            if (action != NULL) {
+                action->type = BUDDY_ACTION_VOICE_STOP;
+                action->voice_cancel = false;
             }
-            buddy_set_ui_refresh(action);
         }
+        break;
+    case BUDDY_EVENT_HOST_HELLO:
+        if (event->ble.connection_generation == state->ble_connection_generation) {
+            state->host_voice = event->host_voice;
+        }
+        break;
+    case BUDDY_EVENT_VOICE:
+        buddy_apply_voice(state, event, now_ms, action);
         break;
     case BUDDY_EVENT_TICK:
         buddy_set_ui_refresh(action);
@@ -703,4 +814,6 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     buddy_copy(snapshot->prompt_tool, sizeof(snapshot->prompt_tool), state->prompt.tool);
     buddy_copy(snapshot->prompt_hint, sizeof(snapshot->prompt_hint), state->prompt.hint);
     snapshot->prompt_hint_truncated = state->prompt.hint_truncated;
+    snapshot->voice_phase = state->voice_phase;
+    snapshot->voice_listening_since_ms = state->voice_listening_since_ms;
 }

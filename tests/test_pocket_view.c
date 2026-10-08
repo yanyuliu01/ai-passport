@@ -36,6 +36,28 @@ static void test_view_priority(void)
     assert(pocket_view_for(&snapshot) == POCKET_VIEW_CONFIRM);
 }
 
+static void test_voice_view(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+
+    /* 正在说话时，说话的画面压过普通页面和新来的审批请求。 */
+    snapshot.voice_phase = BUDDY_VOICE_PREPARING;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_VOICE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
+    snprintf(snapshot.prompt_id, sizeof(snapshot.prompt_id), "%s", "req-1");
+    snapshot.voice_phase = BUDDY_VOICE_LISTENING;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_VOICE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
+    snapshot.voice_phase = BUDDY_VOICE_SENDING;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
+    /* 配对和二次确认仍然更优先。 */
+    snapshot.passkey_visible = true;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_PAIRING);
+    snapshot.passkey_visible = false;
+    snapshot.voice_phase = BUDDY_VOICE_IDLE;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_APPROVAL);
+}
+
 static void test_home_status(void)
 {
     buddy_ui_snapshot_t snapshot = {0};
@@ -193,6 +215,7 @@ static void test_uptime_and_passkey(void)
 int main(void)
 {
     test_view_priority();
+    test_voice_view();
     test_home_status();
     test_pet_mood();
     test_tokens();

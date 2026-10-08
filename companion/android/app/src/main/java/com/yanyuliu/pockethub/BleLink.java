@@ -42,6 +42,9 @@ final class BleLink {
 
         void onLine(String line);
 
+        /** 设备发来的一帧语音（格式见 VoiceRecording）。 */
+        void onVoiceFrame(byte[] frame);
+
         void onClosed();
     }
 
@@ -104,6 +107,21 @@ final class BleLink {
             receiverRegistered = false;
         }
         HubStore.get().setLinkState("已断开");
+    }
+
+    /**
+     * 说话期间让手机把蓝牙连接间隔调短，语音帧才传得过来；说完调回去省电。
+     */
+    void setFast(boolean fast) {
+        if (gatt == null || !ready) {
+            return;
+        }
+        try {
+            gatt.requestConnectionPriority(fast ? BluetoothGatt.CONNECTION_PRIORITY_HIGH
+                    : BluetoothGatt.CONNECTION_PRIORITY_BALANCED);
+        } catch (RuntimeException ignored) {
+            // 只是优化，失败了照常工作。
+        }
     }
 
     /** 排队发送一行（必须以换行结尾）。没连上时直接丢弃：状态类消息下次心跳会重发。 */
@@ -386,6 +404,10 @@ final class BleLink {
             byte[] copy = value == null ? new byte[0] : value.clone();
             main.post(() -> {
                 if (source != gatt) {
+                    return;
+                }
+                if (VoiceRecording.isFrame(copy)) {
+                    listener.onVoiceFrame(copy);
                     return;
                 }
                 for (String line : assembler.feed(copy)) {

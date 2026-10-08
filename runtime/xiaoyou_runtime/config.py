@@ -44,6 +44,15 @@ class Config:
     claude_allowed_tools: List[str]
     claude_extra_args: List[str]
     tools: List[Tool] = field(default_factory=list)
+    # 语音识别；engine 为 none 时不接受语音消息
+    stt_engine: str = "none"
+    stt_command: List[str] = field(default_factory=list)
+    stt_model_dir: Optional[Path] = None
+    stt_language: str = "auto"
+    stt_threads: int = 2
+    stt_timeout_seconds: int = 60
+    # 配置文件所在的目录；相对路径和 stt.command 都以它为准
+    base_dir: Path = Path(".")
 
     def allowed_tools(self) -> List[str]:
         merged = list(self.claude_allowed_tools)
@@ -55,6 +64,8 @@ class Config:
 
 
 BACKENDS = ("claude_code", "echo")
+STT_ENGINES = ("none", "sense_voice", "command")
+STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
 MIN_TOKEN_LENGTH = 16
 PLACEHOLDER_TOKEN = "change-me-to-a-long-random-string"
 
@@ -175,6 +186,30 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
             )
         )
 
+    stt = _expect(raw.get("stt", {}), dict, "stt")
+    stt_engine = _expect(stt.get("engine", "none"), str, "stt.engine")
+    if stt_engine not in STT_ENGINES:
+        raise ConfigError("stt.engine 只能是 %s 之一" % "、".join(STT_ENGINES))
+    stt_command = _strings(stt.get("command", []), "stt.command")
+    stt_model_dir = stt.get("model_dir")
+    if stt_engine == "command":
+        if not stt_command or not any("{audio}" in part for part in stt_command):
+            raise ConfigError("stt.engine 为 command 时，stt.command 里要有一个带 {audio} 的参数")
+    if stt_engine == "sense_voice":
+        if not isinstance(stt_model_dir, str) or not stt_model_dir.strip():
+            raise ConfigError("stt.engine 为 sense_voice 时要设置 stt.model_dir（模型所在的目录）")
+    elif stt_model_dir is not None:
+        _expect(stt_model_dir, str, "stt.model_dir")
+    stt_language = _expect(stt.get("language", "auto"), str, "stt.language")
+    if stt_language not in STT_LANGUAGES:
+        raise ConfigError("stt.language 只能是 %s 之一" % "、".join(STT_LANGUAGES))
+    stt_threads = _expect(stt.get("threads", 2), int, "stt.threads")
+    if not 1 <= stt_threads <= 16:
+        raise ConfigError("stt.threads 应该在 1 到 16 之间")
+    stt_timeout = _expect(stt.get("timeout_seconds", 60), int, "stt.timeout_seconds")
+    if not 5 <= stt_timeout <= 600:
+        raise ConfigError("stt.timeout_seconds 应该在 5 到 600 之间")
+
     return Config(
         host=host,
         port=port,
@@ -192,4 +227,11 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         claude_allowed_tools=_strings(claude.get("allowed_tools", []), "claude_code.allowed_tools"),
         claude_extra_args=_strings(claude.get("extra_args", []), "claude_code.extra_args"),
         tools=tools,
+        stt_engine=stt_engine,
+        stt_command=stt_command,
+        stt_model_dir=_path(stt_model_dir, base) if stt_model_dir else None,
+        stt_language=stt_language,
+        stt_threads=stt_threads,
+        stt_timeout_seconds=stt_timeout,
+        base_dir=base,
     )

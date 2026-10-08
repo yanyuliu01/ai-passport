@@ -4,6 +4,7 @@
 
 #include "buddy_protocol.h"
 #include "buddy_state.h"
+#include "pocket_text.h"
 
 static buddy_event_t test_prompt_event(const char *id, const char *tool,
                                        const char *hint, unsigned running,
@@ -595,23 +596,182 @@ static void test_truncated_prompt_id_is_ignored(void)
     assert(action.type == BUDDY_ACTION_NONE);
 }
 
-static void test_long_ok_opens_settings(void)
+static void test_long_up_opens_settings(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
+    buddy_event_t long_up = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_UP};
     buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t long_down = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_DOWN};
 
     buddy_state_init(&state, NULL);
     state.settings_selection = BUDDY_SETTINGS_BACK;
-    buddy_state_reduce(&state, &long_ok, 1000, &action);
+    state.page = BUDDY_PAGE_USAGE;
+    buddy_state_reduce(&state, &long_down, 999, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && action.type == BUDDY_ACTION_NONE);
+    buddy_state_reduce(&state, &long_up, 1000, &action);
 
     assert(state.page == BUDDY_PAGE_SETTINGS);
     assert(state.settings_selection == BUDDY_SETTINGS_BRIGHTNESS);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
 
-    buddy_state_reduce(&state, &long_ok, 1001, &action);
+    /* Either long press leaves the settings again; OK never starts talking there. */
+    buddy_state_reduce(&state, &long_up, 1001, &action);
     assert(state.page == BUDDY_PAGE_HOME);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    state.page = BUDDY_PAGE_GUIDE;
+    buddy_state_reduce(&state, &long_ok, 1002, &action);
+    assert(state.page == BUDDY_PAGE_HOME && state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+}
+
+static void voice_ready_state(buddy_state_t *state)
+{
+    buddy_action_t action = {0};
+    buddy_event_t connected = {.type = BUDDY_EVENT_BLE_CONNECTED};
+    buddy_event_t hello = {.type = BUDDY_EVENT_HOST_HELLO, .host_voice = true};
+
+    connected.ble.connection_generation = 7;
+    hello.ble.connection_generation = 7;
+    buddy_state_init(state, NULL);
+    buddy_state_reduce(state, &connected, 10, &action);
+    state->ble_encrypted = true;
+    state->connection = BUDDY_CONNECTION_OFFLINE;
+    buddy_state_reduce(state, &hello, 11, &action);
+    assert(state->host_voice);
+}
+
+static buddy_event_t voice_event(buddy_voice_status_t status, uint32_t generation)
+{
+    buddy_event_t event = {.type = BUDDY_EVENT_VOICE, .voice_status = status};
+
+    event.ble.connection_generation = generation;
+    return event;
+}
+
+static void test_hold_ok_talks_and_release_sends(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t release = {.type = BUDDY_EVENT_KEY_RELEASE, .key = BUDDY_KEY_OK};
+    buddy_event_t click = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_DOWN};
+    buddy_event_t event;
+
+    voice_ready_state(&state);
+    state.page = BUDDY_PAGE_ACTIVITY;
+    buddy_state_reduce(&state, &long_ok, 1000, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START && action.connection_generation == 7);
+    assert(state.voice_phase == BUDDY_VOICE_PREPARING && state.page == BUDDY_PAGE_HOME);
+
+    /* A second long press or a click while talking changes nothing. */
+    buddy_state_reduce(&state, &long_ok, 1001, &action);
+    assert(action.type == BUDDY_ACTION_NONE);
+    buddy_state_reduce(&state, &click, 1002, &action);
+    assert(action.type == BUDDY_ACTION_NONE && state.page == BUDDY_PAGE_HOME);
+
+    /* A report from an older connection is ignored. */
+    event = voice_event(BUDDY_VOICE_STARTED, 6);
+    buddy_state_reduce(&state, &event, 1100, &action);
+    assert(state.voice_phase == BUDDY_VOICE_PREPARING);
+    event = voice_event(BUDDY_VOICE_STARTED, 7);
+    buddy_state_reduce(&state, &event, 1200, &action);
+    assert(state.voice_phase == BUDDY_VOICE_LISTENING);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.voice_phase == BUDDY_VOICE_LISTENING &&
+           snapshot.voice_listening_since_ms == 1200);
+
+    buddy_state_reduce(&state, &release, 4000, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_STOP && !action.voice_cancel);
+    assert(state.voice_phase == BUDDY_VOICE_SENDING);
+    buddy_state_reduce(&state, &release, 4001, &action);
+    assert(action.type == BUDDY_ACTION_NONE);
+
+    event = voice_event(BUDDY_VOICE_FINISHED, 7);
+    buddy_state_reduce(&state, &event, 4300, &action);
+    assert(state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(strcmp(state.message, PT_VOICE_SENT) == 0);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+
+    /* Releasing before the microphone is live: the late "started" must not reopen it. */
+    buddy_state_reduce(&state, &long_ok, 5000, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START);
+    buddy_state_reduce(&state, &release, 5100, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_STOP);
+    event = voice_event(BUDDY_VOICE_STARTED, 7);
+    buddy_state_reduce(&state, &event, 5200, &action);
+    assert(state.voice_phase == BUDDY_VOICE_SENDING);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 5300, &action);
+    assert(state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(strcmp(state.message, PT_VOICE_TOO_SHORT) == 0);
+
+    /* Other endings each leave their own message. */
+    buddy_state_reduce(&state, &long_ok, 6000, &action);
+    event = voice_event(BUDDY_VOICE_FAILED_MIC, 7);
+    buddy_state_reduce(&state, &event, 6100, &action);
+    assert(state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(strcmp(state.message, PT_VOICE_FAILED_MIC) == 0);
+    buddy_state_reduce(&state, &long_ok, 7000, &action);
+    event = voice_event(BUDDY_VOICE_LIMIT, 7);
+    buddy_state_reduce(&state, &event, 7100, &action);
+    assert(strcmp(state.message, PT_VOICE_LIMIT) == 0);
+    /* A release with nothing in progress is ignored. */
+    buddy_state_reduce(&state, &release, 7200, &action);
+    assert(action.type == BUDDY_ACTION_NONE);
+}
+
+static void test_talking_needs_a_voice_capable_host(void)
+{
+    buddy_state_t state;
+    buddy_action_t action = {0};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t disconnected = {.type = BUDDY_EVENT_BLE_DISCONNECTED};
+    buddy_event_t connected = {.type = BUDDY_EVENT_BLE_CONNECTED};
+    buddy_event_t hello = {.type = BUDDY_EVENT_HOST_HELLO, .host_voice = true};
+    buddy_event_t prompt = test_prompt_event("req-voice", "Bash", "ls", 0, 1);
+
+    /* Nobody connected. */
+    buddy_state_init(&state, NULL);
+    buddy_state_reduce(&state, &long_ok, 1, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH && state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(strcmp(state.message, PT_VOICE_NEED_LINK) == 0);
+
+    /* Connected to a host that never said it takes voice (the Claude desktop app). */
+    connected.ble.connection_generation = 3;
+    buddy_state_reduce(&state, &connected, 2, &action);
+    state.ble_encrypted = true;
+    buddy_state_reduce(&state, &long_ok, 3, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH && state.voice_phase == BUDDY_VOICE_IDLE);
+    assert(strcmp(state.message, PT_VOICE_NO_HOST) == 0);
+
+    /* A hello for another connection does not count; the right one does. */
+    hello.ble.connection_generation = 2;
+    buddy_state_reduce(&state, &hello, 4, &action);
+    assert(!state.host_voice);
+    hello.ble.connection_generation = 3;
+    buddy_state_reduce(&state, &hello, 5, &action);
+    assert(state.host_voice);
+
+    /* An approval on screen keeps OK for approving. */
+    prompt.ble.connection_generation = 3;
+    buddy_state_reduce(&state, &prompt, 6, &action);
+    buddy_state_reduce(&state, &long_ok, 7, &action);
+    assert(action.type == BUDDY_ACTION_NONE && state.voice_phase == BUDDY_VOICE_IDLE);
+    memset(&state.prompt, 0, sizeof(state.prompt));
+
+    /* Losing the link while talking stops the worker and forgets the capability. */
+    buddy_state_reduce(&state, &long_ok, 8, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START);
+    disconnected.ble.connection_generation = 3;
+    buddy_state_reduce(&state, &disconnected, 9, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_STOP && action.voice_cancel);
+    assert(state.voice_phase == BUDDY_VOICE_IDLE && !state.host_voice);
+    assert(strcmp(state.message, PT_VOICE_FAILED_LINK) == 0);
+    connected.ble.connection_generation = 4;
+    buddy_state_reduce(&state, &connected, 10, &action);
+    assert(!state.host_voice);
 }
 
 static void test_carousel_wraps_in_both_directions(void)
@@ -685,9 +845,19 @@ static void test_screen_off_wakes_on_key_and_on_attention(void)
     assert(state.page == BUDDY_PAGE_HOME);
     assert(buddy_state_backlight_percent(&state) == 0);
 
-    /* A long press must not navigate while the screen is dark. */
+    /* A long press on a dark screen wakes it without navigating. Nobody is
+     * connected here, so holding OK cannot start talking either. */
     buddy_state_reduce(&state, &long_ok, 2, &action);
-    assert(state.screen_off && state.page == BUDDY_PAGE_HOME);
+    assert(!state.screen_off && state.page == BUDDY_PAGE_HOME);
+    assert(state.voice_phase == BUDDY_VOICE_IDLE);
+    state.screen_off = true;
+    {
+        buddy_event_t long_up = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_UP};
+
+        buddy_state_reduce(&state, &long_up, 2, &action);
+        assert(!state.screen_off && state.page == BUDDY_PAGE_HOME);
+    }
+    state.screen_off = true;
 
     /* The waking click is consumed: it never approves or navigates. */
     buddy_state_reduce(&state, &ok, 3, &action);
@@ -889,12 +1059,12 @@ static void test_settings_actions_have_separate_confirmations(void)
     buddy_state_t state;
     buddy_ui_snapshot_t snapshot;
     buddy_action_t action = {0};
-    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t long_up = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_UP};
     buddy_event_t click_ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
     buddy_event_t click_down = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_DOWN};
 
     buddy_state_init(&state, &settings);
-    buddy_state_reduce(&state, &long_ok, 1000, &action);
+    buddy_state_reduce(&state, &long_up, 1000, &action);
     assert(state.page == BUDDY_PAGE_SETTINGS);
     state.settings_selection = BUDDY_SETTINGS_BLE;
     buddy_state_reduce(&state, &click_ok, 1002, &action);
@@ -1095,7 +1265,9 @@ int main(void)
     test_mismatched_observed_prompt_is_ignored();
     test_nonterminated_prompt_id_is_ignored();
     test_truncated_prompt_id_is_ignored();
-    test_long_ok_opens_settings();
+    test_long_up_opens_settings();
+    test_hold_ok_talks_and_release_sends();
+    test_talking_needs_a_voice_capable_host();
     test_carousel_wraps_in_both_directions();
     test_guide_scrolls_and_returns_to_settings();
     test_screen_off_wakes_on_key_and_on_attention();

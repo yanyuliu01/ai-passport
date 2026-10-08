@@ -1621,6 +1621,64 @@ esp_err_t buddy_ble_send_for_generation(const char *data, size_t length,
     return buddy_ble_send_internal(data, length, true, expected_generation);
 }
 
+/* Caller holds s_ble.mutex. */
+static bool buddy_ble_generation_ready_locked(uint32_t expected_generation)
+{
+    return buddy_ble_tx_generation_matches(
+        buddy_ble_transport_available(s_ble.start_requested, s_ble.stop_pending),
+        s_ble.secure, s_ble.notify_subscribed,
+        s_ble.conn_handle != BLE_HS_CONN_HANDLE_NONE, expected_generation,
+        s_ble.connection_generation, s_ble.subscription_generation);
+}
+
+size_t buddy_ble_notify_payload_for_generation(uint32_t expected_generation)
+{
+    size_t payload = 0;
+
+    if (!s_ble.initialized) {
+        return 0;
+    }
+    xSemaphoreTake(s_ble.mutex, portMAX_DELAY);
+    if (buddy_ble_generation_ready_locked(expected_generation)) {
+        payload = buddy_ble_tx_fragment_size(ble_att_mtu(s_ble.conn_handle));
+    }
+    xSemaphoreGive(s_ble.mutex);
+    return payload;
+}
+
+esp_err_t buddy_ble_notify_for_generation(const uint8_t *data, size_t length,
+                                          uint32_t expected_generation)
+{
+    struct os_mbuf *mbuf;
+    esp_err_t result = ESP_OK;
+    int rc;
+
+    if (data == NULL || length == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_ble.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    xSemaphoreTake(s_ble.mutex, portMAX_DELAY);
+    if (!buddy_ble_generation_ready_locked(expected_generation)) {
+        result = ESP_ERR_INVALID_STATE;
+    } else if (length > buddy_ble_tx_fragment_size(ble_att_mtu(s_ble.conn_handle))) {
+        result = ESP_ERR_INVALID_SIZE;
+    } else {
+        mbuf = ble_hs_mbuf_from_flat(data, (uint16_t)length);
+        if (mbuf == NULL) {
+            result = ESP_ERR_NO_MEM;
+        } else {
+            rc = ble_gatts_notify_custom(s_ble.conn_handle, s_tx_value_handle, mbuf);
+            if (rc != 0) {
+                result = buddy_ble_error(rc);
+            }
+        }
+    }
+    xSemaphoreGive(s_ble.mutex);
+    return result;
+}
+
 bool buddy_ble_is_generation_secure(uint32_t expected_generation)
 {
     bool matches;

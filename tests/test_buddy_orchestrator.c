@@ -168,6 +168,29 @@ static void test_official_rx_fixtures_reach_state_and_responses(void)
     assert(strstr(fake.sent, "\"bat\":{\"pct\":87,\"mV\":4012}") != NULL);
 }
 
+static void test_hub_hello_is_acknowledged_and_enables_voice(void)
+{
+    static const char hello[] = "{\"cmd\":\"hub\",\"voice\":true}";
+    fake_runtime_t fake = {.commit_result = ESP_OK, .secure = true};
+    buddy_orchestrator_ops_t ops = fake_ops(&fake);
+    buddy_event_t connected = {.type = BUDDY_EVENT_BLE_CONNECTED};
+    buddy_state_t state;
+    buddy_action_t action;
+
+    buddy_state_init(&state, NULL);
+    connected.ble.connection_generation = 7;
+    buddy_state_reduce(&state, &connected, 999, &action);
+    assert(buddy_orchestrator_process_rx(&state, &ops, hello, strlen(hello), 7, 1000, &action));
+    assert(state.host_voice);
+    assert(strcmp(fake.sent, "{\"ack\":\"hub\",\"ok\":true}\n") == 0);
+
+    /* The voice actions belong to the application; the orchestrator lets them pass. */
+    action.type = BUDDY_ACTION_VOICE_START;
+    assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
+    action.type = BUDDY_ACTION_VOICE_STOP;
+    assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
+}
+
 static void test_failed_setting_commit_sends_error_ack_without_state_change(void)
 {
     fake_runtime_t fake = {.commit_result = ESP_ERR_INVALID_STATE, .secure = true};
@@ -221,6 +244,7 @@ static void test_executor_orders_sensitive_side_effects(void)
 int main(void)
 {
     test_official_rx_fixtures_reach_state_and_responses();
+    test_hub_hello_is_acknowledged_and_enables_voice();
     test_failed_setting_commit_sends_error_ack_without_state_change();
     test_executor_orders_sensitive_side_effects();
     puts("buddy orchestrator tests passed");

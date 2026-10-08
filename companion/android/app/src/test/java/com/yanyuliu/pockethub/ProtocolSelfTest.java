@@ -98,6 +98,91 @@ public final class ProtocolSelfTest {
         check(assembler.feed(huge).isEmpty(), "oversized pending");
         List<String> after = assembler.feed("\nok\n".getBytes(StandardCharsets.UTF_8));
         check(after.size() == 1 && after.get(0).equals("ok"), "recover after oversized");
+
+        voice();
+    }
+
+    private static byte[] hex(String text) {
+        byte[] bytes = new byte[text.length() / 2];
+        for (int index = 0; index < bytes.length; index++) {
+            bytes[index] = (byte) Integer.parseInt(text.substring(2 * index, 2 * index + 2), 16);
+        }
+        return bytes;
+    }
+
+    private static int sampleAt(byte[] wav, int index) {
+        int offset = 44 + 2 * index;
+        return (short) ((wav[offset] & 0xFF) | (wav[offset + 1] << 8));
+    }
+
+    /** 语音：控制行、帧的识别，以及和固件编码器逐个采样对得上的解码。 */
+    private static void voice() {
+        check(BuddyProtocol.hubHello().equals("{\"cmd\":\"hub\",\"voice\":true}\n"), "hub hello");
+        check("start".equals(BuddyProtocol.parseVoiceState(
+                "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\"}")),
+                "voice start");
+        check("end".equals(BuddyProtocol.parseVoiceState(
+                "{\"cmd\":\"voice\",\"state\":\"end\",\"frames\":34,\"dropped\":0,\"ms\":1000}")),
+                "voice end");
+        check("cancel".equals(BuddyProtocol.parseVoiceState("{\"cmd\":\"voice\",\"state\":\"cancel\"}")),
+                "voice cancel");
+        check(BuddyProtocol.parseVoiceState("{\"cmd\":\"voice\",\"state\":\"dance\"}") == null,
+                "unknown voice state");
+        check(BuddyProtocol.parseVoiceState("{\"cmd\":\"permission\",\"state\":\"start\"}") == null,
+                "not a voice line");
+        check(Boolean.TRUE.equals(BuddyProtocol.parseHubAck("{\"ack\":\"hub\",\"ok\":true}")), "hub ack");
+        check(Boolean.FALSE.equals(BuddyProtocol.parseHubAck(
+                "{\"ack\":\"hub\",\"ok\":false,\"error\":\"unknown command\"}")), "old firmware ack");
+        check(BuddyProtocol.parseHubAck("{\"ack\":\"owner\",\"ok\":true}") == null, "other ack");
+
+        check(VoiceRecording.isFrame(new byte[] {(byte) 0xFF, 0}), "frame marker");
+        check(!VoiceRecording.isFrame("{\"cmd\"".getBytes(StandardCharsets.UTF_8)), "text is not a frame");
+        check(!VoiceRecording.isFrame(new byte[0]) && !VoiceRecording.isFrame(null), "empty");
+
+        // 这两帧和期望的采样值由固件的编码器（main/pocket_voice_core.c）在电脑上生成。
+        byte[] first = hex("ff00000000fff7777f2fc5c2222c2cc2b2321d3b");
+        byte[] second = hex("ff0120054cc2c2222c1b");
+        int[] expected = {
+            -11, -41, 22, -114, 179, 810, -547, 2363, -3873, 584, 9499, -1180, 5998, -5749, 2147,
+            9325, -2422, 5474, -7448, 1238, 9134, -3788, 4898, -6156, 1022, 10158, -2894, 2317,
+            -8737, 1312, 7838, -2841, 4337, -7410, 486, 7664, -4083, 3813, -6236, -2321,
+        };
+        VoiceRecording recording = new VoiceRecording();
+        check(recording.add(first) && recording.add(second), "frames accepted");
+        check(!recording.add(new byte[] {(byte) 0xFF, 2, 0, 0, 0}), "header-only frame refused");
+        check(!recording.add("text".getBytes(StandardCharsets.UTF_8)), "text refused");
+        byte[] wav = recording.toWav();
+        check(wav.length == 44 + 2 * expected.length, "wav size " + wav.length);
+        check(new String(wav, 0, 4, StandardCharsets.US_ASCII).equals("RIFF")
+                && new String(wav, 8, 8, StandardCharsets.US_ASCII).equals("WAVEfmt "), "wav header");
+        check((wav[24] & 0xFF) == 0x80 && (wav[25] & 0xFF) == 0x3E && wav[22] == 1 && wav[34] == 16,
+                "16 kHz mono 16-bit");
+        for (int index = 0; index < expected.length; index++) {
+            check(sampleAt(wav, index) == expected[index], "sample " + index);
+        }
+        check(recording.frames() == 2 && recording.lostFrames() == 0, "frame count");
+
+        // 丢一帧：缺的那段补静音，后面的帧照常解码（每帧自带解码起点）。
+        byte[] third = second.clone();
+        third[1] = 3;
+        VoiceRecording gap = new VoiceRecording();
+        gap.add(first);
+        gap.add(second);
+        gap.add(third);
+        check(gap.lostFrames() == 1, "one lost frame");
+        byte[] gapped = gap.toWav();
+        check(gapped.length == 44 + 2 * (30 + 10 + 10 + 10), "silence fills the gap");
+        check(sampleAt(gapped, 45) == 0 && sampleAt(gapped, 50) == 7838
+                && sampleAt(gapped, 59) == -2321, "decoding resumes after the gap");
+        // 序号从 255 回到 0 不算丢帧。
+        VoiceRecording wrap = new VoiceRecording();
+        byte[] last = second.clone();
+        last[1] = (byte) 255;
+        byte[] zero = second.clone();
+        zero[1] = 0;
+        wrap.add(last);
+        wrap.add(zero);
+        check(wrap.lostFrames() == 0, "sequence wraps");
     }
 
     public static void main(String[] args) {

@@ -306,6 +306,21 @@ int main(int argc, char **argv)
     snap.confirmation = BUDDY_CONFIRM_FACTORY_RESET;
     show("27_confirm_factory", &snap);
 
+    snap = live_snapshot();
+    snap.voice_phase = BUDDY_VOICE_PREPARING;
+    show("28_voice_preparing", &snap);
+    snap.voice_phase = BUDDY_VOICE_LISTENING;
+    snap.voice_listening_since_ms = snap.uptime_ms - 7300U;
+    show("29_voice_listening", &snap);
+    snap.voice_phase = BUDDY_VOICE_SENDING;
+    show("30_voice_sending", &snap);
+    snap = live_snapshot();
+    (void)snprintf(snap.message, sizeof(snap.message), "%s",
+                   "这个连接不能传语音\n要连手机上的小幽中枢");
+    show("31_home_voice_no_host", &snap);
+    (void)snprintf(snap.message, sizeof(snap.message), "%s", "发出去啦，等小幽回话");
+    show("32_home_voice_sent", &snap);
+
     {
         lv_mem_monitor_t monitor;
 

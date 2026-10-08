@@ -13,6 +13,7 @@
 typedef enum {
     POCKET_VIEW_CONFIRM,   // 取消配对 / 恢复出厂 的二次确认
     POCKET_VIEW_PAIRING,   // 配对码或“正在建立安全连接”
+    POCKET_VIEW_VOICE,     // 按住确认键说话
     POCKET_VIEW_APPROVAL,  // Claude 请求权限
     POCKET_VIEW_PAGE,      // 普通页面（由 snapshot->page 决定）
 } pocket_view_t;

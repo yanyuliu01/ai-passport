@@ -18,6 +18,12 @@
     "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
     "extra_args": []
   },
+  "stt": {
+    "engine": "none",
+    "model_dir": "stt-models/sense-voice",
+    "language": "auto",
+    "threads": 2
+  },
   "tools": [
     {
       "name": "Codex",

@@ -16,6 +16,9 @@ pocket_view_t pocket_view_for(const buddy_ui_snapshot_t *snapshot)
     if (snapshot->passkey_visible || snapshot->connection == BUDDY_CONNECTION_PAIRING) {
         return POCKET_VIEW_PAIRING;
     }
+    if (snapshot->voice_phase != BUDDY_VOICE_IDLE) {
+        return POCKET_VIEW_VOICE;
+    }
     if (snapshot->prompt_id[0] != '\0') {
         return POCKET_VIEW_APPROVAL;
     }
@@ -56,6 +59,12 @@ pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot)
         return POCKET_PET_ASK;
     case POCKET_VIEW_PAIRING:
         return snapshot->passkey_visible ? POCKET_PET_ASK : POCKET_PET_BUSY;
+    case POCKET_VIEW_VOICE:
+        if (snapshot->voice_phase == BUDDY_VOICE_LISTENING) {
+            return POCKET_PET_ASK;
+        }
+        return snapshot->voice_phase == BUDDY_VOICE_SENDING ? POCKET_PET_HAPPY
+                                                            : POCKET_PET_BUSY;
     case POCKET_VIEW_APPROVAL:
         if (!snapshot->approval_locked) {
             return POCKET_PET_ASK;

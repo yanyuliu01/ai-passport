@@ -2,6 +2,7 @@
 //
 // 数据流：BLE 字节流 → 完整 JSON 行 → 协议事件 → 状态机(buddy_state) → 快照 → 界面(pocket_ui)
 // 按键流：BSP 按键回调 → 队列 → 状态机 → 界面刷新或向电脑回发决定
+// 语音流：长按确认键 → 状态机 → 语音任务(pocket_voice) 采集并发给手机 → 结果回到状态机
 //
 // 线程：NimBLE 回调和按键回调只入队；所有状态变更和 LVGL 调用都在 app 任务里，
 // LVGL 调用前后持有 bsp_lvgl_lock()。
@@ -35,9 +36,11 @@
 #include "buddy_state.h"
 #include "pocket_text.h"
 #include "pocket_ui.h"
+#include "pocket_voice.h"
 
 #define BUDDY_CRITICAL_QUEUE_DEPTH 1U
 #define BUDDY_BUTTON_QUEUE_DEPTH 4U
+#define BUDDY_VOICE_QUEUE_DEPTH 4U
 #define BUDDY_RX_NORMAL_QUEUE_DEPTH 1U
 /* 每个槽位能放一整行 JSON（4 KB）。电脑约每 2 秒才发一两条，应用任务处理一条
  * 只要几毫秒，4 个槽位足够；多出来的内存留给蓝牙和界面。 */
@@ -59,6 +62,8 @@ typedef enum {
     BUDDY_CONTROL_BLE_PASSKEY,
     BUDDY_CONTROL_BLE_ENCRYPTION,
     BUDDY_CONTROL_BOND_DELETE_RESULT,
+    BUDDY_CONTROL_KEY_RELEASE,
+    BUDDY_CONTROL_VOICE,
 } buddy_control_type_t;
 
 typedef struct {
@@ -85,6 +90,10 @@ typedef struct {
             bool secure;
             bool success;
         } ble;
+        struct {
+            buddy_voice_status_t status;
+            uint32_t connection_generation;
+        } voice;
     } data;
 } buddy_control_event_t;
 
@@ -116,6 +125,8 @@ static QueueHandle_t s_passkey_queue;
 static QueueHandle_t s_security_queue;
 static QueueHandle_t s_bond_queue;
 static QueueHandle_t s_button_queue;
+static QueueHandle_t s_release_queue;
+static QueueHandle_t s_voice_queue;
 static QueueHandle_t s_rx_normal_queue;
 static QueueHandle_t s_rx_priority_queue;
 static TaskHandle_t s_app_task_handle;
@@ -129,6 +140,7 @@ static atomic_bool s_ble_initialized;
 static atomic_bool s_app_ready;
 static atomic_uint s_control_coalesced;
 static atomic_uint s_button_dropped;
+static atomic_uint s_voice_dropped;
 static atomic_uint s_rx_normal_coalesced;
 static atomic_uint s_rx_priority_evicted;
 static atomic_uint s_rx_dropped;
@@ -333,6 +345,16 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     if (event == BSP_BTN_DOUBLE) {
         event = BSP_BTN_CLICK;
     }
+    if (event == BSP_BTN_RELEASE) {
+        /* 松开确认键 = 说完了。这个事件不能丢，也不看当时显示的是哪个界面
+         *（按住期间界面已经换成了“在听”），所以单独走一个只留最新一条的队列。 */
+        if (button == BSP_BTN_OK && s_release_queue != NULL) {
+            control.type = BUDDY_CONTROL_KEY_RELEASE;
+            (void)xQueueOverwrite(s_release_queue, &control);
+            buddy_notify_app();
+        }
+        return;
+    }
     if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG) || s_button_queue == NULL) {
         return;
     }
@@ -417,6 +439,25 @@ static void on_ble_event(const buddy_ble_event_t *event, void *context)
         break;
     case BUDDY_BLE_EVENT_RX_LINE:
         return;
+    }
+}
+
+static void on_voice_event(buddy_voice_status_t status, uint32_t connection_generation,
+                           void *context)
+{
+    buddy_control_event_t control = {0};
+
+    (void)context;
+    if (s_voice_queue == NULL) {
+        return;
+    }
+    control.type = BUDDY_CONTROL_VOICE;
+    control.data.voice.status = status;
+    control.data.voice.connection_generation = connection_generation;
+    if (xQueueSend(s_voice_queue, &control, 0) != pdTRUE) {
+        buddy_count(&s_voice_dropped);
+    } else {
+        buddy_notify_app();
     }
 }
 
@@ -529,6 +570,15 @@ static bool buddy_control_to_event(const buddy_control_event_t *control,
         event->ble.status = control->data.ble.status;
         event->ble.success = control->data.ble.success;
         break;
+    case BUDDY_CONTROL_KEY_RELEASE:
+        event->type = BUDDY_EVENT_KEY_RELEASE;
+        event->key = BUDDY_KEY_OK;
+        break;
+    case BUDDY_CONTROL_VOICE:
+        event->type = BUDDY_EVENT_VOICE;
+        event->voice_status = control->data.voice.status;
+        event->ble.connection_generation = control->data.voice.connection_generation;
+        break;
     case BUDDY_CONTROL_KEY:
         return false;
     }
@@ -599,6 +649,7 @@ static uint64_t buddy_queue_overflow_total(void)
 {
     return (uint64_t)atomic_load_explicit(&s_control_coalesced, memory_order_relaxed) +
            (uint64_t)atomic_load_explicit(&s_button_dropped, memory_order_relaxed) +
+           (uint64_t)atomic_load_explicit(&s_voice_dropped, memory_order_relaxed) +
            (uint64_t)atomic_load_explicit(&s_rx_normal_coalesced, memory_order_relaxed) +
            (uint64_t)atomic_load_explicit(&s_rx_priority_evicted, memory_order_relaxed) +
            (uint64_t)atomic_load_explicit(&s_rx_dropped, memory_order_relaxed);
@@ -800,6 +851,22 @@ static bool buddy_execute_action(buddy_state_t *state, const buddy_action_t *act
         memset(result_event, 0, sizeof(*result_event));
         return false;
     }
+    if (action->type == BUDDY_ACTION_VOICE_STOP) {
+        pocket_voice_stop(action->voice_cancel);
+        memset(result_event, 0, sizeof(*result_event));
+        return false;
+    }
+    if (action->type == BUDDY_ACTION_VOICE_START) {
+        memset(result_event, 0, sizeof(*result_event));
+        if (pocket_voice_start(action->connection_generation) == ESP_OK) {
+            return false;
+        }
+        /* 语音任务没起来或上一轮还没收尾：让状态机按“麦克风没准备好”收场。 */
+        result_event->type = BUDDY_EVENT_VOICE;
+        result_event->voice_status = BUDDY_VOICE_FAILED_MIC;
+        result_event->ble.connection_generation = action->connection_generation;
+        return true;
+    }
 
     (void)buddy_orchestrator_execute_action(state, &ops, action, result_event);
     if (result_event->type == BUDDY_EVENT_PERMISSION_SEND_RESULT &&
@@ -912,7 +979,10 @@ static QueueHandle_t buddy_next_ready_queue(void)
         &s_security_queue,
         &s_bond_queue,
         &s_rx_priority_queue,
+        &s_voice_queue,
         &s_button_queue,
+        /* 排在按键队列后面：同时积压时先处理“长按”，再处理它的“松开”。 */
+        &s_release_queue,
         &s_rx_normal_queue,
     };
     size_t index;
@@ -959,7 +1029,8 @@ static void buddy_app_task(void *context)
 
         if (ready == s_link_queue || ready == s_passkey_queue ||
             ready == s_security_queue || ready == s_bond_queue ||
-            ready == s_button_queue) {
+            ready == s_button_queue || ready == s_release_queue ||
+            ready == s_voice_queue) {
             buddy_control_event_t control;
 
             if (xQueueReceive(ready, &control, 0) == pdTRUE &&
@@ -1078,17 +1149,24 @@ void app_main(void)
                                     sizeof(buddy_control_event_t));
     s_bond_queue = xQueueCreate(BUDDY_CRITICAL_QUEUE_DEPTH, sizeof(buddy_control_event_t));
     s_button_queue = xQueueCreate(BUDDY_BUTTON_QUEUE_DEPTH, sizeof(buddy_control_event_t));
+    s_release_queue = xQueueCreate(BUDDY_CRITICAL_QUEUE_DEPTH,
+                                   sizeof(buddy_control_event_t));
+    s_voice_queue = xQueueCreate(BUDDY_VOICE_QUEUE_DEPTH, sizeof(buddy_control_event_t));
     s_rx_normal_queue = xQueueCreate(BUDDY_RX_NORMAL_QUEUE_DEPTH,
                                      sizeof(buddy_rx_slot_t *));
     s_rx_priority_queue = xQueueCreate(BUDDY_RX_PRIORITY_QUEUE_DEPTH,
                                        sizeof(buddy_rx_slot_t *));
     if (s_link_queue == NULL || s_passkey_queue == NULL || s_security_queue == NULL ||
-        s_bond_queue == NULL || s_button_queue == NULL || s_rx_normal_queue == NULL ||
+        s_bond_queue == NULL || s_button_queue == NULL || s_release_queue == NULL ||
+        s_voice_queue == NULL || s_rx_normal_queue == NULL ||
         s_rx_priority_queue == NULL ||
         xTaskCreate(buddy_app_task, "pocket_app", BUDDY_APP_STACK_SIZE, NULL,
                     BUDDY_APP_PRIORITY, &s_app_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "application queue/task initialization failed");
         return;
+    }
+    if (pocket_voice_init(on_voice_event, NULL) != ESP_OK) {
+        ESP_LOGW(TAG, "voice task initialization failed; push-to-talk unavailable");
     }
     if (bsp_button_init(on_key, NULL) != ESP_OK) {
         ESP_LOGW(TAG, "button initialization failed; approvals remain fail-closed");

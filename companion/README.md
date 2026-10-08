@@ -16,6 +16,10 @@ to the [Xiaoyou Runtime](../runtime/README.md) over HTTP; while the runtime
 works the device shows the pet as busy, and when it answers the device gets the
 short brief on the home page and the full reply on the latest-reply page.
 
+Holding `OK` on the device records a voice message. The app receives the audio
+over Bluetooth, forwards it to the runtime, and the runtime turns it into text
+and answers it like a typed message. The app does not recognize speech itself.
+
 The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
@@ -28,6 +32,7 @@ display label, and more can be added in the app.
 | Notifications not yet dismissed | The waiting count; the pet asks for attention |
 | A notification with both an allow-like and a deny-like button | The pet asks; `OK` presses the allow button, `DOWN` the deny button |
 | A message sent to Xiaoyou from the chat box | Busy while the runtime works; then the brief, with the full reply on the latest-reply page |
+| A voice message recorded on the device | The same as a typed message; the chat box shows what was heard once the runtime has transcribed it |
 | Nothing new | A keepalive every 10 seconds so the device stays connected |
 
 Only what a notification contains can be forwarded. Whether a given assistant
@@ -61,7 +66,8 @@ paired device over an encrypted Bluetooth link, and never written to storage or
 sent over the network. Notifications from other apps are ignored.
 
 The app uses the network for one thing: sending what you type in the chat box
-to the runtime address you paired, and reading the answer. That connection is
+to the runtime address you paired, and reading the answer. Voice recordings from the device take
+the same route and are not kept on the phone. That connection is
 plain HTTP, so anyone on the same network can read it; use it on a network you
 trust. The runtime address and token are kept in the app's private storage.
 
@@ -74,14 +80,19 @@ trust. The runtime address and token are kept in the app's private storage.
 | `.../HubStore.java` | In-memory feed, pending questions, log |
 | `.../NotifyListener.java` | Notification listener service |
 | `.../BleLink.java`, `.../LinkService.java` | BLE central and the foreground service that keeps it alive |
-| `.../RuntimeClient.java` | Sends chat messages to the Xiaoyou Runtime and waits for the answer |
+| `.../VoiceRecording.java` | Decodes voice frames from the device into a WAV recording; plain Java, unit tested |
+| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime and waits for the answer |
 | `.../MainActivity.java` | Chat box, setup, source list, test buttons, log |
 
 ## Status
 
 The protocol layer is unit tested and its output is accepted by the firmware's
 parser. The app compiles against the Android 14 API, and its runtime request
-code was run on a desktop Java runtime against a local runtime. It has not been
-run on a phone yet: Bluetooth pairing, the chat box, background behavior on
-vendor-modified Android systems, and real assistant notifications are all
-unverified.
+code was run on a desktop Java runtime against a local runtime. The voice decoder is checked sample by sample against frames
+produced by the firmware's encoder.
+
+On a phone (2026-10-08, one Android device, version 0.2.0): Bluetooth pairing,
+the connection to the device, and a typed message answered by the runtime and
+shown on the device worked. Not verified: voice from the device (version
+0.3.0 has not been run on a phone), reconnecting by itself after the app is
+restarted, background behavior over hours, and real assistant notifications.

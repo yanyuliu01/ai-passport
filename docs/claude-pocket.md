@@ -25,6 +25,7 @@ Bluetooth range of the computer that runs Claude.
 | Usage | Output tokens today and since app start, approvals, denials, uptime, battery |
 | Approvals | The pet asks; the tool name and the argument hint are shown verbatim; approve once or deny on the device |
 | Pairing | LE Secure Connections with a six-digit passkey shown on the device |
+| Push-to-talk | Hold `OK` to record; the audio goes to the phone companion over Bluetooth. Only with a host that says it accepts voice; see [Push-to-talk](#push-to-talk) |
 
 The interface is built around a pixel pet, a small ghost. Its face shows the
 state on the home page: asleep while nothing is connected, idle, busy, asking
@@ -32,8 +33,9 @@ for you, pleased after an approval, and upset after a failed send. Permission
 requests, pairing, and destructive confirmations are presented as the pet
 talking to you in a chat bubble, and your key press appears as your reply.
 
-The device cannot send prompts or audio to Claude: the protocol has no message
-for that. See [Roadmap](#roadmap).
+The Claude desktop protocol has no message for prompts or audio, so the device
+never sends either to the desktop app. Voice goes to the phone companion
+through an extension of the same link; see [Push-to-talk](#push-to-talk).
 
 ## Pair with Claude desktop
 
@@ -51,14 +53,14 @@ list, check that Bluetooth is switched on in the device settings.
 
 The three buttons are `UP`, `DOWN`, and `OK`.
 
-| Where | `UP` / `DOWN` | `OK` click | `OK` long press |
-| --- | --- | --- | --- |
-| Home, Latest reply, Recent activity, Usage | Previous / next page (wraps) | Return to Home | Open Settings |
-| Settings | Move the selection (wraps) | Run the selected item | Return to Home |
-| Connection guide | Scroll three lines | Back to Settings | Return to Home |
-| Permission request | `UP` pages through the hint; `DOWN` denies | Approve once | — |
-| Unpair / factory-reset confirmation | `DOWN` cancels | Confirm | — |
-| Screen off | Any click turns the screen on and does nothing else | | |
+| Where | `UP` / `DOWN` click | `OK` click | `OK` hold | `UP` long press |
+| --- | --- | --- | --- | --- |
+| Home, Latest reply, Recent activity, Usage | Previous / next page (wraps) | Return to Home | Talk; release to send | Open Settings |
+| Settings | Move the selection (wraps) | Run the selected item | Return to Home | Return to Home |
+| Connection guide | Scroll three lines | Back to Settings | Return to Home | Return to Home |
+| Permission request | `UP` pages through the hint; `DOWN` denies | Approve once | — | — |
+| Unpair / factory-reset confirmation | `DOWN` cancels | Confirm | — | — |
+| Screen off | Any click turns the screen on and does nothing else | | Turns the screen on, then talks | Turns the screen on |
 
 A permission request, a pairing passkey, or a confirmation takes over the
 screen and turns it back on if it was off. A key press only counts for the
@@ -92,6 +94,43 @@ and a hint the desktop sent longer than 319 bytes is marked as truncated. LVGL
 does not apply CJK line-breaking rules, so a wrapped line can begin with a
 punctuation mark.
 
+## Push-to-talk
+
+Hold `OK` on any of the four browsable pages. The pet says it is getting
+ready, then a green timer shows that the microphone is live; speak, and release
+to send. A press shorter than about a third of a second sends nothing. A
+recording stops by itself at 30 seconds and is sent as it is.
+
+The device only records and transmits. Turning speech into text and answering
+is done by the host: the phone companion forwards the recording to the Xiaoyou
+Runtime (see [`companion/README.md`](../companion/README.md) and
+[`runtime/README.md`](../runtime/README.md)).
+
+Voice is an extension to the desktop protocol and is off until the host asks
+for it, so the Claude desktop app never receives a frame it does not
+understand:
+
+| Direction | Message | Meaning |
+| --- | --- | --- |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true}` |
+| Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm"}` | A recording begins |
+| Device → host | voice frames | One notification per frame; see below |
+| Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
+| Device → host | `{"cmd":"voice","state":"cancel"}` | Discard what was received |
+
+A voice frame is one notification on the same TX characteristic as the text
+lines: `0xFF`, a sequence byte, the encoder state before this frame (predictor,
+two bytes little-endian, and step index), then IMA ADPCM data, low nibble
+first. `0xFF` never occurs in UTF-8, so a host tells frames from text by the
+first byte of a notification. Audio is 16 kHz mono at 4 bits per sample, about
+8 KB/s. Because every frame carries its own decoder state, a lost frame costs
+only its own 30 ms.
+
+Holding `OK` while no host is connected, or while connected to a host that did
+not announce voice (the Claude desktop app), shows a one-line explanation
+instead of recording. The codec is initialized on first use and put to sleep
+after every recording.
+
 ## Stored data
 
 The device stores its name, the owner name sent by the desktop app, the
@@ -103,7 +142,8 @@ the link drops or no heartbeat arrives for 30 seconds.
 
 - Folder push (`char_begin` and related commands) is refused with an error ack.
 - There is no "always allow" decision; the device sends `once` or `deny`.
-- Sound, microphone, Wi-Fi, and low-power sleep are not used by this application.
+- The speaker, Wi-Fi, and low-power sleep are not used by this application.
+- Replies are shown as text only; nothing is read aloud.
 
 ## Memory
 
@@ -124,6 +164,8 @@ it during on-device acceptance.
 | `main/pocket_view.c` | Pure view selection, pet mood, and number/time formatting |
 | `main/pocket_pet.c` | The pet's 20 × 20 pixel sprite and its moods (no LVGL) |
 | `main/pocket_ui.c` | LVGL screens |
+| `main/pocket_voice_core.c` | IMA ADPCM, voice-frame packing, and the send queue (no ESP-IDF) |
+| `main/pocket_voice.c` | The push-to-talk task: microphone, encoding, Bluetooth uplink |
 | `tools/ui_preview/` | Host renderer that draws every screen with the real LVGL and fonts |
 
 The BLE, protocol, and state layers are adapted from the `demo/claude-buddy-port`
@@ -162,13 +204,21 @@ hardware:
 8. The `heap:` log line shows a comfortable minimum with Claude connected and
    a permission request on screen, and free heap stays stable over a long session; Bluetooth range and battery
    life are measured rather than assumed.
+9. Push-to-talk with the phone companion: holding `OK` turns the timer green
+   within about half a second; a ten-second sentence arrives complete (the
+   phone log shows the frame count and zero lost frames) and is recognized;
+   releasing early sends nothing; walking out of range mid-sentence ends the
+   recording with a message; `heap:` stays comfortable during a recording; with
+   the Claude desktop app connected, holding `OK` shows the explanation and the
+   desktop app keeps working.
 
 ## Roadmap
 
-1. **Voice path.** The board has a microphone, but the ESP32-C3 has no
-   Bluetooth Classic or LE Audio, so it cannot act as a headset, and the
-   desktop protocol carries no audio. Voice input needs a separate channel
-   that turns speech into text and hands it to Claude; that design is the next
-   step.
-2. **Phone companion.** A phone app is needed to keep the link when away from
-   the computer, because the Claude mobile apps do not offer the BLE bridge.
+1. **Spoken replies.** Replies are text only. Playing them through the
+   device speaker needs a downlink audio path and a speech synthesizer on the
+   host.
+2. **A leaner codec.** ADPCM needs about 8 KB/s of Bluetooth throughput. Opus
+   would need a quarter of that at the cost of memory and processor time on a
+   board without PSRAM; worth doing only if on-device tests show lost frames.
+3. **Away from home.** The phone reaches the runtime over the local network
+   only.

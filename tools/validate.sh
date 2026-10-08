@@ -31,6 +31,10 @@ run_app_host_tests() {
         -o "${test_dir}/test_pocket_pet"
     "${test_dir}/test_pocket_pet"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pocket_voice.c main/pocket_voice_core.c -lm \
+        -o "${test_dir}/test_pocket_voice"
+    "${test_dir}/test_pocket_voice"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_buddy_line.c main/buddy_line.c \
         -o "${test_dir}/test_buddy_line"
     "${test_dir}/test_buddy_line"

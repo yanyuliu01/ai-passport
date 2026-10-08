@@ -14,6 +14,13 @@ from typing import Dict, Optional
 class Store:
     def __init__(self, state_dir: Path):
         self._path = Path(state_dir) / "sessions.json"
+        self._voice_dir = Path(state_dir) / "voice"
+        # 录音只在识别前短暂落盘；上次没来得及删的（比如中途被关掉）启动时清掉。
+        for leftover in self._voice_dir.glob("*.wav"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
         self._lock = threading.Lock()
         self._sessions: Dict[str, str] = {}
         try:
@@ -28,6 +35,11 @@ class Store:
                 key: value for key, value in raw.items()
                 if isinstance(key, str) and isinstance(value, str)
             }
+
+    def voice_file(self, message_id: str) -> Path:
+        """一条语音消息的录音暂存位置。"""
+        self._voice_dir.mkdir(parents=True, exist_ok=True)
+        return self._voice_dir / (message_id + ".wav")
 
     def session(self, conversation: str) -> Optional[str]:
         with self._lock:

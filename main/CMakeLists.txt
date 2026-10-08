@@ -3,6 +3,8 @@ idf_component_register(
          "pocket_ui.c"
          "pocket_view.c"
          "pocket_pet.c"
+         "pocket_voice.c"
+         "pocket_voice_core.c"
          "buddy_orchestrator.c"
          "buddy_line.c"
          "buddy_ble.c"

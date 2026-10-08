@@ -19,12 +19,13 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 
 RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime import backends, config as config_module  # noqa: E402
+from xiaoyou_runtime import backends, config as config_module, stt as stt_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
 from xiaoyou_runtime.server import make_server  # noqa: E402
 from xiaoyou_runtime.service import RequestError, Service  # noqa: E402
@@ -430,6 +431,160 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("GET", "/v1/messages/unknown?wait=nan")[0], 400)
         self.assertEqual(self.call("GET", "/v1/other")[0], 404)
         self.assertEqual(self.call("POST", "/v1/other", {})[0], 404)
+
+
+FAKE_STT = r'''
+import os, sys, wave
+with wave.open(sys.argv[1], "rb") as audio:
+    seconds = audio.getnframes() / audio.getframerate()
+mode = os.environ.get("FAKE_STT_MODE", "ok")
+if mode == "crash":
+    sys.stderr.write("model not found\n")
+    sys.exit(3)
+if mode == "silence":
+    sys.exit(0)
+sys.stdout.buffer.write(("  你好小幽 %.1f\n" % seconds).encode("utf-8"))
+'''
+
+
+def make_wav(seconds=1.0, rate=16000, channels=1, width=2):
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(channels)
+        audio.setsampwidth(width)
+        audio.setframerate(rate)
+        audio.writeframes(b"\x01\x00" * int(seconds * rate) * channels * (width // 2 or 1))
+    return buffer.getvalue()
+
+
+class VoiceTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        script = self.folder / "fake_stt.py"
+        script.write_text(FAKE_STT, encoding="utf-8")
+        self.stt_config = {"engine": "command", "command": [sys.executable, str(script), "{audio}"]}
+        self.backend = RecordingBackend()
+        self.addCleanup(os.environ.pop, "FAKE_STT_MODE", None)
+
+    def service(self, **stt):
+        loaded = config_module.load(write_config(self.folder, stt=stt or self.stt_config), {})
+        store = Store(loaded.state_dir)
+        service = Service(self.backend, store, stt_module.create(loaded))
+        self.addCleanup(service.close)
+        return service, loaded
+
+    def leftovers(self, loaded):
+        return sorted(path.name for path in (loaded.state_dir / "voice").glob("*"))
+
+    def test_config_is_checked(self):
+        def load(**stt):
+            return config_module.load(write_config(self.folder, stt=stt), {})
+
+        self.assertEqual(load().stt_engine, "none")
+        with self.assertRaisesRegex(config_module.ConfigError, "stt.engine"):
+            load(engine="whisper")
+        with self.assertRaisesRegex(config_module.ConfigError, "{audio}"):
+            load(engine="command", command=["stt"])
+        with self.assertRaisesRegex(config_module.ConfigError, "model_dir"):
+            load(engine="sense_voice")
+        with self.assertRaisesRegex(config_module.ConfigError, "stt.language"):
+            load(engine="sense_voice", model_dir="m", language="klingon")
+        loaded = load(engine="sense_voice", model_dir="models/sv", language="zh")
+        self.assertEqual(loaded.stt_model_dir, (self.folder / "models" / "sv").resolve())
+        # The model folder does not exist: said at start-up, not at the first voice message.
+        self.assertIn("model", stt_module.check(stt_module.create(loaded)))
+
+    def test_a_recording_is_transcribed_then_answered_like_typed_text(self):
+        service, loaded = self.service()
+        message = service.submit_voice(make_wav(1.5), client_id="v1")
+        self.assertEqual((message["kind"], message["text"]), ("voice", ""))
+        done = service.get(message["id"], wait=10)
+        self.assertEqual((done["status"], done["text"]), ("done", "你好小幽 1.5"))
+        self.assertEqual(done["reply"], "re:你好小幽 1.5")
+        self.assertEqual(self.backend.calls, [("你好小幽 1.5", None)])
+        # The recording is gone once it has been transcribed.
+        self.assertEqual(self.leftovers(loaded), [])
+        # A retry with the same client_id does not transcribe or answer again.
+        self.assertEqual(service.submit_voice(make_wav(1.5), client_id="v1")["id"], message["id"])
+        self.assertEqual(len(self.backend.calls), 1)
+        # Typed text still works and continues the same conversation.
+        typed = service.get(service.submit("打字")["id"], wait=10)
+        self.assertEqual((typed["kind"], typed["status"]), ("text", "done"))
+        self.assertEqual(self.backend.calls[-1], ("打字", "s1"))
+
+    def test_nothing_heard_and_engine_failures_fail_the_message_only(self):
+        service, loaded = self.service()
+        os.environ["FAKE_STT_MODE"] = "silence"
+        quiet = service.get(service.submit_voice(make_wav())["id"], wait=10)
+        self.assertEqual((quiet["status"], quiet["mood"]), ("failed", "oops"))
+        self.assertIn("没听清", quiet["error"])
+        os.environ["FAKE_STT_MODE"] = "crash"
+        broken = service.get(service.submit_voice(make_wav())["id"], wait=10)
+        self.assertEqual(broken["status"], "failed")
+        self.assertIn("model not found", broken["error"])
+        self.assertEqual(self.backend.calls, [])
+        self.assertEqual(self.leftovers(loaded), [])
+        os.environ["FAKE_STT_MODE"] = "ok"
+        self.assertEqual(service.get(service.submit_voice(make_wav())["id"], wait=10)["status"], "done")
+
+    def test_bad_recordings_are_refused_before_queueing(self):
+        service, loaded = self.service()
+        for audio in (b"", b"not a wav file at all", make_wav(0.05), make_wav(1, channels=2),
+                      make_wav(1, width=1), make_wav(1, rate=4000), "text"):
+            with self.assertRaises(RequestError):
+                service.submit_voice(audio)
+        self.assertEqual(self.leftovers(loaded), [])
+        self.assertEqual(self.backend.calls, [])
+
+    def test_voice_is_refused_when_no_engine_is_configured(self):
+        loaded = config_module.load(write_config(self.folder), {})
+        service = Service(self.backend, Store(loaded.state_dir), stt_module.create(loaded))
+        self.addCleanup(service.close)
+        with self.assertRaisesRegex(RequestError, "语音识别"):
+            service.submit_voice(make_wav())
+
+    def test_leftover_recordings_are_removed_at_start(self):
+        voice = self.folder / "state" / "voice"
+        voice.mkdir(parents=True)
+        (voice / "old.wav").write_bytes(make_wav())
+        Store(self.folder / "state")
+        self.assertEqual(list(voice.glob("*")), [])
+
+    def test_http_voice_endpoint(self):
+        loaded = config_module.load(
+            write_config(self.folder, stt=self.stt_config),
+            {"XIAOYOU_PORT": str(HttpTests._free_port())},
+        )
+        service = Service(backends.create(loaded), Store(loaded.state_dir), stt_module.create(loaded))
+        server = make_server(loaded, service)
+        server.RequestHandlerClass.log_message = lambda *args: None
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(service.close)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:%d" % server.server_address[1]
+
+        def post(path, data, token=TOKEN):
+            request = urllib.request.Request(base + path, data=data, method="POST")
+            request.add_header("Content-Type", "audio/wav")
+            if token:
+                request.add_header("Authorization", "Bearer " + token)
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                return error.code, json.loads(error.read())
+
+        self.assertEqual(post("/v1/voice", make_wav(), token=None)[0], 401)
+        self.assertEqual(post("/v1/voice", b"junk")[0], 400)
+        status, message = post("/v1/voice?client_id=p1&conversation=walk", make_wav(2))
+        self.assertEqual((status, message["kind"], message["conversation"]), (202, "voice", "walk"))
+        request = urllib.request.Request(base + "/v1/messages/%s?wait=10" % message["id"])
+        request.add_header("Authorization", "Bearer " + TOKEN)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            done = json.loads(response.read())
+        self.assertEqual((done["status"], done["text"], done["reply"]),
+                         ("done", "你好小幽 2.0", "（回声）你好小幽 2.0"))
 
 
 class CommandLineTests(TempDirCase):

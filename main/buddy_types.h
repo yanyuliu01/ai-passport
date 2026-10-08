@@ -95,6 +95,9 @@ typedef enum {
     BUDDY_EVENT_KEY_LONG,
     BUDDY_EVENT_TICK,
     BUDDY_EVENT_TURN,
+    BUDDY_EVENT_KEY_RELEASE,
+    BUDDY_EVENT_HOST_HELLO,
+    BUDDY_EVENT_VOICE,
 } buddy_event_type_t;
 
 typedef enum {
@@ -109,7 +112,28 @@ typedef enum {
     BUDDY_ACTION_UI_SCROLL,
     BUDDY_ACTION_DISPLAY_BACKLIGHT,
     BUDDY_ACTION_SCREEN_OFF,
+    BUDDY_ACTION_VOICE_START,
+    BUDDY_ACTION_VOICE_STOP,
 } buddy_action_type_t;
+
+/* Push-to-talk: what the device is doing with the microphone right now. */
+typedef enum {
+    BUDDY_VOICE_IDLE,
+    BUDDY_VOICE_PREPARING, /* key held, microphone starting */
+    BUDDY_VOICE_LISTENING, /* recording and streaming */
+    BUDDY_VOICE_SENDING,   /* key released, flushing the tail */
+} buddy_voice_phase_t;
+
+/* Reports from the voice worker. */
+typedef enum {
+    BUDDY_VOICE_STARTED,     /* microphone is live */
+    BUDDY_VOICE_FINISHED,    /* whole recording handed to the host */
+    BUDDY_VOICE_LIMIT,       /* stopped at the length limit, then handed over */
+    BUDDY_VOICE_TOO_SHORT,   /* released almost at once; nothing sent */
+    BUDDY_VOICE_CANCELLED,   /* stopped on request; nothing more to report */
+    BUDDY_VOICE_FAILED_MIC,  /* audio hardware did not start or stopped working */
+    BUDDY_VOICE_FAILED_LINK, /* connection lost or too slow */
+} buddy_voice_status_t;
 
 typedef enum {
     BUDDY_PERMISSION_NONE,
@@ -201,6 +225,8 @@ typedef struct {
     bool observed_prompt_id_truncated;
     char reply[BUDDY_REPLY_MAX];
     bool reply_truncated;
+    buddy_voice_status_t voice_status;
+    bool host_voice;
 } buddy_event_t;
 
 typedef struct {
@@ -221,6 +247,7 @@ typedef struct {
     uint32_t connection_generation;
     bool ble_enabled;
     bool confirmation_acknowledge;
+    bool voice_cancel;
 } buddy_action_t;
 
 typedef struct {
@@ -268,4 +295,6 @@ typedef struct {
     uint32_t passkey;
     uint8_t battery_percent;
     uint16_t battery_mv;
+    buddy_voice_phase_t voice_phase;
+    uint64_t voice_listening_since_ms;
 } buddy_ui_snapshot_t;

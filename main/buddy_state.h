@@ -52,6 +52,11 @@ typedef struct {
     uint32_t passkey;
     uint8_t battery_percent;
     uint16_t battery_mv;
+    /* Push-to-talk. host_voice: the connected host said it accepts voice frames. */
+    buddy_voice_phase_t voice_phase;
+    uint32_t voice_connection_generation;
+    uint64_t voice_listening_since_ms;
+    bool host_voice;
 } buddy_state_t;
 
 void buddy_state_init(buddy_state_t *state, const buddy_settings_snapshot_t *settings);

@@ -42,6 +42,8 @@
 #define LINES_16(n) ((n) * LINE_16 - LINE_SPACE)  // n 行正文占的高度
 #define DOT_Y      286
 #define HINT_Y     297
+// 底部圆角在提示这一行往里收约 12 像素，所以提示最宽 212。
+#define HINT_W     212
 
 #define SETTINGS_ROW_H 30
 #define ENTRY_ROW_H    50
@@ -54,6 +56,7 @@ enum {
     PET_APPROVAL,
     PET_PAIRING,
     PET_CONFIRM,
+    PET_VOICE,
     PET_COUNT,
 };
 #define PET_HOME_SCALE  6
@@ -137,6 +140,12 @@ static struct {
     // 二次确认
     lv_obj_t *confirm;
     lv_obj_t *confirm_text;
+    // 按住说话
+    lv_obj_t *voice;
+    lv_obj_t *voice_text;
+    lv_obj_t *voice_timer;
+    lv_obj_t *voice_state;
+    lv_obj_t *voice_release;
 
     pocket_view_t view;
     buddy_page_t page;
@@ -447,11 +456,11 @@ static void build_bottom(lv_obj_t *root)
         fill(s.dots[index], C_LINE, LV_RADIUS_CIRCLE);
     }
     s.hint = make_label(root, &pocket_font_14, C_DIM, PT_HINT_PAGES);
-    lv_obj_set_width(s.hint, 200);
+    lv_obj_set_width(s.hint, HINT_W);
     lv_obj_set_style_text_align(s.hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s.hint, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_height(s.hint, 17);
-    lv_obj_set_pos(s.hint, (SCREEN_W - 200) / 2, HINT_Y);
+    lv_obj_set_pos(s.hint, (SCREEN_W - HINT_W) / 2, HINT_Y);
 }
 
 static void build_home(lv_obj_t *page)
@@ -637,6 +646,21 @@ static void build_confirm(lv_obj_t *root)
     make_action_bar(s.confirm, ACTION_Y2, C_DIM, false, PT_KEY_DOWN, PT_CONFIRM_NO);
 }
 
+static void build_voice(lv_obj_t *root)
+{
+    s.voice = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 12);
+    (void)make_speech(s.voice, PET_VOICE, &s.voice_text);
+    // 录音时长：变成绿色的大数字就是“现在说话听得到”。
+    s.voice_timer = make_label(s.voice, &pocket_font_num_44, C_OK, "");
+    lv_obj_align(s.voice_timer, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 34);
+    s.voice_state = make_label(s.voice, &pocket_font_22, C_WARN, PT_VOICE_STATE_PREPARING);
+    lv_obj_set_width(s.voice_state, INNER_W);
+    lv_obj_set_style_text_align(s.voice_state, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.voice_state, SIDE, BUBBLE_H + 46);
+    s.voice_release = make_action_bar(s.voice, ACTION_Y2, C_OK, false, PT_KEY_OK,
+                                      PT_VOICE_RELEASE);
+}
+
 void pocket_ui_init(void)
 {
     static void (*const builders[BUDDY_PAGE_GUIDE + 1])(lv_obj_t *) = {
@@ -663,6 +687,8 @@ void pocket_ui_init(void)
     build_approval(root);
     build_pairing(root);
     build_confirm(root);
+    build_voice(root);
+    lv_obj_add_flag(s.voice, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.approval, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.pairing, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.confirm, LV_OBJ_FLAG_HIDDEN);
@@ -997,6 +1023,35 @@ static void render_confirm(const buddy_ui_snapshot_t *snap)
                                  : PT_ASK_UNPAIR);
 }
 
+static void render_voice(const buddy_ui_snapshot_t *snap)
+{
+    bool listening = snap->voice_phase == BUDDY_VOICE_LISTENING;
+    bool sending = snap->voice_phase == BUDDY_VOICE_SENDING;
+    char timer[12];
+
+    pet_set(PET_VOICE, pocket_pet_for(snap));
+    set_text(s.voice_text, listening ? PT_VOICE_LISTENING
+                                     : (sending ? PT_VOICE_SENDING : PT_VOICE_PREPARING));
+    set_visible(s.voice_timer, listening);
+    set_visible(s.voice_state, !listening);
+    set_visible(s.voice_release, !sending);
+    if (listening) {
+        uint64_t seconds = snap->uptime_ms > snap->voice_listening_since_ms
+                               ? (snap->uptime_ms - snap->voice_listening_since_ms) / 1000U
+                               : 0U;
+
+        (void)snprintf(timer, sizeof(timer), "%u:%02u", (unsigned)(seconds / 60U % 10U),
+                       (unsigned)(seconds % 60U));
+        if (strcmp(lv_label_get_text(s.voice_timer), timer) != 0) {
+            lv_label_set_text(s.voice_timer, timer);
+            lv_obj_align(s.voice_timer, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 34);
+        }
+    } else {
+        set_text(s.voice_state, sending ? PT_VOICE_STATE_SENDING : PT_VOICE_STATE_PREPARING);
+        set_text_color(s.voice_state, sending ? C_ACCENT : C_WARN);
+    }
+}
+
 void pocket_ui_render(const buddy_ui_snapshot_t *snap)
 {
     pocket_view_t view;
@@ -1018,6 +1073,7 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     set_visible(s.approval, view == POCKET_VIEW_APPROVAL);
     set_visible(s.pairing, view == POCKET_VIEW_PAIRING);
     set_visible(s.confirm, view == POCKET_VIEW_CONFIRM);
+    set_visible(s.voice, view == POCKET_VIEW_VOICE);
     if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_GUIDE &&
         (s.view != view || s.page != page)) {
         lv_obj_scroll_to_y(s.guide_scroll, 0, LV_ANIM_OFF);
@@ -1035,6 +1091,9 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
         break;
     case POCKET_VIEW_PAIRING:
         render_pairing(snap);
+        break;
+    case POCKET_VIEW_VOICE:
+        render_voice(snap);
         break;
     case POCKET_VIEW_APPROVAL:
         render_approval(snap);

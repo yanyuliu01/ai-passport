@@ -549,6 +549,13 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
     } else if (strcmp(command, "unpair") == 0) {
         event->type = BUDDY_EVENT_UNPAIR_CONFIRMATION;
         result = (int)event->type;
+    } else if (strcmp(command, "hub") == 0) {
+        /* A host other than the Claude desktop app introduces itself and says
+         * whether it accepts voice frames: {"cmd":"hub","voice":true}. */
+        event->type = BUDDY_EVENT_HOST_HELLO;
+        event->host_voice =
+            cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "voice")) != 0;
+        result = (int)event->type;
     } else if (buddy_is_unsupported_folder_command(command)) {
         result = BUDDY_EVENT_UNSUPPORTED_COMMAND;
     } else {

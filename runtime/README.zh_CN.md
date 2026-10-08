@@ -6,7 +6,8 @@
 
 小幽是主人唯一的对话对象。这个 Runtime 是小幽背后那个一直开着的小服务：收到一句话，
 连同小幽的人设一起交给后端的代理，再把三样东西还回来——完整回复、给 Passport 小屏幕
-看的一两句简报、像素宠物此刻的表情。
+看的一两句简报、像素宠物此刻的表情。消息可以是打出来的文字，也可以是一段录音；录音先由
+配置里选定的语音识别引擎变成文字。
 
 目前唯一真正的后端是用非交互模式驱动本机的 **Claude Code 命令行**，用的是这台机器上
 已经登录的 Claude 账号。其他代理（比如 Codex）不是另一个说话的角色：它们在配置里登记
@@ -22,7 +23,7 @@
 
 ## 需要什么
 
-- Python 3.9 或更新版本，不需要第三方包。
+- Python 3.9 或更新版本。不需要第三方包，除非启用内置的语音识别引擎（见[语音](#语音)）。
 - 用 `claude_code` 后端时：同一台机器、同一个用户下装好并登录了 Claude Code
   （终端里能直接运行 `claude`）。
 
@@ -63,6 +64,12 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `claude_code.allowed_tools` | `[]` | 作为 `--allowedTools` 传入的规则。 |
 | `claude_code.extra_args` | `[]` | 追加在命令末尾的额外参数。 |
 | `tools[]` | `[]` | 小幽可以把活交出去的代理：`name`、`description`、`allowed_tools`、`enabled`。 |
+| `stt.engine` | `none` | 语音识别：`none`、`sense_voice` 或 `command`。见[语音](#语音)。 |
+| `stt.model_dir` | 无 | `sense_voice`：放 `model.int8.onnx`（或 `model.onnx`）和 `tokens.txt` 的目录。 |
+| `stt.language` | `auto` | `sense_voice`：`auto`、`zh`、`en`、`ja`、`ko` 或 `yue`。 |
+| `stt.threads` | `2` | `sense_voice`：使用的处理器线程数（1 到 16）。 |
+| `stt.command` | `[]` | `command`：要运行的命令，其中一个参数要包含 `{audio}`。 |
+| `stt.timeout_seconds` | `60` | `command`：一次识别超过这么久就停止（5 到 600）。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`、
@@ -100,12 +107,14 @@ Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设�
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend"}`，不需要令牌。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?}` | `202` 和这条消息的记录，状态为 `queued`。 |
+| `POST /v1/voice?conversation=<名字>&client_id=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。 |
 | `POST /v1/conversations/<名字>/reset` | 忘掉这个对话的会话，下一句话从头开始。 |
 
-消息记录包含 `id`、`client_id`、`conversation`、`status`（`queued`、`running`、`done`、
-`failed`）、`text`、`reply`、`brief`、`mood`（`idle`、`busy`、`ask`、`happy`、`oops`）、
-`error`、`created_at`、`finished_at`。
+消息记录包含 `id`、`client_id`、`conversation`、`kind`（`text` 或 `voice`）、`status`
+（`queued`、`transcribing`、`running`、`done`、`failed`）、`text`、`reply`、`brief`、`mood`
+（`idle`、`busy`、`ask`、`happy`、`oops`）、`error`、`created_at`、`finished_at`。语音消息的
+`text` 在识别完成之前是空的。
 
 同一个 `client_id` 再发一次，返回的是已有的那条记录，不会把这一轮再跑一遍；所以客户端
 没收到响应时可以放心重试。
@@ -117,6 +126,41 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "你好", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## 语音
+
+语音消息就是一段录音：16 位单声道 WAV，采样率 8 到 48 kHz，时长 0.2 到 120 秒，最大
+4 MB。Runtime 先检查格式，把消息排进队列，轮到它时识别成文字并删掉录音，之后和打字的
+消息走完全相同的流程。识别结果为空时，这条消息以“没听清”失败，不会把空内容交给模型。
+
+有两种引擎。
+
+**`sense_voice`** 通过 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 在本机运行
+SenseVoice 模型，录音不离开这台机器。模型在收到第一段录音时加载（几秒），之后常驻内存，
+约占 250 MB。
+
+```bash
+python3 -m pip install sherpa-onnx        # 要用运行 Runtime 的同一个 Python
+mkdir -p stt-models && cd stt-models
+curl -L -O https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 && mv sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17 sense-voice && cd ..
+```
+
+然后设置 `"stt": {"engine": "sense_voice", "model_dir": "stt-models/sense-voice"}`，
+用自己的录音或模型自带的样例检查一下：
+
+```bash
+python3 -m xiaoyou_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
+```
+
+下载约 160 MB。`stt-models/` 已被 Git 忽略。
+
+**`command`** 运行你指定的任意程序，比如换一个模型或接一个云服务：
+`"stt": {"engine": "command", "command": ["my-stt", "{audio}"]}`。`{audio}` 会被换成 WAV
+文件的路径，命令在配置文件所在的目录里运行，它打印到标准输出的内容就是识别结果。退出码
+不为零时这条消息失败，并报告标准错误的最后一行。
+
+`stt.engine` 为 `none` 时，语音消息会被拒绝并说明原因；打字的消息不受影响。
 
 ## 和手机 App 配对
 
@@ -153,7 +197,8 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 
 `runtime/tests/test_runtime.py`（`./tools/validate.sh --static` 会运行）验证了：配置
 检查、交给假的 `claude` 可执行文件的完整命令行和标准输入、结果与错误的解析、会话续接、
-顺序处理、按 `client_id` 重试、令牌校验，以及用 `echo` 后端跑的 HTTP 接口。
+顺序处理、按 `client_id` 重试、令牌校验、用 `echo` 后端跑的 HTTP 接口，以及用一条假的识别
+命令跑的语音消息（格式检查、识别、识别为空和识别失败、录音的清理）。
 
 2026-10-08 用 Claude Code 2.1.294 在 Linux 上手动验证过（是在云端工作区里，不是在
 预期运行的那台电脑上）：
@@ -164,7 +209,18 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   让模型调用了 `tools` 里配置的一个替身工具，并用自己的话总结了它的输出。
 - 一轮简单对话端到端大约六秒。
 
+2026-10-08 在 Linux 上用 sherpa-onnx 1.13 和 int8 版 SenseVoice 模型手动验证过，用的是
+模型自带的普通话样例（5.6 秒）：
+
+- `--stt` 打印出了这句话；加载模型约 3 秒，识别约 0.6 秒。
+- 同一段样例先用在电脑上编译的固件语音编码器编码，再用手机 App 的解码器在电脑的 Java
+  环境里解码，然后发到 `/v1/voice`。识别成功，和未压缩时的结果差一个字；故意每 15 帧丢
+  一帧后仍能识别。
+
 没有验证：
+
+- 真实设备上的语音：麦克风音质、蓝牙吞吐，以及真实环境里真人说话的识别效果。
+- macOS 上的 sherpa-onnx。
 
 - 真实的 Codex 命令行；派活的验证用的是一个替身脚本。
 - 虚拟机，以及连续运行多天的情况。macOS 上只由主人跑过一次 `--once`（用的是单独的

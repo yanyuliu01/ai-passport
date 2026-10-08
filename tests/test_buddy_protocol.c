@@ -45,6 +45,21 @@ static void test_heartbeat_optional_prompt_stays_in_heartbeat_snapshot(void)
     assert(strcmp(event.heartbeat.prompt.hint, "rm -rf /tmp/foo") == 0);
 }
 
+static void test_hub_hello_reports_voice_support(void)
+{
+    buddy_event_t event;
+
+    assert(parse("{\"cmd\":\"hub\",\"voice\":true}", &event) == BUDDY_EVENT_HOST_HELLO);
+    assert(event.host_voice);
+    assert(parse("{\"cmd\":\"hub\",\"voice\":false}", &event) == BUDDY_EVENT_HOST_HELLO);
+    assert(!event.host_voice);
+    /* Only a JSON true counts; anything else means "no voice". */
+    assert(parse("{\"cmd\":\"hub\"}", &event) == BUDDY_EVENT_HOST_HELLO);
+    assert(!event.host_voice);
+    assert(parse("{\"cmd\":\"hub\",\"voice\":\"yes\"}", &event) == BUDDY_EVENT_HOST_HELLO);
+    assert(!event.host_voice);
+}
+
 static void test_unpair_maps_confirmation_event(void)
 {
     buddy_event_t event = {0};
@@ -483,6 +498,7 @@ int main(void)
     test_long_assistant_turn_is_cut_on_a_character_boundary();
     test_heartbeat_optional_prompt_stays_in_heartbeat_snapshot();
     test_unpair_maps_confirmation_event();
+    test_hub_hello_reports_voice_support();
     test_file_transfer_commands_are_unsupported();
     test_unknown_command_is_rejected();
     test_malformed_or_nonobject_json_is_rejected();

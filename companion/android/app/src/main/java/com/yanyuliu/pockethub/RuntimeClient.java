@@ -61,8 +61,19 @@ final class RuntimeClient {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_URL, null);
     }
 
+    static final String VOICE_PLACEHOLDER = "（语音）";
+
     /** 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。 */
     static void send(Context context, String text) {
+        submit(context, text, null);
+    }
+
+    /** 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。 */
+    static void sendVoice(Context context, byte[] wav) {
+        submit(context, VOICE_PLACEHOLDER, wav);
+    }
+
+    private static void submit(Context context, String text, byte[] wav) {
         SharedPreferences prefs = context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         final String url = prefs.getString(KEY_URL, null);
@@ -76,18 +87,31 @@ final class RuntimeClient {
         final String clientId = UUID.randomUUID().toString().replace("-", "");
         WORKER.execute(() -> {
             try {
-                StringBuilder body = new StringBuilder("{\"text\":");
-                BuddyProtocol.quote(body, text);
-                body.append(",\"client_id\":\"").append(clientId).append("\"}");
-                Map<String, String> message = request("POST", url + "/v1/messages", token,
-                        body.toString(), 20);
+                Map<String, String> message;
+                if (wav != null) {
+                    message = request("POST", url + "/v1/voice?client_id=" + clientId, token,
+                            wav, "audio/wav", 30);
+                } else {
+                    StringBuilder body = new StringBuilder("{\"text\":");
+                    BuddyProtocol.quote(body, text);
+                    body.append(",\"client_id\":\"").append(clientId).append("\"}");
+                    message = request("POST", url + "/v1/messages", token,
+                            body.toString().getBytes(StandardCharsets.UTF_8),
+                            "application/json; charset=utf-8", 20);
+                }
                 String id = message.get("id");
                 if (id == null) {
                     throw new IOException("Runtime 没有返回消息编号");
                 }
                 long deadline = System.currentTimeMillis() + GIVE_UP_MS;
+                boolean heard = wav == null;
                 while (true) {
                     String status = message.get("status");
+                    String recognized = message.get("text");
+                    if (!heard && recognized != null && !recognized.isEmpty()) {
+                        heard = true;
+                        store.chatHeard(VOICE_PLACEHOLDER, recognized);
+                    }
                     if ("done".equals(status)) {
                         String reply = message.get("reply");
                         String brief = message.get("brief");
@@ -102,8 +126,10 @@ final class RuntimeClient {
                     if (System.currentTimeMillis() > deadline) {
                         throw new IOException("等了太久还没有结果");
                     }
-                    message = request("GET", url + "/v1/messages/" + id + "?wait=" + POLL_SECONDS,
-                            token, null, POLL_SECONDS + 15);
+                    // 语音还没识别出来时短轮询，好让“我说了什么”尽快显示出来。
+                    int wait = heard ? POLL_SECONDS : 2;
+                    message = request("GET", url + "/v1/messages/" + id + "?wait=" + wait,
+                            token, null, null, wait + 15);
                 }
             } catch (IOException | RuntimeException error) {
                 String detail = error.getMessage();
@@ -113,7 +139,8 @@ final class RuntimeClient {
     }
 
     private static Map<String, String> request(String method, String address, String token,
-                                               String body, int timeoutSeconds)
+                                               byte[] body, String contentType,
+                                               int timeoutSeconds)
             throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         try {
@@ -122,12 +149,11 @@ final class RuntimeClient {
             connection.setReadTimeout(timeoutSeconds * 1000);
             connection.setRequestProperty("Authorization", "Bearer " + token);
             if (body != null) {
-                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                connection.setFixedLengthStreamingMode(bytes.length);
+                connection.setRequestProperty("Content-Type", contentType);
+                connection.setFixedLengthStreamingMode(body.length);
                 try (OutputStream out = connection.getOutputStream()) {
-                    out.write(bytes);
+                    out.write(body);
                 }
             }
             int code = connection.getResponseCode();

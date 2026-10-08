@@ -7,7 +7,9 @@
 Xiaoyou is the single voice the owner talks to. This runtime is the small,
 always-on service behind that voice: it receives a message, hands it to an
 agent backend together with Xiaoyou's persona, and returns a full reply, a
-short brief for the Passport screen, and a mood for the pixel pet.
+short brief for the Passport screen, and a mood for the pixel pet. A message
+can be typed text or a voice recording; a recording is first turned into text
+by a speech recognition engine chosen in the configuration.
 
 Today the only real backend drives the **Claude Code command line** in
 non-interactive mode, using the Claude login already present on the machine.
@@ -25,7 +27,8 @@ particular host. See [What is and is not verified](#what-is-and-is-not-verified)
 
 ## Requirements
 
-- Python 3.9 or newer. No third-party packages.
+- Python 3.9 or newer. No third-party packages, unless you enable the built-in
+  speech recognition engine (see [Voice](#voice)).
 - For the `claude_code` backend: Claude Code installed and logged in on the same
   machine and user account (`claude` must work in a terminal).
 
@@ -67,6 +70,12 @@ Relative paths are resolved against the directory of the configuration file.
 | `claude_code.allowed_tools` | `[]` | Rules passed as `--allowedTools`. |
 | `claude_code.extra_args` | `[]` | Extra arguments appended to the command. |
 | `tools[]` | `[]` | Agents Xiaoyou may delegate to: `name`, `description`, `allowed_tools`, `enabled`. |
+| `stt.engine` | `none` | Speech recognition: `none`, `sense_voice`, or `command`. See [Voice](#voice). |
+| `stt.model_dir` | none | `sense_voice`: folder holding `model.int8.onnx` (or `model.onnx`) and `tokens.txt`. |
+| `stt.language` | `auto` | `sense_voice`: `auto`, `zh`, `en`, `ja`, `ko`, or `yue`. |
+| `stt.threads` | `2` | `sense_voice`: processor threads (1 to 16). |
+| `stt.command` | `[]` | `command`: the command to run; one argument must contain `{audio}`. |
+| `stt.timeout_seconds` | `60` | `command`: a recognition run is stopped after this long (5 to 600). |
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
@@ -111,12 +120,15 @@ responses are JSON.
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend"}`; no token needed. |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?}` | `202` and the message record, status `queued`. |
+| `POST /v1/voice?conversation=<name>&client_id=<id>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. |
 | `POST /v1/conversations/<name>/reset` | Forgets the session of that conversation; the next message starts fresh. |
 
-A message record has `id`, `client_id`, `conversation`, `status` (`queued`,
-`running`, `done`, `failed`), `text`, `reply`, `brief`, `mood` (`idle`, `busy`,
-`ask`, `happy`, `oops`), `error`, `created_at`, and `finished_at`.
+A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
+`voice`), `status` (`queued`, `transcribing`, `running`, `done`, `failed`),
+`text`, `reply`, `brief`, `mood` (`idle`, `busy`, `ask`, `happy`, `oops`),
+`error`, `created_at`, and `finished_at`. For a voice message `text` is empty
+until the recording has been transcribed.
 
 Sending the same `client_id` again returns the existing record instead of
 running the turn twice, so a client may retry safely after a lost response.
@@ -128,6 +140,47 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "hello", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Voice
+
+A voice message is a recording: 16-bit mono WAV, 8 to 48 kHz, 0.2 to 120
+seconds, at most 4 MB. The runtime checks the format, queues the message,
+transcribes it when its turn comes, deletes the recording, and then handles the
+text exactly like a typed message. An empty transcript fails the message with
+a "did not catch that" error instead of sending nothing to the model.
+
+Two engines are available.
+
+**`sense_voice`** runs the SenseVoice model on this machine through
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). Nothing leaves the
+machine. The model is loaded on the first recording (a few seconds) and stays
+in memory, about 250 MB.
+
+```bash
+python3 -m pip install sherpa-onnx        # same Python that runs the runtime
+mkdir -p stt-models && cd stt-models
+curl -L -O https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 && mv sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17 sense-voice && cd ..
+```
+
+Then set `"stt": {"engine": "sense_voice", "model_dir": "stt-models/sense-voice"}`
+and check it with a recording of your own, or with one shipped with the model:
+
+```bash
+python3 -m xiaoyou_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
+```
+
+The download is about 160 MB. `stt-models/` is ignored by Git.
+
+**`command`** runs any program you choose, for example a different model or a
+cloud service: `"stt": {"engine": "command", "command": ["my-stt", "{audio}"]}`.
+`{audio}` is replaced by the path of the WAV file, the command runs in the
+folder of the configuration file, and whatever it prints on standard output is
+the transcript. A non-zero exit code fails the message and reports the last
+line of standard error.
+
+With `stt.engine` set to `none`, voice messages are refused with an
+explanation; typed messages are unaffected.
 
 ## Pairing the phone app
 
@@ -171,8 +224,10 @@ network interfaces, check that the address is the one the phone can reach.
 Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
 --static`): configuration checks, the exact command line and standard input
 given to a fake `claude` executable, result and error parsing, session
-continuation, ordering, retry by `client_id`, token checks, and the HTTP
-interface with the `echo` backend.
+continuation, ordering, retry by `client_id`, token checks, the HTTP interface
+with the `echo` backend, and voice messages with a fake recognition command
+(format checks, transcription, empty and failed recognition, clean-up of
+recordings).
 
 Checked by hand on 2026-10-08 with Claude Code 2.1.294 on Linux, in a cloud
 workspace rather than on the intended computer:
@@ -184,7 +239,22 @@ workspace rather than on the intended computer:
   configured under `tools`, then summarize its output in its own words.
 - A simple turn took about six seconds end to end.
 
+Checked by hand on 2026-10-08 on Linux with sherpa-onnx 1.13 and the int8
+SenseVoice model, using the Mandarin sample shipped with the model (5.6 s):
+
+- `--stt` printed the sentence; loading the model took about 3 s and
+  recognition about 0.6 s.
+- The same sample was encoded by the firmware's voice encoder built for the
+  host, decoded by the phone app's decoder on a desktop Java runtime, and
+  posted to `/v1/voice`. It was recognized, with one character different from
+  the uncompressed result; with every fifteenth frame deliberately dropped it
+  was still recognized.
+
 Not verified:
+
+- Voice from a real device: microphone quality, Bluetooth throughput, and
+  recognition of real speech in a real room.
+- sherpa-onnx on macOS.
 
 - The real Codex command line; the delegation check used a stand-in script.
 - A virtual machine, and a long-running service over days. On macOS only a

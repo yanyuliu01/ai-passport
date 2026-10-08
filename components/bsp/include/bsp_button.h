@@ -16,7 +16,8 @@ typedef enum {
     BSP_BTN_PRESS = 0,   // 按下瞬间(低延迟,适合游戏类即时响应)
     BSP_BTN_CLICK,       // 单击(按下并抬起)
     BSP_BTN_DOUBLE,      // 双击
-    BSP_BTN_LONG,        // 长按
+    BSP_BTN_LONG,        // 长按（到达长按判定时发一次，不重复）
+    BSP_BTN_RELEASE,     // 抬起瞬间（每次按下都会有；按住期间做事、松手收手时用）
 } bsp_btn_ev_t;
 
 // 按键事件回调。运行于 button 组件使用的共享 esp_timer 任务,只能入队或执行同等级

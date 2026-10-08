@@ -103,6 +103,14 @@ esp_err_t buddy_ble_stop(void);
 esp_err_t buddy_ble_send(const char *data, size_t length);
 esp_err_t buddy_ble_send_for_generation(const char *data, size_t length,
                                         uint32_t expected_generation);
+/* Largest payload one notification can carry on this connection right now, or 0
+ * when the generation is not the live, secure, subscribed connection. */
+size_t buddy_ble_notify_payload_for_generation(uint32_t expected_generation);
+/* Sends data as exactly one notification (no fragmentation). ESP_ERR_INVALID_STATE:
+ * that connection is gone; ESP_ERR_INVALID_SIZE: does not fit one notification;
+ * ESP_ERR_NO_MEM or ESP_FAIL: the stack is busy right now, try again shortly. */
+esp_err_t buddy_ble_notify_for_generation(const uint8_t *data, size_t length,
+                                          uint32_t expected_generation);
 bool buddy_ble_is_generation_secure(uint32_t expected_generation);
 bool buddy_ble_is_connected(void);
 bool buddy_ble_is_encrypted(void);

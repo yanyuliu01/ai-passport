@@ -97,6 +97,31 @@ public final class BuddyProtocol {
         return "{\"time\":[" + epochSeconds + "," + offsetSeconds + "]}\n";
     }
 
+    /** 连上后告诉设备：这头是小幽中枢，能接收语音。旧固件不认识这一行，会回一个错误应答。 */
+    public static String hubHello() {
+        return "{\"cmd\":\"hub\",\"voice\":true}\n";
+    }
+
+    /** 设备发来的语音控制行里的 state（start / end / cancel）；不是语音控制行返回 null。 */
+    public static String parseVoiceState(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null || !"voice".equals(fields.get("cmd"))) {
+            return null;
+        }
+        String state = fields.get("state");
+        return "start".equals(state) || "end".equals(state) || "cancel".equals(state)
+                ? state : null;
+    }
+
+    /** 设备对 hubHello 的应答：true 能说话，false 是旧固件，null 表示这一行不是应答。 */
+    public static Boolean parseHubAck(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null || !"hub".equals(fields.get("ack"))) {
+            return null;
+        }
+        return line.contains("\"ok\":true");
+    }
+
     /** 解析设备发来的一行；不是权限决定就返回 null。 */
     public static Decision parseDecision(String line) {
         Map<String, String> fields = parseFlatObject(line);

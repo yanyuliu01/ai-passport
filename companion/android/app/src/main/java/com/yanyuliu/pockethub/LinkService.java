@@ -31,6 +31,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private BleLink link;
     private String lastTurnKey = "";
     private String lastHeartbeat = "";
+    /** 设备正在说话时不为 null。 */
+    private VoiceRecording recording;
 
     static void start(Context context) {
         Intent intent = new Intent(context, LinkService.class);
@@ -109,6 +111,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         TimeZone zone = TimeZone.getDefault();
         long now = System.currentTimeMillis();
         link.send(BuddyProtocol.time(now / 1000L, zone.getOffset(now) / 1000));
+        link.send(BuddyProtocol.hubHello());
+        recording = null;
         lastHeartbeat = "";
         lastTurnKey = "";
         pushState();
@@ -121,12 +125,53 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         BuddyProtocol.Decision decision = BuddyProtocol.parseDecision(line);
         if (decision != null) {
             HubStore.get().answer(decision.id, decision.allow);
+            return;
+        }
+        String voice = BuddyProtocol.parseVoiceState(line);
+        if (voice != null) {
+            onVoiceState(voice);
+            return;
+        }
+        Boolean hub = BuddyProtocol.parseHubAck(line);
+        if (hub != null) {
+            HubStore.get().log(hub ? "设备支持按住说话" : "设备固件较旧，不支持按住说话");
+        }
+    }
+
+    @Override
+    public void onVoiceFrame(byte[] frame) {
+        if (recording != null) {
+            recording.add(frame);
+        }
+    }
+
+    private void onVoiceState(String state) {
+        if ("start".equals(state)) {
+            recording = new VoiceRecording();
+            link.setFast(true);
+            return;
+        }
+        VoiceRecording finished = recording;
+        recording = null;
+        link.setFast(false);
+        if (finished == null || "cancel".equals(state)) {
+            return;
+        }
+        HubStore store = HubStore.get();
+        store.log("收到语音 " + finished.millis() / 100 / 10.0 + " 秒，" + finished.frames()
+                + " 帧" + (finished.lostFrames() > 0 ? "，丢了 " + finished.lostFrames() + " 帧" : ""));
+        if (finished.frames() == 0) {
+            store.chatFailed(RuntimeClient.VOICE_PLACEHOLDER, "没有收到声音，再说一次吧");
+        } else {
+            // 上一句还没答完也照发：Runtime 那边按顺序一条一条处理。
+            RuntimeClient.sendVoice(this, finished.toWav());
         }
     }
 
     @Override
     public void onClosed() {
         main.removeCallbacks(keepalive);
+        recording = null;
     }
 
     // ---- HubStore.Listener ----

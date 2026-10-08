@@ -76,7 +76,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         root.addView(button("② 开启通知读取", view -> startActivity(
                 new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))));
         root.addView(button("③ 连接小幽", view -> connect()));
-        root.addView(button("断开", view -> LinkService.stop(this)));
+        root.addView(button("断开", view -> {
+            rememberConnect(false);
+            LinkService.stop(this);
+        }));
 
         root.addView(heading("来源"));
         sourceList = new LinearLayout(this);
@@ -106,6 +109,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         setContentView(scroll);
+
+        // 上次是连着的：App 被系统关掉再打开后自己连回去，不用再点一次。
+        if (hasBluetoothPermission()
+                && getSharedPreferences("link", MODE_PRIVATE).getBoolean("connect", false)) {
+            LinkService.start(this);
+        }
+    }
+
+    private void rememberConnect(boolean connect) {
+        getSharedPreferences("link", MODE_PRIVATE).edit().putBoolean("connect", connect).apply();
     }
 
     @Override
@@ -174,6 +187,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             requestBluetooth();
             return;
         }
+        rememberConnect(true);
         LinkService.start(this);
     }
 

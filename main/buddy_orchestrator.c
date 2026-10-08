@@ -85,6 +85,13 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
                   : ops->commit_owner(ops->context, event.command.value);
     }
 
+    if (event.type == BUDDY_EVENT_HOST_HELLO) {
+        buddy_state_reduce(state, &event, now_ms, action);
+        /* The acknowledgement tells the host this firmware understands "hub". */
+        (void)buddy_orchestrator_send_ack(ops, "hub", true, NULL, connection_generation);
+        return true;
+    }
+
     if (err == ESP_OK) {
         buddy_state_reduce(state, &event, now_ms, action);
         if (event.type == BUDDY_EVENT_NAME) {
@@ -176,6 +183,8 @@ bool buddy_orchestrator_execute_action(buddy_state_t *state,
     case BUDDY_ACTION_UI_SCROLL:
     case BUDDY_ACTION_DISPLAY_BACKLIGHT:
     case BUDDY_ACTION_SCREEN_OFF:
+    case BUDDY_ACTION_VOICE_START:
+    case BUDDY_ACTION_VOICE_STOP:
         return true;
     }
     return false;

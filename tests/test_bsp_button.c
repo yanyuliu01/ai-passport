@@ -105,7 +105,7 @@ int main(void) {
         reset_faults(); fail_create = i;
         assert(bsp_button_init(event_cb, &events) != ESP_OK); retry_success();
     }
-    for (int i = 1; i <= BSP_BTN_COUNT * 4; ++i) {
+    for (int i = 1; i <= BSP_BTN_COUNT * 5; ++i) {
         reset_faults(); fail_callback = i;
         assert(bsp_button_init(event_cb, &events) != ESP_OK); retry_success();
     }
