@@ -1,0 +1,49 @@
+name: Companion app
+
+on:
+  push:
+    paths:
+      - "companion/**"
+      - ".github/workflows/companion-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: companion-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Test and assemble
+        working-directory: companion/android
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64}"
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "${RUNNER_TEMP}/pocket-hub-debug.apk"
+          sha256sum "${RUNNER_TEMP}/pocket-hub-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pocket-hub-debug-apk
+          path: ${{ runner.temp }}/pocket-hub-debug.apk
+          if-no-files-found: error
+
+      - name: Publish prerelease for phone download
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: companion-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Pocket Hub debug build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Unsigned-for-release debug build of the Pocket Hub Android companion,
+            built from ${{ github.sha }}. Not verified on a phone.
+          files: ${{ runner.temp }}/pocket-hub-debug.apk

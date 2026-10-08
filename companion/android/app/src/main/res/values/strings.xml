@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">小幽中枢</string>
+    <string name="listener_label">小幽中枢：读取 Claude、Codex 等来源的通知</string>
+    <string name="channel_link">设备连接</string>
+    <string name="notification_running">正在和小幽保持连接</string>
+</resources>
