@@ -1,0 +1,28 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "token": "change-me-to-a-long-random-string"
+  },
+  "state_dir": "state",
+  "persona_file": "persona.txt",
+  "backend": "claude_code",
+  "brief_max_chars": 120,
+  "turn_timeout_seconds": 600,
+  "claude_code": {
+    "command": ["claude"],
+    "workdir": "workdir",
+    "model": null,
+    "permission_mode": "dontAsk",
+    "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+    "extra_args": []
+  },
+  "tools": [
+    {
+      "name": "Codex",
+      "enabled": false,
+      "description": "OpenAI Codex CLI. Run it with: codex exec \"<task>\". Good for a second opinion on code.",
+      "allowed_tools": ["Bash(codex exec *)"]
+    }
+  ]
+}

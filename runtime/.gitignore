@@ -1,0 +1,4 @@
+config.json
+state/
+workdir/
+__pycache__/
