@@ -85,7 +85,8 @@ def system_prompt(config: Config) -> str:
     parts.append("## 回复格式")
     parts.append(
         "每一轮都按给定的 JSON 结构回答：reply 是给主人看的完整回复；brief 是显示在随身"
-        "小屏幕上的一两句话，不超过 %d 个字，要让人不看 reply 也知道结论；mood 是你此刻的"
+        "小屏幕上的一两句话，不超过 %d 个字，要让人不看 reply 也知道结论，只用普通文字和标点，"
+        "不用表情符号（小屏幕显示不了）；mood 是你此刻的"
         "表情，只能是 idle（平常）、busy（还在忙）、ask（需要主人拿主意）、happy（顺利完成）、"
         "oops（出了问题）之一。" % config.brief_max_chars
     )

@@ -141,16 +141,23 @@ given to a fake `claude` executable, result and error parsing, session
 continuation, ordering, retry by `client_id`, token checks, and the HTTP
 interface with the `echo` backend.
 
+Checked by hand on 2026-10-08 with Claude Code 2.1.294 on Linux, in a cloud
+workspace rather than on the intended computer:
+
+- `--once` produced a reply, a brief, and a mood in the requested structure;
+  a second turn recalled a detail from the first, so continuation works.
+- Through the HTTP interface, a request without the token got `401`, and a
+  request asking for a second opinion made the model run a stand-in tool
+  configured under `tools`, then summarize its output in its own words.
+- A simple turn took about six seconds end to end.
+
 Not verified:
 
-- A successful turn through the real Claude Code. One attempt with Claude Code
-  2.1.294 accepted every argument and returned a structured error (account
-  usage limit), which the runtime reported correctly; no reply was produced.
-- Whether the persona and reply schema make the model delegate to tools and
-  summarize the way the persona asks.
-- Any tool entry, including Codex.
-- Use from the phone app (the app does not call this service yet) or from a
-  virtual machine.
+- The real Codex command line; the delegation check used a stand-in script.
+- macOS, a virtual machine, and a long-running service over days.
+- Use from the phone app (the app does not call this service yet).
+- How the model behaves when a delegated tool is slow, fails, or returns a
+  large output.
 
 Known risks:
 
