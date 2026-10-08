@@ -149,9 +149,9 @@ To run an individual pure-logic test:
 
 ```bash
 cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_ui_pixel_math.c main/ui_pixel_math.c \
-  -o /tmp/test_ui_pixel_math
-/tmp/test_ui_pixel_math
+  tests/test_pocket_view.c main/pocket_view.c \
+  -o /tmp/test_pocket_view
+/tmp/test_pocket_view
 ```
 
 Use the unified validation entry point:

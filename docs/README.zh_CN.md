@@ -41,6 +41,11 @@
 | --- | --- | --- |
 | 开放固件与可复用示例，为你的创意留出发挥空间。 | 从一个简单想法出发，跟随清晰指南把它变成现实。 | 打造随身伙伴、小工具、游戏，或任何你能想到的东西。 |
 
+> [!NOTE]
+> 本分支承载 **Claude Pocket** 应用：Claude 桌面端的随身伴侣，中文界面。请先阅读
+> [Claude Pocket](claude-pocket.zh_CN.md)。下文描述的是该应用所基于的基线平台；
+> 基线硬件测试菜单及其 `main/demo_*.c` 页面不在本分支中。
+
 ## 找到你的起点
 
 | 我想要…… | 从这里开始 |
@@ -199,6 +204,7 @@ LICENSE                  仓库许可证
 
 | 入口 | 你可以找到 |
 | --- | --- |
+| [Claude Pocket](claude-pocket.zh_CN.md) | 本分支的应用：配对、按键、文字覆盖范围、验收 |
 | [开发指南](development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
 | [AI 技能](../skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
 | [硬件资料](hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |

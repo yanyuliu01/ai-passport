@@ -42,6 +42,13 @@ it anything—from a pocket companion to something no one has imagined yet.
 | --- | --- | --- |
 | Open firmware and reusable examples give you room to shape your own experience. | Start from an idea and follow clear guides to make it real, even if this is your first build. | Make a companion, a tool, a game—or anything you can imagine. |
 
+> [!NOTE]
+> This branch carries the **Claude Pocket** application: a wearable companion for
+> the Claude desktop app with a Chinese interface. Start with
+> [Claude Pocket](claude-pocket.md). The sections below describe the baseline
+> platform the application is built on; the baseline hardware-test menu and its
+> `main/demo_*.c` pages are not part of this branch.
+
 ## Find your starting point
 
 | I want to… | Start here |
@@ -205,6 +212,7 @@ provide reference material. Choose the entry that matches your task.
 
 | Resource | What you will find |
 | --- | --- |
+| [Claude Pocket](claude-pocket.md) | The application on this branch: pairing, controls, text coverage, acceptance |
 | [Development](development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
 | [AI skills](../skills/README.md) | Development, environment setup, builds, device testing, and debugging |
 | [Hardware](hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |

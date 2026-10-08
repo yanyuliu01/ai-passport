@@ -15,6 +15,32 @@
 - 添加字库前评估 Flash 与内部 RAM 影响；ESP32-C3 无 PSRAM。
 - 不提交许可不允许分发的字库。
 
+### Claude Pocket 字库
+
+为 [Claude Pocket](../docs/claude-pocket.zh_CN.md) 界面生成的 LVGL 位图字库。通过
+`main/CMakeLists.txt` 编译进 `main`，在 `main/pocket_fonts.h` 中声明；每个标签都
+显式指定自己的字库。
+
+| 文件 | 来源与字号 | 字符范围 | 用途 |
+| --- | --- | --- | --- |
+| [`fonts/pocket_font_14.c`](fonts/pocket_font_14.c) | Noto Sans SC Regular，14 px，4 bpp | ASCII 和 `main/pocket_text.h` 里出现的全部字符 | 按键提示、小标签、顶栏 |
+| [`fonts/pocket_font_16.c`](fonts/pocket_font_16.c) | Noto Sans SC Regular，16 px，2 bpp | ASCII、GB2312 全集（6763 个汉字及其符号）、补充标点，共 7545 个字形 | 正文，以及电脑发来的所有文字 |
+| [`fonts/pocket_font_22.c`](fonts/pocket_font_22.c) | Noto Sans SC Medium，22 px，4 bpp | 与 14 px 字库相同的子集 | 标题和状态词 |
+| [`fonts/pocket_font_num_44.c`](fonts/pocket_font_num_44.c) | Noto Sans SC Medium，44 px，4 bpp | 数字、空格和 `: . , - %` | 配对码 |
+
+- **来源与许可。** 思源黑体（Noto Sans SC），取自
+  [`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk) 的提交
+  `f8d157532fbfaeda587e826d4cd5b21a49186f7c`，SIL Open Font License 1.1；许可全文
+  保存在 [`fonts/LICENSE-NotoSansSC.txt`](fonts/LICENSE-NotoSansSC.txt)。OTF 源文件
+  由生成脚本下载并校验 SHA-256，不提交到仓库。
+- **生成方式。** `python3 tools/gen_pocket_fonts.py`，使用 `lv_font_conv` 1.5.3
+  （不压缩、不含字距）。每个字库的精确码点、源文件哈希，以及一个请求了但源字体
+  没有的字符（U+2717）都记录在 [`fonts/pocket_fonts.json`](fonts/pocket_fonts.json)。
+- **覆盖检查。** `tests/test_pocket_fonts.py` 属于 `./tools/validate.sh --static`，
+  它解析生成源码里的字符映射表，固定文案缺字时会失败。
+- **开销。** 合计约 0.6 MB Flash（584 KB），几乎全部来自 16 px 正文字库；数据是只读的，
+  不占用堆。
+
 ## 图片（images）
 
 可复用的源图与生成的显示资产放在 `images/`。

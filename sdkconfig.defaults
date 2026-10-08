@@ -22,17 +22,24 @@ CONFIG_LV_COLOR_DEPTH_16=y
 # 20 ms display refresh period targets up to 50 FPS when rendering and SPI
 # transfer complete within the same budget.
 CONFIG_LV_DEF_REFR_PERIOD=20
+# 界面文字全部使用 assets/fonts/ 下的应用字库（含中文）；Montserrat 14 只作为
+# LVGL 的默认字体保留，界面不直接使用它。
 CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-# LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+CONFIG_LV_TXT_ENC_UTF8=y
+# 缺字时显示占位框而不是空白，便于发现字库覆盖问题。
+CONFIG_LV_USE_FONT_PLACEHOLDER=y
+# LVGL 直接用系统堆，不单独划一块固定内存池。本应用常驻约 150 个界面对象，
+# 固定池要么划大了白占内存（没有 PSRAM，蓝牙也要堆），要么划小了开机就分配失败；
+# 共用系统堆则用多少占多少，余量和蓝牙共享。
+CONFIG_LV_USE_BUILTIN_MALLOC=n
+CONFIG_LV_USE_CLIB_MALLOC=y
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
 
 # --- Bluetooth LE / NimBLE ---
-# ESP32-C3 仅支持 BLE；示例只启用单连接 peripheral 所需的最小 host 配置。
+# ESP32-C3 仅支持 BLE。本应用是单连接 peripheral：Nordic UART Service，
+# LE Secure Connections 绑定，绑定信息存 NVS 以便自动重连。
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
@@ -41,4 +48,8 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
-CONFIG_BT_NIMBLE_NVS_PERSIST=n
+CONFIG_BT_NIMBLE_UTIL_API=y
+CONFIG_BT_NIMBLE_SM_LEGACY=n
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_SMP_ID_RESET=n
+CONFIG_BT_NIMBLE_NVS_PERSIST=y

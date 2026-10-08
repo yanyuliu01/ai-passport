@@ -17,6 +17,35 @@ Store reusable font files and generated font sources in `fonts/`.
 - Check Flash and internal-RAM impact before adding a font; the ESP32-C3 has no PSRAM.
 - Do not commit fonts whose license does not permit redistribution.
 
+### Claude Pocket fonts
+
+Generated LVGL bitmap fonts for the [Claude Pocket](../docs/claude-pocket.md)
+interface. They are compiled into `main` through `main/CMakeLists.txt` and
+declared in `main/pocket_fonts.h`; each label selects its font explicitly.
+
+| File | Source and size | Characters | Used for |
+| --- | --- | --- | --- |
+| [`fonts/pocket_font_14.c`](fonts/pocket_font_14.c) | Noto Sans SC Regular, 14 px, 4 bpp | ASCII and every character of `main/pocket_text.h` | Key hints, captions, top bar |
+| [`fonts/pocket_font_16.c`](fonts/pocket_font_16.c) | Noto Sans SC Regular, 16 px, 2 bpp | ASCII, all of GB2312 (6,763 hanzi and its symbols), extra punctuation; 7,545 glyphs | Body text and everything received from the computer |
+| [`fonts/pocket_font_22.c`](fonts/pocket_font_22.c) | Noto Sans SC Medium, 22 px, 4 bpp | Same subset as the 14 px font | Titles and status words |
+| [`fonts/pocket_font_num_44.c`](fonts/pocket_font_num_44.c) | Noto Sans SC Medium, 44 px, 4 bpp | Digits, space, and `: . , - %` | Pairing passkey |
+
+- **Source and license.** Noto Sans SC from
+  [`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk) at commit
+  `f8d157532fbfaeda587e826d4cd5b21a49186f7c`, SIL Open Font License 1.1; the
+  license text is kept in
+  [`fonts/LICENSE-NotoSansSC.txt`](fonts/LICENSE-NotoSansSC.txt). The OTF
+  sources are downloaded and SHA-256 checked by the generator, not committed.
+- **Generation.** `python3 tools/gen_pocket_fonts.py` with `lv_font_conv` 1.5.3
+  (uncompressed, no kerning). The exact code points of every font, the source
+  hashes, and one requested character the source lacks (U+2717) are recorded in
+  [`fonts/pocket_fonts.json`](fonts/pocket_fonts.json).
+- **Coverage check.** `tests/test_pocket_fonts.py`, part of
+  `./tools/validate.sh --static`, decodes the character maps of the generated
+  sources and fails when a fixed string loses a glyph.
+- **Cost.** About 0.6 MB of Flash in total (584 KB), almost all of it the 16 px body
+  font; the data is read-only and does not use heap.
+
 ## Images
 
 Store reusable source images and generated display assets in `images/`.
