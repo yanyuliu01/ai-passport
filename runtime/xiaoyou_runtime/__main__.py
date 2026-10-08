@@ -38,6 +38,12 @@ def _lan_address() -> str:
 
 
 def main(argv=None) -> int:
+    # Windows 的控制台不一定能显示所有字符：显示不了的换成问号，不要因此崩溃。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(prog="xiaoyou_runtime", description="小幽 Runtime")
     parser.add_argument(
         "--config", default=os.environ.get("XIAOYOU_CONFIG", "config.json"),
@@ -128,8 +134,8 @@ def main(argv=None) -> int:
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         return 1
-    print("小幽 Runtime %s 已启动：http://%s:%d（后端 %s，语音识别 %s）" % (
-        __version__, config.host, config.port, config.backend, config.stt_engine),
+    print("小幽 Runtime %s「%s」已启动：http://%s:%d（后端 %s，语音识别 %s）" % (
+        __version__, config.name, config.host, config.port, config.backend, config.stt_engine),
         file=sys.stderr)
     if not _is_loopback(config.host):
         print(

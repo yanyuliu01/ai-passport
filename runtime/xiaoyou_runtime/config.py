@@ -6,6 +6,7 @@
 
 import json
 import os
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -26,6 +27,8 @@ class Tool:
 
 @dataclass(frozen=True)
 class Config:
+    # 这台 Runtime 的名字，手机 App 里用它区分几台电脑
+    name: str
     host: str
     port: int
     token: str
@@ -115,6 +118,11 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         raise ConfigError("环境变量 XIAOYOU_PORT 应该是数字")
     if not 1 <= port <= 65535:
         raise ConfigError("server.port 应该在 1 到 65535 之间")
+    name = (env.get("XIAOYOU_NAME") or _expect(server.get("name", ""), str, "server.name")).strip()
+    if not name:
+        name = socket.gethostname().split(".")[0] or "runtime"
+    if len(name) > 40:
+        raise ConfigError("server.name 不能超过 40 个字符")
     token = env.get("XIAOYOU_TOKEN") or _expect(server.get("token", ""), str, "server.token")
     if token == PLACEHOLDER_TOKEN or len(token) < MIN_TOKEN_LENGTH:
         raise ConfigError(
@@ -211,6 +219,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         raise ConfigError("stt.timeout_seconds 应该在 5 到 600 之间")
 
     return Config(
+        name=name,
         host=host,
         port=port,
         token=token,

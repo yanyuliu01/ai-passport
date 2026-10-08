@@ -56,6 +56,7 @@ Relative paths are resolved against the directory of the configuration file.
 | --- | --- | --- |
 | `server.host` | `127.0.0.1` | Address to listen on. |
 | `server.port` | `8765` | Port to listen on. |
+| `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
 | `state_dir` | `state` | Where the conversation-to-session table is kept. |
 | `persona_file` | `persona.txt` | Xiaoyou's persona, appended to the backend's system prompt. |
@@ -79,7 +80,7 @@ Relative paths are resolved against the directory of the configuration file.
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
-`XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`, `XIAOYOU_BACKEND`,
+`XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`, `XIAOYOU_BACKEND`,
 `XIAOYOU_CLAUDE_CONFIG_DIR`.
 
 ### Using a separate Claude login
@@ -118,10 +119,11 @@ responses are JSON.
 
 | Request | Result |
 | --- | --- |
-| `GET /healthz` | `{"ok": true, "version", "backend"}`; no token needed. |
+| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?}` | `202` and the message record, status `queued`. |
 | `POST /v1/voice?conversation=<name>&client_id=<id>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. |
+| `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the model with the next message. |
 | `POST /v1/conversations/<name>/reset` | Forgets the session of that conversation; the next message starts fresh. |
 
 A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
@@ -140,6 +142,51 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "hello", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Windows
+
+The runtime runs on Windows 10 or later with Python from
+[python.org](https://www.python.org/downloads/windows/) (tick "Add python.exe
+to PATH" in the installer) and Claude Code installed natively. In PowerShell:
+
+```powershell
+irm https://claude.ai/install.ps1 | iex        # Claude Code; then open a new window
+claude                                         # log in once, check /status, quit
+git clone -b feature/pocket-hub-app https://github.com/yanyuliu01/ai-passport.git
+cd ai-passport\runtime
+copy config.example.json config.json
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # paste into server.token
+python -m xiaoyou_runtime --config config.json --once "hello"
+$env:XIAOYOU_HOST = "0.0.0.0"; python -m xiaoyou_runtime --config config.json
+```
+
+Use `python`, not `python3`. The first time the service listens on the network,
+Windows Defender Firewall asks whether to allow Python; allow it on private
+networks, or the phone cannot connect. Save `config.json` as UTF-8 without a
+byte order mark (Notepad's "UTF-8", not "UTF-8 with BOM").
+
+For voice, the steps in [Voice](#voice) work in PowerShell as written, with
+`python` in place of `python3` and `curl.exe` in place of `curl`.
+
+## Several runtimes, one conversation
+
+You can run a runtime on each of your computers and choose in the phone app
+which one answers. Claude Code keeps each conversation on the machine that had
+it, so the conversation itself cannot move. Instead the phone keeps the recent
+turns and hands them to the runtime you switch to:
+
+1. Before each message the app posts its most recent turns (up to 12) to
+   `/v1/conversations/<name>/history`.
+2. The runtime ignores turns it answered itself or has already been given,
+   and keeps the rest.
+3. With the next message of that conversation, the model receives those turns
+   in front of the owner's words, once, with a note that they happened
+   elsewhere.
+
+What carries over is what was said: the owner's words and Xiaoyou's full
+replies, each shortened to 500 and 1000 characters when quoted to the model.
+What does not carry over is everything else the other session knew: files it
+read, tool output, and anything older than the turns the phone still holds.
 
 ## Voice
 
@@ -250,8 +297,15 @@ SenseVoice model, using the Mandarin sample shipped with the model (5.6 s):
   the uncompressed result; with every fifteenth frame deliberately dropped it
   was still recognized.
 
+Checked by hand on 2026-10-08 on Linux with two runtimes on one machine, each
+driving the real Claude Code with its own session, using the phone app's
+request code on a desktop Java runtime: a fact told to the first runtime was
+recalled by the second after the turns were carried over, and something the
+second said was recalled by the first after carrying them back.
+
 Not verified:
 
+- Windows: nothing in this directory has been run on Windows.
 - Voice from a real device: microphone quality, Bluetooth throughput, and
   recognition of real speech in a real room.
 - sherpa-onnx on macOS.

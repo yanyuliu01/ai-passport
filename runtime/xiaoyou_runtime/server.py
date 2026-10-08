@@ -5,6 +5,7 @@
   POST /v1/voice?conversation=&client_id=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>      查结果；wait 最多 60 秒，处理完会提前返回
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
+  POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
 
 除 /healthz 外都要带 Authorization: Bearer <令牌>。
 """
@@ -21,6 +22,7 @@ from .config import Config
 from .service import MAX_AUDIO_BYTES, RequestError, Service
 
 MAX_BODY_BYTES = 64 * 1024
+MAX_HISTORY_BODY_BYTES = 1024 * 1024
 MAX_WAIT_SECONDS = 60.0
 
 
@@ -55,13 +57,13 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             self._fail(401, "令牌不对或者没带令牌")
             return False
 
-        def _body(self) -> Tuple[bool, Any]:
+        def _body(self, limit: int = MAX_BODY_BYTES) -> Tuple[bool, Any]:
             try:
                 length = int(self.headers.get("Content-Length", ""))
             except ValueError:
                 self._fail(411, "需要 Content-Length")
                 return False, None
-            if length < 0 or length > MAX_BODY_BYTES:
+            if length < 0 or length > limit:
                 self._fail(413, "请求体太大")
                 return False, None
             try:
@@ -74,7 +76,10 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             url = urlsplit(self.path)
             parts = [part for part in url.path.split("/") if part]
             if parts == ["healthz"]:
-                self._send(200, {"ok": True, "version": __version__, "backend": config.backend})
+                self._send(200, {
+                    "ok": True, "version": __version__, "backend": config.backend,
+                    "name": config.name,
+                })
                 return
             if not self._authorized():
                 return
@@ -126,10 +131,17 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             if parts == ["v1", "voice"]:
                 self._voice(parse_qs(url.query))
                 return
-            ok, body = self._body()
+            history = (len(parts) == 4 and parts[:2] == ["v1", "conversations"]
+                       and parts[3] == "history")
+            ok, body = self._body(MAX_HISTORY_BODY_BYTES if history else MAX_BODY_BYTES)
             if not ok:
                 return
             try:
+                if history:
+                    if not isinstance(body, dict):
+                        raise RequestError("请求体应该是一个对象")
+                    self._send(200, {"accepted": service.share(parts[2], body.get("turns"))})
+                    return
                 if parts == ["v1", "messages"]:
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")

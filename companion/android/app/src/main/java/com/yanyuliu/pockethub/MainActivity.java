@@ -16,6 +16,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -39,6 +40,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private EditText chatInput;
     private EditText pairingInput;
     private TextView runtimeStatus;
+    private LinearLayout runtimeList;
+    private String runtimeKey = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,12 +67,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
         root.addView(chatInput);
         root.addView(button("发送", view -> sendChat()));
 
-        root.addView(heading("Runtime"));
+        root.addView(heading("由哪台电脑回答"));
+        runtimeList = new LinearLayout(this);
+        runtimeList.setOrientation(LinearLayout.VERTICAL);
+        root.addView(runtimeList);
         runtimeStatus = text("", 13, false);
         root.addView(runtimeStatus);
         pairingInput = input("粘贴连接串：http://地址:端口#令牌");
         root.addView(pairingInput);
-        root.addView(button("保存连接串", view -> savePairing()));
+        root.addView(button("添加这台电脑", view -> savePairing()));
 
         root.addView(heading("设置"));
         root.addView(button("① 授权蓝牙", view -> requestBluetooth()));
@@ -110,6 +116,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         scroll.addView(root);
         setContentView(scroll);
 
+        RuntimeClient.restoreChat(this);
         // 上次是连着的：App 被系统关掉再打开后自己连回去，不用再点一次。
         if (hasBluetoothPermission()
                 && getSharedPreferences("link", MODE_PRIVATE).getBoolean("connect", false)) {
@@ -150,9 +157,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             talk.append("小幽正在想…");
         }
         chatView.setText(talk.length() == 0 ? "（还没有聊过）" : talk.toString().trim());
-        String url = RuntimeClient.savedUrl(this);
-        runtimeStatus.setText(url == null ? "还没有设置。在电脑上运行 python3 -m xiaoyou_runtime --pair"
-                + " 得到连接串。" : "已设置：" + url);
+        refreshRuntimes();
 
         StringBuilder lines = new StringBuilder();
         for (String line : store.logLines()) {
@@ -179,7 +184,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         // 令牌不留在输入框里。
         pairingInput.setText("");
-        HubStore.get().log("已保存 Runtime 连接串");
+        HubStore.get().log("已保存连接串");
     }
 
     private void connect() {
@@ -201,6 +206,39 @@ public class MainActivity extends Activity implements HubStore.Listener {
         labelInput.setText("");
         refreshSources();
         HubStore.get().log("已添加来源 " + packageName);
+    }
+
+    /** 登记过的 Runtime：点一下切换，长按删除。列表没变时不重建，免得打断点击。 */
+    private void refreshRuntimes() {
+        List<RuntimeClient.Target> targets = RuntimeClient.targets(this);
+        RuntimeClient.Target current = RuntimeClient.selected(this);
+        StringBuilder key = new StringBuilder(current == null ? "" : current.url);
+        for (RuntimeClient.Target target : targets) {
+            key.append('|').append(target.name).append('@').append(target.url);
+        }
+        if (key.toString().equals(runtimeKey)) {
+            return;
+        }
+        runtimeKey = key.toString();
+        runtimeList.removeAllViews();
+        for (RuntimeClient.Target target : targets) {
+            RadioButton choice = new RadioButton(this);
+            choice.setText(target.name + "  (" + target.url + ")");
+            choice.setChecked(current != null && current.url.equals(target.url));
+            choice.setOnClickListener(view -> {
+                RuntimeClient.select(this, target.url);
+                HubStore.get().log("现在由 " + target.name + " 上的小幽回答");
+            });
+            choice.setOnLongClickListener(view -> {
+                RuntimeClient.remove(this, target.url);
+                HubStore.get().log("已删除 Runtime " + target.name);
+                return true;
+            });
+            runtimeList.addView(choice);
+        }
+        runtimeStatus.setText(targets.isEmpty()
+                ? "还没有登记电脑。在电脑上运行 python3 -m xiaoyou_runtime --pair 得到连接串。"
+                : "点一下切换由哪台电脑回答，长按删除。换电脑时最近的对话会带过去。");
     }
 
     private void refreshSources() {

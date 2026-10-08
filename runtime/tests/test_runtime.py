@@ -87,6 +87,14 @@ class ConfigTests(TempDirCase):
         self.assertEqual(loaded.claude_command, ["claude"])
         self.assertEqual(loaded.claude_permission_mode, "dontAsk")
 
+    def test_runtime_name(self):
+        self.assertTrue(config_module.load(write_config(self.folder), {}).name)
+        named = write_config(self.folder, server={"token": TOKEN, "name": " 书房的电脑 "})
+        self.assertEqual(config_module.load(named, {}).name, "书房的电脑")
+        self.assertEqual(config_module.load(named, {"XIAOYOU_NAME": "vm"}).name, "vm")
+        with self.assertRaisesRegex(config_module.ConfigError, "server.name"):
+            config_module.load(write_config(self.folder, server={"token": TOKEN, "name": "x" * 41}), {})
+
     def test_environment_overrides_file(self):
         loaded = self.load(env={
             "XIAOYOU_HOST": "0.0.0.0", "XIAOYOU_PORT": "9000",
@@ -363,6 +371,94 @@ class ServiceTests(TempDirCase):
         self.assertIsNone(self.service.get("nope"))
 
 
+class SharedHistoryTests(TempDirCase):
+    """Turns that happened on another runtime are carried over by the phone."""
+
+    def setUp(self):
+        super().setUp()
+        self.backend = RecordingBackend()
+        self.service = Service(self.backend, Store(self.folder))
+        self.addCleanup(self.service.close)
+
+    def done(self, text):
+        return self.service.get(self.service.submit(text)["id"], wait=5)
+
+    @staticmethod
+    def turn(number, at=None):
+        return {"id": "other-%d" % number, "text": "问题%d" % number,
+                "reply": "回答%d" % number, "at": at if at is not None else number}
+
+    def test_carried_turns_reach_the_model_once_with_the_next_message(self):
+        self.assertEqual(self.service.share("default", [self.turn(2), self.turn(1)]), 2)
+        self.assertEqual(self.backend.calls, [])  # nothing is sent until the owner speaks
+        first = self.done("接着说")
+        prompt = self.backend.calls[0][0]
+        self.assertTrue(prompt.endswith("接着说"))
+        # Oldest first, whatever order they arrived in.
+        self.assertLess(prompt.index("问题1"), prompt.index("回答1"))
+        self.assertLess(prompt.index("回答1"), prompt.index("问题2"))
+        # The owner's own words are stored as typed, without the recap.
+        self.assertEqual(first["text"], "接着说")
+        self.done("再来")
+        self.assertEqual(self.backend.calls[1][0], "再来")
+        # Offering the same turns again, or a turn this runtime answered itself, adds nothing.
+        own = {"id": first["id"], "text": "接着说", "reply": first["reply"], "at": 9}
+        self.assertEqual(self.service.share("default", [self.turn(1), self.turn(2), own]), 0)
+        self.assertEqual(self.service.share("default", [self.turn(3), own]), 1)
+        self.done("第三句")
+        self.assertIn("问题3", self.backend.calls[2][0])
+        self.assertNotIn("问题1", self.backend.calls[2][0])
+
+    def test_conversations_do_not_mix_and_a_failed_turn_keeps_the_carry_over(self):
+        self.service.share("work", [self.turn(1)])
+        self.done("家里的事")
+        self.assertEqual(self.backend.calls[0][0], "家里的事")
+        self.backend.fail_on = None
+        self.backend.calls.clear()
+        original = self.backend.turn
+
+        def failing(text, session_id):
+            raise backends.BackendError("boom")
+
+        self.backend.turn = failing
+        failed = self.service.get(self.service.submit("工作的事", "work")["id"], wait=5)
+        self.assertEqual(failed["status"], "failed")
+        self.backend.turn = original
+        self.service.get(self.service.submit("再试一次", "work")["id"], wait=5)
+        self.assertIn("问题1", self.backend.calls[-1][0])
+
+    def test_survives_a_restart_and_reset_drops_what_was_not_said(self):
+        self.service.share("default", [self.turn(1)])
+        self.service.close()
+        store = Store(self.folder)
+        service = Service(self.backend, store)
+        self.addCleanup(service.close)
+        self.assertEqual(service.share("default", [self.turn(1)]), 0)
+        service.reset("default")
+        service.get(service.submit("新的开始")["id"], wait=5)
+        self.assertEqual(self.backend.calls[-1][0], "新的开始")
+        self.assertEqual(service.share("default", [self.turn(1)]), 0)
+
+    def test_long_histories_are_trimmed_to_the_most_recent(self):
+        turns = [{"id": "t%d" % n, "text": "问" * 3000, "reply": "答%d" % n + "x" * 3000, "at": n}
+                 for n in range(30)]
+        self.assertEqual(self.service.share("default", turns), 30)
+        self.done("好")
+        prompt = self.backend.calls[0][0]
+        self.assertLess(len(prompt), 12000)
+        self.assertIn("答29", prompt)
+        self.assertNotIn("答0x", prompt)
+
+    def test_bad_offers_are_refused(self):
+        good = self.turn(1)
+        for turns in (None, "x", [1], [{"id": "a"}], [dict(good, id="a b")], [dict(good, text=" ")],
+                      [dict(good, reply=3)], [dict(good, at=True)], [good] * 31):
+            with self.assertRaises(RequestError):
+                self.service.share("default", turns)
+        with self.assertRaises(RequestError):
+            self.service.share("bad name", [good])
+
+
 class HttpTests(TempDirCase):
     def setUp(self):
         super().setUp()
@@ -401,6 +497,7 @@ class HttpTests(TempDirCase):
         status, body = self.call("GET", "/healthz", token=None)
         self.assertEqual(status, 200)
         self.assertEqual(body["backend"], "echo")
+        self.assertTrue(body["name"])
         self.assertNotIn(TOKEN, json.dumps(body))
 
     def test_everything_else_needs_the_token(self):
@@ -420,6 +517,22 @@ class HttpTests(TempDirCase):
                          message["id"])
         self.assertEqual(self.call("POST", "/v1/conversations/default/reset", {})[1], {"reset": True})
         self.assertEqual(self.call("POST", "/v1/conversations/default/reset", {})[1], {"reset": False})
+
+    def test_history_is_carried_in_over_http(self):
+        turns = [{"id": "elsewhere-1", "text": "我叫什么", "reply": "你叫小明", "at": 1}]
+        self.assertEqual(self.call("POST", "/v1/conversations/default/history", {"turns": turns}),
+                         (200, {"accepted": 1}))
+        self.assertEqual(self.call("POST", "/v1/conversations/default/history", {"turns": turns}),
+                         (200, {"accepted": 0}))
+        message = self.call("POST", "/v1/messages", {"text": "继续"})[1]
+        done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])[1]
+        # The echo backend repeats what it was given, so the carried turn shows up in its reply.
+        self.assertIn("你叫小明", done["reply"])
+        self.assertEqual(done["text"], "继续")
+        self.assertEqual(self.call("POST", "/v1/conversations/default/history", {"turns": "x"})[0], 400)
+        self.assertEqual(self.call("POST", "/v1/conversations/default/history", ["x"])[0], 400)
+        self.assertEqual(
+            self.call("POST", "/v1/conversations/default/history", {"turns": turns}, token=None)[0], 401)
 
     def test_bad_requests(self):
         self.assertEqual(self.call("POST", "/v1/messages", {"text": ""})[0], 400)

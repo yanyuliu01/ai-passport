@@ -21,6 +21,31 @@ MAX_TEXT_CHARS = 8000
 MAX_AUDIO_BYTES = 4 * 1024 * 1024
 MAX_KEPT_MESSAGES = 200
 MAX_NAME_CHARS = 64
+MAX_SHARED_TURNS = 30
+MAX_SHARED_TEXT_CHARS = 4000
+MAX_SHARED_REPLY_CHARS = 8000
+# 转告模型时每轮最多引用这么多字，总共不超过这么多字（保留最近的）。
+RECAP_TEXT_CHARS = 500
+RECAP_REPLY_CHARS = 1000
+RECAP_TOTAL_CHARS = 8000
+
+
+def recap(turns: Any, text: str) -> str:
+    """把别处发生的几轮对话接在主人这句话前面，交给模型。"""
+    blocks = []
+    total = 0
+    for turn in reversed(turns):
+        block = "主人：%s\n小幽：%s" % (
+            turn["text"][:RECAP_TEXT_CHARS], turn["reply"][:RECAP_REPLY_CHARS])
+        total += len(block)
+        if total > RECAP_TOTAL_CHARS and blocks:
+            break
+        blocks.append(block)
+    return (
+        "（下面是主人刚才在另一台电脑上和你的对话。那边的你已经答过了，这里只是让你接上话，"
+        "不要复述，也不要提“另一台电脑”。）\n\n%s\n\n（现在主人说：）\n%s"
+        % ("\n\n".join(reversed(blocks)), text)
+    )
 
 
 class RequestError(Exception):
@@ -125,7 +150,34 @@ class Service:
 
     def reset(self, conversation: Any) -> bool:
         """忘掉一个对话的会话编号：下一句话会开一个新会话。"""
-        return self._store.forget(_name(conversation, "conversation"))
+        conversation = _name(conversation, "conversation")
+        self._store.shared.clear_pending(conversation)
+        return self._store.forget(conversation)
+
+    def share(self, conversation: Any, turns: Any) -> int:
+        """手机带来在别的 Runtime 上发生的对话；返回这台之前不知道的轮数。
+
+        不立刻打扰模型：等这个对话的下一句话到来时一并告诉它。
+        """
+        conversation = _name(conversation, "conversation")
+        if not isinstance(turns, list) or len(turns) > MAX_SHARED_TURNS:
+            raise RequestError("turns 应该是最多 %d 项的列表" % MAX_SHARED_TURNS)
+        cleaned = []
+        for turn in turns:
+            if not isinstance(turn, dict):
+                raise RequestError("turns 里的每一项应该是对象")
+            text, reply, at = turn.get("text"), turn.get("reply"), turn.get("at", 0)
+            if (not isinstance(text, str) or not isinstance(reply, str) or not text.strip()
+                    or not reply.strip() or isinstance(at, bool)
+                    or not isinstance(at, (int, float))):
+                raise RequestError("turns 里的每一项要有非空的 text 和 reply")
+            cleaned.append({
+                "id": _name(turn.get("id"), "turns[].id"),
+                "text": text[:MAX_SHARED_TEXT_CHARS],
+                "reply": reply[:MAX_SHARED_REPLY_CHARS],
+                "at": at,
+            })
+        return self._store.shared.offer(conversation, cleaned)
 
     def close(self) -> None:
         self._queue.put(None)
@@ -185,10 +237,17 @@ class Service:
                         pass
                 text = text[:MAX_TEXT_CHARS]
             self._update(message_id, status="running", text=text)
+            carried = self._store.shared.take(conversation)
             try:
-                turn = self._backend.turn(text, self._store.session(conversation))
+                turn = self._backend.turn(
+                    recap(carried, text) if carried else text, self._store.session(conversation)
+                )
                 if turn.session_id:
                     self._store.remember(conversation, turn.session_id)
+                # 模型已经听到了带过来的那几轮；这一轮是自己答的，也记为已知。
+                if carried:
+                    self._store.shared.told(conversation, carried)
+                self._store.shared.know(conversation, message_id)
                 self._update(
                     message_id, status="done", reply=turn.reply, brief=turn.brief,
                     mood=turn.mood, finished_at=time.time(),

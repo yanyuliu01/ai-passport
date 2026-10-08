@@ -203,6 +203,20 @@ public final class HubStore {
 
     // ---- 和小幽聊天 ----
 
+    /** App 刚启动、聊天框还空着时，把存着的对话放回来。 */
+    public void restoreChat(List<ChatTurn> turns) {
+        synchronized (this) {
+            if (!chat.isEmpty()) {
+                return;
+            }
+            for (ChatTurn turn : turns) {
+                appendChat("我：" + turn.text);
+                appendChat(CHAT_SOURCE + "：" + turn.reply);
+            }
+        }
+        notifyChanged();
+    }
+
     /** 我说了一句话，小幽开始想。 */
     public void chatAsked(String text) {
         synchronized (this) {

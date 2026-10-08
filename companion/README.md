@@ -52,8 +52,14 @@ In the app, in order:
 3. Connect. When the device shows a six-digit passkey, type it on the phone.
 
 To talk to Xiaoyou, start the runtime on a computer on the same network, run
-`python3 -m xiaoyou_runtime --pair` there, and paste the printed line
-(`http://<address>:<port>#<token>`) into the *Runtime* field of the app.
+`python3 -m xiaoyou_runtime --pair` there, paste the printed line
+(`http://<address>:<port>#<token>`) into the app, and add it. Several computers
+can be added; tap one to choose which answers, long-press to remove it. The
+app keeps the 20 most recent turns on the phone and hands the latest ones to
+whichever runtime you send to, so the conversation continues when you switch
+(see *Several runtimes, one conversation* in the runtime README for what does
+and does not carry over). The same stored turns refill the chat box after the
+app is restarted.
 
 The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
@@ -69,7 +75,8 @@ The app uses the network for one thing: sending what you type in the chat box
 to the runtime address you paired, and reading the answer. Voice recordings from the device take
 the same route and are not kept on the phone. That connection is
 plain HTTP, so anyone on the same network can read it; use it on a network you
-trust. The runtime address and token are kept in the app's private storage.
+trust. The runtime addresses and tokens, and the 20 most recent turns of the
+conversation, are kept in the app's private storage.
 
 ## Layout
 
@@ -93,6 +100,7 @@ produced by the firmware's encoder.
 
 On a phone (2026-10-08, one Android device, version 0.2.0): Bluetooth pairing,
 the connection to the device, and a typed message answered by the runtime and
-shown on the device worked. Not verified: voice from the device (version
-0.3.0 has not been run on a phone), reconnecting by itself after the app is
+shown on the device worked. Not verified: voice from the device and
+switching between runtimes (versions 0.3.0 and 0.4.0 have not been run on a
+phone), reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.

@@ -50,6 +50,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | --- | --- | --- |
 | `server.host` | `127.0.0.1` | 监听地址。 |
 | `server.port` | `8765` | 监听端口。 |
+| `server.name` | 这台机器的主机名 | 手机 App 里怎么称呼这台 Runtime，最多 40 个字符。 |
 | `server.token` | 无 | 共享令牌，至少 16 个字符；示例里的占位值会被拒绝。 |
 | `state_dir` | `state` | 存“对话 → 会话编号”这张表的目录。 |
 | `persona_file` | `persona.txt` | 小幽的人设，会追加到后端的系统提示里。 |
@@ -72,7 +73,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `stt.timeout_seconds` | `60` | `command`：一次识别超过这么久就停止（5 到 600）。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
-`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`、
+`XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`、
 `XIAOYOU_CLAUDE_CONFIG_DIR`。
 
 ### 使用单独的 Claude 登录
@@ -105,10 +106,11 @@ Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设�
 
 | 请求 | 结果 |
 | --- | --- |
-| `GET /healthz` | `{"ok": true, "version", "backend"}`，不需要令牌。 |
+| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?}` | `202` 和这条消息的记录，状态为 `queued`。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。 |
+| `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉模型。 |
 | `POST /v1/conversations/<名字>/reset` | 忘掉这个对话的会话，下一句话从头开始。 |
 
 消息记录包含 `id`、`client_id`、`conversation`、`kind`（`text` 或 `voice`）、`status`
@@ -126,6 +128,44 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "你好", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Windows
+
+Runtime 可以跑在 Windows 10 及以上，需要从
+[python.org](https://www.python.org/downloads/windows/) 安装 Python（安装时勾选
+“Add python.exe to PATH”），并原生安装 Claude Code。在 PowerShell 里：
+
+```powershell
+irm https://claude.ai/install.ps1 | iex        # 安装 Claude Code；装完新开一个窗口
+claude                                         # 登录一次，/status 确认后退出
+git clone -b feature/pocket-hub-app https://github.com/yanyuliu01/ai-passport.git
+cd ai-passport\runtime
+copy config.example.json config.json
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # 填进 server.token
+python -m xiaoyou_runtime --config config.json --once "你好"
+$env:XIAOYOU_HOST = "0.0.0.0"; python -m xiaoyou_runtime --config config.json
+```
+
+命令是 `python`，不是 `python3`。服务第一次在网络上监听时，Windows Defender 防火墙会问
+是否允许 Python；要在专用网络上允许，否则手机连不上。`config.json` 要保存成不带 BOM 的
+UTF-8（记事本里选“UTF-8”，不要选“带有 BOM 的 UTF-8”）。
+
+语音部分照[语音](#语音)一节的步骤在 PowerShell 里做即可，把 `python3` 换成 `python`，
+`curl` 换成 `curl.exe`。
+
+## 多台 Runtime，一段对话
+
+可以在每台电脑上各跑一个 Runtime，在手机 App 里选由哪一台回答。Claude Code 把每段对话
+存在发生它的那台机器上，对话本身搬不走。所以改由手机记着最近的几轮，换到哪台就交给哪台：
+
+1. 每次发消息之前，App 把最近的几轮（最多 12 轮）发到 `/v1/conversations/<名字>/history`。
+2. Runtime 跳过自己答过的和已经收到过的，其余的先存着。
+3. 这个对话的下一句话到来时，模型会在主人的话前面看到这几轮，只看到一次，并被告知它们
+   发生在别处。
+
+带得过去的是“说了什么”：主人的话和小幽的完整回复，转告模型时每轮分别截到 500 和 1000 个
+字。带不过去的是那边会话知道的其他一切：读过的文件、工具的输出，以及比手机还记得的那几轮
+更早的内容。
 
 ## 语音
 
@@ -217,8 +257,13 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   环境里解码，然后发到 `/v1/voice`。识别成功，和未压缩时的结果差一个字；故意每 15 帧丢
   一帧后仍能识别。
 
+2026-10-08 在 Linux 上手动验证过：同一台机器上跑两个 Runtime，各自用真实的 Claude Code
+和各自的会话，请求用的是手机 App 的代码（在电脑的 Java 环境里运行）。告诉第一个 Runtime 的
+一件事，把对话带过去之后第二个能说出来；第二个说过的话，带回去之后第一个也能说出来。
+
 没有验证：
 
+- Windows：这个目录里的任何东西都还没有在 Windows 上运行过。
 - 真实设备上的语音：麦克风音质、蓝牙吞吐，以及真实环境里真人说话的识别效果。
 - macOS 上的 sherpa-onnx。
 

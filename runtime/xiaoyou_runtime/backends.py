@@ -7,6 +7,7 @@ echo（不调用任何模型，用来测试整条链路）。以后接别的代�
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -144,9 +145,12 @@ class ClaudeCodeBackend(Backend):
             # 让这台机器上的 Claude Code 用一套单独的登录和设置，
             # 不受（也不影响）使用者平时那套 ~/.claude 配置。
             extra["env"] = dict(os.environ, CLAUDE_CONFIG_DIR=str(config.claude_config_dir))
+        command = self.command(session_id)
+        # 按 PATH 找到完整路径再启动：Windows 上这样才能找到 claude.exe / claude.cmd。
+        command[0] = shutil.which(command[0]) or command[0]
         try:
             done = self._run(
-                self.command(session_id),
+                command,
                 input=text,
                 **extra,
                 capture_output=True,

@@ -100,6 +100,31 @@ public final class ProtocolSelfTest {
         check(after.size() == 1 && after.get(0).equals("ok"), "recover after oversized");
 
         voice();
+        history();
+    }
+
+    /** 换 Runtime 时带过去的对话：只带最近的若干轮，旧的在前，内容原样转义。 */
+    private static void history() {
+        java.util.List<ChatTurn> turns = new java.util.ArrayList<>();
+        check(ChatTurn.historyJson(turns).equals("{\"turns\":[]}"), "empty history");
+        turns.add(new ChatTurn("m1", "说\"你好\"", "好\n的", 100));
+        check(ChatTurn.historyJson(turns).equals(
+                "{\"turns\":[{\"id\":\"m1\",\"text\":\"说\\\"你好\\\"\",\"reply\":\"好\\n的\",\"at\":100}]}"),
+                "one turn: " + ChatTurn.historyJson(turns));
+        for (int index = 2; index <= 20; index++) {
+            turns.add(new ChatTurn("m" + index, "问" + index, "答" + index, 100 + index));
+        }
+        String body = ChatTurn.historyJson(turns);
+        check(!body.contains("\"m8\"") && body.contains("\"m9\"") && body.contains("\"m20\""),
+                "only the most recent turns");
+        check(body.indexOf("\"m9\"") < body.indexOf("\"m20\""), "oldest first");
+        StringBuilder huge = new StringBuilder();
+        for (int index = 0; index < ChatTurn.TEXT_LIMIT + 50; index++) {
+            huge.append('长');
+        }
+        turns.clear();
+        turns.add(new ChatTurn("big", huge.toString(), "ok", 1));
+        check(ChatTurn.historyJson(turns).length() < ChatTurn.TEXT_LIMIT + 80, "long text is cut");
     }
 
     private static byte[] hex(String text) {
