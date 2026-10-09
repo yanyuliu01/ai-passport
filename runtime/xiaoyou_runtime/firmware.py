@@ -46,6 +46,8 @@ MAX_ATTEMPTS = 2
 LOG_LIMIT = 200
 LOCK_STALE_SECONDS = 10.0
 DEVICE_EVENTS = ("connected", "progress", "installed", "failed", "unsupported")
+# 清单的经过里，这几种是“没成、需要人知道”的事；手机 App 会把最近的一条显示出来。
+NOTICE_EVENTS = ("failed", "gave_up", "fetch_failed")
 GITHUB_API = "https://api.github.com"
 POLL_SECONDS = 20.0
 
@@ -275,11 +277,16 @@ class FirmwareStore:
         """现在该推给设备的那一版，写成一层的对象（手机 App 的解析器只认一层）。没有时 id 为空。"""
         data = self._read()
         target = data["target"] if isinstance(data["target"], dict) else {}
+        last = data["log"][-1] if data["log"] else {}
+        noticed = last.get("event") in NOTICE_EVENTS
         return {
             "rev": data["rev"], "id": target.get("id", ""), "seq": target.get("seq", 0),
             "build": target.get("build", ""), "size": target.get("size", 0),
             "sha256": target.get("sha256", ""), "note": target.get("note", ""),
             "reason": target.get("reason", ""), "attempts": target.get("attempts", 0),
+            # 最近一件没成的事（取固件没取到、推了没装上）；之后又有别的进展就不再提它。
+            "notice": str(last.get("detail", ""))[:200] if noticed else "",
+            "notice_at": int(last.get("at", 0)) if noticed else 0,
         }
 
     def wait_for_change(self, rev: int, seconds: float) -> None:
@@ -392,6 +399,10 @@ class FirmwareStore:
             return dict(entry)
 
         return self._change(edit)
+
+    def note(self, event: str, version_id: str = "", detail: str = "") -> None:
+        """往经过里记一笔和设备无关的事（比如取固件没取到）。"""
+        self._change(lambda data: self._note(data, event, version_id, detail))
 
     def clear_target(self) -> bool:
         def edit(data: Dict[str, Any]) -> Any:
@@ -531,6 +542,23 @@ def find_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = No
     return None
 
 
+def failed_build(repo: str, commit: str, opener: Callable[..., Any] = urllib.request.urlopen,
+                 token: Optional[str] = None) -> Optional[str]:
+    """这个提交在 GitHub 上的固件构建是不是已经失败了；是就返回那次运行的网址。"""
+    raw = _github("%s/repos/%s/actions/runs?head_sha=%s&per_page=30" % (GITHUB_API, repo, commit),
+                  opener, token, "application/vnd.github+json", 30)
+    try:
+        runs = json.loads(raw.decode("utf-8")).get("workflow_runs", [])
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return None
+    for run in runs if isinstance(runs, list) else []:
+        if (isinstance(run, dict) and "firmware" in str(run.get("name", "")).lower()
+                and run.get("status") == "completed"
+                and run.get("conclusion") not in ("success", "skipped", "cancelled", None)):
+            return str(run.get("html_url") or "GitHub Actions")
+    return None
+
+
 def fetch_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = None,
                   commit: Optional[str] = None, wait_seconds: float = 0,
                   opener: Callable[..., Any] = urllib.request.urlopen,
@@ -546,6 +574,14 @@ def fetch_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = N
             what = "标签 %s" % tag if tag else ("提交 %s 的构建" % commit[:10] if commit else "固件")
             raise FirmwareError("%s 里没找到%s%s" % (
                 repo, what, "（等了 %d 秒）" % wait_seconds if wait_seconds else ""))
+        if commit is not None and len(commit) == 40:
+            # 构建要是已经失败了就不用傻等到超时。提交写的是简写时 GitHub 不认，跳过这一步。
+            try:
+                failed = failed_build(repo, commit, opener, token)
+            except FirmwareError:
+                failed = None
+            if failed:
+                raise FirmwareError("提交 %s 在 GitHub 上的固件构建失败了：%s" % (commit[:10], failed))
         say("还没构建出来，过一会儿再看……")
         sleep(min(POLL_SECONDS, max(1.0, deadline - time.monotonic())))
     say("下载 %s ……" % found["tag"])

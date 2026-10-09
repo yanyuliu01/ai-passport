@@ -256,6 +256,20 @@ class StoreTests(TempDirCase):
         # Numbers are never reused, so "version 1" never comes to mean something else.
         self.assertEqual(self.add("v3")["seq"], 3)
 
+    def test_the_latest_thing_that_went_wrong_is_offered_as_a_notice(self):
+        first = self.add("v1")
+        self.assertEqual((self.store.target()["notice"], self.store.target()["notice_at"]), ("", 0))
+        self.now = 5000.0
+        self.store.note("fetch_failed", "abc", "构建失败了")
+        target = self.store.target()
+        self.assertEqual((target["notice"], target["notice_at"]), ("构建失败了", 5000))
+        self.assertEqual(self.store.snapshot()["log"][-1]["event"], "fetch_failed")
+        # Anything that happens afterwards retires it.
+        self.store.set_target(first["id"])
+        self.assertEqual(self.store.target()["notice"], "")
+        self.store.report({"event": "failed", "build": "x", "id": first["id"], "detail": "sha256"})
+        self.assertEqual(self.store.target()["notice"], "sha256")
+
     def test_a_tampered_or_missing_image_is_not_handed_out(self):
         first = self.add("v1")
         path = self.folder / "firmware" / "images" / (first["id"] + ".bin")
@@ -401,6 +415,29 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(len(naps), 2)
         self.assertTrue(all(0 < nap <= firmware_module.POLL_SECONDS for nap in naps))
         self.assertIn("下载 firmware-build-3 ……", said)
+
+    def test_a_build_that_already_failed_is_not_waited_for(self):
+        naps = []
+        runs = {"workflow_runs": [
+            {"name": "Companion app", "status": "completed", "conclusion": "failure",
+             "html_url": "https://example.invalid/app"},
+            {"name": "Pocket firmware", "status": "completed", "conclusion": "failure",
+             "html_url": "https://example.invalid/run/7"},
+        ]}
+
+        def github(request, timeout=None):
+            url = request.full_url
+            if "/actions/runs?head_sha=" + "d" * 40 in url:
+                return contextlib.closing(io.BytesIO(json.dumps(runs).encode()))
+            return contextlib.closing(io.BytesIO(b"[]"))
+
+        with self.assertRaisesRegex(FirmwareError, "构建失败了：https://example.invalid/run/7"):
+            firmware_module.fetch_release(*self.ARGS, commit="d" * 40, wait_seconds=600,
+                                          opener=github, sleep=naps.append)
+        self.assertEqual(naps, [])
+        # Still running, or only other workflows failed: keep waiting.
+        runs["workflow_runs"][1].update(status="in_progress", conclusion=None)
+        self.assertIsNone(firmware_module.failed_build("me/repo", "d" * 40, opener=github))
 
     def test_a_download_that_does_not_match_its_published_hash_is_refused(self):
         bad, files = release("firmware-build-4", "e" * 40, self.new, digest="0" * 64)
@@ -658,6 +695,17 @@ class CommandLineTests(TempDirCase):
         self.assertEqual((stored["version"], stored["note"]), ("ccc3333", "from CI"))
         self.assertEqual(stored["source"], "github:firmware-build-7@cccccccccc")
         self.assertEqual(self.store.target()["id"], stored["id"])
+
+        # Waiting for a build that never appears leaves a note where the phone will see it.
+        Args.commit = "d" * 12
+        Args.wait = 1
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = firmware_cli.run(loaded, self.config_path, Args, [], out=said.append,
+                                    opener=FakeGitHub([entry], files))
+        self.assertEqual(code, 1)
+        self.assertIn("没找到", err.getvalue())
+        self.assertIn("没找到", self.store.target()["notice"])
 
     def test_the_server_command_line_is_unchanged(self):
         # No subcommand still means "run the service"; --check proves parsing got that far.

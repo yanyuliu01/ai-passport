@@ -25,9 +25,10 @@
 ## 项目与安全基线
 
 - 目标平台：ESP32-C3、8 MB Flash、无 PSRAM、ESP-IDF 5.5.3。
-- 仓库默认分区表保持最简：只包含 NVS、PHY data，以及占用 8 MB Flash
-  剩余空间的单个 factory app。用户固件可以按需求明确调整布局；修改后必须
-  验证结果，不得把产品专用分区变成模板的强制契约。
+- 仓库默认分区表保持最简：NVS、PHY data、OTA 数据，以及平分 8 MB Flash
+  剩余空间的两个应用槽位（Claude Pocket 固件靠它们经蓝牙换固件）。用户固件
+  可以按需求明确调整布局；修改后必须验证结果，不得把产品专用分区变成模板的
+  强制契约。分区表不能经蓝牙更新：改动它意味着已经在用的设备要再插线刷一次。
 - 保留用户已有修改。先执行 `git status --short --branch`，不得覆盖或清理无关文件。
 - 下载（烧录）新固件无需备份设备内原有固件，不得把读取 Flash 备份作为前置条件。这不保证保留用户数据，也不授权全片擦除；遵循[烧录与数据说明](docs/development/engineering/firmware-layout.zh_CN.md#烧录与已存数据)。
 - 硬件事实优先级：产品规格与实测结果 → `components/bsp/include/bsp_pins.h` → BSP 头文件与实现 → 硬件指南 → README/demo。任务所需硬件细节未在这些来源中定义时，直接询问用户，不得猜测。

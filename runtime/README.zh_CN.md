@@ -75,6 +75,12 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `stt.threads` | `2` | `sense_voice`：使用的处理器线程数（1 到 16）。 |
 | `stt.command` | `[]` | `command`：要运行的命令，其中一个参数要包含 `{audio}`。 |
 | `stt.timeout_seconds` | `60` | `command`：一次识别超过这么久就停止（5 到 600）。 |
+| `firmware.repo` | 无 | 从哪个 GitHub 仓库取构建好的设备固件，写成 `用户名/仓库名`。见[设备固件](#设备固件)。 |
+| `firmware.asset` | `FoloToy-AI-Passport-full.bin` | 发布里固件文件的名字。 |
+| `firmware.tag_prefix` | `firmware-build-` | 带固件的发布，标签以它开头。 |
+| `firmware.source_dir` | 无 | 固件源码在这台电脑的哪里；`fetch --commit HEAD` 和 `build` 用。 |
+| `firmware.build_command` | `[]` | 这台电脑自己构建固件的命令，在 `source_dir` 里运行。空着表示不会自己构建。 |
+| `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | 构建出的固件文件，相对于 `source_dir`。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
@@ -195,6 +201,12 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回；客户端靠它一步一步跟着这一轮走。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
+| `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`：固件仓库的清单，版本从新到旧。见[设备固件](#设备固件)。 |
+| `GET /v1/firmware/target?wait=<秒>&rev=<n>` | 现在该推给设备的那一版，一层的对象：`id`（没有时是空串）、`seq`、`build`、`size`、`sha256`、`note`、`reason`、`attempts`、`notice`、`notice_at`、`rev`。带 `rev` 时清单一有变化就返回。 |
+| `GET /v1/firmware/<编号>/image` | 这一版的应用镜像（二进制）。 |
+| `POST /v1/firmware?note=<备注>&push=1`，请求体是固件文件 | `201` 和这一版的记录；`push=1` 同时把它设为要推的。 |
+| `POST /v1/firmware/target`，请求体 `{"id": 版本或 null, "reason"?, "force"?}` | 指定（或取消）要推给设备的那一版；返回同 `GET /v1/firmware/target`。 |
+| `POST /v1/firmware/device`，请求体 `{"event", "build", "state", "prev", …}` | 手机 App 转告设备的情况。`event` 为 `connected`、`progress`、`installed`、`failed` 或 `unsupported`；返回同 `GET /v1/firmware/target`。 |
 
 消息记录包含 `id`、`client_id`、`conversation`、`kind`（`text` 或 `voice`）、`status`
 （`queued`、`transcribing`、`running`、`done`、`failed`）、`text`、`reply`、`brief`、`mood`
@@ -224,6 +236,68 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -d '{"text": "你好", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## 设备固件
+
+设备可以[经蓝牙换固件](../docs/claude-pocket.zh_CN.md#经蓝牙换固件)。Runtime 所在的
+这台电脑负责留着每一版，并且记着“设备现在该是哪一版”。真正把固件写进设备的是手机
+App：它连着设备、又连得上这台 Runtime 时，发现两边不一样就取走镜像、经蓝牙传过去；
+设备重启后它去认可新固件，并把结果报回来。
+
+每一版的应用镜像原样存在 `<state_dir>/firmware/images/` 里，清单在
+`<state_dir>/firmware/index.json`，**不会自动清理**（一版约 1.7 MB）。入库时会核对
+镜像的校验和，并读出版本号、构建时间和 `build`（固件 ELF 的 SHA-256 前 16 位，设备
+自己报的也是它）。每一版有一个按入库先后排的序号，说“第 7 版”就行。
+
+```bash
+python3 -m xiaoyou_runtime firmware list              # 有哪些版本；● 设备现在跑的，→ 等着推的
+python3 -m xiaoyou_runtime firmware status            # 设备上是哪一版、在等什么、最近的经过
+python3 -m xiaoyou_runtime firmware fetch --push      # 取 GitHub 上最新构建的一版，入库并推给设备
+python3 -m xiaoyou_runtime firmware add 文件.bin       # 入库一个固件文件（应用镜像或合并镜像）
+python3 -m xiaoyou_runtime firmware restore 5         # 把设备换回第 5 版
+python3 -m xiaoyou_runtime firmware restore previous  # 换回设备另一个槽位里的上一版（几秒钟，不用重传）
+python3 -m xiaoyou_runtime firmware cancel            # 不推了
+python3 -m xiaoyou_runtime firmware remove 3          # 从仓库里删掉第 3 版
+```
+
+“版本”可以写序号（`7` 或 `#7`）、编号的开头几位、`latest`、`current`（设备现在跑的）
+或 `previous`。`push` 和 `restore` 是一回事。这些命令和正在运行的服务用的是同一份清单，
+不用重启服务。
+
+`fetch` 从 `firmware.repo` 的发布里取固件：不带参数取最新的，带标签取那一个，
+`--commit <提交>` 只要从那个提交构建出来的（`HEAD` 表示 `firmware.source_dir` 现在所在
+的提交）。`--wait 900` 表示还没构建出来就等，最多 900 秒；这个提交的构建要是已经失败
+了会马上停下。`--detach` 把等和取放到后台，命令马上返回，日志在
+`<state_dir>/firmware/fetch.log`。没登录时 GitHub 每小时只让查 60 次，设置环境变量
+`GITHUB_TOKEN` 可以放宽。
+
+这台电脑装了 ESP-IDF 的话，可以配置 `firmware.build_command`（例如
+`["bash", "-lc", "source ~/esp/esp-idf/export.sh && idf.py build"]`），然后用
+`firmware build --push` 在本机构建并推送，不用等 GitHub。
+
+几条保护：
+
+- 装上之后**不能再经蓝牙换**的版本（加这个功能之前的固件）默认不让推，要 `--force`。
+- 同一版连着两次没装成就不再自动重推，等人来看；`status` 里有原因。
+- 取固件没取到（构建失败、超时）和没装成，都会记在经过里，手机 App 的“设备固件”
+  那一行会显示。
+- 镜像没有签名。能访问这台 Runtime 的接口（也就是知道令牌）的人，可以让手机把任意
+  镜像推给设备。
+
+### 说一句话就改界面
+
+把 `config.example.json` 里叫 `tailor`（裁缝）的那个代理打开，并把 `firmware.repo` 和
+`firmware.source_dir`（写 `..`，也就是这个仓库）填上。它是一个只干活的 `claude_code`
+代理，工作目录是固件仓库，按
+[`skills/pocket-screen-update`](../skills/pocket-screen-update/SKILL.zh_CN.md) 做事：
+改界面代码、跑检查、提交并推送，然后让 Runtime 去等 GitHub 的构建并推给设备。对设备
+说“@裁缝 把顶上那条改细一点”，或者只说想改什么、让小幽自己决定交给它。“换回上一版”
+也归它。
+
+要先具备的条件：这台电脑上的仓库能 `git push`；`tailor` 的 `allowed_tools` 里有
+`Bash`，等于允许它在这个仓库里运行命令，这是这件事需要的，但请只在你自己的电脑上打开。
+从说完话到设备开始换，要等 Claude Code 改完（一两分钟）加上 GitHub 构建（几分钟）；
+这期间这个对话在等它改完，构建和推送在后台进行。
 
 ## Windows
 
@@ -383,8 +457,20 @@ Runtime 之间的 `remote` 代理（用 `echo`）以及互相登记时不会来�
 和各自的会话，请求用的是手机 App 的代码（在电脑的 Java 环境里运行）。告诉第一个 Runtime 的
 一件事，把对话带过去之后第二个能说出来；第二个说过的话，带回去之后第一个也能说出来。
 
+2026-10-09 在 Linux 上（云端工作区）手动验证过固件仓库：`firmware fetch` 从这个仓库在
+GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的 SHA-256，读出的版本号
+就是构建它的提交；`--commit … --wait … --detach` 在后台取回了同一版；用本机编译的
+应用镜像和合并镜像入库，读出的内容一致；`list`、`status`、`push`、`restore`、`cancel`、
+`remove` 都按说明工作。`runtime/tests/test_firmware.py` 用手工拼出的镜像验证了解析、
+清单、接口和命令行。
+
 没有验证：
 
+- 固件仓库和手机 App、真实设备一起使用：没有一版固件真的经蓝牙装到过设备上。
+- `tailor` 代理：没有用真实的 Claude Code 跑过“改界面、提交、推送、等构建”这一整圈；
+  这台电脑上能不能 `git push`、Claude Code 是否接受示例里的 `allowed_tools` 写法，都要在
+  那台电脑上确认。
+- `firmware build`：只用一条替身命令测试过，没有对着真实的 ESP-IDF 跑过。
 - Windows：这个目录里的任何东西都还没有在 Windows 上运行过。
 - 真实设备上的语音：麦克风音质、蓝牙吞吐，以及真实环境里真人说话的识别效果。
 - macOS 上的 sherpa-onnx。
@@ -413,4 +499,5 @@ Runtime 之间的 `remote` 代理（用 `echo`）以及互相登记时不会来�
 
 ```bash
 python3 runtime/tests/test_runtime.py
+python3 runtime/tests/test_firmware.py
 ```

@@ -31,6 +31,7 @@
 | [passport-build](passport-build/SKILL.zh_CN.md) | 运行统一门禁，保留已校验的合并固件和匹配的 ELF/MAP。 |
 | [passport-device-test](passport-device-test/SKILL.zh_CN.md) | 获得授权后识别目标、刷写指定固件，区分串口日志与实机验收。 |
 | [passport-debug](passport-debug/SKILL.zh_CN.md) | 依据日志和匹配符号，诊断崩溃、内存、中文空白及外设故障。 |
+| [pocket-screen-update](pocket-screen-update/SKILL.zh_CN.md) | 把对设备屏幕说的一句修改意见变成经蓝牙推到设备上的新固件，或把设备换回以前的某一版。 |
 | [issue-suggestions](issue-suggestions/SKILL.zh_CN.md) | 发布后，收集开发者的改进点，整理成提交到上游的功能建议 issue。 |
 | [experience-pr](experience-pr/SKILL.zh_CN.md) | 发布后，收集可复用的开发经验，并作为文档 PR 提交。 |
 | [plays-archive](plays-archive/SKILL.zh_CN.md) | 发布后，把已发布应用归档到相对仓库根目录的 `docs/reference/<username>/<app-name>/`，附 AI 生成的双语说明；仅记录封面元数据，不提交图片。 |

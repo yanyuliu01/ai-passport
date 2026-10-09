@@ -32,6 +32,7 @@ from .firmware import FirmwareError, FirmwareStore
 EVENTS = {
     "added": "入库", "requested": "要推给设备", "cancelled": "取消了", "removed": "删掉了",
     "installed": "设备装好了", "failed": "没装成", "gave_up": "不再自动重推",
+    "fetch_failed": "没取到固件",
 }
 
 
@@ -206,9 +207,15 @@ def run(config: Config, config_path: Path, args: Any, arguments: List[str],
                 log_path = _detach(config_path, config.state_dir, arguments)
                 out("已经放到后台去取了；进展看 %s，或者 firmware status" % log_path)
                 return 0
-            blob, found = firmware_module.fetch_release(
-                repo, config.firmware_asset, config.firmware_tag_prefix, args.tag, commit,
-                args.wait, opener=opener, token=os.environ.get("GITHUB_TOKEN"), say=out)
+            try:
+                blob, found = firmware_module.fetch_release(
+                    repo, config.firmware_asset, config.firmware_tag_prefix, args.tag, commit,
+                    args.wait, opener=opener, token=os.environ.get("GITHUB_TOKEN"), say=out)
+            except FirmwareError as error:
+                if args.wait > 0:
+                    # 等构建的这一种多半没有人守着看：记进经过里，手机 App 上看得到。
+                    store.note("fetch_failed", (commit or args.tag or "")[:12], str(error))
+                raise
             _stored(store, blob, "github:%s@%s" % (found["tag"], found["commit"][:10]),
                     args.note, args.push, out)
             return 0

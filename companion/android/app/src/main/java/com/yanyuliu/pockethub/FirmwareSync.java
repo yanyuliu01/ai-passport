@@ -63,6 +63,8 @@ final class FirmwareSync {
     private String targetSha = "";
     private int targetSize;
     private int targetSeq;
+    /** 电脑那边最近一件没成的事是什么时候的；同一件只提一次。-1 表示还没问到过。 */
+    private int noticeAt = -1;
     /** 只在轮询线程里读写：上次从哪台 Runtime 拿到的第几版清单。 */
     private int rev = -1;
     private String revUrl = "";
@@ -284,6 +286,14 @@ final class FirmwareSync {
         targetSha = text(fields, "sha256");
         targetSize = number(fields.get("size"), 0);
         targetSeq = number(fields.get("seq"), 0);
+        int noticed = number(fields.get("notice_at"), 0);
+        if (noticed != noticeAt) {
+            // 头一次问到的是旧事，不提；之后才出现的（比如电脑没取到构建好的固件）说一声。
+            if (noticeAt >= 0 && noticed > 0 && !text(fields, "notice").isEmpty()) {
+                HubStore.get().setFirmware("电脑那边没办成：" + text(fields, "notice"), true);
+            }
+            noticeAt = noticed;
+        }
         HubStore.get().setFirmwareVersions(build, targetId);
         if (push != null && push.active() && !cachedId.equals(targetId)) {
             // 电脑那边改主意了：这一次不传了。
