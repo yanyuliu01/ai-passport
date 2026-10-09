@@ -58,10 +58,15 @@ class Task:
 
 class Tasks:
     def __init__(self, store: Store, finish: Finish, max_parallel: int = 0,
-                 started: Optional[Callable[[Task], None]] = None):
+                 started: Optional[Callable[[Task], None]] = None,
+                 prepare: Optional[Callable[[Task, Control], None]] = None,
+                 release: Optional[Callable[[Task, Control], None]] = None):
         self._store = store
         self._finish = finish
         self._started = started or (lambda task: None)
+        # 每一轮开始前、结束后各调用一次：给遥控器接上进展、授权这些，用完收回。
+        self._prepare = prepare or (lambda task, control: None)
+        self._release = release or (lambda task, control: None)
         self._lock = threading.Lock()
         self._active: Dict[str, Task] = {}
         self._threads: List[threading.Thread] = []
@@ -158,9 +163,13 @@ class Tasks:
                 task.control = Control()
                 control = task.control
             session = self._store.session(task.session_key, task.agent.name)
+            # 一拿到会话编号就记下：这一轮中途被停掉，下一轮也能接着用。
+            control.session = lambda session_id, task=task: self._store.remember(
+                task.session_key, task.agent.name, session_id)
             outcome: Optional[Outcome] = None
             error: Optional[str] = None
             try:
+                self._prepare(task, control)
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
                     system=task.system, schema=task.schema, hop=task.hop, control=control,
@@ -169,6 +178,8 @@ class Tasks:
                 error = str(failure)
             except Exception as failure:  # 任务线程不能悄悄死掉：当成这件事没做成
                 error = "Runtime 内部出错：%s: %s" % (type(failure).__name__, failure)
+            finally:
+                self._release(task, control)
             if outcome is not None and outcome.session_id:
                 self._store.remember(task.session_key, task.agent.name, outcome.session_id)
             with self._lock:

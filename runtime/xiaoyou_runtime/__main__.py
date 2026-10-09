@@ -3,6 +3,7 @@
 import argparse
 import ipaddress
 import os
+import signal
 import socket
 import sys
 import time
@@ -151,8 +152,23 @@ def main(argv=None) -> int:
             # 这件事交到后台了：先把她的第一句打出来，再等结果。
             print("（%s：%s）" % (turn.card, turn.reply), file=sys.stderr)
             limit = config.agent(turn.agent).timeout_seconds + config.voice_timeout_seconds + 30
+            deadline = time.monotonic() + limit
             try:
-                card = xiaoyou.settle(turn.card, limit)
+                while True:
+                    card = xiaoyou.settle(turn.card, 0.5)
+                    if card["state"] not in ("working", "waiting") or time.monotonic() > deadline:
+                        break
+                    for approval in xiaoyou.approvals.pending():
+                        # 没有手机和设备在场：在终端里问。
+                        print("（%s 想做：%s）\n%s" % (
+                            approval["agent"], approval["tool"], approval["detail"]),
+                            file=sys.stderr)
+                        allowed = False
+                        if sys.stdin.isatty():
+                            allowed = input("可以吗？[y/N] ").strip().lower() in ("y", "yes")
+                        else:
+                            print("（这里没法问你，当作不行）", file=sys.stderr)
+                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny")
             except KeyboardInterrupt:
                 xiaoyou.cancel(turn.card)
                 xiaoyou.close()
@@ -196,6 +212,14 @@ def main(argv=None) -> int:
             "请只在可信网络里用，或者前面加一层加密通道（见 README）。",
             file=sys.stderr,
         )
+    def stop(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    # 被 kill（比如 pkill）时也走下面的收尾：后台的事各有自己的进程组，不收尾会留下来。
+    try:
+        signal.signal(signal.SIGTERM, stop)
+    except (ValueError, OSError):
+        pass  # 不在主线程里，或者这个平台没有
     try:
         server.serve_forever()
     except KeyboardInterrupt:

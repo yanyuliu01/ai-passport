@@ -9,6 +9,7 @@
   GET  /v1/feed?conversation=&after=<序号>&wait=<秒>   之后变过的卡；没有变化时最多等 wait 秒
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/cancel          取消一件事
+  POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
 
@@ -194,6 +195,17 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                         body.get("card"),
                     )
                     self._send(202, message)
+                    return
+                if len(parts) == 3 and parts[:2] == ["v1", "approvals"]:
+                    if not isinstance(body, dict):
+                        raise RequestError("请求体应该是一个对象")
+                    answered = service.approve(parts[2], body.get("decision"))
+                    if answered is None:
+                        self._fail(404, "没有这个授权（那件事可能已经结束了）")
+                    elif not answered:
+                        self._fail(409, "这个授权已经回答过了")
+                    else:
+                        self._send(200, {"id": parts[2], "decision": body["decision"]})
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "cancel":
                     card = service.cancel(parts[2])

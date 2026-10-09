@@ -161,8 +161,10 @@ class Cards:
             return self._copy(card) if card is not None else None
 
     def update(self, card_id: str, say: Optional[str] = None, said: Optional[str] = None,
-               progress: Optional[str] = None, **fields: Any) -> Optional[Dict[str, Any]]:
-        """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展。"""
+               progress: Optional[str] = None, fresh: bool = False,
+               **fields: Any) -> Optional[Dict[str, Any]]:
+        """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
+        fresh 表示新的一轮开始了，之前的进展清掉。"""
         with self._changed:
             card = self._cards.get(card_id)
             if card is None:
@@ -174,6 +176,8 @@ class Cards:
                 card["entries"].append(
                     {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now})
             del card["entries"][:-MAX_ENTRIES]
+            if fresh:
+                card["progress"] = []
             if progress is not None:
                 card["progress"].append(" ".join(progress.split())[:MAX_PROGRESS_CHARS])
                 del card["progress"][:-MAX_PROGRESS_LINES]

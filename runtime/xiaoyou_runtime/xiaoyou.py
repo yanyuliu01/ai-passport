@@ -18,12 +18,16 @@ store.py 里：人设、她和主人的对话记录、每件事的卡、这句�
      手机从别处带来的），下次轮到它时先告诉它。
 """
 
+import json
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from . import router as routing
-from .agents import Agent, AgentError, Job, Outcome, clip
+from .agents import Agent, AgentError, Control, Job, Outcome, clip
+from .approvals import Approvals, Gate
 from .cards import ACTIVE, Cards, title_from
 from .config import Config
 from .store import Store
@@ -146,8 +150,12 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("## 你怎么做事")
     parts.append(
         "这一轮你只负责说话：听懂主人的话，凭你已经知道的就能答的直接答，其余的交给帮手。"
-        "你现在不能查资料、读文件、上网，也不能改任何东西；需要这些的事一律交给帮手，"
-        "不要假装自己查过。帮手在后台做，做完后结果会单独告诉主人：你不用等，也不要替它编结果。"
+        "你现在没有任何工具，这是特意安排的，不是出了故障：查资料、读文件、写文件、跑命令、"
+        "上网，这些动手的事都由帮手在后台做。所以凡是需要动手的事，一律用 start 交给帮手"
+        "（对已有的事用 amend），不要自己尝试，不要假装查过，也不要跟主人说“我没有工具”"
+        "“我做不了”。帮手在后台做，做完后结果会单独告诉主人：你不用等，也不要替它编结果。"
+        "对话里以你的口吻说的“做完了”“没做成”，是帮手在后台做完之后的汇报，不代表你这一轮"
+        "自己能动手；主人让你再做一次，就再交给帮手一次。"
         "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
     )
     parts.append("")
@@ -155,7 +163,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("每一轮只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars)
     parts.append(
         "card 是这句话属于哪件事：新的事写 new；是对下面“现在的事”里某一件的追问、补充、"
-        "改要求或取消，写它的编号。"
+        "改要求或取消，写它的编号，连同前面的字母，比如 c3。"
     )
     parts.append("action 是要 Runtime 接着做什么，type 只能是下面几种：")
     parts.append("- none：你已经直接答了，不用做别的。")
@@ -281,7 +289,10 @@ class Xiaoyou:
         self._store = store
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
-        self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun)
+        self._approvals = Approvals(self._approval_changed)
+        self._gate = Gate(self._approvals)
+        self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun,
+                            self._prepare, self._release)
         # 只会干活的帮手做完后，转述要回到那个对话自己的线上排队；没有人排队（命令行里
         # 说一句就走）时就地做。Service 启动时把它换成“排到这个对话的线上”。
         self.defer: Callable[[str, Callable[[], None]], None] = lambda conversation, work: work()
@@ -294,6 +305,10 @@ class Xiaoyou:
     def cards(self) -> Cards:
         return self._cards
 
+    @property
+    def approvals(self) -> Approvals:
+        return self._approvals
+
     def agents(self) -> List[Agent]:
         return [self._agents[name] for name in self._order]
 
@@ -302,6 +317,7 @@ class Xiaoyou:
 
     def close(self) -> None:
         self._tasks.close()
+        self._gate.close()
 
     def _available(self, hop: int) -> List[Agent]:
         # 已经是别的 Runtime 转过来的话，不再往外转：两台互相登记时不会来回踢。
@@ -374,10 +390,12 @@ class Xiaoyou:
         schema = lane_schema(available)
         outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True)
         plan, problem = self._plan(outcome, conversation, focus, available)
+        self._trace(outcome, problem)
         if problem is not None:
             outcome = self._speak(lead, retry_note(problem), conversation, system, schema, hop,
                                   catch_up=False)
             plan, problem = self._plan(outcome, conversation, focus, available)
+            self._trace(outcome, problem)
         fields = outcome.fields or {}
         reply = (self._field(outcome, "reply") or outcome.text).strip()
         mood, brief = fields.get("mood"), fields.get("brief")
@@ -447,9 +465,12 @@ class Xiaoyou:
         action = fields.get("action") if isinstance(fields.get("action"), dict) else {}
         kind = action.get("type") if action.get("type") in ACTIONS else "none"
         wanted = fields.get("card")
-        wanted = wanted.strip() if isinstance(wanted, str) else ""
+        wanted = wanted.strip().strip("「」“”\"'#").lower() if isinstance(wanted, str) else ""
+        if wanted.isdigit():
+            # 她常把 c3 写成 3。
+            wanted = "c" + wanted
         target: Optional[Dict[str, Any]] = None
-        if wanted and wanted.lower() != "new":
+        if wanted and wanted != "new":
             target = self._cards.get(wanted)
             if target is None or target["conversation"] != conversation:
                 return None, "没有编号是 %s 的事" % clip(wanted, 20)
@@ -487,6 +508,16 @@ class Xiaoyou:
         return plan, None
 
     @staticmethod
+    def _trace(outcome: Outcome, problem: Optional[str]) -> None:
+        """设了 XIAOYOU_DEBUG 时，把她这一句决定归到哪张卡、要做什么打到标准错误。"""
+        if os.environ.get("XIAOYOU_DEBUG"):
+            fields = outcome.fields or {}
+            sys.stderr.write("小幽的决定：card=%r action=%s%s\n" % (
+                fields.get("card"), json.dumps(fields.get("action"), ensure_ascii=False),
+                "；办不了：%s" % problem if problem else ""))
+            sys.stderr.flush()
+
+    @staticmethod
     def _field(outcome: Outcome, key: str) -> str:
         value = (outcome.fields or {}).get(key)
         return value if isinstance(value, str) else ""
@@ -512,7 +543,7 @@ class Xiaoyou:
     def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int) -> None:
         speaking = agent.speaks
         self._cards.update(card_id, state="working", agent=agent.name, started_at=time.time(),
-                           queued=self._config.max_parallel > 0)
+                           queued=self._config.max_parallel > 0, fresh=True)
         self._tasks.start(Task(
             card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
             system=task_prompt(self._config.persona, self._config.brief_max_chars)
@@ -524,6 +555,30 @@ class Xiaoyou:
         """轮到这件事了（设了并行上限时，前面可能排过队）。"""
         if self._config.max_parallel > 0:
             self._cards.update(task.card, queued=False, started_at=time.time())
+
+    def _prepare(self, task: Task, control: Control) -> None:
+        """一轮开始前：进展记到卡上；要问“可以吗”的帮手，给它一把通到主人那里的钥匙。"""
+        control.progress = lambda line, card=task.card: self._cards.update(card, progress=line)
+        control.scratch = self._config.state_dir
+        if task.agent.type == "claude_code":
+            control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
+
+    def _release(self, task: Task, control: Control) -> None:
+        """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了。"""
+        self._gate.shut(control.gate)
+        self._approvals.drop(task.card)
+
+    def _approval_changed(self, card_id: str, approval_id: Optional[str]) -> None:
+        """一件事在等主人点头，或者不用等了。"""
+        card = self._cards.get(card_id)
+        if card is None:
+            return
+        if card["state"] not in ACTIVE:
+            if card["approval"] is not None:
+                self._cards.update(card_id, approval=None)
+            return
+        self._cards.update(card_id, approval=approval_id,
+                           state="waiting" if approval_id is not None else "working")
 
     def _finished(self, task: Task, outcome: Optional[Outcome], error: Optional[str]) -> None:
         """后台的事做完或没做成。在任务自己的线程里被调用。"""
@@ -579,9 +634,10 @@ class Xiaoyou:
         card = self._cards.get(card_id)
         if card is None or card["state"] not in ACTIVE:
             return False
-        self._tasks.cancel(card_id)
         self._cards.update(card_id, state="cancelled", brief="取消了", mood="idle",
                            approval=None, queued=False)
+        self._tasks.cancel(card_id)
+        self._approvals.drop(card_id)
         return True
 
     def settle(self, card_id: str, timeout: float) -> Optional[Dict[str, Any]]:

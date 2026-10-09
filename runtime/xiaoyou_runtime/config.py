@@ -41,8 +41,11 @@ class AgentSpec:
     extra_args: List[str] = field(default_factory=list)
     # claude_code
     config_dir: Optional[Path] = None
-    permission_mode: str = "dontAsk"
+    # 后台做事时的权限模式。manual：该问的都问，问到主人那里
+    permission_mode: str = "manual"
     allowed_tools: List[str] = field(default_factory=list)
+    # 除了启动目录之外，还让它碰哪些目录
+    add_dirs: List[Path] = field(default_factory=list)
     # claude_code：启动命令时额外设置的环境变量（例如换一个兼容 Anthropic 接口的服务）
     env: Dict[str, str] = field(default_factory=dict)
     # codex
@@ -234,8 +237,10 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
     return AgentSpec(
         config_dir=_path(config_dir, base) if config_dir else None,
         permission_mode=_expect(
-            raw.get("permission_mode", "dontAsk"), str, where + ".permission_mode"
+            raw.get("permission_mode", "manual"), str, where + ".permission_mode"
         ),
+        add_dirs=[_path(folder, base)
+                  for folder in _strings(raw.get("add_dirs", ["~"]), where + ".add_dirs")],
         allowed_tools=_strings(raw.get("allowed_tools", []), where + ".allowed_tools"),
         env=_env(raw.get("env", {}), where + ".env"),
         **common,

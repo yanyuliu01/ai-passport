@@ -26,6 +26,8 @@ RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
 from xiaoyou_runtime import agents as agents_module  # noqa: E402
+from xiaoyou_runtime import approvals as approvals_module  # noqa: E402
+from xiaoyou_runtime import permission_mcp  # noqa: E402
 from xiaoyou_runtime import cards as cards_module  # noqa: E402
 from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import router as router_module  # noqa: E402
@@ -53,6 +55,51 @@ mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if mode == "crash":
     sys.stderr.write("not logged in\n")
     sys.exit(1)
+if "stream-json" in args:
+    import subprocess, time
+    def emit(event):
+        print(json.dumps(event), flush=True)
+    session = args[args.index("--resume") + 1] if "--resume" in args else "s-stream"
+    print("a line that is not JSON", flush=True)
+    emit({"type": "system", "subtype": "init", "session_id": session})
+    emit({"type": "stream_event", "event": {}})
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "let me look"},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "ls  -la\n/tmp"}}]}})
+    verdict = "nobody to ask"
+    if "--mcp-config" in args and mode == "ask":
+        # Do what Claude Code does: start the permission tool and ask it before writing.
+        target = os.environ["FAKE_CLAUDE_TARGET"]
+        with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as handle:
+            server = json.load(handle)["mcpServers"]["xiaoyou"]
+        tool = subprocess.Popen([server["command"]] + server["args"], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, env=dict(os.environ, **server["env"]))
+        def rpc(message):
+            tool.stdin.write((json.dumps(message) + "\n").encode()); tool.stdin.flush()
+            return json.loads(tool.stdout.readline()) if "id" in message else None
+        rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
+        rpc({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        wanted = {"file_path": target, "content": "hello\n"}
+        emit({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Write", "input": wanted}]}})
+        answer = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "approve", "arguments": {"tool_name": "Write", "input": wanted, "tool_use_id": "t1"}}})
+        answer = json.loads(answer["result"]["content"][0]["text"])
+        verdict = answer["behavior"] + ":" + answer.get("message", "")
+        if answer["behavior"] == "allow":
+            with open(answer["updatedInput"]["file_path"], "w", encoding="utf-8") as handle:
+                handle.write(answer["updatedInput"]["content"])
+        tool.stdin.close(); tool.wait()
+    if mode == "hang":
+        time.sleep(60)
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "StructuredOutput", "input": {}}]}})
+    out = {"type": "result", "is_error": mode == "stream-error", "session_id": session,
+           "result": "plain " + text + " [" + verdict + "]"}
+    if "--json-schema" in args:
+        out["structured_output"] = {"reply": "did " + text + " [" + verdict + "]", "brief": "did", "mood": "happy"}
+    emit(out)
+    sys.exit(0)
 if mode == "error":
     print(json.dumps({"is_error": True, "result": "usage limit reached", "session_id": "s-err"}))
     sys.exit(0)
@@ -225,6 +272,7 @@ class ConfigTests(TempDirCase):
             {"turn_timeout_seconds": 1},
             {"backend": "claude_code", "claude_code": {"command": []}},
             {"backend": "claude_code", "claude_code": {"allowed_tools": "Read"}},
+            {"backend": "claude_code", "claude_code": {"add_dirs": "~"}},
             {"tools": [{"name": ""}]},
             {"persona_file": "missing.md"},
             {"agents": {}},
@@ -300,7 +348,9 @@ class ConfigTests(TempDirCase):
         self.assertEqual((claude.name, claude.type, claude.model, claude.allowed_tools, claude.speaks),
                          ("claude", "claude_code", "m", ["Read"], True))
         self.assertEqual(claude.config_dir, (self.folder / "claude-home").resolve())
-        self.assertEqual(claude.permission_mode, "dontAsk")
+        # Anything Claude Code would ask about in a terminal is asked, of the owner.
+        self.assertEqual((claude.permission_mode, claude.add_dirs),
+                         ("manual", [Path(os.path.expanduser("~"))]))
         self.assertTrue(any("旧写法" in notice for notice in loaded.notices))
         # A tool that was switched on has to be moved by hand: it is now an agent of its own.
         with self.assertRaisesRegex(config_module.ConfigError, "agents"):
@@ -403,11 +453,80 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(args[:3], ["-p", "--output-format", "json"])
         self.assertEqual(args[args.index("--append-system-prompt") + 1], "SYSTEM-TEXT")
         self.assertEqual(json.loads(args[args.index("--json-schema") + 1]), self.schema)
-        self.assertEqual(args[args.index("--permission-mode") + 1], "dontAsk")
+        self.assertEqual(args[args.index("--permission-mode") + 1], "manual")
         self.assertEqual(args[args.index("--allowedTools") + 1], "Read,Grep")
         self.assertEqual(args[args.index("--model") + 1], "some-model")
         self.assertNotIn("--resume", args)
         self.assertEqual(args[-2:], ["--max-turns", "9"])
+        # The whole home directory is within reach, not just the folder it starts in.
+        self.assertEqual(args[args.index("--add-dir") + 1], os.path.expanduser("~"))
+        self.assertNotIn("--permission-prompt-tool", args)
+
+    def test_work_is_followed_step_by_step_and_the_session_is_known_at_once(self):
+        control = agents_module.Control()
+        lines, sessions = [], []
+        control.progress, control.session = lines.append, sessions.append
+        outcome = self.agent.run(Job("count", system="S", schema=self.schema, control=control))
+        self.assertEqual((outcome.text, outcome.session_id), ("did count [nobody to ask]", "s-stream"))
+        self.assertEqual(outcome.fields["brief"], "did")
+        # Tool names and commands as they are; the tool that carries the reply is not a step.
+        self.assertEqual(lines, ["Bash ls  -la\n/tmp"])
+        self.assertEqual(sessions, ["s-stream"])
+        args = self.calls()[0]["args"]
+        self.assertEqual(args[:4], ["-p", "--output-format", "stream-json", "--verbose"])
+        self.assertEqual(self.calls()[0]["stdin"], "count")
+        # Nobody to ask this time, so no permission tool is attached.
+        self.assertNotIn("--mcp-config", args)
+        resumed = self.agent.run(Job("more", session_id="s-prev", control=agents_module.Control()))
+        self.assertEqual((resumed.text, resumed.session_id, resumed.fields),
+                         ("plain more [nobody to ask]", "s-prev", None))
+        os.environ["FAKE_CLAUDE_MODE"] = "stream-error"
+        with self.assertRaisesRegex(AgentError, "报告失败"):
+            self.agent.run(Job("x", control=agents_module.Control()))
+        os.environ["FAKE_CLAUDE_MODE"] = "crash"
+        with self.assertRaisesRegex(AgentError, "not logged in"):
+            self.agent.run(Job("x", control=agents_module.Control()))
+
+    def test_what_needs_a_yes_is_put_to_the_owner_through_the_permission_tool(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "ask"
+        target = self.folder / "note.txt"
+        os.environ["FAKE_CLAUDE_TARGET"] = str(target)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_TARGET", None)
+        approvals = approvals_module.Approvals()
+        gate = approvals_module.Gate(approvals)
+        self.addCleanup(gate.close)
+
+        def run(decision):
+            control = agents_module.Control()
+            control.gate = gate.open("c1", "default", "claude")
+            control.scratch = self.folder / "state"
+            result = {}
+            thread = threading.Thread(target=lambda: result.update(
+                outcome=self.agent.run(Job("write it", control=control))))
+            thread.start()
+            self.assertTrue(until(approvals.pending))
+            asked = approvals.pending()[0]
+            self.assertEqual((asked["card"], asked["agent"], asked["tool"], asked["detail"]),
+                             ("c1", "claude", "claude · Write", "%s\nhello" % target))
+            args = self.calls()[-1]["args"]
+            self.assertEqual(args[args.index("--permission-prompt-tool") + 1], "mcp__xiaoyou__approve")
+            config = Path(args[args.index("--mcp-config") + 1])
+            # The file with the key is readable by the owner only, and lives in the state folder.
+            self.assertEqual(config.parent, self.folder / "state")
+            if os.name != "nt":
+                self.assertEqual(config.stat().st_mode & 0o077, 0)
+            self.assertNotIn(TOKEN, config.read_text("utf-8"))
+            self.assertNotIn("--strict-mcp-config", args)
+            self.assertTrue(approvals.answer(asked["id"], decision))
+            thread.join(10)
+            gate.shut(control.gate)
+            self.assertFalse(config.exists())
+            return result["outcome"].text
+
+        self.assertEqual(run("deny"), "plain write it [deny:主人说不行]")
+        self.assertFalse(target.exists())
+        self.assertEqual(run("allow"), "plain write it [allow:]")
+        self.assertEqual(target.read_text("utf-8"), "hello\n")
 
     def test_when_she_only_talks_it_gets_no_tools_and_little_time(self):
         seen = []
@@ -908,6 +1027,33 @@ class TasksTests(TempDirCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(self.finished, [])
 
+    @unittest.skipIf(os.name == "nt", "process sessions are a POSIX notion")
+    def test_cancelling_reaches_what_the_process_started_in_a_session_of_its_own(self):
+        # Claude Code runs shell commands in a new session; killing its group alone misses them.
+        marker = self.folder / "pid.txt"
+        agent = self.command(
+            "import subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+            " start_new_session=True)\n"
+            "open(%r, 'w').write(str(child.pid))\ntime.sleep(60)" % str(marker))
+        tasks = self.tasks()
+        tasks.start(tasks_module.Task("c1", "default", agent, "x"))
+        self.assertTrue(until(marker.exists) and until(lambda: marker.read_text().isdigit()))
+        grandchild = int(marker.read_text())
+        tasks.cancel("c1")
+
+        def gone():
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                return True
+            # Killed but not yet reaped by whoever inherited it: gone for our purposes.
+            status = subprocess.run(["ps", "-o", "stat=", "-p", str(grandchild)],
+                                    stdout=subprocess.PIPE, text=True).stdout.strip()
+            return status == "" or status.startswith("Z")
+
+        self.assertTrue(until(gone))
+
     def test_an_agent_that_can_be_steered_is_told_without_starting_over(self):
         heard = []
 
@@ -940,6 +1086,227 @@ class TasksTests(TempDirCase):
         agent.gate.set()
         self.assertTrue(until(lambda: len(self.finished) == 2))
         self.assertEqual(begun, ["c1", "c2"])
+
+
+class ApprovalTests(TempDirCase):
+    def test_an_approval_waits_for_one_answer(self):
+        changes = []
+        approvals = approvals_module.Approvals(lambda card, waiting: changes.append((card, waiting)))
+        first = approvals.ask("c1", "default", "claude", "claude · Bash", "rm -rf build")
+        second = approvals.ask("c1", "default", "claude", "claude · Write", "a.txt")
+        other = approvals.ask("c2", "work", "codex", "codex · 命令", "make")
+        self.assertEqual((first, second, other), ("a1", "a2", "a3"))
+        self.assertEqual([item["id"] for item in approvals.pending()], ["a1", "a2", "a3"])
+        self.assertEqual([item["id"] for item in approvals.pending("work")], ["a3"])
+        self.assertEqual(sorted(approvals.pending("work")[0]),
+                         ["agent", "card", "conversation", "created_at", "detail", "id", "tool"])
+        got = {}
+        thread = threading.Thread(target=lambda: got.update(decision=approvals.wait(first)))
+        thread.start()
+        self.assertTrue(approvals.answer(first, "allow"))
+        thread.join(5)
+        self.assertEqual(got, {"decision": "allow"})
+        # Answered once; a second answer and an unknown number are told apart.
+        self.assertIs(approvals.answer(first, "deny"), False)
+        self.assertIsNone(approvals.answer("a99", "allow"))
+        # The card is told what it is still waiting for.
+        self.assertEqual(changes, [("c1", "a1"), ("c1", "a2"), ("c2", "a3"), ("c1", "a2")])
+        # The thing stopped: whoever is still waiting is released with a no.
+        approvals.drop("c1")
+        self.assertEqual((approvals.wait(second), approvals.get(second)["gone"]), ("deny", True))
+        self.assertEqual(changes[-1], ("c1", None))
+        self.assertEqual([item["id"] for item in approvals.pending()], ["a3"])
+        self.assertEqual(approvals.wait("a99"), "deny")
+
+    def test_what_is_shown_is_the_tool_and_its_input_as_they_are(self):
+        describe = approvals_module.describe
+        self.assertEqual(describe("claude", "Bash", {"command": "git push --force"}),
+                         ("claude · Bash", "git push --force"))
+        self.assertEqual(describe("claude", "Edit", {"file_path": "/a.py", "old_string": "x = 1",
+                                                     "new_string": "x = 2"}),
+                         ("claude · Edit", "/a.py\n- x = 1\n+ x = 2"))
+        self.assertEqual(describe("claude", "mcp__mail__send", {"to": "a@b.c"}),
+                         ("claude · mcp__mail__send", '{"to": "a@b.c"}'))
+        self.assertEqual(describe("claude", "Odd", "not an object"), ("claude · Odd", ""))
+        self.assertEqual(len(describe("claude", "Write", {"content": "x" * 50000})[1]), 20000)
+        line = approvals_module.progress_line
+        self.assertEqual((line("Read", {"file_path": "/a"}), line("WebSearch", {"query": "q"}),
+                          line("Task", {"prompt": "p"}), line("Bash", None)),
+                         ("Read /a", "WebSearch q", "Task", "Bash"))
+
+    def test_the_gate_only_opens_for_the_key_of_a_thing(self):
+        approvals = approvals_module.Approvals()
+        gate = approvals_module.Gate(approvals)
+        self.addCleanup(gate.close)
+        env = gate.open("c1", "default", "claude")
+        self.assertTrue(env["XIAOYOU_GATE_URL"].startswith("http://127.0.0.1:"))
+
+        def post(key, body):
+            request = urllib.request.Request(env["XIAOYOU_GATE_URL"], data=body, method="POST")
+            request.add_header("X-Xiaoyou-Key", key)
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                return error.code, json.loads(error.read())
+
+        ask = json.dumps({"tool_name": "Bash", "input": {"command": "ls"}}).encode()
+        self.assertEqual(post("wrong", ask)[0], 403)
+        self.assertEqual(post(TOKEN, ask)[0], 403)
+        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], b"{nope")[0], 400)
+        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], b'{"input": {}}')[0], 400)
+        self.assertEqual(approvals.pending(), [])
+        answer = {}
+        thread = threading.Thread(target=lambda: answer.update(reply=post(env["XIAOYOU_GATE_KEY"], ask)))
+        thread.start()
+        self.assertTrue(until(approvals.pending))
+        approvals.answer(approvals.pending()[0]["id"], "allow")
+        thread.join(5)
+        self.assertEqual((answer["reply"][0], answer["reply"][1]["decision"]), (200, "allow"))
+        # Once the round is over the key is worth nothing.
+        gate.shut(env)
+        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], ask)[0], 403)
+
+    def test_the_permission_tool_speaks_just_enough_mcp(self):
+        handle = permission_mcp.handle
+        self.assertIsNone(handle({"jsonrpc": "2.0", "method": "notifications/initialized"}, None, None))
+        self.assertIsNone(handle("junk", None, None))
+        hello = handle({"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+                       None, None)
+        self.assertEqual((hello["result"]["protocolVersion"], hello["result"]["serverInfo"]["name"]),
+                         ("2025-06-18", "xiaoyou"))
+        tools = handle({"id": 2, "method": "tools/list"}, None, None)["result"]["tools"]
+        self.assertEqual([tool["name"] for tool in tools], ["approve"])
+        self.assertIn("error", handle({"id": 3, "method": "resources/list"}, None, None))
+        self.assertIn("error", handle({"id": 4, "method": "tools/call", "params": {"name": "other"}},
+                                      None, None))
+
+        def call(url, key, opener=urllib.request.urlopen):
+            reply = handle({"id": 5, "method": "tools/call", "params": {"name": "approve", "arguments": {
+                "tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "t"}}}, url, key, opener)
+            # The answer is a JSON object serialised into one piece of text.
+            return json.loads(reply["result"]["content"][0]["text"])
+
+        # Not started by the runtime, or the runtime is gone: a no, with the reason.
+        self.assertEqual(call(None, None)["behavior"], "deny")
+        refused = call("http://127.0.0.1:%d/approve" % free_port(), "k")
+        self.assertEqual(refused["behavior"], "deny")
+        self.assertIn("连不上", refused["message"])
+
+        class Reply(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        seen = []
+
+        def opener(decision):
+            def open_(request, timeout):
+                seen.append((request.get_header("X-xiaoyou-key"), json.loads(request.data)))
+                return Reply(json.dumps({"decision": decision, "message": "主人说不行"}).encode())
+            return open_
+
+        self.assertEqual(call("http://gate", "k", opener("allow")),
+                         {"behavior": "allow", "updatedInput": {"command": "ls"}})
+        self.assertEqual(call("http://gate", "k", opener("deny")),
+                         {"behavior": "deny", "message": "主人说不行"})
+        self.assertEqual(seen[0], ("k", {"tool_name": "Bash", "input": {"command": "ls"},
+                                         "tool_use_id": "t"}))
+
+    def test_the_permission_tool_runs_as_a_process_on_standard_input_and_output(self):
+        lines = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+        text = "".join(json.dumps(line) + "\n" for line in lines) + "not json\n"
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith("XIAOYOU_GATE")}
+        done = subprocess.run(
+            [sys.executable, "-m", "xiaoyou_runtime.permission_mcp"], input=text.encode(),
+            stdout=subprocess.PIPE, cwd=str(RUNTIME), env=environment, timeout=20)
+        replies = [json.loads(line) for line in done.stdout.decode().splitlines()]
+        self.assertEqual((done.returncode, [reply["id"] for reply in replies]), (0, [1, 2]))
+
+
+class WorkWithApprovalTests(TempDirCase):
+    """The whole path: a thing in the background, a real child process, the owner's answer."""
+
+    def setUp(self):
+        super().setUp()
+        fake = self.folder / "fake_claude.py"
+        fake.write_text(FAKE_CLAUDE, encoding="utf-8")
+        self.target = self.folder / "note.txt"
+        for name, value in (("FAKE_CLAUDE_LOG", str(self.folder / "calls.jsonl")),
+                            ("FAKE_CLAUDE_MODE", "ask"), ("FAKE_CLAUDE_TARGET", str(self.target))):
+            os.environ[name] = value
+            self.addCleanup(os.environ.pop, name, None)
+        loaded = config_module.load(write_config(self.folder, agents={"claude": {
+            "type": "claude_code", "command": [sys.executable, str(fake)]}}), {})
+        self.store = Store(loaded.state_dir)
+        self.xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents], self.store)
+        self.service = Service(self.xiaoyou, self.store)
+        self.addCleanup(self.service.close)
+
+    def begin(self):
+        message = self.service.get(self.service.submit("写个文件", agent="claude")["id"], wait=5)
+        self.assertTrue(until(lambda: self.service.feed("default")["approvals"], 10))
+        return message["card"], self.service.feed("default")["approvals"][0]
+
+    def test_the_owner_says_yes(self):
+        card_id, asked = self.begin()
+        self.assertEqual((asked["card"], asked["tool"], asked["detail"]),
+                         (card_id, "claude · Write", "%s\nhello" % self.target))
+        card = self.xiaoyou.cards.get(card_id)
+        self.assertEqual((card["state"], card["approval"]), ("waiting", asked["id"]))
+        # Each step is on the card as it happened.
+        self.assertEqual(card["progress"], ["Bash ls -la /tmp", "Write %s" % self.target])
+        self.assertFalse(self.target.exists())
+        self.assertIs(self.service.approve(asked["id"], "allow"), True)
+        self.assertIs(self.service.approve(asked["id"], "allow"), False)
+        card = self.xiaoyou.settle(card_id, 10)
+        self.assertEqual((card["state"], card["approval"]), ("done", None))
+        self.assertEqual(self.target.read_text("utf-8"), "hello\n")
+        self.assertIn("[allow:]", card["entries"][-1]["text"])
+        self.assertEqual(self.service.feed("default")["approvals"], [])
+        # The session was known from the first event on.
+        self.assertEqual(self.store.session("default/%s" % card_id, "claude"), "s-stream")
+        self.assertEqual(list((self.folder / "state").glob("mcp-*.json")), [])
+
+    def test_the_owner_says_no(self):
+        card_id, asked = self.begin()
+        self.assertIs(self.service.approve(asked["id"], "deny"), True)
+        card = self.xiaoyou.settle(card_id, 10)
+        self.assertEqual(card["state"], "done")
+        self.assertIn("[deny:主人说不行]", card["entries"][-1]["text"])
+        self.assertFalse(self.target.exists())
+        with self.assertRaises(RequestError):
+            self.service.approve(asked["id"], "maybe")
+        self.assertIsNone(self.service.approve("a99", "allow"))
+
+    def test_cancelling_while_it_waits_ends_the_process_and_the_question(self):
+        card_id, asked = self.begin()
+        self.assertEqual(self.service.cancel(card_id)["state"], "cancelled")
+        self.assertTrue(until(lambda: not self.service.feed("default")["approvals"]))
+        card = self.xiaoyou.cards.get(card_id)
+        self.assertEqual((card["state"], card["approval"]), ("cancelled", None))
+        self.assertFalse(self.target.exists())
+        # Too late to answer; the card stays cancelled.
+        self.assertIs(self.service.approve(asked["id"], "allow"), False)
+        self.assertEqual(self.xiaoyou.cards.get(card_id)["state"], "cancelled")
+
+    def test_a_round_that_is_started_over_does_not_leave_its_question_behind(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "hang"
+        self.service.get(self.service.submit("慢慢做", agent="claude")["id"], wait=5)
+        self.assertTrue(until(lambda: self.xiaoyou.cards.get("c1")["progress"], 10))
+        os.environ["FAKE_CLAUDE_MODE"] = "ok"
+        self.assertEqual(self.xiaoyou._tasks.amend("c1", "redo", "换个做法"), "redo")
+        card = self.xiaoyou.settle("c1", 10)
+        self.assertEqual(card["state"], "done")
+        calls = [json.loads(line) for line in (self.folder / "calls.jsonl").read_text("utf-8").splitlines()]
+        # The first round had already said which session it was, so the second continues it.
+        self.assertEqual(calls[1]["args"][calls[1]["args"].index("--resume") + 1], "s-stream")
+        self.assertEqual(calls[1]["stdin"], "（主人改了要求：换个做法。按新的要求继续，已经做过的不用重复。）")
 
 
 class XiaoyouTests(TempDirCase):
@@ -1174,7 +1541,8 @@ class XiaoyouTests(TempDirCase):
 
     def test_a_finished_thing_can_be_picked_up_again(self):
         self.settled(self.say("@codex one").card)
-        self.claude.script = [amend("c1", "再检查一遍", "redo", reply="让它再看一遍")]
+        # She often writes the number without its letter; that is understood.
+        self.claude.script = [amend(" 1 ", "再检查一遍", "redo", reply="让它再看一遍")]
         turn = self.say("再检查一遍", card="c1")
         self.assertEqual((turn.card, turn.started), ("c1", True))
         card = self.settled("c1")
@@ -1659,6 +2027,10 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("POST", "/v1/cards/c1/cancel", {})[1]["state"], "done")
         self.assertEqual(self.call("POST", "/v1/cards/c9/cancel", {})[0], 404)
         self.assertEqual(self.call("POST", "/v1/cards/c1/cancel", {}, token=None)[0], 401)
+        self.assertEqual(self.call("POST", "/v1/approvals/a1", {"decision": "allow"})[0], 404)
+        self.assertEqual(self.call("POST", "/v1/approvals/a1", {"decision": "perhaps"})[0], 400)
+        self.assertEqual(self.call("POST", "/v1/approvals/a1", ["allow"])[0], 400)
+        self.assertEqual(self.call("POST", "/v1/approvals/a1", {"decision": "allow"}, token=None)[0], 401)
         status, body = self.call("POST", "/v1/messages", {"text": "hi", "agent": "codex"})
         self.assertEqual(status, 400)
         self.assertIn("codex", body["error"])

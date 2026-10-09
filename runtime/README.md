@@ -99,6 +99,10 @@ be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
 agent), and `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every
 `claude_code` agent).
 
+With `XIAOYOU_DEBUG` set (to anything), every sentence Xiaoyou takes adds one
+line to standard error: which card she put it on and what she asked the
+runtime to do.
+
 A configuration written for 0.3 or earlier (`backend`, `claude_code`, `tools`)
 still loads: it is read as a single agent named `claude`, a notice at start-up
 says it is the old shape, and existing sessions continue. An entry under `tools`
@@ -122,16 +126,21 @@ Keys by type:
 
 | Type | What it does | Keys |
 | --- | --- | --- |
-| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `dontAsk`), `allowed_tools`, `extra_args`, `env` |
+| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env` |
 | `codex` | Runs the Codex command line non-interactively (`codex exec`, and `codex exec resume` to continue). | `command` (default `["codex"]`), `workdir`, `config_dir`, `sandbox` (default `read-only`), `model`, `extra_args` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
 
-With `permission_mode` set to `dontAsk`, anything in Claude Code not covered by
-`allowed_tools` is refused instead of waiting for a person who is not there.
-Keep the allow rules narrow: every rule is something this agent can do
-unattended. The same goes for Codex's `sandbox`, which is read-only by default.
+`permission_mode` is the permission mode Claude Code works under when it is
+given a thing to do. The default is `manual`: whatever it would ask about in a
+terminal is asked of the owner; see [Approvals](#approvals). `allowed_tools`
+are rules that are approved in advance and never asked about; keep them
+narrow. `add_dirs` are the directories it may touch besides the one it starts
+in; the default is the whole home directory. To go back to "refuse whatever is
+not allowed, ask nobody", set `permission_mode` to `dontAsk`. None of these
+affect the one call in which Xiaoyou herself takes a sentence: that call never
+has tools.
 
 ### Using another provider's model (for example DeepSeek V4)
 
@@ -235,11 +244,41 @@ back to the conversation's own line and `voice_agent` reports it. If
 rather than nothing. When a helper fails, the card says so, with the reason.
 
 A card is in one of the states `working` (a helper is on it), `waiting` (for
-the owner's approval; used by the approval prompt in the next version),
+the owner's approval; see [Approvals](#approvals)),
 `done`, `failed`, `cancelled`; `talking` is reserved. Cards are stored in
 `state/cards.json`, the latest 50. Things that were in progress when the
 runtime restarts cannot be continued; they are marked `failed` with a note
 saying the runtime was restarted.
+
+### Approvals
+
+A thing given to Claude Code runs with `--permission-mode manual` and with the
+runtime's own permission tool attached
+(`xiaoyou_runtime/permission_mcp.py`, an MCP server with a single tool). Where
+Claude Code would ask "may I?", it calls that tool instead; the tool hands the
+operation to the runtime, the card of the thing becomes `waiting`, an entry
+appears under `approvals` in `/v1/feed`, and it waits. When the owner answers
+`allow` the step is carried out; with `deny` it is not, Claude Code is told
+that the owner said no, and decides how to go on. If the thing is cancelled,
+its request changes or it times out, approvals not yet answered lapse.
+
+What the owner is shown comes from the tool call as it is, without passing
+through a model: `tool` is "helper · tool name" (for example `claude · Bash`)
+and `detail` is the command itself; for writing a file it is the path and the
+content, for editing one the path with what is replaced and by what. Lines of
+progress are made the same way: the tool name and its one most telling
+argument.
+
+The permission tool is a separate process. It does not use the interface the
+phone connects to; it connects to an entrance the runtime opens on `127.0.0.1`
+only, on a random port, with a key that is valid for this one thing and this
+one round. The key is written to a temporary file under `state/` that only the
+owner of the process can read, and the file is removed when the round ends.
+The runtime's token is never written to any file.
+
+With `--once` on the command line no phone or device is present: an approval
+is asked in the terminal (`[y/N]`), and when there is no terminal the answer
+is no.
 
 ### Using a separate Claude login
 
@@ -283,9 +322,10 @@ responses are JSON.
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
-| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": []}`: the cards of that conversation, in full, whose sequence number is above `after`. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": [...]}`: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at"}`). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
 | `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
+| `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
 
@@ -320,9 +360,10 @@ The record also says who the sentence went to:
 A card has `id` (`c1`, `c2`, …), `conversation`, `title` (at most 24
 characters), `state`, `agent` (who is or was on it; `null` when Xiaoyou
 answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at"}]`,
-the latest 40), `brief`, `mood`, `progress` (the latest lines of progress;
-still empty in this version), `started_at`, `edits` (how many times it was
-added to or changed), `approval` (always `null` in this version), `queued`
+the latest 40), `brief`, `mood`, `progress` (the latest 5 lines of progress,
+starting over with each round), `started_at`, `edits` (how many times it was
+added to or changed), `approval` (the number of the approval it is waiting
+for, or `null`), `queued`
 (waiting its turn under a limit on parallel things), `created_at`,
 `updated_at`, and `seq`.
 
@@ -461,10 +502,17 @@ network interfaces, check that the address is the one the phone can reach.
    argument. The runtime does what the `action` in her reply says; see
    [One thing, one card](#one-thing-one-card).
 4. A thing in the background: for Claude Code that is `claude -p
-   --output-format json [--append-system-prompt <persona> --json-schema <reply,
-   brief, mood>] --permission-mode <mode> [--allowedTools ...] [--model ...]
-   [--resume <the session of this thing>]`, in a process group of its own that
-   is ended as a whole when the thing is cancelled or its request changes.
+   --output-format stream-json --verbose [--append-system-prompt <persona>
+   --json-schema <reply, brief, mood>] --permission-mode <mode>
+   --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <a temporary
+   file in state> --add-dir <directory> [--allowedTools ...] [--model ...]
+   [--resume <the session of this thing>]`. It still starts in `workdir`. The
+   runtime reads its events line by line: the session identifier is recorded
+   right at the start, and every step becomes a line of progress. When the
+   thing is cancelled or its request changes, it is ended together with every
+   process it started (Claude Code runs commands in a session of their own, so
+   the whole tree is found by parentage). The runtime does the same clean-up
+   when it is itself killed.
 5. Session identifiers are stored in `state/sessions.json`: per conversation
    and agent for Xiaoyou's own line, per conversation/card and agent for things
    in the background.
@@ -523,6 +571,33 @@ Linux, in a cloud workspace rather than on the intended computer, with one
 - After 37 seconds the feed delivered the first card as `done`, with the count.
 - Xiaoyou takes about 6 to 7 seconds over a sentence, most of it Claude Code
   starting up and answering.
+
+The same day, in the same environment, with the default `manual` mode (only
+the tools that read files approved in advance), through the HTTP interface:
+
+- Asked to write one line into a file: two approvals came in turn (a `Bash`
+  command, then a `Write`), the card became `waiting`, and the feed carried
+  the content as it was. Both answered `deny`: the file was not written, and
+  Xiaoyou said so. Answering the same approval again returned `409`.
+- Asked again, both answered `allow`: the file was written with the right
+  content, and no temporary file was left in `state/`.
+- Separately, an approval was left unanswered for 100 seconds; Claude Code
+  waited and then carried on as usual.
+- Changing a request: asked to `sleep 45` and then read a file, and told after
+  9 seconds to skip the sleep. Xiaoyou picked that card and `redo`; Claude
+  Code was stopped, continued in the same session, and had the result about
+  10 seconds later, without waiting out the 45 seconds.
+- Cancelling: asked to `sleep 60`, then told to forget it. Xiaoyou picked that
+  card and `cancel`; Claude Code and the `sleep` it had started both ended.
+  Killing the runtime ends things in progress in the same way.
+- Two things found and fixed on the way: the model often writes a card number
+  `c3` as `3` (now understood), and Claude Code runs commands in a session of
+  their own, so ending its process group alone left `sleep` behind (the whole
+  tree is now ended by parentage).
+- This cloud environment makes every `claude -p` share one session identifier
+  unless it is started with a clean environment (`env -i HOME=$HOME
+  PATH=$PATH`). The checks in this list were done with a clean environment;
+  the earlier one about things in parallel was not.
 
 Earlier the same day version 0.4 was checked by hand with Claude Code 2.1.295
 on Linux, also in a cloud workspace, with one `claude_code` agent and a
@@ -587,13 +662,12 @@ Not verified:
   app 0.5.0 and the current firmware do not know about cards: they can send
   and receive, but never see a result from the background. The matching app
   and firmware do not exist yet.
-- Adding to, changing and cancelling a thing with the real Claude Code: the
-  tests use stand-in agents and one real child process. In particular, when
-  Claude Code is stopped before it has returned a session identifier, the
-  runtime gives it the original task again together with the new request, and
-  it does not remember what it had done so far.
-- Whether the model always picks the right `card` and `action`: only the two
+- Whether the model always picks the right `card` and `action`: only the
   sentences above were tried by hand.
+- An owner who takes very long to answer an approval (100 seconds was the
+  longest tried).
+- Several approvals at once within one thing: the permission tool passes them
+  on one at a time, the rest queue.
 - Whether this computer and the account's usage limits cope with many things
   in progress at once.
 - How the model behaves when a helper is slow or returns a large output.
@@ -609,10 +683,15 @@ Known risks:
   sentence nobody was named for costs one call to the agent that speaks, and a
   work-only helper's result costs one more for the report. Parallel things are
   not limited by default; the owner keeps an eye on usage himself.
-- Things in the background currently run with the permission mode from the
-  configuration, and an operation that needs confirmation is not put to the
-  owner (the approval prompt comes in the next version). The default
-  configuration is read-only.
+- With the default configuration a thing given to Claude Code can reach the
+  whole home directory, and what keeps that safe is that everything that
+  should be asked is asked. An operation the owner allows really happens; the
+  device shows only the first 319 bytes of it, and the phone the whole.
+- The `codex` agent is still `codex exec` in a read-only sandbox and never
+  asks.
+- Phone app 0.5.0 and the current firmware do not show these approvals: until
+  the matching app and firmware exist, a thing waiting for approval can only
+  be answered through the HTTP interface, or waits until it times out.
 - Two things changing the same folder at the same time are not protected from
   each other.
 - Starting a conversation over (reset) neither stops things in progress nor

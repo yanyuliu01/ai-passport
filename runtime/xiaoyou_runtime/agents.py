@@ -18,6 +18,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .approvals import progress_line
 from .config import AgentSpec
 
 MAX_OUTPUT_CHARS = 200000
@@ -53,6 +55,15 @@ class Control:
         self._process: Optional[subprocess.Popen] = None
         self._steer: Optional[Callable[[str], bool]] = None
         self.cancelled = False
+        # 下面几样由开任务的一方填好，代理用得上就用：
+        # 做了一步操作时报一行进展
+        self.progress: Callable[[str], None] = lambda line: None
+        # 一拿到会话编号就报：这样中途被停掉也能接着用
+        self.session: Callable[[str], None] = lambda session_id: None
+        # 权限询问工具要的环境变量（小门的地址和这件事的钥匙）；None 表示这一次没有人可问
+        self.gate: Optional[Dict[str, str]] = None
+        # 放临时文件（比如给 Claude Code 的 MCP 配置）的目录
+        self.scratch: Optional[Path] = None
 
     def attach(self, process: Optional[subprocess.Popen]) -> None:
         with self._lock:
@@ -82,20 +93,55 @@ class Control:
             kill_tree(process)
 
 
+def _descendants(pid: int) -> List[int]:
+    """这个进程起的所有进程（子、孙……）的编号。查不到就是空的。"""
+    try:
+        listing = subprocess.run(["ps", "-eo", "pid=,ppid="], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: Dict[int, List[int]] = {}
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found: List[int] = []
+    queue = [pid]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            if child not in found:
+                found.append(child)
+                queue.append(child)
+    return found
+
+
 def kill_tree(process: subprocess.Popen) -> None:
-    """结束一个进程和它起的所有子进程。"""
+    """结束一个进程和它起的所有进程。
+
+    只结束进程组不够：Claude Code 跑命令时会给命令另开一个会话，那些进程不在它的
+    进程组里。所以先按父子关系把整棵树找出来，再一个一个结束。
+    """
     if process.poll() is not None:
         return
-    try:
-        if os.name == "nt":
+    if os.name == "nt":
+        try:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        return
+    others = _descendants(process.pid)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
     except (OSError, ProcessLookupError):
         try:
             process.kill()
         except OSError:
+            pass
+    for pid in others:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
             pass
 
 
@@ -180,6 +226,70 @@ def _run_controlled(command: List[str], control: Control, timeout: int, **extra:
     return subprocess.CompletedProcess(command, process.returncode, out, err)
 
 
+def stream_command(command: List[str], text: str, cwd: Optional[Path], timeout: int, what: str,
+                   env: Optional[Dict[str, str]], control: Control,
+                   on_line: Callable[[str], None]) -> "subprocess.CompletedProcess[str]":
+    """运行一条命令，标准输出来一行处理一行。失败的说法和 run_command 一样。"""
+    command = list(command)
+    command[0] = shutil.which(command[0]) or command[0]
+    extra: Dict[str, Any] = {}
+    if env is not None:
+        extra["env"] = env
+    if cwd is not None:
+        cwd.mkdir(parents=True, exist_ok=True)
+        extra["cwd"] = str(cwd)
+    if os.name != "nt":
+        extra["start_new_session"] = True
+    if control.cancelled:
+        raise Cancelled("%s 被叫停了" % what)
+    try:
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", **extra)
+    except FileNotFoundError:
+        raise AgentError("找不到命令 %s。请先安装并登录 %s，或在配置里改这个代理的 command"
+                         % (command[0], what))
+    except OSError as error:
+        raise AgentError("启动 %s 失败：%s" % (what, error))
+    control.attach(process)
+    timed_out = threading.Event()
+
+    def expire() -> None:
+        timed_out.set()
+        kill_tree(process)
+
+    timer = threading.Timer(timeout, expire)
+    timer.daemon = True
+    timer.start()
+    errors: List[str] = []
+    reader = threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True)
+    reader.start()
+    try:
+        try:
+            process.stdin.write(text)
+            process.stdin.close()
+        except OSError:
+            pass  # 它没读完就退出了；原因在退出码和标准错误里
+        for line in process.stdout:
+            on_line(line)
+        process.wait()
+    finally:
+        timer.cancel()
+        kill_tree(process)
+        control.attach(None)
+        reader.join(timeout=5)
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass
+    if control.cancelled:
+        raise Cancelled("%s 被叫停了" % what)
+    if timed_out.is_set():
+        raise AgentError("%s 超过 %d 秒还没结束，已经停止" % (what, timeout))
+    return subprocess.CompletedProcess(command, process.returncode, "", "".join(errors))
+
+
 def run_command(command: List[str], text: Optional[str], cwd: Optional[Path], timeout: int,
                 what: str, env: Optional[Dict[str, str]] = None, run=subprocess.run,
                 control: Optional[Control] = None):
@@ -256,18 +366,28 @@ class EchoAgent(Agent):
 class ClaudeCodeAgent(Agent):
     """用非交互模式驱动 Claude Code 命令行。
 
-    每一次启动一次命令：这一段话从标准输入送进去，要求输出 JSON；有上一次的会话编号
-    就带上 --resume 接着聊。对话记录由 Claude Code 自己保存。
+    每一次启动一次命令：这一段话从标准输入送进去；有上一次的会话编号就带上 --resume
+    接着聊。对话记录由 Claude Code 自己保存。
+
+    两种跑法。只说话（小幽接主人一句话、转述结果）：要一整个 JSON，不给工具。做事
+    （后台任务）：要事件流，这样能看到它每一步在干什么、一开始就拿到会话编号；要问
+    “可以吗”的操作通过权限询问工具（permission_mcp.py）交给主人点头。
     """
+
+    PROMPT_TOOL = "mcp__xiaoyou__approve"
 
     def __init__(self, spec: AgentSpec, run=subprocess.run):
         super().__init__(spec)
         self._run = run
 
-    def command(self, job: Job) -> List[str]:
+    def command(self, job: Job, stream: bool = False,
+                mcp_config: Optional[Path] = None) -> List[str]:
         spec = self.spec
         command = list(spec.command)
-        command += ["-p", "--output-format", "json"]
+        if stream:
+            command += ["-p", "--output-format", "stream-json", "--verbose"]
+        else:
+            command += ["-p", "--output-format", "json"]
         if job.system:
             command += ["--append-system-prompt", job.system]
         if job.schema:
@@ -277,6 +397,12 @@ class ClaudeCodeAgent(Agent):
             command += ["--tools", "", "--permission-mode", "dontAsk"]
         else:
             command += ["--permission-mode", spec.permission_mode]
+            if mcp_config is not None:
+                # 不加 --strict-mcp-config：使用者自己登记的 MCP 照常可用。
+                command += ["--permission-prompt-tool", self.PROMPT_TOOL,
+                            "--mcp-config", str(mcp_config)]
+            for folder in spec.add_dirs:
+                command += ["--add-dir", str(folder)]
             if spec.allowed_tools:
                 command += ["--allowedTools", ",".join(spec.allowed_tools)]
         if spec.model:
@@ -286,36 +412,105 @@ class ClaudeCodeAgent(Agent):
         command += spec.extra_args
         return command
 
+    def _env(self) -> Optional[Dict[str, str]]:
+        if self.spec.config_dir is None and not self.spec.env:
+            return None
+        env = dict(os.environ)
+        # 配置里写的环境变量：换接口地址、密钥、模型之类。
+        env.update(self.spec.env)
+        if self.spec.config_dir is not None:
+            # 让这台机器上的 Claude Code 用一套单独的登录和设置，
+            # 不受（也不影响）使用者平时那套 ~/.claude 配置。
+            env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
+        return env
+
     def run(self, job: Job) -> Outcome:
-        env = None
-        if self.spec.config_dir is not None or self.spec.env:
-            env = dict(os.environ)
-            # 配置里写的环境变量：换接口地址、密钥、模型之类。
-            env.update(self.spec.env)
-            if self.spec.config_dir is not None:
-                # 让这台机器上的 Claude Code 用一套单独的登录和设置，
-                # 不受（也不影响）使用者平时那套 ~/.claude 配置。
-                env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
+        if job.control is not None and not job.plain and self._run is subprocess.run:
+            return self._work(job, job.control)
         done = run_command(
             self.command(job), job.text, self.spec.workdir,
-            job.timeout or self.spec.timeout_seconds, "Claude Code", env=env, run=self._run,
-            control=job.control,
+            job.timeout or self.spec.timeout_seconds, "Claude Code", env=self._env(),
+            run=self._run, control=job.control,
         )
-        return self.parse(done.returncode, done.stdout, done.stderr)
-
-    def parse(self, returncode: int, stdout: str, stderr: str) -> Outcome:
         payload: Any = None
         try:
-            payload = json.loads(stdout) if stdout.strip() else None
+            payload = json.loads(done.stdout) if done.stdout.strip() else None
         except json.JSONDecodeError:
             payload = None
+        return self.parse(done.returncode, payload, done.stderr or done.stdout)
+
+    @staticmethod
+    def mcp_config(gate: Dict[str, str]) -> Dict[str, Any]:
+        """给 Claude Code 的 MCP 配置：怎么启动权限询问工具。"""
+        package_parent = str(Path(__file__).resolve().parent.parent)
+        return {"mcpServers": {"xiaoyou": {
+            "command": sys.executable,
+            "args": ["-m", "xiaoyou_runtime.permission_mcp"],
+            "env": dict(gate, PYTHONPATH=package_parent),
+        }}}
+
+    def _work(self, job: Job, control: Control) -> Outcome:
+        """做事：读事件流，报进展，需要确认的操作交给主人。"""
+        config_file: Optional[Path] = None
+        if control.gate is not None:
+            folder = control.scratch if control.scratch is not None else Path(tempfile.gettempdir())
+            folder.mkdir(parents=True, exist_ok=True)
+            handle, name = tempfile.mkstemp(prefix="mcp-", suffix=".json", dir=str(folder))
+            # mkstemp 建的文件只有自己能读写：里面有这件事的钥匙。
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(self.mcp_config(control.gate), stream)
+            config_file = Path(name)
+        final: Dict[str, Any] = {}
+
+        def on_line(line: str) -> None:
+            line = line.strip()
+            if not line.startswith("{"):
+                return
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(event, dict):
+                return
+            kind = event.get("type")
+            if kind == "system" and event.get("subtype") == "init":
+                if isinstance(event.get("session_id"), str):
+                    control.session(event["session_id"])
+            elif kind == "assistant":
+                message = event.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                for block in content if isinstance(content, list) else []:
+                    if (isinstance(block, dict) and block.get("type") == "tool_use"
+                            and isinstance(block.get("name"), str)
+                            # 这是它交结构化回复用的，不是一步操作。
+                            and block["name"] != "StructuredOutput"):
+                        control.progress(progress_line(block["name"], block.get("input")))
+            elif kind == "result":
+                final.update(event)
+
+        try:
+            done = stream_command(
+                self.command(job, stream=True, mcp_config=config_file), job.text,
+                self.spec.workdir, job.timeout or self.spec.timeout_seconds, "Claude Code",
+                self._env(), control, on_line,
+            )
+        finally:
+            if config_file is not None:
+                try:
+                    config_file.unlink()
+                except OSError:
+                    pass
+        return self.parse(done.returncode, final or None, done.stderr)
+
+    def parse(self, returncode: int, payload: Any, detail: str) -> Outcome:
+        """payload 是 Claude Code 最后给出的那个结果对象；没有就是 None。"""
         if not isinstance(payload, dict):
-            detail = clip(stderr or stdout or "没有输出", 200)
-            raise AgentError("Claude Code 没有返回可用的结果（退出码 %d）：%s" % (returncode, detail))
+            raise AgentError("Claude Code 没有返回可用的结果（退出码 %d）：%s" % (
+                returncode, clip(detail or "没有输出", 200)))
         session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
         result = payload.get("result") if isinstance(payload.get("result"), str) else ""
         if returncode != 0 or payload.get("is_error") is True:
-            raise AgentError("Claude Code 报告失败：%s" % clip(result or stderr or "没有说明", 200))
+            raise AgentError("Claude Code 报告失败：%s" % clip(result or detail or "没有说明", 200))
         structured = payload.get("structured_output")
         if isinstance(structured, dict) and isinstance(structured.get("reply"), str):
             return Outcome(structured["reply"], session_id, structured)

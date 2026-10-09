@@ -26,8 +26,9 @@
       "workdir": "workdir",
       "config_dir": null,
       "model": null,
-      "permission_mode": "dontAsk",
+      "permission_mode": "manual",
       "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "add_dirs": ["~"],
       "extra_args": []
     },
     "deepseek": {

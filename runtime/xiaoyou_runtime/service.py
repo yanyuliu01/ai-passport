@@ -195,8 +195,15 @@ class Service:
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
         result = self._xiaoyou.cards.changed(conversation, after, wait)
-        result["approvals"] = []
+        # 授权出现和有了答案都会让那张卡变一次，所以等卡就等到了授权。
+        result["approvals"] = self._xiaoyou.approvals.pending(conversation)
         return result
+
+    def approve(self, approval_id: str, decision: Any) -> Optional[bool]:
+        """回答一个授权：allow 或 deny。没有这个授权返回 None，已经答过了返回 False。"""
+        if decision not in ("allow", "deny"):
+            raise RequestError("decision 只能是 allow 或 deny")
+        return self._xiaoyou.approvals.answer(approval_id, decision)
 
     def cards(self, conversation: Any = "default") -> List[Dict[str, Any]]:
         return self._xiaoyou.cards.recent(_name(conversation, "conversation"), 30)

@@ -86,6 +86,9 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 `XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
 `XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）。
 
+设了 `XIAOYOU_DEBUG`（任意值）时，小幽每接一句话，标准错误里多一行：她把这句话归到了
+哪张卡、要 Runtime 做什么。
+
 0.3 及更早的配置（`backend`、`claude_code`、`tools`）仍然能读：按只有一个名叫 `claude`
 的代理处理，启动时会提示这是旧写法，原来的会话接着用。`tools` 里启用过的条目需要手动
 改成 `agents` 里的一个代理。
@@ -108,15 +111,17 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
-| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `dontAsk`）、`allowed_tools`、`extra_args`、`env` |
+| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env` |
 | `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
 
-`permission_mode` 为 `dontAsk` 时，Claude Code 里没有被 `allowed_tools` 放行的操作会被
-直接拒绝，而不是等一个不在场的人来点头。放行规则要写窄：每一条都是这个代理在没人看着
-时能做的事。Codex 的 `sandbox` 同理，默认只读。
+`permission_mode` 是交给 Claude Code 做事时的权限模式，默认 `manual`：凡是它在终端里会问
+“可以吗”的操作，都来问主人，见[授权](#授权)。`allowed_tools` 是预先放行、不用问的规则，
+要写窄。`add_dirs` 是除了启动目录之外它还能碰的目录，默认是整个主目录。想回到“没放行的
+一律拒绝、谁也不问”，把 `permission_mode` 设成 `dontAsk`。小幽自己接话的那一次调用不受
+这几项影响：它永远没有工具。Codex 的 `sandbox` 同理，默认只读。
 
 ### 换成别家的模型（例如 DeepSeek V4）
 
@@ -195,9 +200,29 @@ JSON 对象。
 它的原始结果交回这个对话的线上，由 `voice_agent` 转述。`voice_agent` 这时不可用的话，原样
 把结果给主人，不让这件事白做。帮手没做成，卡上照实写“没做成”和原因。
 
-卡的状态有 `working`（帮手在做）、`waiting`（等主人点头，授权弹窗用，见下一版）、`done`、
+卡的状态有 `working`（帮手在做）、`waiting`（等主人点头，见[授权](#授权)）、`done`、
 `failed`、`cancelled`；`talking` 是预留的。卡存在 `state/cards.json`，留最近 50 张。Runtime
 重启时还在做的事没法接着做，会被标成 `failed`，原因写“Runtime 重启了，这件事没做完”。
+
+### 授权
+
+交给 Claude Code 的事以 `--permission-mode manual` 运行，并带上 Runtime 自带的权限询问工具
+（`xiaoyou_runtime/permission_mcp.py`，一个只有一个工具的 MCP 服务）。Claude Code 要问
+“可以吗”的时候改成调用这个工具；工具把操作交给 Runtime，这件事的卡变成 `waiting`，
+`/v1/feed` 的 `approvals` 里多一项，然后一直等。主人回答 `allow`，这一步照做；回答 `deny`，
+这一步不做，Claude Code 被告知“主人说不行”，接着决定怎么办。那件事被取消、改了要求或
+超时，还没答的授权自动作废。
+
+给主人看的内容原样来自这次工具调用，不经过模型：`tool` 是“帮手名 · 工具名”（例如
+`claude · Bash`），`detail` 是命令原文；写文件是路径加内容，改文件是路径加被替换的和替换
+成的。进展行也一样：工具名加上最关键的一个参数。
+
+权限询问工具是另一个进程。它不走手机连的那个接口，而是连 Runtime 另开的一个只听
+`127.0.0.1`、端口随机的入口，用的是只对这一件事、这一轮有效的钥匙；钥匙写在 `state/` 下
+一个只有自己可读的临时文件里，这一轮结束就删。Runtime 的令牌不会写进任何文件。
+
+命令行里用 `--once` 说一句话时没有手机和设备在场：有授权就在终端里问（`可以吗？[y/N]`），
+不是终端就当作不行。
 
 ### 使用单独的 Claude 登录
 
@@ -238,9 +263,10 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
-| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>` | `{"seq", "cards": [...], "approvals": []}`：这个对话里序号比 `after` 大的卡（完整内容）。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
+| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>` | `{"seq", "cards": [...], "approvals": [...]}`：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at"}`）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 30 张卡。 |
 | `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`。 |
+| `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权。没有这个授权（或 Runtime 重启过）返回 `404`；已经回答过、或者那件事已经停了，返回 `409`。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
 
@@ -267,8 +293,9 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 
 一张卡包含 `id`（`c1`、`c2`……）、`conversation`、`title`（最多 24 个字）、`state`、`agent`
 （谁在做或做的；小幽自己答的是 `null`）、`entries`（`[{"role": "you" 或 "xiaoyou", "text",
-"at"}]`，最近 40 条）、`brief`、`mood`、`progress`（最近几行进展，这一版还是空的）、
-`started_at`、`edits`（补充或改过几次）、`approval`（这一版总是 `null`）、`queued`（设了并行
+"at"}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
+`started_at`、`edits`（补充或改过几次）、`approval`（正在等的那个授权的编号，没有是
+`null`）、`queued`（设了并行
 上限、正在排队）、`created_at`、`updated_at`、`seq`。
 
 同一个 `client_id` 再发一次，返回的是已有的那条记录，不会把这句话再处理一遍；所以客户端
@@ -383,9 +410,13 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
    --json-schema <reply、brief、mood、card、action> --tools "" --permission-mode dontAsk
    [--model ...] [--resume <会话>]`。主人的话从标准输入送进去，不会出现在命令行参数里。
    Runtime 照她回复里的 `action` 办，见[一件事一张卡](#一件事一张卡)。
-4. 后台的事：对 Claude Code 是 `claude -p --output-format json [--append-system-prompt <人设>
-   --json-schema <reply、brief、mood>] --permission-mode <模式> [--allowedTools ...]
-   [--model ...] [--resume <这件事的会话>]`，进程在自己的进程组里，取消或改要求时整组结束。
+4. 后台的事：对 Claude Code 是 `claude -p --output-format stream-json --verbose
+   [--append-system-prompt <人设> --json-schema <reply、brief、mood>] --permission-mode <模式>
+   --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <state 里的临时文件>
+   --add-dir <目录> [--allowedTools ...] [--model ...] [--resume <这件事的会话>]`。启动目录
+   仍然是 `workdir`。Runtime 逐行读它的事件：一开始就记下会话编号，每一步操作记一行进展。
+   取消或改要求时，它和它起的所有进程一起结束（Claude Code 跑命令时会另开会话，所以是按
+   父子关系找出整棵树来结束的）。Runtime 自己被 `kill` 时也会先这样收尾。
 5. 会话编号存到 `state/sessions.json`：小幽接话用的按“对话 + 代理”，后台的事按
    “对话/卡 + 代理”。
 6. 每句话和每个后台结果都记进小幽自己的对话记录 `state/transcript.json`，并记下替她说话
@@ -426,6 +457,22 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   在自己的一张卡上。这时第一件事还在做。
 - 37 秒时 feed 给出第一张卡变成 `done`，内容是数出来的结果。
 - 小幽接一句话约 6 到 7 秒，大部分是 Claude Code 自己启动和回答的时间。
+
+同一天，同样的环境，默认的 `manual` 模式（只预先放行了读文件的几个工具），通过 HTTP 接口：
+
+- 让它往一个文件里写一行字：先后来了两个授权（一条 `Bash` 命令、一次 `Write`），卡变成
+  `waiting`，feed 里有内容原文。两个都答 `deny`：文件没有被写，小幽照实说没写成。同一个
+  授权再答一次得到 `409`。
+- 再说一次并都答 `allow`：文件写出来了，内容正确；`state/` 里没有留下临时文件。
+- 单独试过让一个授权等 100 秒再回答，Claude Code 一直等着，之后照常继续。
+- 改要求：先让它 `sleep 45` 再读一个文件，9 秒后说“不用 sleep 了”。小幽选了那张卡和
+  `redo`；Claude Code 被停掉，用同一个会话接着做，约 10 秒后给出结果，没有等那 45 秒。
+- 取消：让它 `sleep 60`，然后说“算了不用跑了”。小幽选了那张卡和 `cancel`；Claude Code
+  和它起的 `sleep` 都结束了。`kill` 掉 Runtime 时正在做的事也一样被结束。
+- 途中发现并改掉的两件事：模型常把卡的编号 `c3` 写成 `3`（现在认）；Claude Code 跑命令
+  时会另开会话，只结束进程组留得下 `sleep`（现在按父子关系结束整棵树）。
+- 这个云端环境会让所有 `claude -p` 共用同一个会话编号，除非用干净的环境变量启动
+  （`env -i HOME=$HOME PATH=$PATH`）。上面这些是在干净环境里做的；早先“并行”那一段不是。
 
 同一天稍早，0.4 版用 Claude Code 2.1.295 在 Linux 上手动验证过（同样是在云端工作区里），
 配置是一个 `claude_code` 代理加一个 `command` 类型的替身帮手。那一版里帮手是在同一轮里
@@ -474,10 +521,9 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 - 虚拟机，以及连续运行多天的情况。
 - 0.5 这一版在 macOS 上、以及和手机 App、设备一起使用的情况。手机 App 0.5.0 和现在的
   固件还不认识卡：能发能收，但后台的结果看不到。配套的 App 和固件还没做。
-- 补充、改要求、取消在真实的 Claude Code 上的表现：测试里用的是替身代理和一个真的子进程。
-  特别是 Claude Code 被停掉之后还没来得及交出会话编号，重做时 Runtime 会把原来的任务
-  连同新的要求一起重新交给它，之前做到一半的内容它不记得。
-- 模型会不会总是选对 `card` 和 `action`：只手动试了上面那两句。
+- 模型会不会总是选对 `card` 和 `action`：只手动试了上面这几句。
+- 主人很久不回答授权（上面最长试过 100 秒）。
+- 一件事里同时来几个授权：权限询问工具一次只送一个，后面的排着。
 - 很多件事同时做时，这台电脑和账号用量撑不撑得住。
 - 帮手很慢或输出很长时，模型的表现。
 
@@ -488,8 +534,11 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   认证方式。把它提供给自己以外的人之前，请先确认 Claude Code 当前的使用条款。
 - 每一次调用都计入所登录账号的用量限制。没指定由谁做的每句话都要先调用一次说话的
   代理；只干活的帮手做完后还要再调用一次来转述。并行不设上限，用量由主人自己掌握。
-- 后台的事现在按配置里的权限模式照跑，需要确认的操作不会来问主人（授权弹窗在下一版）。
-  默认配置是只读的。
+- 默认配置下，交给 Claude Code 的事能碰整个主目录，靠的是“该问的都问”。主人点了“可以”
+  的操作就真的做了；设备上只显示内容的前 319 字节，长的要到手机上看全。
+- `codex` 代理还是只读沙箱的 `codex exec`，不会来问。
+- 手机 App 0.5.0 和现在的固件不会显示这些授权：在配套的 App 和固件出来之前，等授权的事
+  只能用 HTTP 接口回答，或者一直等到超时。
 - 两件事同时改同一个文件夹时没有互相保护。
 - 对话重新开始（reset）不会停掉正在做的事，也不会清掉卡。
 - 只有一个共享令牌，没有按设备区分身份，也没有限流。
