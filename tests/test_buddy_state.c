@@ -596,7 +596,7 @@ static void test_truncated_prompt_id_is_ignored(void)
     assert(action.type == BUDDY_ACTION_NONE);
 }
 
-static void test_long_up_opens_settings(void)
+static void test_long_up_opens_the_menu(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
@@ -605,24 +605,35 @@ static void test_long_up_opens_settings(void)
     buddy_event_t long_down = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_DOWN};
 
     buddy_state_init(&state, NULL);
-    state.settings_selection = BUDDY_SETTINGS_BACK;
-    state.page = BUDDY_PAGE_USAGE;
+    state.menu_selection = BUDDY_MENU_BACK;
+    state.page = BUDDY_PAGE_READER;
     buddy_state_reduce(&state, &long_down, 999, &action);
-    assert(state.page == BUDDY_PAGE_USAGE && action.type == BUDDY_ACTION_NONE);
+    assert(state.page == BUDDY_PAGE_READER && action.type == BUDDY_ACTION_NONE);
+    /* From the reader as well as from home. */
     buddy_state_reduce(&state, &long_up, 1000, &action);
 
-    assert(state.page == BUDDY_PAGE_SETTINGS);
-    assert(state.settings_selection == BUDDY_SETTINGS_BRIGHTNESS);
+    assert(state.page == BUDDY_PAGE_MENU);
+    assert(state.menu_selection == BUDDY_MENU_NOTICES);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
 
-    /* Either long press leaves the settings again; OK never starts talking there. */
+    /* Either long press leaves the menu again; OK never starts talking there. */
     buddy_state_reduce(&state, &long_up, 1001, &action);
     assert(state.page == BUDDY_PAGE_HOME);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
-    state.page = BUDDY_PAGE_GUIDE;
-    buddy_state_reduce(&state, &long_ok, 1002, &action);
-    assert(state.page == BUDDY_PAGE_HOME && state.voice_phase == BUDDY_VOICE_IDLE);
-    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    {
+        static const buddy_page_t under_the_menu[] = {
+            BUDDY_PAGE_MENU, BUDDY_PAGE_NOTICES, BUDDY_PAGE_HELPERS, BUDDY_PAGE_MORE,
+            BUDDY_PAGE_GUIDE,
+        };
+        size_t index;
+
+        for (index = 0; index < sizeof(under_the_menu) / sizeof(under_the_menu[0]); ++index) {
+            state.page = under_the_menu[index];
+            buddy_state_reduce(&state, &long_ok, 1002, &action);
+            assert(state.page == BUDDY_PAGE_HOME && state.voice_phase == BUDDY_VOICE_IDLE);
+            assert(action.type == BUDDY_ACTION_UI_REFRESH);
+        }
+    }
 }
 
 static void voice_ready_state(buddy_state_t *state)
@@ -660,7 +671,9 @@ static void test_hold_ok_talks_and_release_sends(void)
     buddy_event_t event;
 
     voice_ready_state(&state);
-    state.page = BUDDY_PAGE_ACTIVITY;
+    assert(state.host_hub);
+    /* Talking also works from the reader page; it goes back to Xiaoyou. */
+    state.page = BUDDY_PAGE_READER;
     buddy_state_reduce(&state, &long_ok, 1000, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && action.connection_generation == 7);
     assert(state.voice_phase == BUDDY_VOICE_PREPARING && state.page == BUDDY_PAGE_HOME);
@@ -691,8 +704,12 @@ static void test_hold_ok_talks_and_release_sends(void)
     event = voice_event(BUDDY_VOICE_FINISHED, 7);
     buddy_state_reduce(&state, &event, 4300, &action);
     assert(state.voice_phase == BUDDY_VOICE_IDLE);
-    assert(strcmp(state.message, PT_VOICE_SENT) == 0);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    /* The recording is on its way: the home page says so until the host answers,
+     * and the timer counts from here. */
+    assert(state.chat.phase == BUDDY_CHAT_SENT && state.chat.mood == BUDDY_MOOD_BUSY);
+    assert(state.chat_since_ms == 4300 && state.reply[0] == '\0');
+    assert(state.message[0] == '\0');
 
     /* Releasing before the microphone is live: the late "started" must not reopen it. */
     buddy_state_reduce(&state, &long_ok, 5000, &action);
@@ -774,7 +791,7 @@ static void test_talking_needs_a_voice_capable_host(void)
     assert(!state.host_voice);
 }
 
-static void test_carousel_wraps_in_both_directions(void)
+static void test_home_keys_and_the_reader(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
@@ -782,28 +799,32 @@ static void test_carousel_wraps_in_both_directions(void)
     buddy_event_t down = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_DOWN};
     buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
 
-    assert(BUDDY_PAGE_CAROUSEL_COUNT == 4);
     buddy_state_init(&state, NULL);
     assert(state.page == BUDDY_PAGE_HOME);
+    /* Nothing to read yet: no short press does anything on the home page. */
     buddy_state_reduce(&state, &ok, 1, &action);
-    assert(state.page == BUDDY_PAGE_HOME);
-    assert(action.type == BUDDY_ACTION_NONE);
-    buddy_state_reduce(&state, &down, 2, &action);
-    assert(state.page == BUDDY_PAGE_REPLY);
-    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
+    buddy_state_reduce(&state, &up, 2, &action);
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
     buddy_state_reduce(&state, &down, 3, &action);
-    assert(state.page == BUDDY_PAGE_ACTIVITY);
-    buddy_state_reduce(&state, &down, 4, &action);
-    assert(state.page == BUDDY_PAGE_USAGE);
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
+
+    /* With an answer, DOWN opens the reader; UP and DOWN scroll it; OK goes back. */
+    snprintf(state.reply, sizeof(state.reply), "%s", "a long answer");
+    buddy_state_reduce(&state, &up, 4, &action);
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
     buddy_state_reduce(&state, &down, 5, &action);
-    assert(state.page == BUDDY_PAGE_HOME);
-    buddy_state_reduce(&state, &up, 6, &action);
-    assert(state.page == BUDDY_PAGE_USAGE);
-    buddy_state_reduce(&state, &ok, 7, &action);
-    assert(state.page == BUDDY_PAGE_HOME);
+    assert(state.page == BUDDY_PAGE_READER && action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_reduce(&state, &down, 6, &action);
+    assert(state.page == BUDDY_PAGE_READER);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta > 0);
+    buddy_state_reduce(&state, &up, 7, &action);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta < 0);
+    buddy_state_reduce(&state, &ok, 8, &action);
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_UI_REFRESH);
 }
 
-static void test_guide_scrolls_and_returns_to_settings(void)
+static void test_guide_scrolls_and_returns_to_more(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
@@ -812,8 +833,8 @@ static void test_guide_scrolls_and_returns_to_settings(void)
     buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
 
     buddy_state_init(&state, NULL);
-    state.page = BUDDY_PAGE_SETTINGS;
-    state.settings_selection = BUDDY_SETTINGS_GUIDE;
+    state.page = BUDDY_PAGE_MORE;
+    state.more_selection = BUDDY_MORE_GUIDE;
     buddy_state_reduce(&state, &ok, 1, &action);
     assert(state.page == BUDDY_PAGE_GUIDE);
     buddy_state_reduce(&state, &down, 2, &action);
@@ -822,8 +843,8 @@ static void test_guide_scrolls_and_returns_to_settings(void)
     buddy_state_reduce(&state, &up, 3, &action);
     assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta < 0);
     buddy_state_reduce(&state, &ok, 4, &action);
-    assert(state.page == BUDDY_PAGE_SETTINGS);
-    assert(state.settings_selection == BUDDY_SETTINGS_GUIDE);
+    assert(state.page == BUDDY_PAGE_MORE);
+    assert(state.more_selection == BUDDY_MORE_GUIDE);
 }
 
 static void test_screen_off_wakes_on_key_and_on_attention(void)
@@ -837,8 +858,8 @@ static void test_screen_off_wakes_on_key_and_on_attention(void)
 
     buddy_state_init(&state, NULL);
     assert(buddy_state_backlight_percent(&state) == 100);
-    state.page = BUDDY_PAGE_SETTINGS;
-    state.settings_selection = BUDDY_SETTINGS_SCREEN_OFF;
+    state.page = BUDDY_PAGE_MENU;
+    state.menu_selection = BUDDY_MENU_SCREEN_OFF;
     buddy_state_reduce(&state, &ok, 1, &action);
     assert(state.screen_off);
     assert(action.type == BUDDY_ACTION_SCREEN_OFF);
@@ -1042,13 +1063,15 @@ static void test_normal_navigation_and_approval_scroll_are_distinct(void)
     buddy_event_t prompt = test_prompt_event("req-scroll", "Read", "long hint", 0, 1);
 
     buddy_state_init(&state, NULL);
+    snprintf(state.reply, sizeof(state.reply), "%s", "something to read");
     buddy_state_reduce(&state, &down, 1000, &action);
-    assert(state.page == BUDDY_PAGE_REPLY);
+    assert(state.page == BUDDY_PAGE_READER);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
 
+    /* With a request on screen the same keys belong to the request. */
     buddy_state_reduce(&state, &prompt, 1002, &action);
     buddy_state_reduce(&state, &up, 1003, &action);
-    assert(state.page == BUDDY_PAGE_REPLY);
+    assert(state.page == BUDDY_PAGE_READER);
     assert(action.type == BUDDY_ACTION_UI_SCROLL);
     assert(action.scroll_delta < 0);
 }
@@ -1065,55 +1088,90 @@ static void test_settings_actions_have_separate_confirmations(void)
 
     buddy_state_init(&state, &settings);
     buddy_state_reduce(&state, &long_up, 1000, &action);
-    assert(state.page == BUDDY_PAGE_SETTINGS);
-    state.settings_selection = BUDDY_SETTINGS_BLE;
+    assert(state.page == BUDDY_PAGE_MENU);
+    state.menu_selection = BUDDY_MENU_BLE;
     buddy_state_reduce(&state, &click_ok, 1002, &action);
     assert(action.type == BUDDY_ACTION_BLE_TOGGLE);
     assert(!action.ble_enabled);
     buddy_state_snapshot(&state, &snapshot);
     assert(!snapshot.ble_enabled);
 
-    state.settings_selection = BUDDY_SETTINGS_UNPAIR;
+    /* The destructive ones sit one level down, and each asks again. */
+    state.menu_selection = BUDDY_MENU_MORE;
+    state.more_selection = BUDDY_MORE_BACK;
+    buddy_state_reduce(&state, &click_ok, 1003, &action);
+    assert(state.page == BUDDY_PAGE_MORE && state.more_selection == BUDDY_MORE_GUIDE);
+    state.more_selection = BUDDY_MORE_UNPAIR;
     buddy_state_reduce(&state, &click_ok, 1004, &action);
     assert(state.confirmation == BUDDY_CONFIRM_UNPAIR);
     assert(!state.confirmation_acknowledge);
     buddy_state_reduce(&state, &click_down, 1005, &action);
     assert(state.confirmation == BUDDY_CONFIRM_NONE);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
-    assert(state.page == BUDDY_PAGE_SETTINGS);
+    assert(state.page == BUDDY_PAGE_MORE);
 
-    state.settings_selection = BUDDY_SETTINGS_FACTORY_RESET;
+    state.more_selection = BUDDY_MORE_FACTORY_RESET;
     buddy_state_reduce(&state, &click_ok, 1010, &action);
     assert(state.confirmation == BUDDY_CONFIRM_FACTORY_RESET);
     buddy_state_reduce(&state, &click_ok, 1011, &action);
     assert(action.type == BUDDY_ACTION_FACTORY_RESET_CONFIRMED);
 }
 
-static void test_settings_surface_is_complete_and_bounded(void)
+static void test_menu_surface_is_complete_and_bounded(void)
 {
     buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
     buddy_action_t action = {0};
     buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
     buddy_event_t up = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_UP};
     buddy_event_t down = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_DOWN};
     unsigned press;
 
-    assert(BUDDY_SETTINGS_COUNT == 7);
+    assert(BUDDY_MENU_COUNT == 7 && BUDDY_MORE_COUNT == 4);
     buddy_state_init(&state, NULL);
-    state.page = BUDDY_PAGE_SETTINGS;
-    state.settings_selection = BUDDY_SETTINGS_BRIGHTNESS;
+    state.page = BUDDY_PAGE_MENU;
+    state.menu_selection = BUDDY_MENU_BRIGHTNESS;
     for (press = 0; press < 2U * BUDDY_BRIGHTNESS_LEVELS; ++press) {
         buddy_state_reduce(&state, &ok, press + 1U, &action);
         assert(action.type == BUDDY_ACTION_DISPLAY_BACKLIGHT);
         assert(action.brightness_percent >= 20 && action.brightness_percent <= 100);
         assert(action.brightness_percent == buddy_state_backlight_percent(&state));
     }
+    /* The selection wraps in both directions. */
+    state.menu_selection = BUDDY_MENU_NOTICES;
     buddy_state_reduce(&state, &up, 100, &action);
-    assert(state.settings_selection == BUDDY_SETTINGS_BACK);
+    assert(state.menu_selection == BUDDY_MENU_BACK);
     buddy_state_reduce(&state, &down, 101, &action);
-    assert(state.settings_selection == BUDDY_SETTINGS_BRIGHTNESS);
-    state.settings_selection = BUDDY_SETTINGS_BACK;
+    assert(state.menu_selection == BUDDY_MENU_NOTICES);
+
+    /* Notices and helpers are pages of their own; OK comes back to the same row. */
     buddy_state_reduce(&state, &ok, 102, &action);
+    assert(state.page == BUDDY_PAGE_NOTICES && action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_reduce(&state, &down, 103, &action);
+    assert(state.page == BUDDY_PAGE_NOTICES && action.type == BUDDY_ACTION_NONE);
+    buddy_state_reduce(&state, &ok, 104, &action);
+    assert(state.page == BUDDY_PAGE_MENU && state.menu_selection == BUDDY_MENU_NOTICES);
+    buddy_state_reduce(&state, &down, 105, &action);
+    assert(state.menu_selection == BUDDY_MENU_HELPERS);
+    buddy_state_reduce(&state, &ok, 106, &action);
+    assert(state.page == BUDDY_PAGE_HELPERS);
+    buddy_state_reduce(&state, &ok, 107, &action);
+    assert(state.page == BUDDY_PAGE_MENU && state.menu_selection == BUDDY_MENU_HELPERS);
+
+    /* More settings: wraps, and "back" returns to the menu, not to home. */
+    state.menu_selection = BUDDY_MENU_MORE;
+    buddy_state_reduce(&state, &ok, 108, &action);
+    assert(state.page == BUDDY_PAGE_MORE && state.more_selection == BUDDY_MORE_GUIDE);
+    buddy_state_reduce(&state, &up, 109, &action);
+    assert(state.more_selection == BUDDY_MORE_BACK);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.page == BUDDY_PAGE_MORE && snapshot.more_selection == BUDDY_MORE_BACK &&
+           snapshot.menu_selection == BUDDY_MENU_MORE);
+    buddy_state_reduce(&state, &ok, 110, &action);
+    assert(state.page == BUDDY_PAGE_MENU && state.menu_selection == BUDDY_MENU_MORE);
+
+    state.menu_selection = BUDDY_MENU_BACK;
+    buddy_state_reduce(&state, &ok, 111, &action);
     assert(state.page == BUDDY_PAGE_HOME);
 }
 
@@ -1239,6 +1297,241 @@ static void test_new_link_generation_invalidates_sensitive_state_when_disconnect
     assert(!state.confirmation_pending);
 }
 
+static buddy_event_t chat_event(buddy_chat_phase_t phase, const char *said, const char *reply,
+                                const char *agent, uint32_t generation)
+{
+    buddy_event_t event = {.type = BUDDY_EVENT_CHAT};
+
+    event.chat.phase = phase;
+    event.chat.mood = phase == BUDDY_CHAT_DONE ? BUDDY_MOOD_HAPPY : BUDDY_MOOD_BUSY;
+    snprintf(event.chat.said, sizeof(event.chat.said), "%s", said);
+    snprintf(event.chat.agent, sizeof(event.chat.agent), "%s", agent);
+    snprintf(event.reply, sizeof(event.reply), "%s", reply);
+    event.ble.connection_generation = generation;
+    return event;
+}
+
+static void test_the_conversation_follows_the_hub(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t event;
+
+    voice_ready_state(&state);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.host_hub && snapshot.chat.phase == BUDDY_CHAT_NONE);
+    assert(!snapshot.host_chat);
+
+    /* A phone app from before "chat" says hub and still reports replies as turn
+     * events; until the hub reports the conversation itself, those count. */
+    {
+        buddy_event_t heartbeat = test_heartbeat_event(0, 0);
+        buddy_event_t turn = {.type = BUDDY_EVENT_TURN};
+
+        heartbeat.heartbeat.waiting = 0;
+        buddy_state_reduce(&state, &heartbeat, 900, &action);
+        snprintf(turn.reply, sizeof(turn.reply), "%s", "from an older app");
+        buddy_state_reduce(&state, &turn, 901, &action);
+        assert(strcmp(state.reply, "from an older app") == 0);
+        turn.reply[0] = '\0';
+        buddy_state_reduce(&state, &turn, 902, &action);
+        assert(state.reply[0] == '\0');
+    }
+
+    /* A report from another connection is not this conversation. */
+    event = chat_event(BUDDY_CHAT_THINKING, "hello", "", "", 6);
+    buddy_state_reduce(&state, &event, 1000, &action);
+    assert(state.chat.phase == BUDDY_CHAT_NONE && action.type == BUDDY_ACTION_NONE);
+    assert(!state.host_chat);
+
+    event = chat_event(BUDDY_CHAT_THINKING, "hello", "", "", 7);
+    buddy_state_reduce(&state, &event, 1000, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(state.chat.phase == BUDDY_CHAT_THINKING && state.chat_since_ms == 1000);
+    assert(strcmp(state.chat.said, "hello") == 0);
+    /* The same step reported again does not restart the clock. */
+    buddy_state_reduce(&state, &event, 3000, &action);
+    assert(state.chat_since_ms == 1000);
+
+    /* She hands the work over: the clock starts again for the helper. */
+    event = chat_event(BUDDY_CHAT_HELPER, "hello", "", "codex", 7);
+    snprintf(event.chat.stage, sizeof(event.chat.stage), "%s", "asking codex");
+    buddy_state_reduce(&state, &event, 5000, &action);
+    assert(state.chat.phase == BUDDY_CHAT_HELPER && state.chat_since_ms == 5000);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(strcmp(snapshot.chat.agent, "codex") == 0 &&
+           strcmp(snapshot.chat.stage, "asking codex") == 0 && snapshot.chat_since_ms == 5000);
+    /* "Handed over" without saying to whom is just thinking. */
+    event = chat_event(BUDDY_CHAT_HELPER, "hello", "", "", 7);
+    buddy_state_reduce(&state, &event, 6000, &action);
+    assert(state.chat.phase == BUDDY_CHAT_THINKING);
+
+    /* The answer arrives while the screen is dark: it lights up. */
+    state.screen_off = true;
+    event = chat_event(BUDDY_CHAT_DONE, "hello", "hi there", "", 7);
+    event.reply_truncated = true;
+    buddy_state_reduce(&state, &event, 9000, &action);
+    assert(!state.screen_off);
+    assert(state.chat.phase == BUDDY_CHAT_DONE && state.chat.mood == BUDDY_MOOD_HAPPY);
+    assert(strcmp(state.reply, "hi there") == 0 && state.reply_truncated);
+    /* The same answer repeated later does not wake a screen the owner turned off. */
+    state.screen_off = true;
+    buddy_state_reduce(&state, &event, 9500, &action);
+    assert(state.screen_off);
+    state.screen_off = false;
+
+    /* Reading the answer: a repeat keeps the reader open, new words close it. */
+    state.page = BUDDY_PAGE_READER;
+    buddy_state_reduce(&state, &event, 9600, &action);
+    assert(state.page == BUDDY_PAGE_READER);
+    event = chat_event(BUDDY_CHAT_THINKING, "next question", "", "", 7);
+    buddy_state_reduce(&state, &event, 9700, &action);
+    assert(state.page == BUDDY_PAGE_HOME && state.reply[0] == '\0');
+
+    /* A hub that reports the conversation owns the reply: a turn event must not
+     * overwrite her words. */
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.host_chat);
+    event = chat_event(BUDDY_CHAT_FAILED, "next question", "runtime is asleep", "", 7);
+    buddy_state_reduce(&state, &event, 9800, &action);
+    {
+        buddy_event_t heartbeat = test_heartbeat_event(0, 0);
+        buddy_event_t turn = {.type = BUDDY_EVENT_TURN};
+
+        heartbeat.heartbeat.waiting = 0;
+        buddy_state_reduce(&state, &heartbeat, 9900, &action);
+        snprintf(turn.reply, sizeof(turn.reply), "%s", "from a turn event");
+        buddy_state_reduce(&state, &turn, 9901, &action);
+        assert(strcmp(state.reply, "runtime is asleep") == 0);
+        assert(state.chat.phase == BUDDY_CHAT_FAILED);
+    }
+
+    /* The link goes away: nothing of the conversation stays on screen. */
+    state.page = BUDDY_PAGE_READER;
+    event = (buddy_event_t){.type = BUDDY_EVENT_BLE_DISCONNECTED};
+    event.ble.connection_generation = 8;
+    buddy_state_reduce(&state, &event, 10000, &action);
+    assert(state.chat.phase == BUDDY_CHAT_NONE && state.chat.said[0] == '\0');
+    assert(state.reply[0] == '\0' && state.page == BUDDY_PAGE_HOME);
+    assert(!state.host_hub && !state.host_voice && !state.host_chat);
+}
+
+static void test_a_recording_on_its_way_is_not_wiped_by_an_idle_report(void)
+{
+    buddy_state_t state;
+    buddy_action_t action = {0};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t release = {.type = BUDDY_EVENT_KEY_RELEASE, .key = BUDDY_KEY_OK};
+    buddy_event_t event;
+
+    voice_ready_state(&state);
+    event = chat_event(BUDDY_CHAT_DONE, "before", "an earlier answer", "", 7);
+    buddy_state_reduce(&state, &event, 500, &action);
+
+    buddy_state_reduce(&state, &long_ok, 1000, &action);
+    event = voice_event(BUDDY_VOICE_STARTED, 7);
+    buddy_state_reduce(&state, &event, 1100, &action);
+    buddy_state_reduce(&state, &release, 3000, &action);
+    event = voice_event(BUDDY_VOICE_FINISHED, 7);
+    buddy_state_reduce(&state, &event, 3200, &action);
+    /* The earlier turn is gone from the screen the moment the new one leaves. */
+    assert(state.chat.phase == BUDDY_CHAT_SENT && state.reply[0] == '\0');
+    assert(state.chat.said[0] == '\0' && state.chat_since_ms == 3200);
+
+    /* The hub has not noticed yet and still says "nothing going on". */
+    event = chat_event(BUDDY_CHAT_NONE, "", "", "", 7);
+    buddy_state_reduce(&state, &event, 3300, &action);
+    assert(state.chat.phase == BUDDY_CHAT_SENT);
+    /* Then it starts on it; for the owner it is the same wait. */
+    event = chat_event(BUDDY_CHAT_THINKING, "", "", "", 7);
+    buddy_state_reduce(&state, &event, 3600, &action);
+    assert(state.chat.phase == BUDDY_CHAT_THINKING && state.chat_since_ms == 3200);
+    event = chat_event(BUDDY_CHAT_THINKING, "what it heard", "", "", 7);
+    buddy_state_reduce(&state, &event, 4100, &action);
+    assert(strcmp(state.chat.said, "what it heard") == 0 && state.chat_since_ms == 3200);
+
+    /* A recording that was too short leaves the previous turn alone. */
+    event = chat_event(BUDDY_CHAT_DONE, "what it heard", "the answer", "", 7);
+    buddy_state_reduce(&state, &event, 5000, &action);
+    buddy_state_reduce(&state, &long_ok, 6000, &action);
+    buddy_state_reduce(&state, &release, 6100, &action);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 6200, &action);
+    assert(state.chat.phase == BUDDY_CHAT_DONE && strcmp(state.reply, "the answer") == 0);
+    /* And an idle report now does clear it: the hub decides, once nothing is in flight. */
+    event = chat_event(BUDDY_CHAT_NONE, "", "", "", 7);
+    buddy_state_reduce(&state, &event, 6300, &action);
+    assert(state.chat.phase == BUDDY_CHAT_NONE && state.reply[0] == '\0');
+}
+
+static void test_helpers_belong_to_the_connection(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t helpers = {.type = BUDDY_EVENT_HELPERS, .helper_count = 2};
+    buddy_event_t connected = {.type = BUDDY_EVENT_BLE_CONNECTED};
+
+    voice_ready_state(&state);
+    snprintf(helpers.helpers[0].name, sizeof(helpers.helpers[0].name), "%s", "claude");
+    snprintf(helpers.helpers[1].name, sizeof(helpers.helpers[1].name), "%s", "codex");
+    snprintf(helpers.helpers[1].about, sizeof(helpers.helpers[1].about), "%s", "reviews code");
+    helpers.ble.connection_generation = 6;
+    buddy_state_reduce(&state, &helpers, 100, &action);
+    assert(state.helper_count == 0);
+    helpers.ble.connection_generation = 7;
+    buddy_state_reduce(&state, &helpers, 101, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.helper_count == 2 && strcmp(snapshot.helpers[1].name, "codex") == 0 &&
+           strcmp(snapshot.helpers[1].about, "reviews code") == 0);
+    /* A count larger than the table is not trusted. */
+    helpers.helper_count = 99;
+    buddy_state_reduce(&state, &helpers, 102, &action);
+    assert(state.helper_count == BUDDY_HELPER_COUNT);
+    /* An empty list clears them, and so does a different host connecting. */
+    helpers.helper_count = 0;
+    memset(helpers.helpers, 0, sizeof(helpers.helpers));
+    buddy_state_reduce(&state, &helpers, 103, &action);
+    assert(state.helper_count == 0);
+    helpers.helper_count = 1;
+    snprintf(helpers.helpers[0].name, sizeof(helpers.helpers[0].name), "%s", "claude");
+    buddy_state_reduce(&state, &helpers, 104, &action);
+    connected.ble.connection_generation = 8;
+    buddy_state_reduce(&state, &connected, 105, &action);
+    assert(state.helper_count == 0 && state.helpers[0].name[0] == '\0' && !state.host_hub);
+}
+
+static void test_a_notice_remembers_when_it_appeared(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t tick = {.type = BUDDY_EVENT_TICK};
+
+    buddy_state_init(&state, NULL);
+    buddy_state_reduce(&state, &tick, 100, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.message[0] == '\0');
+    /* Holding OK with nobody connected leaves a line saying why nothing happened. */
+    buddy_state_reduce(&state, &long_ok, 5000, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(strcmp(snapshot.message, PT_VOICE_NEED_LINK) == 0);
+    assert(snapshot.message_since_ms == 5000);
+    /* The same line later is still the same notice. */
+    buddy_state_reduce(&state, &tick, 9000, &action);
+    buddy_state_reduce(&state, &long_ok, 9500, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.message_since_ms == 5000);
+    /* Text written from outside the state machine is noticed on the next event. */
+    snprintf(state.message, sizeof(state.message), "%s", PT_MSG_BLE_FAILED);
+    buddy_state_reduce(&state, &tick, 12000, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.message_since_ms == 12000);
+}
+
 int main(void)
 {
     test_offline_initialization();
@@ -1265,11 +1558,11 @@ int main(void)
     test_mismatched_observed_prompt_is_ignored();
     test_nonterminated_prompt_id_is_ignored();
     test_truncated_prompt_id_is_ignored();
-    test_long_up_opens_settings();
+    test_long_up_opens_the_menu();
     test_hold_ok_talks_and_release_sends();
     test_talking_needs_a_voice_capable_host();
-    test_carousel_wraps_in_both_directions();
-    test_guide_scrolls_and_returns_to_settings();
+    test_home_keys_and_the_reader();
+    test_guide_scrolls_and_returns_to_more();
     test_screen_off_wakes_on_key_and_on_attention();
     test_assistant_turn_is_kept_only_while_connected();
     test_protocol_command_events_refresh_the_display();
@@ -1280,11 +1573,15 @@ int main(void)
     test_parsed_heartbeat_approval_serializes_permission();
     test_normal_navigation_and_approval_scroll_are_distinct();
     test_settings_actions_have_separate_confirmations();
-    test_settings_surface_is_complete_and_bounded();
+    test_menu_surface_is_complete_and_bounded();
     test_remote_unpair_confirmation_remembers_ack();
     test_remote_unpair_cannot_replace_a_local_confirmation();
     test_ble_security_events_update_owned_state_and_clear_sensitive_prompt();
     test_stale_security_mailbox_event_cannot_override_latest_link();
     test_new_link_generation_invalidates_sensitive_state_when_disconnect_was_coalesced();
+    test_the_conversation_follows_the_hub();
+    test_a_recording_on_its_way_is_not_wiped_by_an_idle_report();
+    test_helpers_belong_to_the_connection();
+    test_a_notice_remembers_when_it_appeared();
     return 0;
 }

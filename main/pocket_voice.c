@@ -43,6 +43,7 @@ static atomic_bool s_busy;
 static atomic_bool s_stop;
 static atomic_bool s_cancel;
 static atomic_uint s_generation;
+static atomic_uint s_level;
 static bool s_audio_initialized;
 
 static uint32_t voice_now_ms(void)
@@ -180,6 +181,7 @@ static buddy_voice_status_t voice_run(uint32_t generation, uint8_t *storage)
             continue;
         }
         read_failures = 0;
+        atomic_store(&s_level, pocket_voice_level(pcm, VOICE_CHUNK_SAMPLES));
         pocket_voice_packer_push(&packer, pcm, VOICE_CHUNK_SAMPLES, voice_queue_frame, &fifo);
         if (voice_drain(&fifo, generation, VOICE_FRAMES_PER_PASS, &last_progress_ms) ==
             VOICE_DRAIN_LINK_LOST) {
@@ -247,6 +249,7 @@ static void voice_task(void *context)
         if (s_audio_initialized && bsp_audio_sleep() != ESP_OK) {
             ESP_LOGW(TAG, "codec did not go to sleep");
         }
+        atomic_store(&s_level, 0U);
         atomic_store(&s_busy, false);
         voice_report(status, generation);
     }
@@ -293,4 +296,9 @@ void pocket_voice_stop(bool cancel)
         atomic_store(&s_cancel, true);
     }
     atomic_store(&s_stop, true);
+}
+
+uint8_t pocket_voice_level_now(void)
+{
+    return (uint8_t)atomic_load(&s_level);
 }

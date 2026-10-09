@@ -73,19 +73,55 @@ static void test_home_status(void)
     snapshot.connection = BUDDY_CONNECTION_OFFLINE;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_LINKING);
 
+    /* 连着手机中枢：首页跟着和小幽的对话走。 */
     snapshot = connected_snapshot();
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_IDLE);
-    snapshot.running = 2;
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_BUSY);
-    snapshot.waiting = 1;
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_PENDING);
-    snapshot.character = BUDDY_CHARACTER_CELEBRATE;
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_MILESTONE);
-    snapshot.character = BUDDY_CHARACTER_HEART;
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_APPROVED);
+    snapshot.host_hub = true;
+    snapshot.host_chat = true;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_QUIET);
+    assert(!pocket_home_is_talk(POCKET_HOME_QUIET));
+    /* 中枢心跳里的数字说的是别的 App 的通知，不是小幽在忙。 */
+    snapshot.waiting = 2;
+    snapshot.running = 1;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_QUIET);
+    /* 不报告对话的旧版中枢：只能像桌面端那样按数字来。 */
+    snapshot.host_chat = false;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
+    snapshot.host_chat = true;
+    snapshot.waiting = 0;
+    snapshot.running = 0;
+    snapshot.chat.phase = BUDDY_CHAT_SENT;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_SENT);
+    assert(pocket_home_is_talk(POCKET_HOME_SENT));
+    snapshot.chat.phase = BUDDY_CHAT_THINKING;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
+    snapshot.chat.phase = BUDDY_CHAT_HELPER;
+    /* 说“交给别人了”却没说是谁，只能当作还在想。 */
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
+    snprintf(snapshot.chat.agent, sizeof(snapshot.chat.agent), "%s", "codex");
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_HELPER);
+    snapshot.chat.phase = BUDDY_CHAT_DONE;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_ANSWERED);
+    snapshot.chat.phase = BUDDY_CHAT_FAILED;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_FAILED);
+    assert(pocket_home_is_talk(POCKET_HOME_FAILED));
     /* 心跳一旦过期，任何“刚刚发生”的状态都不能继续显示。 */
     snapshot.heartbeat_stale = true;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_LINKING);
+    assert(!pocket_home_is_talk(POCKET_HOME_LINKING));
+
+    /* 连着 Claude 桌面端：没有“对话”，按心跳里的数字和最新回复来。 */
+    snapshot = connected_snapshot();
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_QUIET);
+    snapshot.running = 2;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
+    snapshot.running = 0;
+    snapshot.waiting = 1;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
+    snapshot.waiting = 0;
+    snprintf(snapshot.reply, sizeof(snapshot.reply), "%s", "done");
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_ANSWERED);
+    snapshot.running = 1;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_THINKING);
 }
 
 static void test_pet_mood(void)
@@ -101,11 +137,27 @@ static void test_pet_mood(void)
     assert(pocket_pet_for(&snapshot) == POCKET_PET_IDLE);
     snapshot.running = 1;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
-    snapshot.waiting = 1;
-    assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
-    snapshot.waiting = 0;
+    snapshot.running = 0;
     snapshot.character = BUDDY_CHARACTER_HEART;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
+
+    /* 和小幽的对话：在等的时候忙，答完时是她自己说的表情，没成是沮丧。 */
+    snapshot = connected_snapshot();
+    snapshot.chat.phase = BUDDY_CHAT_SENT;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
+    snapshot.chat.phase = BUDDY_CHAT_HELPER;
+    snprintf(snapshot.chat.agent, sizeof(snapshot.chat.agent), "%s", "codex");
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
+    snapshot.chat.phase = BUDDY_CHAT_DONE;
+    snapshot.chat.mood = BUDDY_MOOD_HAPPY;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
+    snapshot.chat.mood = BUDDY_MOOD_ASK;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
+    snapshot.chat.mood = BUDDY_MOOD_IDLE;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_IDLE);
+    snapshot.chat.phase = BUDDY_CHAT_FAILED;
+    snapshot.chat.mood = BUDDY_MOOD_HAPPY;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_OOPS);
 
     /* 审批：提问 → 发送中 → 结果；拒绝之后不摆出开心的脸。 */
     snapshot = connected_snapshot();
@@ -131,34 +183,54 @@ static void test_pet_mood(void)
     assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
 }
 
-static void expect_tokens(uint64_t tokens, const char *expected)
+static void test_notice(void)
 {
-    char text[24];
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
 
-    assert(pocket_format_tokens(tokens, text, sizeof(text)) == strlen(expected));
-    assert(strcmp(text, expected) == 0);
+    assert(!pocket_notice_visible(NULL));
+    assert(!pocket_notice_visible(&snapshot));
+    /* Claude 桌面端的状态行一直显示。 */
+    snprintf(snapshot.message, sizeof(snapshot.message), "%s", "approve: Bash");
+    snapshot.message_since_ms = 1000;
+    snapshot.uptime_ms = 1000 + 3600000;
+    assert(pocket_notice_visible(&snapshot));
+    /* 连着手机中枢时它只是一条提示：出现六秒就收起。 */
+    snapshot.host_hub = true;
+    assert(!pocket_notice_visible(&snapshot));
+    snapshot.uptime_ms = 1000 + 5999;
+    assert(pocket_notice_visible(&snapshot));
+    snapshot.uptime_ms = 1000 + 6000;
+    assert(!pocket_notice_visible(&snapshot));
+    /* 计时器回绕时宁可多显示一会儿。 */
+    snapshot.uptime_ms = 500;
+    assert(pocket_notice_visible(&snapshot));
 }
 
-static void test_tokens(void)
+static void test_helper_colour(void)
 {
-    char tiny[4];
+    /* 认识的名字颜色固定，不分大小写。 */
+    assert(pocket_helper_color("claude") == 0xE08A63u);
+    assert(pocket_helper_color("Claude") == 0xE08A63u);
+    assert(pocket_helper_color("CODEX") == 0x6FD3B0u);
+    /* 没有名字就是小幽自己。 */
+    assert(pocket_helper_color(NULL) == POCKET_COLOR_XIAOYOU);
+    assert(pocket_helper_color("") == POCKET_COLOR_XIAOYOU);
+    /* 不认识的名字：同一个名字永远同一个颜色，而且不会撞上小幽和认识的那两个。 */
+    {
+        static const char *const names[] = {
+            "local", "gemini", "pc", "\xE4\xB9\xA6\xE6\x88\xBF\xE7\x94\xB5\xE8\x84\x91",
+            "claude-code", "codex2", "a", "b",
+        };
+        size_t index;
 
-    expect_tokens(0, "0");
-    expect_tokens(999, "999");
-    expect_tokens(1000, "1,000");
-    expect_tokens(9999, "9,999");
-    expect_tokens(10000, "1.0\xE4\xB8\x87");
-    expect_tokens(31200, "3.1\xE4\xB8\x87");
-    expect_tokens(99999, "9.9\xE4\xB8\x87");
-    expect_tokens(184502, "18.4\xE4\xB8\x87");
-    expect_tokens(99999999, "9999.9\xE4\xB8\x87");
-    expect_tokens(100000000, "1.0\xE4\xBA\xBF");
-    expect_tokens(1234567890, "12.3\xE4\xBA\xBF");
-    /* 缓冲区不够时截断但保持 NUL 结尾。 */
-    assert(pocket_format_tokens(1234567, tiny, sizeof(tiny)) == 3);
-    assert(tiny[3] == '\0');
-    assert(pocket_format_tokens(1, NULL, 8) == 0);
-    assert(pocket_format_tokens(1, tiny, 0) == 0);
+        for (index = 0; index < sizeof(names) / sizeof(names[0]); ++index) {
+            uint32_t color = pocket_helper_color(names[index]);
+
+            assert(color == pocket_helper_color(names[index]));
+            assert(color != POCKET_COLOR_XIAOYOU && color != 0xE08A63u && color != 0x6FD3B0u);
+        }
+        assert(pocket_helper_color("PC") == pocket_helper_color("pc"));
+    }
 }
 
 static void test_clock(void)
@@ -185,24 +257,30 @@ static void test_clock(void)
     assert(strcmp(text, "00:13") == 0);
 }
 
-static void expect_uptime(uint64_t ms, const char *expected)
+static void test_elapsed_and_passkey(void)
 {
-    char text[32];
+    char text[16];
+    char tiny[4];
 
-    assert(pocket_format_uptime(ms, text, sizeof(text)) == strlen(expected));
-    assert(strcmp(text, expected) == 0);
-}
-
-static void test_uptime_and_passkey(void)
-{
-    char text[8];
-
-    expect_uptime(0, "\xE4\xB8\x8D\xE5\x88\xB0" "1" "\xE5\x88\x86\xE9\x92\x9F");
-    expect_uptime(59999, "\xE4\xB8\x8D\xE5\x88\xB0" "1" "\xE5\x88\x86\xE9\x92\x9F");
-    expect_uptime(12 * 60000ULL, "12\xE5\x88\x86\xE9\x92\x9F");
-    expect_uptime(185 * 60000ULL, "3\xE5\xB0\x8F\xE6\x97\xB6" "05\xE5\x88\x86");
-    expect_uptime((2 * 1440ULL + 4 * 60 + 30) * 60000ULL,
-                  "2\xE5\xA4\xA9" "4\xE5\xB0\x8F\xE6\x97\xB6");
+    assert(pocket_format_elapsed(1000, 1000, text, sizeof(text)) == 4);
+    assert(strcmp(text, "0:00") == 0);
+    assert(pocket_format_elapsed(1000, 13400, text, sizeof(text)) == 4);
+    assert(strcmp(text, "0:12") == 0);
+    assert(pocket_format_elapsed(0, 75000, text, sizeof(text)) == 4);
+    assert(strcmp(text, "1:15") == 0);
+    assert(pocket_format_elapsed(0, 12 * 60000ULL + 5000, text, sizeof(text)) == 5);
+    assert(strcmp(text, "12:05") == 0);
+    /* 封顶，不会越写越宽。 */
+    assert(pocket_format_elapsed(0, 5ULL * 3600000ULL, text, sizeof(text)) == 5);
+    assert(strcmp(text, "99:59") == 0);
+    /* 起点在“现在”之后（计时器回绕）按 0 算。 */
+    assert(pocket_format_elapsed(5000, 1000, text, sizeof(text)) == 4);
+    assert(strcmp(text, "0:00") == 0);
+    /* 缓冲区不够时截断但保持 NUL 结尾。 */
+    assert(pocket_format_elapsed(0, 75000, tiny, sizeof(tiny)) == 3);
+    assert(tiny[3] == '\0');
+    assert(pocket_format_elapsed(0, 1, NULL, 8) == 0);
+    assert(pocket_format_elapsed(0, 1, tiny, 0) == 0);
 
     assert(pocket_format_passkey(123456, text, sizeof(text)) == 7);
     assert(strcmp(text, "123 456") == 0);
@@ -218,9 +296,10 @@ int main(void)
     test_voice_view();
     test_home_status();
     test_pet_mood();
-    test_tokens();
+    test_notice();
+    test_helper_colour();
     test_clock();
-    test_uptime_and_passkey();
+    test_elapsed_and_passkey();
     puts("pocket_view: PASS");
     return 0;
 }

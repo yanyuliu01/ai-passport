@@ -26,3 +26,5 @@ esp_err_t pocket_voice_init(pocket_voice_event_cb_t callback, void *context);
 esp_err_t pocket_voice_start(uint32_t connection_generation);
 // 结束当前这一轮。cancel 为 true 时丢弃录音，不交给手机。没有在录时什么也不做。
 void pocket_voice_stop(bool cancel);
+// 麦克风此刻的音量，0 到 100；没有在录时是 0。任何任务都可以调用。
+uint8_t pocket_voice_level_now(void);

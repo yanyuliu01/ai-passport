@@ -401,6 +401,117 @@ static int buddy_parse_evt(const cJSON *object, buddy_event_t *event)
     return (int)event->type;
 }
 
+static bool buddy_copy_field(const cJSON *object, const char *name, char *destination,
+                             size_t destination_size, bool *truncated)
+{
+    const char *value;
+    size_t length;
+
+    if (!buddy_json_optional_string(object, name, &value, &length)) {
+        return false;
+    }
+    /* A missing field reads as empty. */
+    return buddy_copy_utf8(destination, destination_size, value, length, truncated);
+}
+
+/* {"cmd":"chat","phase":"thinking|helper|done|failed|idle","said":"...",
+ *  "reply":"...","agent":"...","stage":"...","mood":"idle|busy|ask|happy|oops"}
+ * A hub host reports where the conversation with Xiaoyou stands. Everything
+ * except phase is optional. Text that does not fit is cut on a character
+ * boundary; only the reply says so, because only the reply is shown in full. */
+static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
+{
+    static const struct {
+        const char *name;
+        buddy_chat_phase_t phase;
+    } phases[] = {
+        {"idle", BUDDY_CHAT_NONE},     {"thinking", BUDDY_CHAT_THINKING},
+        {"helper", BUDDY_CHAT_HELPER}, {"done", BUDDY_CHAT_DONE},
+        {"failed", BUDDY_CHAT_FAILED},
+    };
+    static const struct {
+        const char *name;
+        buddy_mood_t mood;
+    } moods[] = {
+        {"idle", BUDDY_MOOD_IDLE},   {"busy", BUDDY_MOOD_BUSY}, {"ask", BUDDY_MOOD_ASK},
+        {"happy", BUDDY_MOOD_HAPPY}, {"oops", BUDDY_MOOD_OOPS},
+    };
+    const char *phase;
+    const char *mood;
+    size_t phase_length;
+    size_t mood_length;
+    size_t index;
+    bool known = false;
+
+    if (!buddy_json_optional_string(object, "phase", &phase, &phase_length) || phase == NULL ||
+        !buddy_json_optional_string(object, "mood", &mood, &mood_length)) {
+        return false;
+    }
+    for (index = 0; index < sizeof(phases) / sizeof(phases[0]); ++index) {
+        if (strcmp(phase, phases[index].name) == 0) {
+            event->chat.phase = phases[index].phase;
+            known = true;
+        }
+    }
+    if (!known) {
+        return false;
+    }
+    /* An unknown mood is not worth refusing the whole update for. */
+    event->chat.mood = BUDDY_MOOD_IDLE;
+    for (index = 0; mood != NULL && index < sizeof(moods) / sizeof(moods[0]); ++index) {
+        if (strcmp(mood, moods[index].name) == 0) {
+            event->chat.mood = moods[index].mood;
+        }
+    }
+    if (!buddy_copy_field(object, "said", event->chat.said, sizeof(event->chat.said), NULL) ||
+        !buddy_copy_field(object, "agent", event->chat.agent, sizeof(event->chat.agent),
+                          NULL) ||
+        !buddy_copy_field(object, "stage", event->chat.stage, sizeof(event->chat.stage),
+                          NULL) ||
+        !buddy_copy_field(object, "reply", event->reply, sizeof(event->reply),
+                          &event->reply_truncated)) {
+        return false;
+    }
+    event->type = BUDDY_EVENT_CHAT;
+    return true;
+}
+
+/* {"cmd":"helpers","list":[{"name":"claude","about":"..."}, ...]}
+ * The agents Xiaoyou can hand work to. Entries beyond BUDDY_HELPER_COUNT and
+ * entries without a name are left out; an empty list clears what was known. */
+static bool buddy_parse_helpers(const cJSON *object, buddy_event_t *event)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
+    const cJSON *item;
+
+    if (list == NULL || !cJSON_IsArray(list)) {
+        return false;
+    }
+    cJSON_ArrayForEach(item, list)
+    {
+        buddy_helper_t *helper;
+
+        if (event->helper_count >= BUDDY_HELPER_COUNT) {
+            break;
+        }
+        if (!cJSON_IsObject(item)) {
+            return false;
+        }
+        helper = &event->helpers[event->helper_count];
+        if (!buddy_copy_field(item, "name", helper->name, sizeof(helper->name), NULL) ||
+            !buddy_copy_field(item, "about", helper->about, sizeof(helper->about), NULL)) {
+            return false;
+        }
+        if (helper->name[0] != '\0') {
+            ++event->helper_count;
+        } else {
+            memset(helper, 0, sizeof(*helper));
+        }
+    }
+    event->type = BUDDY_EVENT_HELPERS;
+    return true;
+}
+
 static bool buddy_is_unsupported_folder_command(const char *command)
 {
     return strcmp(command, "char_begin") == 0 || strcmp(command, "file") == 0 ||
@@ -556,6 +667,10 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
         event->host_voice =
             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "voice")) != 0;
         result = (int)event->type;
+    } else if (strcmp(command, "chat") == 0) {
+        result = buddy_parse_chat(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "helpers") == 0) {
+        result = buddy_parse_helpers(root, event) ? (int)event->type : result;
     } else if (buddy_is_unsupported_folder_command(command)) {
         result = BUDDY_EVENT_UNSUPPORTED_COMMAND;
     } else {
@@ -729,6 +844,15 @@ int buddy_protocol_command_ack_json(char *json, size_t size, const char *command
         buddy_writer_json_string(&writer, error, error_length);
     }
     buddy_writer_literal(&writer, "}\n");
+    return buddy_writer_finish(&writer);
+}
+
+int buddy_protocol_hub_ack_json(char *json, size_t size)
+{
+    buddy_json_writer_t writer;
+
+    buddy_writer_init(&writer, json, size);
+    buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

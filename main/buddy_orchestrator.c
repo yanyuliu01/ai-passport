@@ -87,8 +87,14 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
 
     if (event.type == BUDDY_EVENT_HOST_HELLO) {
         buddy_state_reduce(state, &event, now_ms, action);
-        /* The acknowledgement tells the host this firmware understands "hub". */
-        (void)buddy_orchestrator_send_ack(ops, "hub", true, NULL, connection_generation);
+        /* The acknowledgement tells the host this firmware understands "hub",
+         * and that it takes the conversation as "chat" messages. */
+        {
+            char json[BUDDY_PROTOCOL_TX_MAX];
+            int ack_length = buddy_protocol_hub_ack_json(json, sizeof(json));
+
+            (void)buddy_orchestrator_send_json(ops, json, ack_length, connection_generation);
+        }
         return true;
     }
 

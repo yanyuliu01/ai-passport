@@ -159,12 +159,39 @@ static buddy_ui_snapshot_t live_snapshot(void)
     snap.epoch_seconds = 1790000000;
     snap.timezone_offset_seconds = 28800;
     snap.time_received_ms = snap.uptime_ms;
-    snap.total = 3;
-    snap.tokens = 184502;
-    snap.tokens_today = 31200;
-    snap.approval_count = 42;
-    snap.denial_count = 3;
     return snap;
+}
+
+/* Connected to the phone hub: Xiaoyou is on the other end. */
+static buddy_ui_snapshot_t hub_snapshot(void)
+{
+    buddy_ui_snapshot_t snap = live_snapshot();
+
+    snap.host_hub = true;
+    snap.host_chat = true;
+    snap.helper_count = 3;
+    (void)snprintf(snap.helpers[0].name, BUDDY_AGENT_MAX, "%s", "claude");
+    (void)snprintf(snap.helpers[0].about, BUDDY_HELPER_ABOUT_MAX, "%s", "日常问答、查资料");
+    (void)snprintf(snap.helpers[1].name, BUDDY_AGENT_MAX, "%s", "codex");
+    (void)snprintf(snap.helpers[1].about, BUDDY_HELPER_ABOUT_MAX, "%s",
+                   "看代码、给第二意见，默认只读");
+    (void)snprintf(snap.helpers[2].name, BUDDY_AGENT_MAX, "%s", "书房电脑");
+    (void)snprintf(snap.helpers[2].about, BUDDY_HELPER_ABOUT_MAX, "%s", "那台电脑上的事");
+    return snap;
+}
+
+#define SAID "retry 那个函数重试次数老不对，帮我看看"
+#define ANSWER \
+    "找到了：每次失败计数加了 2，所以 n=3 只会试 2 次。把 attempts += 2 改成 += 1 就好。" \
+    "另外最后抛错时把原始异常丢了，排查会看不出原因，要不要我一起改？\n\n" \
+    "改法也简单：把 raise RuntimeError('gave up') 接上 from 原来的异常就行。" \
+    "我没有真的运行过，只是读代码得出的结论。如果你想保险一点，我可以让 codex 在只读模式下" \
+    "把调用这个函数的地方都过一遍，看看有没有哪里依赖了现在这个“只试两次”的行为。" \
+    "那样大概要一两分钟，结果我会总结给你。"
+
+static void set_text_field(char *field, size_t size, const char *text)
+{
+    (void)snprintf(field, size, "%s", text);
 }
 
 int main(int argc, char **argv)
@@ -190,6 +217,7 @@ int main(int argc, char **argv)
 
     pocket_ui_init();
 
+    /* ---- not connected, pairing ---- */
     snap = base_snapshot();
     show("01_home_waiting", &snap);
     snap.ble_enabled = false;
@@ -210,71 +238,92 @@ int main(int argc, char **argv)
     snap.heartbeat_stale = true;
     show("05_home_linking", &snap);
 
-    snap = live_snapshot();
-    show("06_home_idle", &snap);
-    snap.running = 1;
-    snap.character = BUDDY_CHARACTER_BUSY;
-    (void)snprintf(snap.message, sizeof(snap.message), "%s",
-                   "正在重构支付模块的重试逻辑，并补充单元测试覆盖边界情况");
-    show("07_home_busy", &snap);
-    snap.waiting = 1;
-    (void)snprintf(snap.message, sizeof(snap.message), "%s", "approve: Bash");
-    show("08_home_pending", &snap);
+    /* ---- the conversation with Xiaoyou (phone hub) ---- */
+    snap = hub_snapshot();
+    show("06_home_quiet", &snap);
+    /* Notifications from other apps do not interrupt; the page only mentions them. */
+    snap.waiting = 2;
+    show("06b_home_notices", &snap);
     snap.waiting = 0;
-    snap.character = BUDDY_CHARACTER_HEART;
-    show("09_home_approved", &snap);
 
-    snap = live_snapshot();
-    snap.page = BUDDY_PAGE_REPLY;
-    show("10_reply_empty", &snap);
-    (void)snprintf(snap.reply, sizeof(snap.reply), "%s",
-                   "已经把重试逻辑改成指数退避，最多 5 次，并为超时、限流、网络中断三种情况各补了一个测试。"
-                   "全部 42 个用例通过。下一步建议把 retry_policy 的配置项写进 README，"
-                   "然后我可以继续处理 webhook 的幂等问题，需要我现在开始吗？");
+    snap.voice_phase = BUDDY_VOICE_PREPARING;
+    show("07_voice_preparing", &snap);
+    snap.voice_phase = BUDDY_VOICE_LISTENING;
+    snap.voice_listening_since_ms = snap.uptime_ms - 7300U;
+    {
+        static const uint8_t levels[] = {8, 20, 35, 60, 42, 75, 55, 30, 62, 88, 48, 22, 40, 15, 6};
+        size_t step;
+
+        /* The level bars fill from the right as samples arrive. */
+        for (step = 0; step < sizeof(levels); ++step) {
+            snap.voice_level = levels[step];
+            snap.uptime_ms += 100U;
+            pocket_ui_render(&snap);
+        }
+    }
+    show("08_voice_listening", &snap);
+    snap.voice_phase = BUDDY_VOICE_SENDING;
+    show("09_voice_sending", &snap);
+
+    snap = hub_snapshot();
+    snap.chat.phase = BUDDY_CHAT_SENT;
+    snap.chat.mood = BUDDY_MOOD_BUSY;
+    show("10_home_sent", &snap);
+    snap.chat.phase = BUDDY_CHAT_THINKING;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
+    show("11_home_thinking", &snap);
+    snap.chat.phase = BUDDY_CHAT_HELPER;
+    set_text_field(snap.chat.agent, sizeof(snap.chat.agent), "codex");
+    set_text_field(snap.chat.stage, sizeof(snap.chat.stage), "这个我让 codex 仔细看一遍，稍等");
+    snap.chat_since_ms = snap.uptime_ms - 12400U;
+    show("12_home_helper", &snap);
+    set_text_field(snap.chat.agent, sizeof(snap.chat.agent), "书房电脑");
+    snap.chat.stage[0] = '\0';
+    snap.chat_since_ms = snap.uptime_ms - 75000U;
+    show("13_home_helper_other", &snap);
+
+    snap = hub_snapshot();
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    snap.chat.mood = BUDDY_MOOD_HAPPY;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
+    set_text_field(snap.reply, sizeof(snap.reply), ANSWER);
+    show("14_home_answered", &snap);
+    snap.chat.mood = BUDDY_MOOD_ASK;
+    set_text_field(snap.reply, sizeof(snap.reply), "改好了。要不要我顺手把测试也跑一遍？");
+    show("15_home_answered_short", &snap);
+    set_text_field(snap.message, sizeof(snap.message), "按住确认键再说话哦");
+    snap.message_since_ms = snap.uptime_ms - 1000U;
+    show("16_home_notice", &snap);
+    snap.message[0] = '\0';
+
+    snap.chat.phase = BUDDY_CHAT_FAILED;
+    snap.chat.mood = BUDDY_MOOD_OOPS;
+    set_text_field(snap.reply, sizeof(snap.reply), "连不上 Runtime：电脑可能睡着了");
+    show("17_home_failed", &snap);
+
+    snap = hub_snapshot();
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    snap.chat.mood = BUDDY_MOOD_HAPPY;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
+    set_text_field(snap.reply, sizeof(snap.reply), ANSWER);
     snap.reply_truncated = true;
-    show("11_reply_long", &snap);
-    (void)snprintf(snap.reply, sizeof(snap.reply), "%s",
+    snap.page = BUDDY_PAGE_READER;
+    show("18_reader_top", &snap);
+    pocket_ui_scroll(60);
+    save("19_reader_scrolled");
+    pocket_ui_scroll(60);
+    save("20_reader_end");
+    set_text_field(snap.reply, sizeof(snap.reply),
                    "Done. All 42 tests pass (pytest -q). 龘 is outside the font.");
     snap.reply_truncated = false;
-    show("12_reply_latin_and_missing_glyph", &snap);
+    show("21_reader_latin_and_missing_glyph", &snap);
 
-    snap = live_snapshot();
-    snap.page = BUDDY_PAGE_ACTIVITY;
-    show("13_activity_empty", &snap);
-    (void)snprintf(snap.entries[0], BUDDY_ENTRY_MAX, "%s", "10:42 git push origin feature/retry");
-    (void)snprintf(snap.entries[1], BUDDY_ENTRY_MAX, "%s", "10:41 运行 yarn test，42 个用例全部通过");
-    (void)snprintf(snap.entries[2], BUDDY_ENTRY_MAX, "%s", "10:39 编辑 src/payments/retry.ts");
-    (void)snprintf(snap.entries[3], BUDDY_ENTRY_MAX, "%s", "10:36 读取 README.md");
-    show("14_activity", &snap);
-
-    snap.page = BUDDY_PAGE_USAGE;
-    show("15_usage", &snap);
-    snap.battery_available = false;
-    snap.tokens = 123456789;
-    snap.tokens_today = 0;
-    show("16_usage_no_battery", &snap);
-
-    snap = live_snapshot();
-    snap.page = BUDDY_PAGE_SETTINGS;
-    for (index = 0; index < BUDDY_SETTINGS_COUNT; index += 3) {
-        char name[32];
-
-        snap.settings_selection = (buddy_settings_item_t)index;
-        (void)snprintf(name, sizeof(name), "17_settings_%d", index);
-        show(name, &snap);
-    }
-    snap.page = BUDDY_PAGE_GUIDE;
-    show("18_guide_top", &snap);
-    pocket_ui_scroll(60);
-    pocket_ui_scroll(60);
-    save("19_guide_scrolled");
-
-    snap = live_snapshot();
-    snap.waiting = 1;
+    /* ---- something needs a yes or no ---- */
+    snap = hub_snapshot();
     (void)snprintf(snap.prompt_id, sizeof(snap.prompt_id), "%s", "req_abc123");
     (void)snprintf(snap.prompt_tool, sizeof(snap.prompt_tool), "%s", "Bash");
     (void)snprintf(snap.prompt_hint, sizeof(snap.prompt_hint), "%s", "rm -rf /tmp/foo");
-    show("20_approval_short", &snap);
+    show("22_approval_short", &snap);
     (void)snprintf(snap.prompt_id, sizeof(snap.prompt_id), "%s", "req_long");
     (void)snprintf(snap.prompt_tool, sizeof(snap.prompt_tool), "%s",
                    "mcp__filesystem__write_file_with_a_long_name");
@@ -283,43 +332,77 @@ int main(int argc, char **argv)
                    "yarn install --frozen-lockfile && yarn build && yarn test --coverage && "
                    "把构建产物上传到 s3://releases/2026-10/ 并通知 #deploy 频道，完成后清理临时目录");
     snap.prompt_hint_truncated = true;
-    show("21_approval_long", &snap);
+    show("23_approval_long", &snap);
     pocket_ui_scroll(-48);
-    save("22_approval_long_scrolled");
+    save("24_approval_long_scrolled");
     snap.approval_locked = true;
     snap.permission_decision = BUDDY_PERMISSION_ONCE;
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENDING;
-    show("23_approval_sending", &snap);
+    show("25_approval_sending", &snap);
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENT;
-    show("24_approval_sent", &snap);
+    show("26_approval_sent", &snap);
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_FAILED;
-    show("25_approval_failed", &snap);
+    show("27_approval_failed", &snap);
     snap.permission_decision = BUDDY_PERMISSION_DENY;
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENT;
-    show("25b_approval_denied", &snap);
+    show("28_approval_denied", &snap);
 
-    snap = live_snapshot();
-    snap.page = BUDDY_PAGE_SETTINGS;
+    /* ---- the menu and what is under it ---- */
+    snap = hub_snapshot();
+    (void)snprintf(snap.entries[0], BUDDY_ENTRY_MAX, "%s", "10:42 Claude：部署完成，3 个服务已更新");
+    (void)snprintf(snap.entries[1], BUDDY_ENTRY_MAX, "%s", "10:41 小幽：找到了，计数多加了 1");
+    snap.page = BUDDY_PAGE_MENU;
+    for (index = 0; index < BUDDY_MENU_COUNT; index += 3) {
+        char name[32];
+
+        snap.menu_selection = (buddy_menu_item_t)index;
+        (void)snprintf(name, sizeof(name), "29_menu_%d", index);
+        show(name, &snap);
+    }
+    snap.page = BUDDY_PAGE_NOTICES;
+    show("30_notices", &snap);
+    memset(snap.entries, 0, sizeof(snap.entries));
+    show("31_notices_empty", &snap);
+    snap.page = BUDDY_PAGE_HELPERS;
+    show("32_helpers", &snap);
+    snap.helper_count = 0;
+    show("33_helpers_empty", &snap);
+    snap.page = BUDDY_PAGE_MORE;
+    snap.more_selection = BUDDY_MORE_GUIDE;
+    show("34_more", &snap);
+    snap.more_selection = BUDDY_MORE_FACTORY_RESET;
+    show("35_more_destructive", &snap);
+    snap.page = BUDDY_PAGE_GUIDE;
+    show("36_guide_top", &snap);
+    pocket_ui_scroll(60);
+    pocket_ui_scroll(60);
+    save("37_guide_scrolled");
+
+    snap = hub_snapshot();
+    snap.page = BUDDY_PAGE_MORE;
     snap.confirmation = BUDDY_CONFIRM_UNPAIR;
     snap.confirmation_pending = true;
-    show("26_confirm_unpair", &snap);
+    show("38_confirm_unpair", &snap);
     snap.confirmation = BUDDY_CONFIRM_FACTORY_RESET;
-    show("27_confirm_factory", &snap);
+    show("39_confirm_factory", &snap);
 
+    /* ---- connected to the Claude desktop app instead of the hub ---- */
     snap = live_snapshot();
-    snap.voice_phase = BUDDY_VOICE_PREPARING;
-    show("28_voice_preparing", &snap);
-    snap.voice_phase = BUDDY_VOICE_LISTENING;
-    snap.voice_listening_since_ms = snap.uptime_ms - 7300U;
-    show("29_voice_listening", &snap);
-    snap.voice_phase = BUDDY_VOICE_SENDING;
-    show("30_voice_sending", &snap);
-    snap = live_snapshot();
-    (void)snprintf(snap.message, sizeof(snap.message), "%s",
-                   "这个连接不能传语音\n要连手机上的小幽中枢");
-    show("31_home_voice_no_host", &snap);
-    (void)snprintf(snap.message, sizeof(snap.message), "%s", "发出去啦，等小幽回话");
-    show("32_home_voice_sent", &snap);
+    show("40_desktop_quiet", &snap);
+    snap.running = 1;
+    snap.character = BUDDY_CHARACTER_BUSY;
+    set_text_field(snap.message, sizeof(snap.message),
+                   "正在重构支付模块的重试逻辑，并补充单元测试覆盖边界情况");
+    show("41_desktop_busy", &snap);
+    snap.running = 0;
+    snap.message[0] = '\0';
+    set_text_field(snap.reply, sizeof(snap.reply),
+                   "已经把重试逻辑改成指数退避，最多 5 次，并为超时、限流、网络中断三种情况各补了一个测试。"
+                   "全部 42 个用例通过。");
+    show("42_desktop_reply", &snap);
+    snap.reply[0] = '\0';
+    set_text_field(snap.message, sizeof(snap.message), "这个连接不能传语音");
+    show("43_desktop_notice", &snap);
 
     {
         lv_mem_monitor_t monitor;

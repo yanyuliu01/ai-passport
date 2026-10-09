@@ -14,8 +14,15 @@
 #define BUDDY_COMMAND_MAX 32
 #define BUDDY_HINT_MAX 320
 #define BUDDY_JSON_LINE_MAX 4096
-/* Latest assistant reply kept for display; bytes, cut on a UTF-8 boundary. */
-#define BUDDY_REPLY_MAX 420
+/* Latest assistant reply kept for display; bytes, cut on a UTF-8 boundary.
+ * About 320 Chinese characters: the home page shows the beginning, the reader
+ * page scrolls through all of it. */
+#define BUDDY_REPLY_MAX 960
+/* The conversation with Xiaoyou as a hub host reports it (see buddy_chat_t). */
+#define BUDDY_AGENT_MAX 24
+#define BUDDY_STAGE_MAX 160
+#define BUDDY_HELPER_COUNT 4
+#define BUDDY_HELPER_ABOUT_MAX 64
 
 typedef enum {
     BUDDY_CONNECTION_OFFLINE,
@@ -37,16 +44,15 @@ typedef enum {
 } buddy_character_t;
 
 typedef enum {
-    BUDDY_PAGE_HOME,
-    BUDDY_PAGE_REPLY,
-    BUDDY_PAGE_ACTIVITY,
-    BUDDY_PAGE_USAGE,
-    BUDDY_PAGE_SETTINGS,
+    BUDDY_PAGE_HOME,    /* the conversation: Xiaoyou, what was said, her answer */
+    BUDDY_PAGE_READER,  /* the whole answer, scrolled with UP and DOWN */
+    BUDDY_PAGE_MENU,    /* long press UP */
+    BUDDY_PAGE_NOTICES, /* recent entries from the host */
+    BUDDY_PAGE_HELPERS, /* the agents Xiaoyou can hand work to */
+    BUDDY_PAGE_MORE,    /* rarely used and destructive settings */
     BUDDY_PAGE_GUIDE,
+    BUDDY_PAGE_COUNT,
 } buddy_page_t;
-
-/* HOME..USAGE form the browsable carousel; SETTINGS and GUIDE sit outside it. */
-#define BUDDY_PAGE_CAROUSEL_COUNT 4
 
 typedef enum {
     BUDDY_CONFIRM_NONE,
@@ -55,15 +61,41 @@ typedef enum {
 } buddy_confirmation_t;
 
 typedef enum {
-    BUDDY_SETTINGS_BRIGHTNESS,
-    BUDDY_SETTINGS_BLE,
-    BUDDY_SETTINGS_GUIDE,
-    BUDDY_SETTINGS_SCREEN_OFF,
-    BUDDY_SETTINGS_UNPAIR,
-    BUDDY_SETTINGS_FACTORY_RESET,
-    BUDDY_SETTINGS_BACK,
-    BUDDY_SETTINGS_COUNT,
-} buddy_settings_item_t;
+    BUDDY_MENU_NOTICES,
+    BUDDY_MENU_HELPERS,
+    BUDDY_MENU_BRIGHTNESS,
+    BUDDY_MENU_BLE,
+    BUDDY_MENU_SCREEN_OFF,
+    BUDDY_MENU_MORE,
+    BUDDY_MENU_BACK,
+    BUDDY_MENU_COUNT,
+} buddy_menu_item_t;
+
+typedef enum {
+    BUDDY_MORE_GUIDE,
+    BUDDY_MORE_UNPAIR,
+    BUDDY_MORE_FACTORY_RESET,
+    BUDDY_MORE_BACK,
+    BUDDY_MORE_COUNT,
+} buddy_more_item_t;
+
+/* Where a turn of the conversation with Xiaoyou stands. */
+typedef enum {
+    BUDDY_CHAT_NONE,     /* nothing has been said on this connection */
+    BUDDY_CHAT_SENT,     /* a recording left the device; the host has not said anything yet */
+    BUDDY_CHAT_THINKING, /* Xiaoyou has the question */
+    BUDDY_CHAT_HELPER,   /* she handed work to another agent (chat.agent) */
+    BUDDY_CHAT_DONE,     /* her answer is in reply */
+    BUDDY_CHAT_FAILED,   /* the turn did not work; reply says why */
+} buddy_chat_phase_t;
+
+typedef enum {
+    BUDDY_MOOD_IDLE,
+    BUDDY_MOOD_BUSY,
+    BUDDY_MOOD_ASK,
+    BUDDY_MOOD_HAPPY,
+    BUDDY_MOOD_OOPS,
+} buddy_mood_t;
 
 #define BUDDY_BRIGHTNESS_LEVELS 5U
 
@@ -98,6 +130,8 @@ typedef enum {
     BUDDY_EVENT_KEY_RELEASE,
     BUDDY_EVENT_HOST_HELLO,
     BUDDY_EVENT_VOICE,
+    BUDDY_EVENT_CHAT,
+    BUDDY_EVENT_HELPERS,
 } buddy_event_type_t;
 
 typedef enum {
@@ -180,6 +214,22 @@ typedef struct {
     int32_t timezone_offset_seconds;
 } buddy_time_sync_t;
 
+/* One turn with Xiaoyou, as a hub host reports it. Her words travel in the
+ * event's (and the state's) reply field. */
+typedef struct {
+    buddy_chat_phase_t phase;
+    buddy_mood_t mood;
+    char said[BUDDY_MESSAGE_MAX];  /* what the owner said; empty until transcribed */
+    char agent[BUDDY_AGENT_MAX];   /* who is working on it, when it is not Xiaoyou herself */
+    char stage[BUDDY_STAGE_MAX];   /* what she said when she handed the work over */
+} buddy_chat_t;
+
+/* An agent Xiaoyou can hand work to. */
+typedef struct {
+    char name[BUDDY_AGENT_MAX];
+    char about[BUDDY_HELPER_ABOUT_MAX];
+} buddy_helper_t;
+
 typedef struct {
     char name[BUDDY_COMMAND_MAX];
     char value[BUDDY_MESSAGE_MAX];
@@ -227,6 +277,9 @@ typedef struct {
     bool reply_truncated;
     buddy_voice_status_t voice_status;
     bool host_voice;
+    buddy_chat_t chat;
+    buddy_helper_t helpers[BUDDY_HELPER_COUNT];
+    unsigned helper_count;
 } buddy_event_t;
 
 typedef struct {
@@ -273,11 +326,24 @@ typedef struct {
     bool heartbeat_stale;
     bool confirmation_pending;
     buddy_confirmation_t confirmation;
-    buddy_settings_item_t settings_selection;
+    buddy_menu_item_t menu_selection;
+    buddy_more_item_t more_selection;
     bool screen_off;
     uint8_t brightness_level;
     char reply[BUDDY_REPLY_MAX];
     bool reply_truncated;
+    buddy_chat_t chat;
+    /* When the current phase of the turn began; the home page counts up from it. */
+    uint64_t chat_since_ms;
+    buddy_helper_t helpers[BUDDY_HELPER_COUNT];
+    unsigned helper_count;
+    /* The host introduced itself as a hub (the phone), not the Claude desktop app. */
+    bool host_hub;
+    /* The hub reports the conversation itself; heartbeat counters are then only
+     * about notifications and say nothing about Xiaoyou being busy. */
+    bool host_chat;
+    /* When the text in message last changed. */
+    uint64_t message_since_ms;
     bool prompt_hint_truncated;
     uint64_t approval_count;
     uint64_t denial_count;
@@ -297,4 +363,6 @@ typedef struct {
     uint16_t battery_mv;
     buddy_voice_phase_t voice_phase;
     uint64_t voice_listening_since_ms;
+    /* Microphone level right now, 0 to 100; filled in by the application task. */
+    uint8_t voice_level;
 } buddy_ui_snapshot_t;

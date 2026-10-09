@@ -117,6 +117,42 @@ size_t pocket_adpcm_decode(pocket_adpcm_state_t *state, const uint8_t *data, siz
     return bytes * 2U;
 }
 
+uint8_t pocket_voice_level(const int16_t *pcm, size_t samples)
+{
+    // log2(峰值) 的 16 倍，用整数算：最高位是整数部分，下面四位线性补小数。
+    enum { FLOOR = 122, CEILING = 239 };  // 约等于峰值 200（底噪）和 32767（满幅）
+    uint32_t peak = 0;
+    unsigned msb = 0;
+    unsigned scaled;
+    size_t index;
+
+    if (pcm == NULL) {
+        return 0;
+    }
+    for (index = 0; index < samples; ++index) {
+        uint32_t magnitude = pcm[index] < 0 ? (uint32_t)(-(int32_t)pcm[index])
+                                            : (uint32_t)pcm[index];
+
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
+    }
+    if (peak == 0U) {
+        return 0;
+    }
+    while ((peak >> (msb + 1U)) != 0U) {
+        ++msb;
+    }
+    scaled = msb * 16U + (unsigned)((((peak << (15U - msb)) - 32768U) * 16U) / 32768U);
+    if (scaled <= FLOOR) {
+        return 0;
+    }
+    if (scaled >= CEILING) {
+        return 100;
+    }
+    return (uint8_t)((scaled - FLOOR) * 100U / (CEILING - FLOOR));
+}
+
 size_t pocket_voice_frame_size(size_t notify_payload)
 {
     if (notify_payload < POCKET_VOICE_FRAME_MIN) {

@@ -1,9 +1,12 @@
-// main/pocket_ui.c —— Claude Pocket 界面实现（240×320 竖屏，三键操作）。
+// main/pocket_ui.c —— 小幽界面实现（240×320 竖屏，三键操作）。
 //
-// 结构：一块屏幕上常驻三层——顶栏、内容区、底部提示。内容区里每个页面和
-// 每个浮层各有一个容器，render 时只切换显隐并更新变化的文字。
-// 屏幕四角有半径 30 的圆角遮罩（BSP_LVGL_SCREEN_RADIUS），所以顶栏和底栏的
-// 内容都向内收，不贴边。
+// 首页就是和小幽的对话：上面是她和你刚说的话，下面是她的话。她把活交给别的代理时，
+// 画面上看得见她在跟谁通信。低频的东西（通知、帮手、设置）都收在长按上键的菜单里。
+//
+// 结构：一块屏幕上常驻三层——顶栏、内容区、底部按键提示。内容区里每个页面和每个
+// 浮层各有一个容器，render 时只切换显隐并更新变化的内容。
+// 屏幕四角有半径 30 的圆角遮罩（BSP_LVGL_SCREEN_RADIUS），所以顶栏和底栏的内容都
+// 向内收，不贴边。
 
 #include "pocket_ui.h"
 
@@ -18,52 +21,75 @@
 #include "pocket_text.h"
 #include "pocket_view.h"
 
-// ---- 配色：暖色深底，陶土色强调 ----
-#define C_BG       0x1B1A18
-#define C_CARD     0x2A2825
-#define C_LINE     0x3A3733
-#define C_TEXT     0xF3EFE6
-#define C_DIM      0xA39E93
-#define C_ACCENT   0xE08A63
-#define C_OK       0x86C48A
-#define C_WARN     0xEDB95E
-#define C_DANGER   0xEA6F63
-#define C_ON_COLOR 0x1B1A18  // 彩色底上的文字
+// ---- 配色：夜色。小幽是住在口袋里的小幽灵，底色是夜空的墨蓝，她自己是月白。
+// 彩色只回答一个问题——现在是谁在做事：小幽是淡紫，每个帮手有自己的颜色
+// （pocket_helper_color）。绿、红、黄只表示可以、不行、要你留意。
+#define C_BG       0x15172A
+#define C_CARD     0x232646
+#define C_LINE     0x3A3E68
+#define C_TEXT     0xF2F0FA
+#define C_DIM      0x8E90B5
+#define C_XIAOYOU  POCKET_COLOR_XIAOYOU
+#define C_OK       0x86D19A
+#define C_WARN     0xF2C265
+#define C_DANGER   0xF0736A
+#define C_ON_COLOR 0x15172A  // 彩色底上的文字
 
 // ---- 布局 ----
 #define SCREEN_W   240
 #define SCREEN_H   320
 #define AREA_Y     34
-#define AREA_H     248
+#define AREA_H     252
 #define SIDE       14
 #define INNER_W    (SCREEN_W - 2 * SIDE)
 #define LINE_SPACE 2
 #define LINE_16    23   // pocket_font_16 行距：字高 21 + 行间 2
 #define LINES_16(n) ((n) * LINE_16 - LINE_SPACE)  // n 行正文占的高度
-#define DOT_Y      286
-#define HINT_Y     297
+#define HINT_Y     296
 // 底部圆角在提示这一行往里收约 12 像素，所以提示最宽 212。
 #define HINT_W     212
+#define HINT_ITEMS 3
 
-#define SETTINGS_ROW_H 30
+#define ROW_H          30
 #define ENTRY_ROW_H    50
 #define ENTRY_ROW_GAP  3
-#define USAGE_ROWS     4
 
-// 小幽在四个地方出现：首页的大个子，和三个对话场景里的头像。
+// 小幽出现的地方：首页的两种版式，和四个占满屏幕的场景。
 enum {
-    PET_HOME,
+    PET_SOLO,
+    PET_TALK,
     PET_APPROVAL,
     PET_PAIRING,
     PET_CONFIRM,
     PET_VOICE,
     PET_COUNT,
 };
-#define PET_HOME_SCALE  6
+#define PET_SOLO_SCALE  6
+#define PET_TALK_SCALE  4
 #define PET_CHAT_SCALE  3
 #define PET_FRAME_MS    450
 
-// 对话场景的版式：左边头像，右边气泡。气泡里每行 136 像素宽。
+// 首页的对话版式：小幽在左上，右边是你说的话；一条细线；下面是她的话。
+#define TALK_PET_X      14
+#define TALK_SAID_X     102
+#define TALK_SAID_W     124
+#define TALK_RULE_Y     86
+#define TALK_BODY_Y     94
+#define TALK_BODY_W     (SCREEN_W - 2 * 16)
+#define TALK_BODY_LINES 7
+#define TALK_STAGE_LINES 3
+#define TALK_LINK_Y     (TALK_BODY_Y + TALK_STAGE_LINES * LINE_16 + 8)
+#define TALK_STATUS_Y   (TALK_LINK_Y + 34)
+
+// 往下读：一屏十行，翻一次走九行，留一行让眼睛接得上。
+#define READER_LINES    10
+#define READER_STEP     (9 * LINE_16)
+
+// 说话时的音量条。
+#define LEVEL_BARS      15
+#define LEVEL_SAMPLE_MS 90U
+
+// 审批、配对、确认这三个场景的版式：左边头像，右边气泡。气泡里每行 136 像素宽。
 #define CHAT_PET_X      8
 #define CHAT_PET_Y      10
 #define BUBBLE_X        72
@@ -82,42 +108,72 @@ typedef struct {
     uint8_t scale;
 } pet_t;
 
+// 按键图标：上、下、确认。
+typedef enum {
+    KEY_NONE,
+    KEY_UP,
+    KEY_DOWN,
+    KEY_OK,
+} key_icon_t;
+
+typedef struct {
+    key_icon_t key;
+    const char *text;
+} hint_item_t;
+
 static struct {
     // 顶栏
     lv_obj_t *link_dot;
-    lv_obj_t *link_label;
     lv_obj_t *clock;
     lv_obj_t *battery;
     lv_obj_t *battery_fill;
     lv_obj_t *battery_nub;
-    lv_obj_t *battery_label;
-    // 底部
-    lv_obj_t *dots[BUDDY_PAGE_CAROUSEL_COUNT];
-    lv_obj_t *hint;
+    // 底部按键提示
+    lv_obj_t *hint_icons[HINT_ITEMS];
+    lv_obj_t *hint_labels[HINT_ITEMS];
+    key_icon_t hint_keys[HINT_ITEMS];
+    const char *hint_texts[HINT_ITEMS];
+    lv_obj_t *notice;
     // 页面容器，下标为 buddy_page_t
-    lv_obj_t *pages[BUDDY_PAGE_GUIDE + 1];
-    // 首页
-    lv_obj_t *home_title;
-    lv_obj_t *home_sub;
-    lv_obj_t *chips;
-    lv_obj_t *chip_labels[3];
+    lv_obj_t *pages[BUDDY_PAGE_COUNT];
     // 小幽
     pet_t pets[PET_COUNT];
     unsigned pet_frame;
-    // 最新回复
-    lv_obj_t *reply_body;
-    // 最近动态
+    // 首页：她独占画面
+    lv_obj_t *solo;
+    lv_obj_t *solo_title;
+    lv_obj_t *solo_sub;
+    // 首页：对话
+    lv_obj_t *talk;
+    lv_obj_t *talk_you;
+    lv_obj_t *talk_said;
+    lv_obj_t *talk_body;
+    lv_obj_t *talk_link;
+    lv_obj_t *talk_xiaoyou;
+    lv_obj_t *talk_tag;
+    lv_obj_t *talk_tag_label;
+    lv_obj_t *talk_status;
+    lv_obj_t *talk_elapsed;
+    uint32_t link_color;
+    // 往下读
+    lv_obj_t *reader_scroll;
+    lv_obj_t *reader_body;
+    // 通知
     lv_obj_t *entry_rows[BUDDY_ENTRY_COUNT];
     lv_obj_t *entry_labels[BUDDY_ENTRY_COUNT];
-    lv_obj_t *activity_empty;
-    // 用量
-    lv_obj_t *usage_today;
-    lv_obj_t *usage_session;
-    lv_obj_t *usage_values[USAGE_ROWS];
-    // 设置
-    lv_obj_t *setting_rows[BUDDY_SETTINGS_COUNT];
-    lv_obj_t *setting_labels[BUDDY_SETTINGS_COUNT];
-    lv_obj_t *setting_values[BUDDY_SETTINGS_COUNT];
+    lv_obj_t *notices_empty;
+    // 帮手
+    lv_obj_t *helper_rows[BUDDY_HELPER_COUNT];
+    lv_obj_t *helper_tags[BUDDY_HELPER_COUNT];
+    lv_obj_t *helper_names[BUDDY_HELPER_COUNT];
+    lv_obj_t *helper_abouts[BUDDY_HELPER_COUNT];
+    lv_obj_t *helpers_empty;
+    // 菜单和更多设置
+    lv_obj_t *menu_rows[BUDDY_MENU_COUNT];
+    lv_obj_t *menu_labels[BUDDY_MENU_COUNT];
+    lv_obj_t *menu_values[BUDDY_MENU_COUNT];
+    lv_obj_t *more_rows[BUDDY_MORE_COUNT];
+    lv_obj_t *more_labels[BUDDY_MORE_COUNT];
     // 连接指引
     lv_obj_t *guide_name;
     lv_obj_t *guide_scroll;
@@ -142,10 +198,12 @@ static struct {
     lv_obj_t *confirm_text;
     // 按住说话
     lv_obj_t *voice;
-    lv_obj_t *voice_text;
+    lv_obj_t *voice_title;
+    lv_obj_t *voice_sub;
+    lv_obj_t *voice_bars;
     lv_obj_t *voice_timer;
-    lv_obj_t *voice_state;
-    lv_obj_t *voice_release;
+    uint8_t levels[LEVEL_BARS];
+    uint64_t level_sampled_ms;
 
     pocket_view_t view;
     buddy_page_t page;
@@ -174,16 +232,18 @@ static void fill(lv_obj_t *obj, uint32_t color, int radius)
     lv_obj_set_style_radius(obj, radius, 0);
 }
 
-static void outline(lv_obj_t *obj, uint32_t color, int radius)
+static void outline(lv_obj_t *obj, uint32_t color, int radius, int width)
 {
     lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(obj, lv_color_hex(color), 0);
-    lv_obj_set_style_border_width(obj, 1, 0);
+    lv_obj_set_style_border_width(obj, width, 0);
     lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(obj, radius, 0);
 }
 
 // 每个标签都显式指定字库：界面不依赖主题默认字体（默认 Montserrat 没有中文）。
+// pocket_font_14 和 pocket_font_22 只有固定文案里用到的字，对面发来的文字一律用
+// pocket_font_16。
 static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color,
                             const char *text)
 {
@@ -261,6 +321,15 @@ static void set_bg_color(lv_obj_t *obj, uint32_t color)
     }
 }
 
+static void set_border_color(lv_obj_t *obj, uint32_t color)
+{
+    lv_color_t next = lv_color_hex(color);
+
+    if (!lv_color_eq(lv_obj_get_style_border_color(obj, LV_PART_MAIN), next)) {
+        lv_obj_set_style_border_color(obj, next, 0);
+    }
+}
+
 static void set_bg_opa(lv_obj_t *obj, lv_opa_t opa)
 {
     if (lv_obj_get_style_bg_opa(obj, LV_PART_MAIN) != opa) {
@@ -279,12 +348,29 @@ static void set_visible(lv_obj_t *obj, bool visible)
     }
 }
 
-static lv_obj_t *make_title(lv_obj_t *parent, const char *text, uint32_t color)
+static void set_height(lv_obj_t *label, int height)
 {
-    lv_obj_t *label = make_label(parent, &pocket_font_22, color, text);
+    if (lv_obj_get_height(label) != height) {
+        lv_obj_set_height(label, height);
+        lv_obj_set_user_data(label, NULL);  // 行数变了，省略号要重新算
+    }
+}
+
+static lv_obj_t *make_title(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *label = make_label(parent, &pocket_font_22, C_TEXT, text);
 
     lv_obj_set_pos(label, SIDE + 2, 0);
     return label;
+}
+
+static void style_scrollbar(lv_obj_t *obj)
+{
+    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(C_XIAOYOU), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(obj, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(obj, 2, LV_PART_SCROLLBAR);
 }
 
 // 可滚动的文字卡片：返回容器，*label_out 为其中自动换行的正文标签。
@@ -316,12 +402,26 @@ static lv_obj_t *make_action_bar(lv_obj_t *parent, int y, uint32_t color, bool s
     if (solid) {
         fill(bar, color, 15);
     } else {
-        outline(bar, color, 15);
+        outline(bar, color, 15, 2);
     }
     label = make_label(bar, &pocket_font_16, solid ? C_ON_COLOR : color, "");
     lv_label_set_text_fmt(label, "%s%s%s", key, PT_KEY_SEPARATOR, action);
     lv_obj_center(label);
     return bar;
+}
+
+// 画一个实心小方块。所有像素风的东西（小幽、按键图标、信封、等待的点）都用它拼。
+static void draw_block(lv_layer_t *layer, lv_draw_rect_dsc_t *dsc, int x, int y, int w, int h,
+                       uint32_t color)
+{
+    lv_area_t area;
+
+    area.x1 = x;
+    area.y1 = y;
+    area.x2 = x + w - 1;
+    area.y2 = y + h - 1;
+    dsc->bg_color = lv_color_hex(color);
+    lv_draw_rect(layer, dsc, &area);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,12 +441,10 @@ static void pet_draw_cb(lv_event_t *event)
     lv_draw_rect_dsc_init(&dsc);
     dsc.bg_opa = LV_OPA_COVER;
     for (y = 0; y < POCKET_PET_GRID; ++y) {
-        lv_area_t area;
+        int top = coords.y1 + y * pet->scale;
 
-        area.y1 = coords.y1 + y * pet->scale;
-        area.y2 = area.y1 + pet->scale - 1;
         // 屏幕是一条一条刷新的：这一行不在本次刷新范围里就不用画。
-        if (area.y2 < layer->_clip_area.y1 || area.y1 > layer->_clip_area.y2) {
+        if (top + pet->scale - 1 < layer->_clip_area.y1 || top > layer->_clip_area.y2) {
             continue;
         }
         for (x = 0; x < POCKET_PET_GRID;) {
@@ -362,10 +460,8 @@ static void pet_draw_cb(lv_event_t *event)
                    pocket_pet_pixel(pet->mood, s.pet_frame, x + run, y) == color) {
                 ++run;
             }
-            area.x1 = coords.x1 + x * pet->scale;
-            area.x2 = area.x1 + run * pet->scale - 1;
-            dsc.bg_color = lv_color_hex(pocket_pet_rgb(color));
-            lv_draw_rect(layer, &dsc, &area);
+            draw_block(layer, &dsc, coords.x1 + x * pet->scale, top, run * pet->scale,
+                       pet->scale, pocket_pet_rgb(color));
             x += run;
         }
     }
@@ -403,9 +499,11 @@ static void pet_timer_cb(lv_timer_t *timer)
             lv_obj_invalidate(s.pets[which].obj);
         }
     }
+    // 递信的那条路也跟着这个节拍走。
+    lv_obj_invalidate(s.talk_link);
 }
 
-// 对话场景的上半部分：左边小幽的头像，右边它说话的气泡。返回气泡容器，
+// 审批、配对、确认的上半部分：左边小幽的头像，右边它说话的气泡。返回气泡容器，
 // *text_out 是气泡里的文字标签（固定文案，最多三行）。
 static lv_obj_t *make_speech(lv_obj_t *parent, int which, lv_obj_t **text_out)
 {
@@ -422,86 +520,213 @@ static lv_obj_t *make_speech(lv_obj_t *parent, int which, lv_obj_t **text_out)
 }
 
 // ---------------------------------------------------------------------------
+// 像素风的小图：按键图标、小幽递出去的信、音量条
+// ---------------------------------------------------------------------------
+
+// 11×11 的格子里画一个键：上、下是三角，确认是一个圈。
+static void key_draw_cb(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_current_target(event);
+    // user_data 里放的是这个图标是第几项，实际画哪个键看那一项现在的值。
+    key_icon_t key = s.hint_keys[(uintptr_t)lv_event_get_user_data(event)];
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t dsc;
+    lv_area_t coords;
+    int row;
+
+    lv_obj_get_coords(obj, &coords);
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_COVER;
+    if (key == KEY_OK) {
+        // 圈：外面一圈 11×11，四角各缺一块。
+        static const uint8_t rows[11][2] = {
+            {3, 5}, {1, 9}, {1, 9}, {0, 11}, {0, 11}, {0, 11}, {0, 11}, {0, 11}, {1, 9}, {1, 9},
+            {3, 5},
+        };
+
+        for (row = 0; row < 11; ++row) {
+            draw_block(layer, &dsc, coords.x1 + rows[row][0], coords.y1 + row, rows[row][1], 1,
+                       C_DIM);
+        }
+        for (row = 3; row < 8; ++row) {
+            int inset = row == 3 || row == 7 ? 3 : 2;
+
+            draw_block(layer, &dsc, coords.x1 + inset, coords.y1 + row, 11 - 2 * inset, 1, C_BG);
+        }
+    } else if (key == KEY_UP || key == KEY_DOWN) {
+        for (row = 0; row < 6; ++row) {
+            int width = key == KEY_UP ? 1 + 2 * row : 11 - 2 * row;
+
+            draw_block(layer, &dsc, coords.x1 + (11 - width) / 2, coords.y1 + 2 + row, width, 1,
+                       C_DIM);
+        }
+    }
+}
+
+// 她在跟帮手通信：一条点线，一封信在线上走。颜色是帮手的颜色。
+static void link_draw_cb(lv_event_t *event)
+{
+    // 13×9 的小信封，一行一个 13 位的图案。
+    static const uint16_t envelope[9] = {
+        0x1FFF, 0x1803, 0x1405, 0x1209, 0x11F1, 0x1001, 0x1001, 0x1001, 0x1FFF,
+    };
+    lv_obj_t *obj = lv_event_get_current_target(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t dsc;
+    lv_area_t coords;
+    int width;
+    int travel;
+    int letter_x;
+    int x;
+    int row;
+
+    lv_obj_get_coords(obj, &coords);
+    width = coords.x2 - coords.x1 + 1;
+    travel = width - 13;
+    // 信走四步到头，再从头来。
+    letter_x = travel <= 0 ? 0 : (int)(s.pet_frame % 4U) * travel / 3;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_COVER;
+    for (x = 0; x + 3 <= width; x += 7) {
+        if (x + 3 > letter_x - 2 && x < letter_x + 15) {
+            continue;  // 信封两边留一点空
+        }
+        draw_block(layer, &dsc, coords.x1 + x, coords.y1 + 5, 3, 3, C_LINE);
+    }
+    for (row = 0; row < 9; ++row) {
+        int bit;
+
+        for (bit = 0; bit < 13; ++bit) {
+            if ((envelope[row] >> (12 - bit)) & 1U) {
+                draw_block(layer, &dsc, coords.x1 + letter_x + bit, coords.y1 + 2 + row, 1, 1,
+                           s.link_color);
+            }
+        }
+    }
+}
+
+// 说话时的音量条：最近 LEVEL_BARS 次采样，新的在右边。
+static void bars_draw_cb(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_current_target(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t dsc;
+    lv_area_t coords;
+    int height;
+    int index;
+
+    lv_obj_get_coords(obj, &coords);
+    height = coords.y2 - coords.y1 + 1;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_COVER;
+    for (index = 0; index < LEVEL_BARS; ++index) {
+        int bar = 4 + (int)s.levels[index] * (height - 4) / 100;
+
+        draw_block(layer, &dsc, coords.x1 + index * 9, coords.y1 + (height - bar) / 2, 5, bar,
+                   C_OK);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 构建
 // ---------------------------------------------------------------------------
 
 static void build_top_bar(lv_obj_t *root)
 {
-    s.link_dot = make_box(root, 24, 15, 8, 8);
+    s.link_dot = make_box(root, 20, 14, 7, 7);
     fill(s.link_dot, C_DIM, LV_RADIUS_CIRCLE);
-    s.link_label = make_label(root, &pocket_font_14, C_DIM, PT_LINK_WAITING);
-    lv_obj_set_pos(s.link_label, 37, 10);
+    s.clock = make_label(root, &pocket_font_14, C_DIM, "");
+    lv_obj_set_pos(s.clock, 33, 8);
 
-    s.clock = make_label(root, &pocket_font_14, C_TEXT, "");
-    lv_obj_align(s.clock, LV_ALIGN_TOP_MID, 0, 10);
-
-    s.battery = make_box(root, SCREEN_W - 24 - 24, 13, 22, 12);
-    outline(s.battery, C_DIM, 3);
+    s.battery = make_box(root, SCREEN_W - 22 - 24, 12, 22, 12);
+    outline(s.battery, C_DIM, 3, 1);
     s.battery_fill = make_box(s.battery, 2, 2, 16, 6);
     fill(s.battery_fill, C_OK, 1);
-    s.battery_nub = make_box(root, SCREEN_W - 24 - 2, 17, 2, 4);
+    s.battery_nub = make_box(root, SCREEN_W - 22 - 2, 16, 2, 4);
     fill(s.battery_nub, C_DIM, 1);
-    s.battery_label = make_label(root, &pocket_font_14, C_DIM, "");
-    lv_obj_align_to(s.battery_label, s.battery, LV_ALIGN_OUT_LEFT_MID, -4, 0);
 }
 
 static void build_bottom(lv_obj_t *root)
 {
     int index;
-    const int gap = 12;
-    const int x0 = (SCREEN_W - (BUDDY_PAGE_CAROUSEL_COUNT - 1) * gap - 6) / 2;
 
-    for (index = 0; index < BUDDY_PAGE_CAROUSEL_COUNT; ++index) {
-        s.dots[index] = make_box(root, x0 + index * gap, DOT_Y, 6, 6);
-        fill(s.dots[index], C_LINE, LV_RADIUS_CIRCLE);
+    for (index = 0; index < HINT_ITEMS; ++index) {
+        s.hint_icons[index] = make_box(root, 0, HINT_Y + 3, 11, 11);
+        lv_obj_add_event_cb(s.hint_icons[index], key_draw_cb, LV_EVENT_DRAW_MAIN,
+                            (void *)(uintptr_t)index);
+        lv_obj_add_flag(s.hint_icons[index], LV_OBJ_FLAG_HIDDEN);
+        s.hint_labels[index] = make_label(root, &pocket_font_14, C_DIM, "");
+        lv_obj_set_pos(s.hint_labels[index], 0, HINT_Y);
+        lv_obj_add_flag(s.hint_labels[index], LV_OBJ_FLAG_HIDDEN);
     }
-    s.hint = make_label(root, &pocket_font_14, C_DIM, PT_HINT_PAGES);
-    lv_obj_set_width(s.hint, HINT_W);
-    lv_obj_set_style_text_align(s.hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(s.hint, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_height(s.hint, 17);
-    lv_obj_set_pos(s.hint, (SCREEN_W - HINT_W) / 2, HINT_Y);
+    // 设备自己要说的一句话（没发出去、蓝牙开关失败……）出现时，临时占用这一行。
+    s.notice = make_text_block(root, &pocket_font_16, C_WARN, (SCREEN_W - HINT_W) / 2,
+                               HINT_Y - 3, HINT_W, LINES_16(1));
+    lv_obj_set_style_text_align(s.notice, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(s.notice, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_home(lv_obj_t *page)
 {
-    static const char *const names[3] = {PT_STAT_TOTAL, PT_STAT_RUNNING, PT_STAT_WAITING};
-    int index;
+    // 她独占画面：没连上、刚连上、还没聊过。
+    s.solo = make_box(page, 0, 0, SCREEN_W, AREA_H);
+    make_pet(s.solo, PET_SOLO, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 6,
+             PET_SOLO_SCALE);
+    s.solo_title = make_label(s.solo, &pocket_font_22, C_TEXT, PT_HOME_WAITING);
+    lv_obj_set_width(s.solo_title, INNER_W);
+    lv_obj_set_style_text_align(s.solo_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.solo_title, SIDE, 136);
+    s.solo_sub = make_text_block(s.solo, &pocket_font_16, C_DIM, SIDE, 170, INNER_W,
+                                 LINES_16(3));
+    lv_obj_set_style_text_align(s.solo_sub, LV_TEXT_ALIGN_CENTER, 0);
 
-    make_pet(page, PET_HOME, (SCREEN_W - POCKET_PET_GRID * PET_HOME_SCALE) / 2, 0,
-             PET_HOME_SCALE);
+    // 对话：左上是她，右边是你说的话；细线下面是她的话。
+    s.talk = make_box(page, 0, 0, SCREEN_W, AREA_H);
+    make_pet(s.talk, PET_TALK, TALK_PET_X, 0, PET_TALK_SCALE);
+    s.talk_you = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_YOU);
+    lv_obj_set_pos(s.talk_you, TALK_SAID_X, 8);
+    s.talk_said = make_text_block(s.talk, &pocket_font_16, C_DIM, TALK_SAID_X, 30, TALK_SAID_W,
+                                  LINES_16(2));
+    fill(make_box(s.talk, 16, TALK_RULE_Y, TALK_BODY_W, 1), C_LINE, 0);
+    s.talk_body = make_text_block(s.talk, &pocket_font_16, C_TEXT, 16, TALK_BODY_Y, TALK_BODY_W,
+                                  LINES_16(TALK_BODY_LINES));
 
-    s.home_title = make_label(page, &pocket_font_22, C_TEXT, PT_HOME_WAITING);
-    lv_obj_set_width(s.home_title, INNER_W);
-    lv_obj_set_style_text_align(s.home_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s.home_title, SIDE, 122);
-
-    s.home_sub = make_text_block(page, &pocket_font_16, C_DIM, SIDE, 154, INNER_W,
-                                 LINES_16(2));
-    lv_obj_set_style_text_align(s.home_sub, LV_TEXT_ALIGN_CENTER, 0);
-
-    s.chips = make_box(page, SIDE, 208, INNER_W, 30);
-    for (index = 0; index < 3; ++index) {
-        lv_obj_t *chip = make_box(s.chips, index * 73, 0, 66, 30);
-
-        fill(chip, C_CARD, 15);
-        s.chip_labels[index] = make_label(chip, &pocket_font_14, C_TEXT, names[index]);
-        lv_obj_center(s.chip_labels[index]);
-    }
+    // 她在跟谁通信：小幽 ···✉··· [帮手]
+    s.talk_xiaoyou = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_XIAOYOU);
+    lv_obj_set_pos(s.talk_xiaoyou, 16, TALK_LINK_Y + 3);
+    s.talk_link = make_box(s.talk, 54, TALK_LINK_Y + 5, 66, 13);
+    lv_obj_add_event_cb(s.talk_link, link_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    s.talk_tag = make_box(s.talk, 126, TALK_LINK_Y, LV_SIZE_CONTENT, 24);
+    outline(s.talk_tag, C_XIAOYOU, 12, 2);
+    lv_obj_set_style_pad_hor(s.talk_tag, 9, 0);
+    s.talk_tag_label = make_label(s.talk_tag, &pocket_font_16, C_XIAOYOU, "");
+    lv_obj_align(s.talk_tag_label, LV_ALIGN_LEFT_MID, 0, 0);
+    s.talk_status = make_text_block(s.talk, &pocket_font_16, C_DIM, 16, TALK_STATUS_Y,
+                                    TALK_BODY_W - 50, LINES_16(1));
+    s.talk_elapsed = make_label(s.talk, &pocket_font_16, C_XIAOYOU, "");
+    lv_obj_set_width(s.talk_elapsed, 48);
+    lv_obj_set_style_text_align(s.talk_elapsed, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s.talk_elapsed, SCREEN_W - 16 - 48, TALK_STATUS_Y);
+    s.link_color = C_XIAOYOU;
+    lv_obj_add_flag(s.talk, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void build_reply(lv_obj_t *page)
+static void build_reader(lv_obj_t *page)
 {
-    make_title(page, PT_REPLY_TITLE, C_TEXT);
-    s.reply_body = make_text_block(page, &pocket_font_16, C_TEXT, SIDE + 2, 36,
-                                   INNER_W - 4, LINES_16(9));
+    s.reader_scroll = make_box(page, SIDE, 8, INNER_W, READER_LINES * LINE_16);
+    lv_obj_add_flag(s.reader_scroll, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s.reader_scroll, LV_DIR_VER);
+    style_scrollbar(s.reader_scroll);
+    s.reader_body = make_label(s.reader_scroll, &pocket_font_16, C_TEXT, "");
+    lv_label_set_long_mode(s.reader_body, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s.reader_body, INNER_W - 10);
 }
 
-static void build_activity(lv_obj_t *page)
+static void build_notices(lv_obj_t *page)
 {
     int index;
 
-    make_title(page, PT_ACTIVITY_TITLE, C_TEXT);
+    make_title(page, PT_NOTICES_TITLE);
     for (index = 0; index < BUDDY_ENTRY_COUNT; ++index) {
         s.entry_rows[index] = make_box(page, SIDE, 36 + index * (ENTRY_ROW_H + ENTRY_ROW_GAP),
                                        INNER_W, ENTRY_ROW_H);
@@ -509,78 +734,88 @@ static void build_activity(lv_obj_t *page)
         s.entry_labels[index] = make_text_block(s.entry_rows[index], &pocket_font_16, C_TEXT,
                                                 8, 3, INNER_W - 16, LINES_16(2));
     }
-    s.activity_empty = make_label(page, &pocket_font_16, C_DIM, PT_ACTIVITY_EMPTY);
-    lv_obj_align(s.activity_empty, LV_ALIGN_TOP_MID, 0, 100);
+    s.notices_empty = make_label(page, &pocket_font_16, C_DIM, PT_NOTICES_EMPTY);
+    lv_obj_align(s.notices_empty, LV_ALIGN_TOP_MID, 0, 100);
 }
 
-static lv_obj_t *build_usage_card(lv_obj_t *page, int x, const char *caption)
+static void build_helpers(lv_obj_t *page)
 {
-    lv_obj_t *card = make_box(page, x, 36, 102, 64);
-    lv_obj_t *label;
-    lv_obj_t *value;
-
-    fill(card, C_CARD, 12);
-    label = make_label(card, &pocket_font_14, C_DIM, caption);
-    lv_obj_set_pos(label, 10, 7);
-    value = make_text_block(card, &pocket_font_22, C_ACCENT, 10, 28, 88, 27);
-    return value;
-}
-
-static void build_usage(lv_obj_t *page)
-{
-    static const char *const captions[USAGE_ROWS] = {
-        PT_USAGE_APPROVED, PT_USAGE_DENIED, PT_USAGE_UPTIME, PT_USAGE_BATTERY,
-    };
     int index;
 
-    make_title(page, PT_USAGE_TITLE, C_TEXT);
-    s.usage_today = build_usage_card(page, SIDE, PT_USAGE_TODAY);
-    s.usage_session = build_usage_card(page, SIDE + 110, PT_USAGE_SESSION);
-    for (index = 0; index < USAGE_ROWS; ++index) {
-        int y = 112 + index * 32;
-        lv_obj_t *caption = make_label(page, &pocket_font_16, C_DIM, captions[index]);
-        lv_obj_t *rule;
+    make_title(page, PT_HELPERS_TITLE);
+    for (index = 0; index < BUDDY_HELPER_COUNT; ++index) {
+        lv_obj_t *row = make_box(page, SIDE, 36 + index * (ENTRY_ROW_H + ENTRY_ROW_GAP),
+                                 INNER_W, ENTRY_ROW_H);
 
-        lv_obj_set_pos(caption, SIDE + 4, y);
-        s.usage_values[index] = make_label(page, &pocket_font_16, C_TEXT, PT_NO_VALUE);
-        lv_obj_set_width(s.usage_values[index], 130);
-        lv_obj_set_style_text_align(s.usage_values[index], LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_pos(s.usage_values[index], SCREEN_W - SIDE - 4 - 130, y);
-        if (index + 1 < USAGE_ROWS) {
-            rule = make_box(page, SIDE + 4, y + 26, INNER_W - 8, 1);
-            fill(rule, C_LINE, 0);
-        }
+        fill(row, C_CARD, 10);
+        s.helper_rows[index] = row;
+        s.helper_tags[index] = make_box(row, 8, 4, LV_SIZE_CONTENT, 22);
+        outline(s.helper_tags[index], C_XIAOYOU, 11, 2);
+        lv_obj_set_style_pad_hor(s.helper_tags[index], 8, 0);
+        s.helper_names[index] =
+            make_label(s.helper_tags[index], &pocket_font_16, C_XIAOYOU, "");
+        lv_obj_align(s.helper_names[index], LV_ALIGN_LEFT_MID, 0, 0);
+        s.helper_abouts[index] = make_text_block(row, &pocket_font_16, C_DIM, 9, 27,
+                                                 INNER_W - 18, LINES_16(1));
+    }
+    s.helpers_empty = make_label(page, &pocket_font_16, C_DIM, PT_HELPERS_EMPTY);
+    lv_obj_set_style_text_align(s.helpers_empty, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s.helpers_empty, LV_ALIGN_TOP_MID, 0, 96);
+}
+
+// 一行菜单：左边名字，右边可选的当前值。选中时整行铺小幽的颜色。
+static void make_row(lv_obj_t *page, int index, const char *name, lv_obj_t **row_out,
+                     lv_obj_t **label_out, lv_obj_t **value_out)
+{
+    lv_obj_t *row = make_box(page, SIDE, 36 + index * ROW_H, INNER_W, ROW_H - 2);
+
+    lv_obj_set_style_radius(row, 9, 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(C_XIAOYOU), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    *row_out = row;
+    *label_out = make_label(row, &pocket_font_16, C_TEXT, name);
+    lv_obj_align(*label_out, LV_ALIGN_LEFT_MID, 10, 0);
+    if (value_out != NULL) {
+        *value_out = make_label(row, &pocket_font_16, C_DIM, "");
+        lv_obj_set_width(*value_out, 70);
+        lv_obj_set_style_text_align(*value_out, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(*value_out, LV_ALIGN_RIGHT_MID, -10, 0);
     }
 }
 
-static void build_settings(lv_obj_t *page)
+static void build_menu(lv_obj_t *page)
 {
-    static const char *const names[BUDDY_SETTINGS_COUNT] = {
-        [BUDDY_SETTINGS_BRIGHTNESS] = PT_SET_BRIGHTNESS,
-        [BUDDY_SETTINGS_BLE] = PT_SET_BLE,
-        [BUDDY_SETTINGS_GUIDE] = PT_SET_GUIDE,
-        [BUDDY_SETTINGS_SCREEN_OFF] = PT_SET_SCREEN_OFF,
-        [BUDDY_SETTINGS_UNPAIR] = PT_SET_UNPAIR,
-        [BUDDY_SETTINGS_FACTORY_RESET] = PT_SET_FACTORY,
-        [BUDDY_SETTINGS_BACK] = PT_SET_BACK,
+    static const char *const names[BUDDY_MENU_COUNT] = {
+        [BUDDY_MENU_NOTICES] = PT_MENU_NOTICES,
+        [BUDDY_MENU_HELPERS] = PT_MENU_HELPERS,
+        [BUDDY_MENU_BRIGHTNESS] = PT_MENU_BRIGHTNESS,
+        [BUDDY_MENU_BLE] = PT_MENU_BLE,
+        [BUDDY_MENU_SCREEN_OFF] = PT_MENU_SCREEN_OFF,
+        [BUDDY_MENU_MORE] = PT_MENU_MORE,
+        [BUDDY_MENU_BACK] = PT_MENU_BACK,
     };
     int index;
 
-    make_title(page, PT_SETTINGS_TITLE, C_TEXT);
-    for (index = 0; index < BUDDY_SETTINGS_COUNT; ++index) {
-        lv_obj_t *row = make_box(page, SIDE, 34 + index * SETTINGS_ROW_H, INNER_W,
-                                 SETTINGS_ROW_H - 2);
+    make_title(page, PT_MENU_TITLE);
+    for (index = 0; index < BUDDY_MENU_COUNT; ++index) {
+        make_row(page, index, names[index], &s.menu_rows[index], &s.menu_labels[index],
+                 &s.menu_values[index]);
+    }
+}
 
-        lv_obj_set_style_radius(row, 9, 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(C_ACCENT), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        s.setting_rows[index] = row;
-        s.setting_labels[index] = make_label(row, &pocket_font_16, C_TEXT, names[index]);
-        lv_obj_align(s.setting_labels[index], LV_ALIGN_LEFT_MID, 10, 0);
-        s.setting_values[index] = make_label(row, &pocket_font_16, C_DIM, "");
-        lv_obj_set_width(s.setting_values[index], 70);
-        lv_obj_set_style_text_align(s.setting_values[index], LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_align(s.setting_values[index], LV_ALIGN_RIGHT_MID, -10, 0);
+static void build_more(lv_obj_t *page)
+{
+    static const char *const names[BUDDY_MORE_COUNT] = {
+        [BUDDY_MORE_GUIDE] = PT_MORE_GUIDE,
+        [BUDDY_MORE_UNPAIR] = PT_MORE_UNPAIR,
+        [BUDDY_MORE_FACTORY_RESET] = PT_MORE_FACTORY,
+        [BUDDY_MORE_BACK] = PT_MENU_BACK,
+    };
+    int index;
+
+    make_title(page, PT_MORE_TITLE);
+    for (index = 0; index < BUDDY_MORE_COUNT; ++index) {
+        make_row(page, index, names[index], &s.more_rows[index], &s.more_labels[index], NULL);
     }
 }
 
@@ -588,8 +823,8 @@ static void build_guide(lv_obj_t *page)
 {
     lv_obj_t *body;
 
-    make_title(page, PT_GUIDE_TITLE, C_TEXT);
-    s.guide_name = make_text_block(page, &pocket_font_16, C_ACCENT, SIDE + 2, 32,
+    make_title(page, PT_GUIDE_TITLE);
+    s.guide_name = make_text_block(page, &pocket_font_16, C_XIAOYOU, SIDE + 2, 32,
                                    INNER_W - 4, LINES_16(1));
     s.guide_scroll = make_scroll_card(page, 58, LINES_16(8) + 8, &body);
     lv_label_set_text(body, PT_GUIDE_BODY);
@@ -600,11 +835,11 @@ static void build_approval(lv_obj_t *root)
     lv_obj_t *bubble;
     lv_obj_t *question;
 
-    s.approval = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 12);
+    s.approval = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     bubble = make_speech(s.approval, PET_APPROVAL, &question);
     lv_label_set_text(question, PT_ASK_APPROVAL);
-    // 工具名占气泡的第三行、用强调色：这是判断要不要放行时最先要看的信息。
-    s.approval_tool = make_text_block(bubble, &pocket_font_16, C_ACCENT, BUBBLE_PAD_X,
+    // 是谁、要做什么，占气泡的第三行：这是判断要不要放行时最先要看的信息。
+    s.approval_tool = make_text_block(bubble, &pocket_font_16, C_WARN, BUBBLE_PAD_X,
                                       BUBBLE_PAD_Y + 2 * LINE_16,
                                       BUBBLE_W - 2 * BUBBLE_PAD_X, LINES_16(1));
     // 参数原文：照原样显示，不由小幽转述。
@@ -632,15 +867,15 @@ static void build_approval(lv_obj_t *root)
 
 static void build_pairing(lv_obj_t *root)
 {
-    s.pairing = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 12);
+    s.pairing = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     (void)make_speech(s.pairing, PET_PAIRING, &s.pairing_text);
-    s.pairing_code = make_label(s.pairing, &pocket_font_num_44, C_ACCENT, "");
+    s.pairing_code = make_label(s.pairing, &pocket_font_num_44, C_XIAOYOU, "");
     lv_obj_align(s.pairing_code, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 40);
 }
 
 static void build_confirm(lv_obj_t *root)
 {
-    s.confirm = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 12);
+    s.confirm = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     (void)make_speech(s.confirm, PET_CONFIRM, &s.confirm_text);
     make_action_bar(s.confirm, ACTION_Y1, C_DANGER, true, PT_KEY_OK, PT_CONFIRM_YES);
     make_action_bar(s.confirm, ACTION_Y2, C_DIM, false, PT_KEY_DOWN, PT_CONFIRM_NO);
@@ -648,27 +883,33 @@ static void build_confirm(lv_obj_t *root)
 
 static void build_voice(lv_obj_t *root)
 {
-    s.voice = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 12);
-    (void)make_speech(s.voice, PET_VOICE, &s.voice_text);
-    // 录音时长：变成绿色的大数字就是“现在说话听得到”。
-    s.voice_timer = make_label(s.voice, &pocket_font_num_44, C_OK, "");
-    lv_obj_align(s.voice_timer, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 34);
-    s.voice_state = make_label(s.voice, &pocket_font_22, C_WARN, PT_VOICE_STATE_PREPARING);
-    lv_obj_set_width(s.voice_state, INNER_W);
-    lv_obj_set_style_text_align(s.voice_state, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s.voice_state, SIDE, BUBBLE_H + 46);
-    s.voice_release = make_action_bar(s.voice, ACTION_Y2, C_OK, false, PT_KEY_OK,
-                                      PT_VOICE_RELEASE);
+    s.voice = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H);
+    make_pet(s.voice, PET_VOICE, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 0,
+             PET_SOLO_SCALE);
+    s.voice_title = make_label(s.voice, &pocket_font_22, C_OK, PT_VOICE_LISTENING);
+    lv_obj_set_width(s.voice_title, INNER_W);
+    lv_obj_set_style_text_align(s.voice_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.voice_title, SIDE, 128);
+    s.voice_sub = make_label(s.voice, &pocket_font_16, C_DIM, "");
+    lv_obj_set_width(s.voice_sub, INNER_W);
+    lv_obj_set_style_text_align(s.voice_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.voice_sub, SIDE, 166);
+    // 音量条在动，就是“现在说话听得到”。
+    s.voice_bars = make_box(s.voice, (SCREEN_W - (LEVEL_BARS * 9 - 4)) / 2, 166,
+                            LEVEL_BARS * 9 - 4, 44);
+    lv_obj_add_event_cb(s.voice_bars, bars_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    s.voice_timer = make_label(s.voice, &pocket_font_16, C_TEXT, "");
+    lv_obj_set_width(s.voice_timer, INNER_W);
+    lv_obj_set_style_text_align(s.voice_timer, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.voice_timer, SIDE, 218);
 }
 
 void pocket_ui_init(void)
 {
-    static void (*const builders[BUDDY_PAGE_GUIDE + 1])(lv_obj_t *) = {
-        [BUDDY_PAGE_HOME] = build_home,
-        [BUDDY_PAGE_REPLY] = build_reply,
-        [BUDDY_PAGE_ACTIVITY] = build_activity,
-        [BUDDY_PAGE_USAGE] = build_usage,
-        [BUDDY_PAGE_SETTINGS] = build_settings,
+    static void (*const builders[BUDDY_PAGE_COUNT])(lv_obj_t *) = {
+        [BUDDY_PAGE_HOME] = build_home,       [BUDDY_PAGE_READER] = build_reader,
+        [BUDDY_PAGE_MENU] = build_menu,       [BUDDY_PAGE_NOTICES] = build_notices,
+        [BUDDY_PAGE_HELPERS] = build_helpers, [BUDDY_PAGE_MORE] = build_more,
         [BUDDY_PAGE_GUIDE] = build_guide,
     };
     lv_obj_t *root = lv_obj_create(NULL);
@@ -679,7 +920,7 @@ void pocket_ui_init(void)
     fill(root, C_BG, 0);
 
     build_top_bar(root);
-    for (index = 0; index <= BUDDY_PAGE_GUIDE; ++index) {
+    for (index = 0; index < BUDDY_PAGE_COUNT; ++index) {
         s.pages[index] = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H);
         builders[index](s.pages[index]);
         lv_obj_add_flag(s.pages[index], LV_OBJ_FLAG_HIDDEN);
@@ -706,22 +947,56 @@ void pocket_ui_init(void)
 // 刷新
 // ---------------------------------------------------------------------------
 
+// 底部的按键提示：最多三项，每项是一个键的图标加几个字，整体居中。
+static void set_hints(const hint_item_t *items, int count)
+{
+    bool same = true;
+    int widths[HINT_ITEMS] = {0};
+    int total = 0;
+    int index;
+    int x;
+
+    for (index = 0; index < HINT_ITEMS; ++index) {
+        key_icon_t key = index < count ? items[index].key : KEY_NONE;
+        const char *text = index < count ? items[index].text : NULL;
+
+        same = same && s.hint_keys[index] == key && s.hint_texts[index] == text;
+    }
+    if (same) {
+        return;
+    }
+    for (index = 0; index < HINT_ITEMS; ++index) {
+        bool used = index < count;
+
+        s.hint_keys[index] = used ? items[index].key : KEY_NONE;
+        s.hint_texts[index] = used ? items[index].text : NULL;
+        set_visible(s.hint_icons[index], used);
+        set_visible(s.hint_labels[index], used);
+        if (used) {
+            lv_label_set_text(s.hint_labels[index], items[index].text);
+            lv_obj_update_layout(s.hint_labels[index]);
+            widths[index] = 11 + 4 + lv_obj_get_width(s.hint_labels[index]);
+            total += widths[index] + (index > 0 ? 14 : 0);
+            lv_obj_invalidate(s.hint_icons[index]);
+        }
+    }
+    x = (SCREEN_W - total) / 2;
+    for (index = 0; index < count && index < HINT_ITEMS; ++index) {
+        lv_obj_set_x(s.hint_icons[index], x);
+        lv_obj_set_x(s.hint_labels[index], x + 15);
+        x += widths[index] + 14;
+    }
+}
+
 static void render_top_bar(const buddy_ui_snapshot_t *snap)
 {
     char text[16];
     uint32_t color = C_DIM;
-    const char *link = PT_LINK_WAITING;
 
-    if (!snap->ble_enabled) {
-        link = PT_LINK_OFF;
-    } else if (snap->ble_connected && snap->ble_encrypted) {
-        link = PT_LINK_ON;
-        color = C_OK;
-    } else if (snap->ble_connected) {
-        link = PT_LINK_PAIRING;
-        color = C_WARN;
+    // 圆点：灰是没连上，黄是正在配对，绿是连好了。
+    if (snap->ble_enabled && snap->ble_connected) {
+        color = snap->ble_encrypted ? C_OK : C_WARN;
     }
-    set_text(s.link_label, link);
     set_bg_color(s.link_dot, color);
 
     (void)pocket_format_clock(snap->epoch_seconds, snap->timezone_offset_seconds,
@@ -730,127 +1005,158 @@ static void render_top_bar(const buddy_ui_snapshot_t *snap)
 
     set_visible(s.battery, snap->battery_available);
     set_visible(s.battery_nub, snap->battery_available);
-    set_visible(s.battery_label, snap->battery_available);
     if (snap->battery_available) {
         unsigned percent = snap->battery_percent > 100U ? 100U : snap->battery_percent;
         int width = (int)(16U * percent / 100U);
 
-        (void)snprintf(text, sizeof(text), "%u%%", percent);
-        if (strcmp(lv_label_get_text(s.battery_label), text) != 0) {
-            lv_label_set_text(s.battery_label, text);
-            lv_obj_align_to(s.battery_label, s.battery, LV_ALIGN_OUT_LEFT_MID, -4, 0);
-            lv_obj_set_width(s.battery_fill, width < 2 ? 2 : width);
+        if (width < 2) {
+            width = 2;
+        }
+        if (lv_obj_get_width(s.battery_fill) != width) {
+            lv_obj_set_width(s.battery_fill, width);
         }
         set_bg_color(s.battery_fill, percent <= 20U ? C_DANGER : C_OK);
     }
 }
 
+// 首页。返回按键提示里要不要有“往下读”。
 static void render_home(const buddy_ui_snapshot_t *snap)
 {
-    static const char *const names[3] = {PT_STAT_TOTAL, PT_STAT_RUNNING, PT_STAT_WAITING};
-    static char sub[BUDDY_MESSAGE_MAX + BUDDY_NAME_MAX + 8];
-    const unsigned counts[3] = {snap->total, snap->running, snap->waiting};
+    static char line[BUDDY_MESSAGE_MAX + BUDDY_NAME_MAX + 8];
     pocket_home_t home = pocket_home_for(snap);
-    const char *title = PT_HOME_IDLE;
-    uint32_t title_color = C_TEXT;
-    bool live = false;
-    int index;
+    bool hub = snap->chat.phase != BUDDY_CHAT_NONE;
+    bool talk = pocket_home_is_talk(home);
+    bool helper = home == POCKET_HOME_HELPER;
+    const char *said = "";
+    const char *body = "";
+    uint32_t body_color = C_TEXT;
 
-    sub[0] = '\0';
-    switch (home) {
-    case POCKET_HOME_BLE_OFF:
-        title = PT_HOME_BLE_OFF;
-        title_color = C_DIM;
-        (void)snprintf(sub, sizeof(sub), "%s",
-                       snap->message[0] != '\0' ? snap->message : PT_HOME_SUB_BLE_OFF);
-        break;
-    case POCKET_HOME_WAITING:
-        title = PT_HOME_WAITING;
-        (void)snprintf(sub, sizeof(sub), "%s\n%s",
-                       snap->message[0] != '\0' ? snap->message : PT_HOME_SUB_WAITING,
-                       snap->name);
-        break;
-    case POCKET_HOME_LINKING:
-        title = PT_HOME_LINKING;
-        (void)snprintf(sub, sizeof(sub), "%s", PT_HOME_SUB_LINKING);
-        break;
-    case POCKET_HOME_IDLE:
-        live = true;
-        title = PT_HOME_IDLE;
-        (void)snprintf(sub, sizeof(sub), "%s",
-                       snap->message[0] != '\0' ? snap->message : PT_HOME_SUB_IDLE);
-        break;
-    case POCKET_HOME_BUSY:
-        live = true;
-        title = PT_HOME_BUSY;
-        title_color = C_ACCENT;
-        (void)snprintf(sub, sizeof(sub), "%s", snap->message);
-        break;
-    case POCKET_HOME_PENDING:
-        live = true;
-        title = PT_HOME_PENDING;
-        title_color = C_WARN;
-        (void)snprintf(sub, sizeof(sub), "%s",
-                       snap->message[0] != '\0' ? snap->message : PT_HOME_SUB_PENDING);
-        break;
-    case POCKET_HOME_APPROVED:
-        live = true;
-        title = PT_HOME_APPROVED;
-        title_color = C_OK;
-        (void)snprintf(sub, sizeof(sub), "%s", snap->message);
-        break;
-    case POCKET_HOME_MILESTONE:
-        live = true;
-        title = PT_HOME_MILESTONE;
-        title_color = C_ACCENT;
-        (void)snprintf(sub, sizeof(sub), "%s", PT_HOME_SUB_MILESTONE);
-        break;
-    }
-    set_text(s.home_title, title);
-    set_text_color(s.home_title, title_color);
-    // 没有会话数字要显示时，把那一行的位置让给说明文字（设备名需要第三行）。
-    if (lv_obj_get_height(s.home_sub) != (live ? LINES_16(2) : LINES_16(3))) {
-        lv_obj_set_height(s.home_sub, live ? LINES_16(2) : LINES_16(3));
-        lv_obj_set_user_data(s.home_sub, NULL);
-    }
-    set_block_text(s.home_sub, sub);
-    pet_set(PET_HOME, pocket_pet_for(snap));
+    set_visible(s.solo, !talk);
+    set_visible(s.talk, talk);
+    if (!talk) {
+        const char *title = PT_HOME_QUIET;
+        const char *sub = PT_HOME_SUB_QUIET;
+        bool notice = pocket_notice_visible(snap);
 
-    set_visible(s.chips, live);
-    if (live) {
-        for (index = 0; index < 3; ++index) {
-            char text[24];
-
-            (void)snprintf(text, sizeof(text), "%s %u", names[index],
-                           counts[index] > 99U ? 99U : counts[index]);
-            set_text(s.chip_labels[index], text);
-            set_text_color(s.chip_labels[index],
-                           index == 2 && counts[2] > 0U ? C_WARN : C_TEXT);
+        switch (home) {
+        case POCKET_HOME_BLE_OFF:
+            title = PT_HOME_BLE_OFF;
+            sub = PT_HOME_SUB_BLE_OFF;
+            break;
+        case POCKET_HOME_WAITING:
+            title = PT_HOME_WAITING;
+            (void)snprintf(line, sizeof(line), "%s\n%s", PT_HOME_SUB_WAITING, snap->name);
+            sub = line;
+            break;
+        case POCKET_HOME_LINKING:
+            title = PT_HOME_LINKING;
+            sub = PT_HOME_SUB_LINKING;
+            break;
+        default:
+            // 连着手机中枢才能按住说话；别的连接只能等对面有事。
+            sub = snap->host_hub ? PT_HOME_SUB_QUIET : PT_HOME_SUB_NO_VOICE;
+            if (snap->host_chat && snap->waiting > 0U) {
+                // 别的 App 有通知没看：不打断对话，只在这儿提一句。
+                (void)snprintf(line, sizeof(line), PT_HOME_SUB_NOTICES,
+                               (unsigned)snap->waiting);
+                sub = line;
+            }
+            break;
         }
-    }
-}
-
-static bool link_is_live(const buddy_ui_snapshot_t *snap)
-{
-    return snap->ble_connected && snap->ble_encrypted && !snap->heartbeat_stale;
-}
-
-static void render_reply(const buddy_ui_snapshot_t *snap)
-{
-    static char text[BUDDY_REPLY_MAX + 8];
-
-    if (snap->reply[0] == '\0') {
-        set_block_text(s.reply_body, link_is_live(snap) ? PT_REPLY_EMPTY : PT_REPLY_OFFLINE);
-        set_text_color(s.reply_body, C_DIM);
+        set_text(s.solo_title, title);
+        set_text_color(s.solo_title, home == POCKET_HOME_BLE_OFF ? C_DIM : C_TEXT);
+        // 设备或对面有一句话要说时，说明的位置让给它。
+        set_block_text(s.solo_sub, notice ? snap->message : sub);
+        set_text_color(s.solo_sub, notice ? C_WARN : C_DIM);
+        pet_set(PET_SOLO, pocket_pet_for(snap));
         return;
     }
-    (void)snprintf(text, sizeof(text), "%s%s", snap->reply,
-                   snap->reply_truncated ? PT_ELLIPSIS : "");
-    set_block_text(s.reply_body, text);
-    set_text_color(s.reply_body, C_TEXT);
+
+    pet_set(PET_TALK, pocket_pet_for(snap));
+    switch (home) {
+    case POCKET_HOME_SENT:
+        said = PT_SAID_PENDING;
+        body = PT_TALK_SENT;
+        body_color = C_DIM;
+        break;
+    case POCKET_HOME_THINKING:
+        if (hub) {
+            said = snap->chat.said[0] != '\0' ? snap->chat.said : PT_SAID_PENDING;
+            body = snap->chat.stage[0] != '\0' ? snap->chat.stage : PT_TALK_THINKING;
+        } else {
+            said = PT_DESKTOP_BUSY;
+            body = snap->message[0] != '\0' ? snap->message : PT_DESKTOP_WORKING;
+        }
+        body_color = C_DIM;
+        break;
+    case POCKET_HOME_HELPER:
+        said = snap->chat.said;
+        if (snap->chat.stage[0] != '\0') {
+            body = snap->chat.stage;
+        } else {
+            (void)snprintf(line, sizeof(line), PT_HELPER_ASKED, snap->chat.agent);
+            body = line;
+        }
+        break;
+    case POCKET_HOME_FAILED:
+        said = snap->chat.said;
+        body = snap->reply[0] != '\0' ? snap->reply : PT_TALK_FAILED;
+        break;
+    default:
+        said = hub ? snap->chat.said : PT_DESKTOP_REPLY;
+        body = snap->reply;
+        break;
+    }
+    // “你”这个字只在引用你的话时出现；桌面端那两句是说明，不是你说的。
+    set_visible(s.talk_you, hub || home == POCKET_HOME_SENT);
+    set_block_text(s.talk_said, said);
+    // 她去找帮手时，下半屏要留给“她在跟谁通信”，她的话最多三行。
+    set_height(s.talk_body, LINES_16(helper ? TALK_STAGE_LINES : TALK_BODY_LINES));
+    set_block_text(s.talk_body, body);
+    set_text_color(s.talk_body, body_color);
+
+    set_visible(s.talk_xiaoyou, helper);
+    set_visible(s.talk_link, helper);
+    set_visible(s.talk_tag, helper);
+    set_visible(s.talk_status, helper);
+    set_visible(s.talk_elapsed, helper);
+    if (helper) {
+        static char status[BUDDY_AGENT_MAX + 32];
+        char elapsed[12];
+        uint32_t color = pocket_helper_color(snap->chat.agent);
+
+        if (s.link_color != color) {
+            s.link_color = color;
+            lv_obj_invalidate(s.talk_link);
+        }
+        set_text(s.talk_tag_label, snap->chat.agent);
+        set_text_color(s.talk_tag_label, color);
+        set_border_color(s.talk_tag, color);
+        (void)snprintf(status, sizeof(status), PT_HELPER_WORKING, snap->chat.agent);
+        set_block_text(s.talk_status, status);
+        (void)pocket_format_elapsed(snap->chat_since_ms, snap->uptime_ms, elapsed,
+                                    sizeof(elapsed));
+        set_text(s.talk_elapsed, elapsed);
+        set_text_color(s.talk_elapsed, color);
+    }
 }
 
-static void render_activity(const buddy_ui_snapshot_t *snap)
+static void render_reader(const buddy_ui_snapshot_t *snap, bool entered)
+{
+    static char text[BUDDY_REPLY_MAX + 64];
+    uintptr_t before = (uintptr_t)lv_obj_get_user_data(s.reader_body);
+
+    (void)snprintf(text, sizeof(text), "%s%s%s", snap->reply,
+                   snap->reply_truncated ? PT_ELLIPSIS "\n" : "",
+                   snap->reply_truncated ? PT_READER_CUT : "");
+    set_block_text(s.reader_body, text);
+    // 刚进来，或者内容换了：从头读起。
+    if (entered || before != (uintptr_t)lv_obj_get_user_data(s.reader_body)) {
+        lv_obj_scroll_to_y(s.reader_scroll, 0, LV_ANIM_OFF);
+    }
+}
+
+static void render_notices(const buddy_ui_snapshot_t *snap)
 {
     bool any = false;
     int index;
@@ -866,55 +1172,71 @@ static void render_activity(const buddy_ui_snapshot_t *snap)
             set_text_color(s.entry_labels[index], index == 0 ? C_TEXT : C_DIM);
         }
     }
-    set_visible(s.activity_empty, !any);
+    set_visible(s.notices_empty, !any);
 }
 
-static void render_usage(const buddy_ui_snapshot_t *snap)
+static void render_helpers(const buddy_ui_snapshot_t *snap)
 {
-    char text[40];
+    unsigned count = snap->helper_count < BUDDY_HELPER_COUNT ? snap->helper_count
+                                                              : BUDDY_HELPER_COUNT;
+    unsigned index;
 
-    (void)pocket_format_tokens(snap->tokens_today, text, sizeof(text));
-    set_block_text(s.usage_today, text);
-    (void)pocket_format_tokens(snap->tokens, text, sizeof(text));
-    set_block_text(s.usage_session, text);
+    for (index = 0; index < BUDDY_HELPER_COUNT; ++index) {
+        bool present = index < count && snap->helpers[index].name[0] != '\0';
 
-    (void)snprintf(text, sizeof(text), "%" PRIu64 " %s", snap->approval_count, PT_USAGE_TIMES);
-    set_text(s.usage_values[0], text);
-    (void)snprintf(text, sizeof(text), "%" PRIu64 " %s", snap->denial_count, PT_USAGE_TIMES);
-    set_text(s.usage_values[1], text);
-    (void)pocket_format_uptime(snap->uptime_ms, text, sizeof(text));
-    set_text(s.usage_values[2], text);
-    if (snap->battery_available) {
-        (void)snprintf(text, sizeof(text), "%u%%  %u.%02uV", (unsigned)snap->battery_percent,
-                       (unsigned)(snap->battery_mv / 1000U),
-                       (unsigned)(snap->battery_mv % 1000U / 10U));
-        set_text(s.usage_values[3], text);
-    } else {
-        set_text(s.usage_values[3], PT_USAGE_NO_BATTERY);
+        set_visible(s.helper_rows[index], present);
+        if (present) {
+            uint32_t color = pocket_helper_color(snap->helpers[index].name);
+
+            set_text(s.helper_names[index], snap->helpers[index].name);
+            set_text_color(s.helper_names[index], color);
+            set_border_color(s.helper_tags[index], color);
+            set_block_text(s.helper_abouts[index], snap->helpers[index].about);
+        }
     }
+    set_visible(s.helpers_empty, count == 0U);
 }
 
-static void render_settings(const buddy_ui_snapshot_t *snap)
+static void render_rows(lv_obj_t *const *rows, lv_obj_t *const *labels, lv_obj_t *const *values,
+                        int count, int selected, int first_destructive, int last_destructive)
 {
-    char text[16];
     int index;
 
-    for (index = 0; index < BUDDY_SETTINGS_COUNT; ++index) {
-        bool selected = index == (int)snap->settings_selection;
-        bool destructive = index == BUDDY_SETTINGS_UNPAIR ||
-                           index == BUDDY_SETTINGS_FACTORY_RESET;
+    for (index = 0; index < count; ++index) {
+        bool chosen = index == selected;
+        bool destructive = index >= first_destructive && index <= last_destructive;
 
-        set_bg_opa(s.setting_rows[index], selected ? LV_OPA_COVER : LV_OPA_TRANSP);
-        set_text_color(s.setting_labels[index],
-                       selected ? C_ON_COLOR : (destructive ? C_DANGER : C_TEXT));
-        set_text_color(s.setting_values[index], selected ? C_ON_COLOR : C_DIM);
+        set_bg_opa(rows[index], chosen ? LV_OPA_COVER : LV_OPA_TRANSP);
+        set_text_color(labels[index], chosen ? C_ON_COLOR : (destructive ? C_DANGER : C_TEXT));
+        if (values != NULL) {
+            set_text_color(values[index], chosen ? C_ON_COLOR : C_DIM);
+        }
     }
+}
+
+static void render_menu(const buddy_ui_snapshot_t *snap)
+{
+    char text[16];
+    unsigned notices = 0;
+    unsigned index;
+
+    render_rows(s.menu_rows, s.menu_labels, s.menu_values, BUDDY_MENU_COUNT,
+                (int)snap->menu_selection, -1, -2);
+    for (index = 0; index < BUDDY_ENTRY_COUNT; ++index) {
+        notices += snap->entries[index][0] != '\0' ? 1U : 0U;
+    }
+    (void)snprintf(text, sizeof(text), "%u", notices);
+    set_text(s.menu_values[BUDDY_MENU_NOTICES], notices > 0U ? text : "");
+    (void)snprintf(text, sizeof(text), "%u",
+                   snap->helper_count < BUDDY_HELPER_COUNT ? snap->helper_count
+                                                           : (unsigned)BUDDY_HELPER_COUNT);
+    set_text(s.menu_values[BUDDY_MENU_HELPERS], snap->helper_count > 0U ? text : "");
     (void)snprintf(text, sizeof(text), "%u%%",
                    20U + (unsigned)(snap->brightness_level >= BUDDY_BRIGHTNESS_LEVELS
                                         ? BUDDY_BRIGHTNESS_LEVELS - 1U
                                         : snap->brightness_level) * 20U);
-    set_text(s.setting_values[BUDDY_SETTINGS_BRIGHTNESS], text);
-    set_text(s.setting_values[BUDDY_SETTINGS_BLE], snap->ble_enabled ? PT_ON : PT_OFF);
+    set_text(s.menu_values[BUDDY_MENU_BRIGHTNESS], text);
+    set_text(s.menu_values[BUDDY_MENU_BLE], snap->ble_enabled ? PT_ON : PT_OFF);
 }
 
 static void render_guide(const buddy_ui_snapshot_t *snap)
@@ -944,7 +1266,7 @@ static void render_approval(const buddy_ui_snapshot_t *snap)
         (void)snprintf(s.approval_tool_text, sizeof(s.approval_tool_text), "%s", tool);
         lv_label_set_text(s.approval_tool, tool);
     }
-    // 气泡里的工具名只有一行；放不下时在下面的卡片开头再完整写一遍，
+    // 气泡里的名字只有一行；放不下时在下面的卡片开头再完整写一遍，
     // 保证放行之前能看到完整的名字。
     used = 0;
     hint[0] = '\0';
@@ -1023,63 +1345,73 @@ static void render_confirm(const buddy_ui_snapshot_t *snap)
                                  : PT_ASK_UNPAIR);
 }
 
-static void render_voice(const buddy_ui_snapshot_t *snap)
+static void render_voice(const buddy_ui_snapshot_t *snap, bool entered)
 {
     bool listening = snap->voice_phase == BUDDY_VOICE_LISTENING;
     bool sending = snap->voice_phase == BUDDY_VOICE_SENDING;
     char timer[12];
 
     pet_set(PET_VOICE, pocket_pet_for(snap));
-    set_text(s.voice_text, listening ? PT_VOICE_LISTENING
-                                     : (sending ? PT_VOICE_SENDING : PT_VOICE_PREPARING));
+    set_text(s.voice_title, listening ? PT_VOICE_LISTENING
+                                      : (sending ? PT_VOICE_SENDING : PT_VOICE_PREPARING));
+    set_text_color(s.voice_title, listening ? C_OK : (sending ? C_XIAOYOU : C_WARN));
+    set_visible(s.voice_sub, !listening);
+    set_visible(s.voice_bars, listening);
     set_visible(s.voice_timer, listening);
-    set_visible(s.voice_state, !listening);
-    set_visible(s.voice_release, !sending);
-    if (listening) {
-        uint64_t seconds = snap->uptime_ms > snap->voice_listening_since_ms
-                               ? (snap->uptime_ms - snap->voice_listening_since_ms) / 1000U
-                               : 0U;
-
-        (void)snprintf(timer, sizeof(timer), "%u:%02u", (unsigned)(seconds / 60U % 10U),
-                       (unsigned)(seconds % 60U));
-        if (strcmp(lv_label_get_text(s.voice_timer), timer) != 0) {
-            lv_label_set_text(s.voice_timer, timer);
-            lv_obj_align(s.voice_timer, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 34);
-        }
-    } else {
-        set_text(s.voice_state, sending ? PT_VOICE_STATE_SENDING : PT_VOICE_STATE_PREPARING);
-        set_text_color(s.voice_state, sending ? C_ACCENT : C_WARN);
+    if (!listening) {
+        set_text(s.voice_sub, sending ? PT_VOICE_SUB_SENDING : PT_VOICE_SUB_PREPARING);
+        memset(s.levels, 0, sizeof(s.levels));
+        s.level_sampled_ms = 0;
+        return;
     }
+    if (entered || s.level_sampled_ms == 0U || snap->uptime_ms < s.level_sampled_ms ||
+        snap->uptime_ms - s.level_sampled_ms >= LEVEL_SAMPLE_MS) {
+        memmove(s.levels, s.levels + 1, sizeof(s.levels) - 1U);
+        s.levels[LEVEL_BARS - 1] = snap->voice_level > 100U ? 100U : snap->voice_level;
+        s.level_sampled_ms = snap->uptime_ms != 0U ? snap->uptime_ms : 1U;
+        lv_obj_invalidate(s.voice_bars);
+    }
+    (void)pocket_format_elapsed(snap->voice_listening_since_ms, snap->uptime_ms, timer,
+                                sizeof(timer));
+    set_text(s.voice_timer, timer);
 }
 
 void pocket_ui_render(const buddy_ui_snapshot_t *snap)
 {
+    static const hint_item_t hint_none[1] = {{KEY_NONE, NULL}};
+    hint_item_t hints[HINT_ITEMS];
     pocket_view_t view;
     buddy_page_t page;
-    const char *hint = "";
-    bool carousel;
+    bool entered;
+    bool notice = false;
+    int count = 0;
     int index;
 
     if (!s.ready || snap == NULL) {
         return;
     }
     view = pocket_view_for(snap);
-    page = snap->page <= BUDDY_PAGE_GUIDE ? snap->page : BUDDY_PAGE_HOME;
-    carousel = view == POCKET_VIEW_PAGE && (int)page < BUDDY_PAGE_CAROUSEL_COUNT;
+    page = snap->page < BUDDY_PAGE_COUNT ? snap->page : BUDDY_PAGE_HOME;
+    entered = s.view != view || s.page != page;
 
-    for (index = 0; index <= BUDDY_PAGE_GUIDE; ++index) {
+    for (index = 0; index < BUDDY_PAGE_COUNT; ++index) {
         set_visible(s.pages[index], view == POCKET_VIEW_PAGE && index == (int)page);
     }
     set_visible(s.approval, view == POCKET_VIEW_APPROVAL);
     set_visible(s.pairing, view == POCKET_VIEW_PAIRING);
     set_visible(s.confirm, view == POCKET_VIEW_CONFIRM);
     set_visible(s.voice, view == POCKET_VIEW_VOICE);
-    if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_GUIDE &&
-        (s.view != view || s.page != page)) {
+    if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_GUIDE && entered) {
         lv_obj_scroll_to_y(s.guide_scroll, 0, LV_ANIM_OFF);
     }
     if (view != POCKET_VIEW_APPROVAL) {
         s.approval_id[0] = '\0';
+    }
+    if ((view != POCKET_VIEW_PAGE || page != BUDDY_PAGE_READER) &&
+        lv_obj_get_user_data(s.reader_body) != NULL) {
+        // 不在读的时候不留着那一大段文字：内存留给别的。
+        lv_label_set_text(s.reader_body, "");
+        lv_obj_set_user_data(s.reader_body, NULL);
     }
     s.view = view;
     s.page = page;
@@ -1093,45 +1425,84 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
         render_pairing(snap);
         break;
     case POCKET_VIEW_VOICE:
-        render_voice(snap);
+        render_voice(snap, entered);
+        if (snap->voice_phase != BUDDY_VOICE_SENDING) {
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_RELEASE};
+        }
         break;
     case POCKET_VIEW_APPROVAL:
         render_approval(snap);
-        hint = snap->approval_locked ? "" : PT_HINT_APPROVAL;
+        if (!snap->approval_locked) {
+            hints[count++] = (hint_item_t){KEY_UP, PT_HINT_FULL};
+        }
         break;
     case POCKET_VIEW_PAGE:
         switch (page) {
-        case BUDDY_PAGE_HOME:
+        case BUDDY_PAGE_HOME: {
+            pocket_home_t home = pocket_home_for(snap);
+            bool talk = pocket_home_is_talk(home);
+            bool can_talk = snap->host_hub && home >= POCKET_HOME_QUIET;
+
             render_home(snap);
-            hint = PT_HINT_PAGES;
+            // 对话版式里，设备自己要说的一句话临时占用提示这一行。
+            notice = talk && pocket_notice_visible(snap) && snap->host_hub;
+            if (can_talk) {
+                bool busy = home == POCKET_HOME_SENT || home == POCKET_HOME_THINKING ||
+                            home == POCKET_HOME_HELPER;
+
+                hints[count++] =
+                    (hint_item_t){KEY_OK, busy ? PT_HINT_CUT_IN : PT_HINT_TALK};
+            } else {
+                hints[count++] = (hint_item_t){KEY_UP, PT_HINT_MENU};
+            }
+            if (snap->reply[0] != '\0') {
+                hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_READ};
+            }
             break;
-        case BUDDY_PAGE_REPLY:
-            render_reply(snap);
-            hint = PT_HINT_PAGES;
+        }
+        case BUDDY_PAGE_READER:
+            render_reader(snap, entered);
+            hints[count++] = (hint_item_t){KEY_UP, PT_HINT_UP};
+            hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_DOWN};
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_TO_XIAOYOU};
             break;
-        case BUDDY_PAGE_ACTIVITY:
-            render_activity(snap);
-            hint = PT_HINT_PAGES;
+        case BUDDY_PAGE_MENU:
+            render_menu(snap);
+            hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
+            hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_ENTER};
             break;
-        case BUDDY_PAGE_USAGE:
-            render_usage(snap);
-            hint = PT_HINT_PAGES;
+        case BUDDY_PAGE_MORE:
+            render_rows(s.more_rows, s.more_labels, NULL, BUDDY_MORE_COUNT,
+                        (int)snap->more_selection, BUDDY_MORE_UNPAIR, BUDDY_MORE_FACTORY_RESET);
+            hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
+            hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_ENTER};
             break;
-        case BUDDY_PAGE_SETTINGS:
-            render_settings(snap);
-            hint = PT_HINT_SETTINGS;
+        case BUDDY_PAGE_NOTICES:
+            render_notices(snap);
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_BACK};
+            break;
+        case BUDDY_PAGE_HELPERS:
+            render_helpers(snap);
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_BACK};
             break;
         case BUDDY_PAGE_GUIDE:
             render_guide(snap);
-            hint = PT_HINT_GUIDE;
+            hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_SCROLL};
+            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_BACK};
+            break;
+        case BUDDY_PAGE_COUNT:
             break;
         }
         break;
     }
-    set_block_text(s.hint, hint);
-    for (index = 0; index < BUDDY_PAGE_CAROUSEL_COUNT; ++index) {
-        set_visible(s.dots[index], carousel);
-        set_bg_color(s.dots[index], index == (int)page ? C_ACCENT : C_LINE);
+    set_visible(s.notice, notice);
+    if (notice) {
+        set_block_text(s.notice, snap->message);
+        set_hints(hint_none, 0);
+    } else {
+        set_hints(hints, count);
     }
 }
 
@@ -1150,6 +1521,9 @@ void pocket_ui_scroll(int delta)
     } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_GUIDE) {
         // 按整行滚动，避免卡片上下沿出现被切掉一半的字。
         lv_obj_scroll_by_bounded(s.guide_scroll, 0, delta > 0 ? -3 * LINE_16 : 3 * LINE_16,
+                                 LV_ANIM_OFF);
+    } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_READER) {
+        lv_obj_scroll_by_bounded(s.reader_scroll, 0, delta > 0 ? -READER_STEP : READER_STEP,
                                  LV_ANIM_OFF);
     }
 }

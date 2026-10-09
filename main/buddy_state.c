@@ -85,7 +85,22 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     memset(state->heartbeat.entries, 0, sizeof(state->heartbeat.entries));
     state->reply[0] = '\0';
     state->reply_truncated = false;
+    memset(&state->chat, 0, sizeof(state->chat));
+    state->chat_since_ms = 0;
+    if (state->page == BUDDY_PAGE_READER) {
+        state->page = BUDDY_PAGE_HOME;
+    }
     buddy_invalidate_prompt(state);
+}
+
+/* What belongs to the host on the other end, not to the session it reports. */
+static void buddy_forget_host(buddy_state_t *state)
+{
+    state->host_voice = false;
+    state->host_hub = false;
+    state->host_chat = false;
+    memset(state->helpers, 0, sizeof(state->helpers));
+    state->helper_count = 0;
 }
 
 static buddy_character_t buddy_character_for(const buddy_state_t *state, uint64_t now_ms)
@@ -176,19 +191,18 @@ static uint8_t buddy_brightness_percent(uint8_t level)
     return (uint8_t)(20U + level * 20U);
 }
 
-static void buddy_settings_click(buddy_state_t *state, buddy_key_t key,
-                                 buddy_action_t *action)
+static void buddy_menu_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     if (key == BUDDY_KEY_UP) {
-        state->settings_selection =
-            (buddy_settings_item_t)((state->settings_selection + BUDDY_SETTINGS_COUNT - 1) %
-                                    BUDDY_SETTINGS_COUNT);
+        state->menu_selection =
+            (buddy_menu_item_t)((state->menu_selection + BUDDY_MENU_COUNT - 1) %
+                                BUDDY_MENU_COUNT);
         buddy_set_ui_refresh(action);
         return;
     }
     if (key == BUDDY_KEY_DOWN) {
-        state->settings_selection =
-            (buddy_settings_item_t)((state->settings_selection + 1) % BUDDY_SETTINGS_COUNT);
+        state->menu_selection =
+            (buddy_menu_item_t)((state->menu_selection + 1) % BUDDY_MENU_COUNT);
         buddy_set_ui_refresh(action);
         return;
     }
@@ -196,8 +210,16 @@ static void buddy_settings_click(buddy_state_t *state, buddy_key_t key,
         return;
     }
 
-    switch (state->settings_selection) {
-    case BUDDY_SETTINGS_BRIGHTNESS:
+    switch (state->menu_selection) {
+    case BUDDY_MENU_NOTICES:
+        state->page = BUDDY_PAGE_NOTICES;
+        buddy_set_ui_refresh(action);
+        break;
+    case BUDDY_MENU_HELPERS:
+        state->page = BUDDY_PAGE_HELPERS;
+        buddy_set_ui_refresh(action);
+        break;
+    case BUDDY_MENU_BRIGHTNESS:
         state->brightness_level =
             (uint8_t)((state->brightness_level + 1U) % BUDDY_BRIGHTNESS_LEVELS);
         if (action != NULL) {
@@ -205,65 +227,121 @@ static void buddy_settings_click(buddy_state_t *state, buddy_key_t key,
             action->brightness_percent = buddy_brightness_percent(state->brightness_level);
         }
         break;
-    case BUDDY_SETTINGS_BLE:
+    case BUDDY_MENU_BLE:
         state->settings.ble_enabled = !state->settings.ble_enabled;
         if (action != NULL) {
             action->type = BUDDY_ACTION_BLE_TOGGLE;
             action->ble_enabled = state->settings.ble_enabled;
         }
         break;
-    case BUDDY_SETTINGS_GUIDE:
-        state->page = BUDDY_PAGE_GUIDE;
-        buddy_set_ui_refresh(action);
-        break;
-    case BUDDY_SETTINGS_SCREEN_OFF:
+    case BUDDY_MENU_SCREEN_OFF:
         state->screen_off = true;
         state->page = BUDDY_PAGE_HOME;
         if (action != NULL) {
             action->type = BUDDY_ACTION_SCREEN_OFF;
         }
         break;
-    case BUDDY_SETTINGS_UNPAIR:
-        buddy_open_confirmation(state, BUDDY_CONFIRM_UNPAIR, false, 0, action);
+    case BUDDY_MENU_MORE:
+        state->page = BUDDY_PAGE_MORE;
+        state->more_selection = BUDDY_MORE_GUIDE;
+        buddy_set_ui_refresh(action);
         break;
-    case BUDDY_SETTINGS_FACTORY_RESET:
-        buddy_open_confirmation(state, BUDDY_CONFIRM_FACTORY_RESET, false, 0, action);
-        break;
-    case BUDDY_SETTINGS_BACK:
-    case BUDDY_SETTINGS_COUNT:
+    case BUDDY_MENU_BACK:
+    case BUDDY_MENU_COUNT:
         state->page = BUDDY_PAGE_HOME;
         buddy_set_ui_refresh(action);
         break;
     }
 }
 
+static void buddy_more_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
+{
+    if (key == BUDDY_KEY_UP) {
+        state->more_selection =
+            (buddy_more_item_t)((state->more_selection + BUDDY_MORE_COUNT - 1) %
+                                BUDDY_MORE_COUNT);
+        buddy_set_ui_refresh(action);
+        return;
+    }
+    if (key == BUDDY_KEY_DOWN) {
+        state->more_selection =
+            (buddy_more_item_t)((state->more_selection + 1) % BUDDY_MORE_COUNT);
+        buddy_set_ui_refresh(action);
+        return;
+    }
+    if (key != BUDDY_KEY_OK) {
+        return;
+    }
+
+    switch (state->more_selection) {
+    case BUDDY_MORE_GUIDE:
+        state->page = BUDDY_PAGE_GUIDE;
+        buddy_set_ui_refresh(action);
+        break;
+    case BUDDY_MORE_UNPAIR:
+        buddy_open_confirmation(state, BUDDY_CONFIRM_UNPAIR, false, 0, action);
+        break;
+    case BUDDY_MORE_FACTORY_RESET:
+        buddy_open_confirmation(state, BUDDY_CONFIRM_FACTORY_RESET, false, 0, action);
+        break;
+    case BUDDY_MORE_BACK:
+    case BUDDY_MORE_COUNT:
+        state->page = BUDDY_PAGE_MENU;
+        buddy_set_ui_refresh(action);
+        break;
+    }
+}
+
+static void buddy_scroll(buddy_key_t key, buddy_action_t *action)
+{
+    if (action != NULL && (key == BUDDY_KEY_UP || key == BUDDY_KEY_DOWN)) {
+        action->type = BUDDY_ACTION_UI_SCROLL;
+        action->scroll_delta = key == BUDDY_KEY_DOWN ? 60 : -60;
+    }
+}
+
 static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
                                buddy_action_t *action)
 {
-    if (state->page == BUDDY_PAGE_SETTINGS) {
-        buddy_settings_click(state, key, action);
+    switch (state->page) {
+    case BUDDY_PAGE_MENU:
+        buddy_menu_click(state, key, action);
         return;
-    }
-    if (state->page == BUDDY_PAGE_GUIDE) {
+    case BUDDY_PAGE_MORE:
+        buddy_more_click(state, key, action);
+        return;
+    case BUDDY_PAGE_GUIDE:
         if (key == BUDDY_KEY_OK) {
-            state->page = BUDDY_PAGE_SETTINGS;
+            state->page = BUDDY_PAGE_MORE;
             buddy_set_ui_refresh(action);
-        } else if (action != NULL && (key == BUDDY_KEY_UP || key == BUDDY_KEY_DOWN)) {
-            action->type = BUDDY_ACTION_UI_SCROLL;
-            action->scroll_delta = key == BUDDY_KEY_DOWN ? 60 : -60;
+        } else {
+            buddy_scroll(key, action);
         }
         return;
+    case BUDDY_PAGE_NOTICES:
+    case BUDDY_PAGE_HELPERS:
+        if (key == BUDDY_KEY_OK) {
+            state->page = BUDDY_PAGE_MENU;
+            buddy_set_ui_refresh(action);
+        }
+        return;
+    case BUDDY_PAGE_READER:
+        /* The whole answer: UP and DOWN move through it, OK goes back to Xiaoyou. */
+        if (key == BUDDY_KEY_OK) {
+            state->page = BUDDY_PAGE_HOME;
+            buddy_set_ui_refresh(action);
+        } else {
+            buddy_scroll(key, action);
+        }
+        return;
+    case BUDDY_PAGE_HOME:
+    case BUDDY_PAGE_COUNT:
+        break;
     }
-    /* Carousel: HOME -> REPLY -> ACTIVITY -> USAGE, wrapping in both directions. */
-    if (key == BUDDY_KEY_DOWN) {
-        state->page = (buddy_page_t)((state->page + 1) % BUDDY_PAGE_CAROUSEL_COUNT);
-        buddy_set_ui_refresh(action);
-    } else if (key == BUDDY_KEY_UP) {
-        state->page = (buddy_page_t)((state->page + BUDDY_PAGE_CAROUSEL_COUNT - 1) %
-                                     BUDDY_PAGE_CAROUSEL_COUNT);
-        buddy_set_ui_refresh(action);
-    } else if (key == BUDDY_KEY_OK && state->page != BUDDY_PAGE_HOME) {
-        state->page = BUDDY_PAGE_HOME;
+    /* Home. DOWN opens the reader when there is something to read; the other
+     * short presses do nothing here: talking is a long press on OK. */
+    if (key == BUDDY_KEY_DOWN && state->reply[0] != '\0') {
+        state->page = BUDDY_PAGE_READER;
         buddy_set_ui_refresh(action);
     }
 }
@@ -424,8 +502,8 @@ static void buddy_apply_permission_result(buddy_state_t *state,
     buddy_set_ui_refresh(action);
 }
 
-/* Long press. OK is push-to-talk on the browsable pages; UP opens the settings.
- * On the settings and guide pages either key goes back to the home page. */
+/* Long press. On the home and reader pages OK is push-to-talk and UP opens the
+ * menu. On the menu and the pages under it either key goes back to the home page. */
 static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     bool woke = state->screen_off;
@@ -438,7 +516,7 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     /* A long press on a dark screen wakes it; holding OK goes straight on to talking. */
     state->screen_off = false;
     buddy_set_ui_refresh(action);
-    if (state->page == BUDDY_PAGE_SETTINGS || state->page == BUDDY_PAGE_GUIDE) {
+    if (state->page != BUDDY_PAGE_HOME && state->page != BUDDY_PAGE_READER) {
         if (!woke) {
             state->page = BUDDY_PAGE_HOME;
         }
@@ -446,8 +524,8 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     }
     if (key == BUDDY_KEY_UP) {
         if (!woke) {
-            state->page = BUDDY_PAGE_SETTINGS;
-            state->settings_selection = BUDDY_SETTINGS_BRIGHTNESS;
+            state->page = BUDDY_PAGE_MENU;
+            state->menu_selection = BUDDY_MENU_NOTICES;
         }
         return;
     }
@@ -488,7 +566,7 @@ static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
         buddy_set_ui_refresh(action);
         return;
     case BUDDY_VOICE_FINISHED:
-        message = PT_VOICE_SENT;
+        /* Nothing to add: the home page itself shows that the question is on its way. */
         break;
     case BUDDY_VOICE_LIMIT:
         message = PT_VOICE_LIMIT;
@@ -508,6 +586,68 @@ static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
     state->voice_phase = BUDDY_VOICE_IDLE;
     if (message != NULL) {
         buddy_copy(state->message, sizeof(state->message), message);
+    }
+    if (event->voice_status == BUDDY_VOICE_FINISHED ||
+        event->voice_status == BUDDY_VOICE_LIMIT) {
+        /* The recording is with the host. Until it says what it heard, the home
+         * page shows that a question is on its way instead of the previous turn. */
+        memset(&state->chat, 0, sizeof(state->chat));
+        state->chat.phase = BUDDY_CHAT_SENT;
+        state->chat.mood = BUDDY_MOOD_BUSY;
+        state->chat_since_ms = now_ms;
+        state->reply[0] = '\0';
+        state->reply_truncated = false;
+    }
+    buddy_set_ui_refresh(action);
+}
+
+static bool buddy_chat_in_progress(buddy_chat_phase_t phase)
+{
+    return phase == BUDDY_CHAT_SENT || phase == BUDDY_CHAT_THINKING ||
+           phase == BUDDY_CHAT_HELPER;
+}
+
+static void buddy_apply_chat(buddy_state_t *state, const buddy_event_t *event,
+                             uint64_t now_ms, buddy_action_t *action)
+{
+    bool was_in_progress = buddy_chat_in_progress(state->chat.phase);
+    bool answered = event->chat.phase == BUDDY_CHAT_DONE ||
+                    event->chat.phase == BUDDY_CHAT_FAILED;
+    /* A recording that left the device and the host starting to think about it
+     * are one wait as far as the owner is concerned: keep counting. */
+    bool same_step = strcmp(state->chat.agent, event->chat.agent) == 0 &&
+                     (state->chat.phase == event->chat.phase ||
+                      (state->chat.phase == BUDDY_CHAT_SENT &&
+                       event->chat.phase == BUDDY_CHAT_THINKING));
+    bool same_words = strcmp(state->reply, event->reply) == 0 &&
+                      strcmp(state->chat.said, event->chat.said) == 0;
+
+    if (event->ble.connection_generation != state->ble_connection_generation) {
+        return;
+    }
+    state->host_chat = true;
+    /* A hub that only repeats "nothing yet" must not wipe a recording that has
+     * just left the device and is still being transcribed. */
+    if (event->chat.phase == BUDDY_CHAT_NONE && state->chat.phase == BUDDY_CHAT_SENT) {
+        return;
+    }
+    state->chat = event->chat;
+    if (state->chat.phase == BUDDY_CHAT_HELPER && state->chat.agent[0] == '\0') {
+        /* "Somebody else is on it" without saying who is just thinking. */
+        state->chat.phase = BUDDY_CHAT_THINKING;
+    }
+    buddy_copy(state->reply, sizeof(state->reply), event->reply);
+    state->reply_truncated = event->reply_truncated;
+    if (!same_step) {
+        state->chat_since_ms = now_ms;
+    }
+    if (!same_words && state->page == BUDDY_PAGE_READER) {
+        /* The text being read is gone; go back to where the new one appears. */
+        state->page = BUDDY_PAGE_HOME;
+    }
+    if (answered && was_in_progress) {
+        /* The answer to something just asked is worth lighting the screen for. */
+        state->screen_off = false;
     }
     buddy_set_ui_refresh(action);
 }
@@ -594,7 +734,7 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
             }
         }
         if (state->ble_connection_generation != event->ble.connection_generation) {
-            state->host_voice = false;
+            buddy_forget_host(state);
         }
         state->ble_connection_generation = event->ble.connection_generation;
         state->ble_connected = true;
@@ -617,7 +757,7 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         } else if (state->confirmation == BUDDY_CONFIRM_NONE) {
             state->connection = BUDDY_CONNECTION_OFFLINE;
         }
-        state->host_voice = false;
+        buddy_forget_host(state);
         buddy_set_ui_refresh(action);
         if (state->voice_phase != BUDDY_VOICE_IDLE) {
             /* The worker notices the lost link itself; this makes sure it stops. */
@@ -729,6 +869,21 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     case BUDDY_EVENT_HOST_HELLO:
         if (event->ble.connection_generation == state->ble_connection_generation) {
             state->host_voice = event->host_voice;
+            state->host_hub = true;
+            buddy_set_ui_refresh(action);
+        }
+        break;
+    case BUDDY_EVENT_CHAT:
+        buddy_apply_chat(state, event, now_ms, action);
+        break;
+    case BUDDY_EVENT_HELPERS:
+        if (event->ble.connection_generation == state->ble_connection_generation) {
+            unsigned count = event->helper_count < BUDDY_HELPER_COUNT ? event->helper_count
+                                                                      : BUDDY_HELPER_COUNT;
+
+            memcpy(state->helpers, event->helpers, sizeof(state->helpers));
+            state->helper_count = count;
+            buddy_set_ui_refresh(action);
         }
         break;
     case BUDDY_EVENT_VOICE:
@@ -738,7 +893,13 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         buddy_set_ui_refresh(action);
         break;
     case BUDDY_EVENT_TURN:
-        if (state->connected && !state->heartbeat_stale) {
+        /* The Claude desktop app, and a phone app from before "chat", report a
+         * reply this way. A hub that reports the whole conversation with "chat"
+         * owns the reply, and a stray turn event must not replace it. */
+        if (state->connected && !state->heartbeat_stale && !state->host_chat) {
+            if (strcmp(state->reply, event->reply) != 0 && state->page == BUDDY_PAGE_READER) {
+                state->page = BUDDY_PAGE_HOME;
+            }
             buddy_copy(state->reply, sizeof(state->reply), event->reply);
             state->reply_truncated = event->reply_truncated;
             buddy_set_ui_refresh(action);
@@ -748,6 +909,19 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         break;
     }
 
+    {
+        /* FNV-1a over the notice line: remember when it last changed. */
+        uint32_t hash = 2166136261u;
+        const unsigned char *cursor;
+
+        for (cursor = (const unsigned char *)state->message; *cursor != '\0'; ++cursor) {
+            hash = (hash ^ *cursor) * 16777619u;
+        }
+        if (hash != state->message_hash) {
+            state->message_hash = hash;
+            state->message_since_ms = now_ms;
+        }
+    }
     /* Anything that needs the owner's eyes turns the screen back on. */
     if (state->screen_off &&
         (buddy_has_actionable_prompt(state) || state->passkey_visible ||
@@ -786,7 +960,15 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->heartbeat_stale = state->heartbeat_stale;
     snapshot->confirmation_pending = state->confirmation_pending;
     snapshot->confirmation = state->confirmation;
-    snapshot->settings_selection = state->settings_selection;
+    snapshot->menu_selection = state->menu_selection;
+    snapshot->more_selection = state->more_selection;
+    snapshot->chat = state->chat;
+    snapshot->chat_since_ms = state->chat_since_ms;
+    memcpy(snapshot->helpers, state->helpers, sizeof(snapshot->helpers));
+    snapshot->helper_count = state->helper_count;
+    snapshot->host_hub = state->host_hub;
+    snapshot->host_chat = state->host_chat;
+    snapshot->message_since_ms = state->message_since_ms;
     snapshot->brightness_level = state->brightness_level;
     snapshot->screen_off = state->screen_off;
     snapshot->reply_truncated = state->reply_truncated;

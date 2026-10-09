@@ -75,7 +75,8 @@ typedef struct {
             uint32_t view_generation;
             buddy_page_t page;
             buddy_confirmation_t confirmation;
-            buddy_settings_item_t settings_selection;
+            buddy_menu_item_t menu_selection;
+            buddy_more_item_t more_selection;
             bool approval_visible;
             bool passkey_visible;
             bool ble_enabled;
@@ -101,7 +102,8 @@ typedef struct {
     uint32_t generation;
     buddy_page_t page;
     buddy_confirmation_t confirmation;
-    buddy_settings_item_t settings_selection;
+    buddy_menu_item_t menu_selection;
+    buddy_more_item_t more_selection;
     bool approval_visible;
     bool passkey_visible;
     bool ble_enabled;
@@ -365,7 +367,8 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     control.data.key.view_generation = s_rendered_view.generation;
     control.data.key.page = s_rendered_view.page;
     control.data.key.confirmation = s_rendered_view.confirmation;
-    control.data.key.settings_selection = s_rendered_view.settings_selection;
+    control.data.key.menu_selection = s_rendered_view.menu_selection;
+    control.data.key.more_selection = s_rendered_view.more_selection;
     control.data.key.approval_visible = s_rendered_view.approval_visible;
     control.data.key.passkey_visible = s_rendered_view.passkey_visible;
     control.data.key.ble_enabled = s_rendered_view.ble_enabled;
@@ -492,10 +495,12 @@ static bool buddy_key_matches_state(const buddy_control_event_t *control,
     return state->confirmation == BUDDY_CONFIRM_NONE && !state->passkey_visible &&
            state->prompt.id[0] == '\0' && state->page == control->data.key.page &&
            state->screen_off == control->data.key.screen_off &&
-           (state->page != BUDDY_PAGE_SETTINGS ||
-            (state->settings_selection == control->data.key.settings_selection &&
-             (state->settings_selection != BUDDY_SETTINGS_BLE ||
-              state->settings.ble_enabled == control->data.key.ble_enabled)));
+           (state->page != BUDDY_PAGE_MENU ||
+            (state->menu_selection == control->data.key.menu_selection &&
+             (state->menu_selection != BUDDY_MENU_BLE ||
+              state->settings.ble_enabled == control->data.key.ble_enabled))) &&
+           (state->page != BUDDY_PAGE_MORE ||
+            state->more_selection == control->data.key.more_selection);
 }
 
 static bool buddy_translate_key(const buddy_control_event_t *control, buddy_event_t *event)
@@ -880,7 +885,8 @@ static bool buddy_rendered_view_same(const buddy_rendered_view_t *left,
                                      const buddy_rendered_view_t *right)
 {
     return left->page == right->page && left->confirmation == right->confirmation &&
-           left->settings_selection == right->settings_selection &&
+           left->menu_selection == right->menu_selection &&
+           left->more_selection == right->more_selection &&
            left->screen_off == right->screen_off &&
            left->approval_visible == right->approval_visible &&
            left->passkey_visible == right->passkey_visible &&
@@ -897,7 +903,8 @@ static void buddy_publish_rendered_view(const buddy_ui_snapshot_t *snapshot)
     buddy_rendered_view_t next = {
         .page = snapshot->page,
         .confirmation = snapshot->confirmation,
-        .settings_selection = snapshot->settings_selection,
+        .menu_selection = snapshot->menu_selection,
+        .more_selection = snapshot->more_selection,
         .screen_off = snapshot->screen_off,
         .approval_visible = !snapshot->confirmation_pending && !snapshot->passkey_visible &&
                             !snapshot->approval_locked && snapshot->prompt_id[0] != '\0',
@@ -944,6 +951,7 @@ static void buddy_render(buddy_state_t *state, const buddy_action_t *action, uin
 
     buddy_state_snapshot(state, &snapshot);
     snapshot.uptime_ms = now_ms;
+    snapshot.voice_level = pocket_voice_level_now();
     if (buddy_settings_load(&settings) == ESP_OK) {
         snapshot.approval_count = settings.approval_count;
         snapshot.denial_count = settings.denial_count;
@@ -1047,7 +1055,8 @@ static void buddy_app_task(void *context)
             }
         }
         if (!reduced) {
-            const buddy_event_t tick = {.type = BUDDY_EVENT_TICK};
+            /* 事件结构有几 KB，放在静态区而不是任务栈上。 */
+            static const buddy_event_t tick = {.type = BUDDY_EVENT_TICK};
 
             buddy_state_reduce(&state, &tick, now_ms, &action);
         }

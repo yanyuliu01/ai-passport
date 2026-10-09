@@ -182,7 +182,31 @@ static void test_hub_hello_is_acknowledged_and_enables_voice(void)
     buddy_state_reduce(&state, &connected, 999, &action);
     assert(buddy_orchestrator_process_rx(&state, &ops, hello, strlen(hello), 7, 1000, &action));
     assert(state.host_voice);
-    assert(strcmp(fake.sent, "{\"ack\":\"hub\",\"ok\":true}\n") == 0);
+    assert(state.host_hub);
+    /* The acknowledgement also says this firmware takes "chat" and "helpers". */
+    assert(strcmp(fake.sent, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true}\n") == 0);
+
+    /* Those messages change what is on screen and are not acknowledged one by one. */
+    fake.sent[0] = '\0';
+    {
+        const char *chat = "{\"cmd\":\"chat\",\"phase\":\"done\",\"said\":\"hi\","
+                           "\"reply\":\"hello\",\"mood\":\"happy\"}";
+        const char *helpers = "{\"cmd\":\"helpers\",\"list\":[{\"name\":\"codex\"}]}";
+        const char *bad = "{\"cmd\":\"chat\",\"phase\":\"dancing\"}";
+
+        assert(buddy_orchestrator_process_rx(&state, &ops, chat, strlen(chat), 7, 1001,
+                                             &action));
+        assert(action.type == BUDDY_ACTION_UI_REFRESH);
+        assert(state.chat.phase == BUDDY_CHAT_DONE && strcmp(state.reply, "hello") == 0);
+        assert(buddy_orchestrator_process_rx(&state, &ops, helpers, strlen(helpers), 7, 1002,
+                                             &action));
+        assert(state.helper_count == 1 && fake.sent[0] == '\0');
+        /* One that does not parse is refused by name, and changes nothing. */
+        assert(!buddy_orchestrator_process_rx(&state, &ops, bad, strlen(bad), 7, 1003,
+                                              &action));
+        assert(strstr(fake.sent, "\"ack\":\"chat\",\"ok\":false") != NULL);
+        assert(state.chat.phase == BUDDY_CHAT_DONE);
+    }
 
     /* The voice actions belong to the application; the orchestrator lets them pass. */
     action.type = BUDDY_ACTION_VOICE_START;

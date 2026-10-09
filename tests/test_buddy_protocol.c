@@ -490,6 +490,101 @@ static void test_long_assistant_turn_is_cut_on_a_character_boundary(void)
     assert(memcmp(event.reply + strlen(event.reply) - 3U, "\xE4\xB8\xAD", 3) == 0);
 }
 
+static void test_chat_reports_the_conversation(void)
+{
+    static char line[BUDDY_JSON_LINE_MAX];
+    buddy_event_t event;
+    char output[64];
+    size_t index;
+
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"helper\",\"said\":\"\xE7\x9C\x8B\xE7\x9C\x8B\","
+                 "\"reply\":\"\",\"agent\":\"codex\",\"stage\":\"asking codex\","
+                 "\"mood\":\"busy\"}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(event.type == BUDDY_EVENT_CHAT);
+    assert(event.chat.phase == BUDDY_CHAT_HELPER && event.chat.mood == BUDDY_MOOD_BUSY);
+    assert(strcmp(event.chat.said, "\xE7\x9C\x8B\xE7\x9C\x8B") == 0);
+    assert(strcmp(event.chat.agent, "codex") == 0);
+    assert(strcmp(event.chat.stage, "asking codex") == 0);
+    assert(event.reply[0] == '\0' && !event.reply_truncated);
+
+    /* Only the phase is required; everything else reads as empty or neutral. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"idle\"}", &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.phase == BUDDY_CHAT_NONE && event.chat.mood == BUDDY_MOOD_IDLE);
+    assert(event.chat.said[0] == '\0' && event.chat.agent[0] == '\0');
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"thinking\"}", &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.phase == BUDDY_CHAT_THINKING);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"failed\",\"reply\":\"no\",\"mood\":\"oops\"}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.phase == BUDDY_CHAT_FAILED && event.chat.mood == BUDDY_MOOD_OOPS);
+    /* A mood this firmware does not know is not worth refusing the update for. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"reply\":\"ok\",\"mood\":\"smug\"}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.phase == BUDDY_CHAT_DONE && event.chat.mood == BUDDY_MOOD_IDLE);
+    assert(strcmp(event.reply, "ok") == 0);
+
+    /* A phase it does not know, a missing phase or a field of the wrong type is refused,
+     * and the command name survives so the host can be told which message it was. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"dancing\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "chat") == 0 && event.chat.phase == BUDDY_CHAT_NONE);
+    assert(parse("{\"cmd\":\"chat\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"reply\":5}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"agent\":[]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+
+    /* A long answer is cut on a character boundary and says so; the short fields
+     * are cut the same way without a flag. */
+    index = (size_t)snprintf(line, sizeof(line),
+                             "{\"cmd\":\"chat\",\"phase\":\"done\",\"said\":\"");
+    while (index < 300U) {
+        memcpy(line + index, "\xE4\xBD\xA0", 3);
+        index += 3;
+    }
+    index += (size_t)snprintf(line + index, sizeof(line) - index, "\",\"reply\":\"");
+    while (index < 300U + 3U * (BUDDY_REPLY_MAX / 3U + 20U)) {
+        memcpy(line + index, "\xE5\xA5\xBD", 3);
+        index += 3;
+    }
+    (void)snprintf(line + index, sizeof(line) - index, "\"}");
+    assert(parse(line, &event) == BUDDY_EVENT_CHAT);
+    assert(event.reply_truncated);
+    assert(strlen(event.reply) == (BUDDY_REPLY_MAX - 1U) / 3U * 3U);
+    assert(strlen(event.chat.said) == (BUDDY_MESSAGE_MAX - 1U) / 3U * 3U);
+    assert(event.chat.said[strlen(event.chat.said) - 1] == '\xA0');
+
+    assert(buddy_protocol_hub_ack_json(output, sizeof(output)) > 0);
+    assert(strcmp(output, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true}\n") == 0);
+    assert(buddy_protocol_hub_ack_json(output, 8) == 0);
+}
+
+static void test_helpers_lists_who_xiaoyou_can_ask(void)
+{
+    buddy_event_t event;
+
+    assert(parse("{\"cmd\":\"helpers\",\"list\":[{\"name\":\"claude\",\"about\":\"answers\"},"
+                 "{\"name\":\"codex\"},{\"about\":\"nameless\"},{\"name\":\"pc\"},"
+                 "{\"name\":\"four\"},{\"name\":\"five\"}]}",
+                 &event) == BUDDY_EVENT_HELPERS);
+    /* Entries without a name are skipped; the table holds the first four that have one. */
+    assert(event.helper_count == BUDDY_HELPER_COUNT);
+    assert(strcmp(event.helpers[0].name, "claude") == 0 &&
+           strcmp(event.helpers[0].about, "answers") == 0);
+    assert(strcmp(event.helpers[1].name, "codex") == 0 && event.helpers[1].about[0] == '\0');
+    assert(strcmp(event.helpers[2].name, "pc") == 0);
+    assert(strcmp(event.helpers[3].name, "four") == 0);
+
+    assert(parse("{\"cmd\":\"helpers\",\"list\":[]}", &event) == BUDDY_EVENT_HELPERS);
+    assert(event.helper_count == 0);
+    assert(parse("{\"cmd\":\"helpers\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "helpers") == 0);
+    assert(parse("{\"cmd\":\"helpers\",\"list\":\"claude\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"helpers\",\"list\":[\"claude\"]}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"helpers\",\"list\":[{\"name\":7}]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(event.helper_count == 0);
+}
+
 int main(void)
 {
     test_official_heartbeat_maps_documented_fields();
@@ -499,6 +594,8 @@ int main(void)
     test_heartbeat_optional_prompt_stays_in_heartbeat_snapshot();
     test_unpair_maps_confirmation_event();
     test_hub_hello_reports_voice_support();
+    test_chat_reports_the_conversation();
+    test_helpers_lists_who_xiaoyou_can_ask();
     test_file_transfer_commands_are_unsupported();
     test_unknown_command_is_rejected();
     test_malformed_or_nonobject_json_is_rejected();
