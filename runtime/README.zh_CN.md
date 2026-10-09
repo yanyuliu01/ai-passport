@@ -295,8 +295,12 @@ python3 -m xiaoyou_runtime firmware remove 3          # 从仓库里删掉第 3 
 `--commit <提交>` 只要从那个提交构建出来的（`HEAD` 表示 `firmware.source_dir` 现在所在
 的提交）。`--wait 900` 表示还没构建出来就等，最多 900 秒；这个提交的构建要是已经失败
 了会马上停下。`--detach` 把等和取放到后台，命令马上返回，日志在
-`<state_dir>/firmware/fetch.log`。没登录时 GitHub 每小时只让查 60 次，设置环境变量
-`GITHUB_TOKEN` 可以放宽。
+`<state_dir>/firmware/fetch.log`。
+
+找构建用的是 `git ls-remote`（每个构建是打在它那个提交上的一个标签），找到后直接下载，
+所以等构建不占 GitHub 接口每小时的查询次数。只有“这个构建是不是已经失败了”这一问要
+走接口，最多每 90 秒问一次。这台电脑没有 `git` 时全部走接口：没登录每小时只让查
+60 次，设置环境变量 `GITHUB_TOKEN` 可以放宽。
 
 这台电脑装了 ESP-IDF 的话，可以配置 `firmware.build_command`（例如
 `["bash", "-lc", "source ~/esp/esp-idf/export.sh && idf.py build"]`），然后用

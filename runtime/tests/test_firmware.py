@@ -365,6 +365,11 @@ def release(tag, commit, blob, digest=None, asset="FoloToy-AI-Passport-full.bin"
     return entry, files
 
 
+def no_git(repo, tag_prefix):
+    """Stands in for remote_tags on a computer without git: the fetcher asks the API."""
+    return None
+
+
 class FetchTests(unittest.TestCase):
     ARGS = ("me/repo", "FoloToy-AI-Passport-full.bin", "firmware-build-")
 
@@ -379,7 +384,7 @@ class FetchTests(unittest.TestCase):
 
     def test_the_newest_firmware_release_is_taken(self):
         github = FakeGitHub(self.releases, self.files)
-        blob, found = firmware_module.fetch_release(*self.ARGS, opener=github, token="t0ken")
+        blob, found = firmware_module.fetch_release(*self.ARGS, opener=github, token="t0ken", tags=no_git)
         self.assertEqual(blob, self.new)
         self.assertEqual((found["tag"], found["commit"]), ("firmware-build-3", "c" * 40))
         self.assertEqual(github.calls[0],
@@ -387,14 +392,14 @@ class FetchTests(unittest.TestCase):
 
     def test_a_tag_or_a_commit_picks_one_build(self):
         github = FakeGitHub(self.releases, self.files)
-        blob, found = firmware_module.fetch_release(*self.ARGS, tag="firmware-build-2", opener=github)
+        blob, found = firmware_module.fetch_release(*self.ARGS, tag="firmware-build-2", opener=github, tags=no_git)
         self.assertEqual((blob, found["tag"]), (self.old, "firmware-build-2"))
-        blob, found = firmware_module.fetch_release(*self.ARGS, commit="b" * 10, opener=github)
+        blob, found = firmware_module.fetch_release(*self.ARGS, commit="b" * 10, opener=github, tags=no_git)
         self.assertEqual(found["tag"], "firmware-build-2")
         with self.assertRaisesRegex(FirmwareError, "没找到"):
-            firmware_module.fetch_release(*self.ARGS, commit="d" * 40, opener=github)
+            firmware_module.fetch_release(*self.ARGS, commit="d" * 40, opener=github, tags=no_git)
         with self.assertRaisesRegex(FirmwareError, "标签"):
-            firmware_module.fetch_release(*self.ARGS, tag="firmware-build-99", opener=github)
+            firmware_module.fetch_release(*self.ARGS, tag="firmware-build-99", opener=github, tags=no_git)
 
     def test_waiting_for_a_build_that_is_not_there_yet(self):
         naps = []
@@ -410,7 +415,7 @@ class FetchTests(unittest.TestCase):
         github = Later(self.releases, self.files)
         blob, found = firmware_module.fetch_release(
             *self.ARGS, commit="c" * 40, wait_seconds=300, opener=github,
-            sleep=naps.append, say=said.append)
+            sleep=naps.append, say=said.append, tags=no_git)
         self.assertEqual((blob, found["tag"]), (self.new, "firmware-build-3"))
         self.assertEqual(len(naps), 2)
         self.assertTrue(all(0 < nap <= firmware_module.POLL_SECONDS for nap in naps))
@@ -433,7 +438,7 @@ class FetchTests(unittest.TestCase):
 
         with self.assertRaisesRegex(FirmwareError, "构建失败了：https://example.invalid/run/7"):
             firmware_module.fetch_release(*self.ARGS, commit="d" * 40, wait_seconds=600,
-                                          opener=github, sleep=naps.append)
+                                          opener=github, sleep=naps.append, tags=no_git)
         self.assertEqual(naps, [])
         # Still running, or only other workflows failed: keep waiting.
         runs["workflow_runs"][1].update(status="in_progress", conclusion=None)
@@ -442,7 +447,8 @@ class FetchTests(unittest.TestCase):
     def test_a_download_that_does_not_match_its_published_hash_is_refused(self):
         bad, files = release("firmware-build-4", "e" * 40, self.new, digest="0" * 64)
         with self.assertRaisesRegex(FirmwareError, "对不上"):
-            firmware_module.fetch_release(*self.ARGS, opener=FakeGitHub([bad], files))
+            firmware_module.fetch_release(*self.ARGS, opener=FakeGitHub([bad], files),
+                                          tags=no_git)
 
     def test_github_problems_are_explained(self):
         def limited(request, timeout=None):
@@ -452,13 +458,119 @@ class FetchTests(unittest.TestCase):
             raise urllib.error.URLError("no route")
 
         with self.assertRaisesRegex(FirmwareError, "GITHUB_TOKEN"):
-            firmware_module.fetch_release(*self.ARGS, opener=limited)
+            firmware_module.fetch_release(*self.ARGS, opener=limited, tags=no_git)
         with self.assertRaisesRegex(FirmwareError, "连不上"):
-            firmware_module.fetch_release(*self.ARGS, opener=offline)
+            firmware_module.fetch_release(*self.ARGS, opener=offline, tags=no_git)
         with self.assertRaisesRegex(FirmwareError, "发布列表"):
             firmware_module.fetch_release(
-                *self.ARGS, opener=lambda request, timeout=None: contextlib.closing(
+                *self.ARGS, tags=no_git, opener=lambda request, timeout=None: contextlib.closing(
                     io.BytesIO(b'{"message":"Not Found"}')))
+
+
+    # ---- finding builds through git, without the rate-limited API ----
+
+    WEB = "https://github.com/me/repo/releases/download/"
+
+    def web_files(self, tag, blob, digest=True):
+        asset = self.ARGS[1]
+        files = {self.WEB + tag + "/" + asset: blob}
+        if digest:
+            files[self.WEB + tag + "/" + asset + ".sha256"] = (
+                "%s  %s\n" % (hashlib.sha256(blob).hexdigest(), asset)).encode()
+        return files
+
+    def test_git_lists_the_builds_and_the_api_is_not_asked(self):
+        listed = {"firmware-build-9": "9" * 40, "firmware-build-10": "a" * 40,
+                  "firmware-build-2": "b" * 40}
+        files = dict(self.web_files("firmware-build-10", self.new),
+                     **self.web_files("firmware-build-2", self.old))
+        github = FakeGitHub([], files)
+        tags = lambda repo, prefix: dict(listed)
+
+        blob, found = firmware_module.fetch_release(*self.ARGS, opener=github, token="t0ken",
+                                                    tags=tags)
+        # The newest is the highest build number, not the last in spelling order.
+        self.assertEqual((blob, found["tag"], found["commit"]),
+                         (self.new, "firmware-build-10", "a" * 40))
+        blob, found = firmware_module.fetch_release(*self.ARGS, commit="b" * 12, opener=github,
+                                                    tags=tags)
+        self.assertEqual((blob, found["tag"]), (self.old, "firmware-build-2"))
+        blob, found = firmware_module.fetch_release(*self.ARGS, tag="firmware-build-2",
+                                                    opener=github, tags=tags)
+        self.assertEqual(blob, self.old)
+        with self.assertRaisesRegex(FirmwareError, "没找到"):
+            firmware_module.fetch_release(*self.ARGS, commit="d" * 40, opener=github, tags=tags)
+        # A tag without files (build 9) is "not there", not a crash.
+        with self.assertRaisesRegex(FirmwareError, "没找到"):
+            firmware_module.fetch_release(*self.ARGS, tag="firmware-build-9", opener=github,
+                                          tags=tags)
+        # Nothing went to the API, and the token never left for the download hosts.
+        self.assertTrue(all(url.startswith(self.WEB) and auth is None
+                            for url, auth in github.calls))
+
+    def test_waiting_through_git_asks_the_api_only_now_and_then(self):
+        naps = []
+        listed = {}
+        files = self.web_files("firmware-build-11", self.new, digest=False)
+        github = FakeGitHub([], {})
+        runs = []
+
+        def opener(request, timeout=None):
+            if "/actions/runs?head_sha=" in request.full_url:
+                runs.append(request.full_url)
+                return contextlib.closing(io.BytesIO(b'{"workflow_runs": []}'))
+            return github(request, timeout)
+
+        def nap(seconds):
+            naps.append(seconds)
+            if len(naps) == 3:
+                listed["firmware-build-11"] = "c" * 40   # the tag appears first ...
+            if len(naps) == 5:
+                github.files.update(files)               # ... and its files a little later
+
+        blob, found = firmware_module.fetch_release(
+            *self.ARGS, commit="c" * 40, wait_seconds=900, opener=opener, sleep=nap,
+            tags=lambda repo, prefix: dict(listed))
+        self.assertEqual((blob, found["tag"]), (self.new, "firmware-build-11"))
+        self.assertEqual(len(naps), 5)
+        # Five rounds of waiting, one question to the API (the clock barely moved in this test).
+        self.assertEqual(len(runs), 1)
+        self.assertFalse(any("api.github.com/repos/me/repo/releases" in url
+                             for url, _ in github.calls))
+
+    def test_remote_tags_reads_what_git_prints(self):
+        seen = {}
+
+        def run(command, **options):
+            seen["command"] = command
+            seen["prompt"] = options["env"].get("GIT_TERMINAL_PROMPT")
+
+            class Done:
+                returncode = 0
+                stdout = ("%s\trefs/tags/firmware-build-1\n" % ("1" * 40)
+                          + "%s\trefs/tags/firmware-build-2\n" % ("0" * 40)
+                          + "%s\trefs/tags/firmware-build-2^{}\n" % ("2" * 40)
+                          + "garbage\n")
+            return Done
+
+        tags = firmware_module.remote_tags("me/repo", "firmware-build-", run=run)
+        # An annotated tag counts as the commit it points to.
+        self.assertEqual(tags, {"firmware-build-1": "1" * 40, "firmware-build-2": "2" * 40})
+        self.assertEqual(seen["command"], ["git", "ls-remote", "--tags",
+                                           "https://github.com/me/repo.git", "firmware-build-*"])
+        self.assertEqual(seen["prompt"], "0")
+
+        def missing(command, **options):
+            raise FileNotFoundError("git")
+
+        def refused(command, **options):
+            class Done:
+                returncode = 128
+                stdout = ""
+            return Done
+
+        self.assertIsNone(firmware_module.remote_tags("me/repo", "firmware-build-", run=missing))
+        self.assertIsNone(firmware_module.remote_tags("me/repo", "firmware-build-", run=refused))
 
 
 class BuildTests(TempDirCase):
@@ -689,7 +801,7 @@ class CommandLineTests(TempDirCase):
             detach = False
 
         code = firmware_cli.run(loaded, self.config_path, Args, [], out=said.append,
-                                opener=FakeGitHub([entry], files))
+                                opener=FakeGitHub([entry], files), tags=no_git)
         self.assertEqual(code, 0)
         stored = self.store.find("latest")
         self.assertEqual((stored["version"], stored["note"]), ("ccc3333", "from CI"))
@@ -702,7 +814,7 @@ class CommandLineTests(TempDirCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = firmware_cli.run(loaded, self.config_path, Args, [], out=said.append,
-                                    opener=FakeGitHub([entry], files))
+                                    opener=FakeGitHub([entry], files), tags=no_git)
         self.assertEqual(code, 1)
         self.assertIn("没找到", err.getvalue())
         self.assertIn("没找到", self.store.target()["notice"])

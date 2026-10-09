@@ -49,11 +49,19 @@ DEVICE_EVENTS = ("connected", "progress", "installed", "failed", "unsupported")
 # 清单的经过里，这几种是“没成、需要人知道”的事；手机 App 会把最近的一条显示出来。
 NOTICE_EVENTS = ("failed", "gave_up", "fetch_failed")
 GITHUB_API = "https://api.github.com"
+GITHUB_WEB = "https://github.com"
 POLL_SECONDS = 20.0
+# 等构建的时候，隔这么久才问一次“是不是已经失败了”：这一问要走 GitHub 的接口，
+# 没登录时每小时只有 60 次。
+FAILED_CHECK_SECONDS = 90.0
 
 
 class FirmwareError(Exception):
     """这件事没做成；消息可以直接给人看。"""
+
+
+class NotThere(FirmwareError):
+    """要取的文件（还）不在那儿。"""
 
 
 @dataclass(frozen=True)
@@ -496,18 +504,72 @@ def _github(url: str, opener: Callable[..., Any], token: Optional[str], accept: 
     request = urllib.request.Request(url)
     request.add_header("Accept", accept)
     request.add_header("User-Agent", "xiaoyou-runtime")
-    if token:
+    if token and url.startswith(GITHUB_API + "/"):
+        # 令牌只给接口用：下载会被转到别的主机上，不把它带过去。
         request.add_header("Authorization", "Bearer " + token)
     try:
         with opener(request, timeout=timeout) as response:
             return response.read(MAX_FILE_BYTES + 1)
     except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise NotThere("GitHub 上没有 %s" % url)
         if error.code in (403, 429):
             raise FirmwareError("GitHub 暂时不让查了（%d，多半是没登录时的次数限制）；"
                                 "设置环境变量 GITHUB_TOKEN 可以放宽" % error.code)
         raise FirmwareError("GitHub 返回 %d：%s" % (error.code, url))
     except (urllib.error.URLError, OSError) as error:
         raise FirmwareError("连不上 GitHub：%s" % error)
+
+
+def remote_tags(repo: str, tag_prefix: str, run: Callable[..., Any] = subprocess.run,
+                timeout: float = 30) -> Optional[Dict[str, str]]:
+    """用 git 问这个仓库有哪些固件构建：标签 → 它是从哪个提交构建的。
+
+    这样问不走 GitHub 的接口，不占每小时的查询次数，所以等构建时可以一直问。
+    这台电脑没有 git、或者这一次没问到，返回 None，调用方改走接口。
+    """
+    environment = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    try:
+        done = run(["git", "ls-remote", "--tags", "%s/%s.git" % (GITHUB_WEB, repo),
+                    tag_prefix + "*"],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout,
+                   env=environment)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0:
+        return None
+    tags: Dict[str, str] = {}
+    for line in (done.stdout or "").splitlines():
+        commit, _, ref = line.partition("\t")
+        if not ref.startswith("refs/tags/") or len(commit) != 40:
+            continue
+        name = ref[len("refs/tags/"):]
+        if name.endswith("^{}"):
+            # 带说明的标签：这一行才是它指向的提交。
+            tags[name[:-3]] = commit
+        else:
+            tags.setdefault(name, commit)
+    return tags
+
+
+def _tag_number(name: str, tag_prefix: str) -> int:
+    rest = name[len(tag_prefix):]
+    return int(rest) if rest.isdigit() else -1
+
+
+def pick_tag(tags: Dict[str, str], repo: str, asset: str, tag_prefix: str,
+             tag: Optional[str] = None, commit: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """从 remote_tags 的结果里挑一个构建：指定标签、指定提交，或者编号最大的那个。"""
+    names = [name for name in tags if name.startswith(tag_prefix)]
+    if tag is not None:
+        names = [name for name in names if name == tag]
+    if commit is not None:
+        names = [name for name in names if tags[name].startswith(commit)]
+    if not names:
+        return None
+    name = max(names, key=lambda item: (_tag_number(item, tag_prefix), item))
+    url = "%s/%s/releases/download/%s/%s" % (GITHUB_WEB, repo, name, asset)
+    return {"tag": name, "commit": tags[name], "url": url, "sha256_url": url + ".sha256"}
 
 
 def find_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = None,
@@ -563,19 +625,38 @@ def fetch_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = N
                   commit: Optional[str] = None, wait_seconds: float = 0,
                   opener: Callable[..., Any] = urllib.request.urlopen,
                   token: Optional[str] = None, sleep: Callable[[float], None] = time.sleep,
-                  say: Callable[[str], None] = lambda message: None) -> Tuple[bytes, Dict[str, str]]:
-    """取回一个构建好的固件。wait_seconds 大于 0 时，还没构建出来就隔一会儿再看，直到超时。"""
+                  say: Callable[[str], None] = lambda message: None,
+                  tags: Callable[[str, str], Optional[Dict[str, str]]] = remote_tags,
+                  ) -> Tuple[bytes, Dict[str, str]]:
+    """取回一个构建好的固件。wait_seconds 大于 0 时，还没构建出来就隔一会儿再看，直到超时。
+
+    先用 git 看有哪些构建（tags，不占接口的查询次数），直接下载；git 用不了才去问接口。
+    """
     deadline = time.monotonic() + max(0.0, wait_seconds)
+    failed_checked: Optional[float] = None
     while True:
-        found = find_release(repo, asset, tag_prefix, tag, commit, opener, token)
+        listed = tags(repo, tag_prefix)
+        if listed is not None:
+            found = pick_tag(listed, repo, asset, tag_prefix, tag, commit)
+        else:
+            found = find_release(repo, asset, tag_prefix, tag, commit, opener, token)
         if found is not None:
-            break
+            try:
+                blob = _download(found, opener, token, say)
+                break
+            except NotThere:
+                if listed is None:
+                    raise
+                # 标签已经打上了，文件还没传完（或者这个标签下没有固件）：当作还没好。
         if time.monotonic() >= deadline:
             what = "标签 %s" % tag if tag else ("提交 %s 的构建" % commit[:10] if commit else "固件")
             raise FirmwareError("%s 里没找到%s%s" % (
                 repo, what, "（等了 %d 秒）" % wait_seconds if wait_seconds else ""))
-        if commit is not None and len(commit) == 40:
+        if commit is not None and len(commit) == 40 and (
+                failed_checked is None
+                or time.monotonic() - failed_checked >= FAILED_CHECK_SECONDS):
             # 构建要是已经失败了就不用傻等到超时。提交写的是简写时 GitHub 不认，跳过这一步。
+            failed_checked = time.monotonic()
             try:
                 failed = failed_build(repo, commit, opener, token)
             except FirmwareError:
@@ -584,16 +665,25 @@ def fetch_release(repo: str, asset: str, tag_prefix: str, tag: Optional[str] = N
                 raise FirmwareError("提交 %s 在 GitHub 上的固件构建失败了：%s" % (commit[:10], failed))
         say("还没构建出来，过一会儿再看……")
         sleep(min(POLL_SECONDS, max(1.0, deadline - time.monotonic())))
+    return blob, found
+
+
+def _download(found: Dict[str, str], opener: Callable[..., Any], token: Optional[str],
+              say: Callable[[str], None]) -> bytes:
     say("下载 %s ……" % found["tag"])
     blob = _github(found["url"], opener, token, "application/octet-stream", 120)
     if len(blob) > MAX_FILE_BYTES:
         raise FirmwareError("下载到的文件超过 8 MB，不像是这台设备的固件")
     if found["sha256_url"]:
-        expected = _github(found["sha256_url"], opener, token, "application/octet-stream",
-                           30).decode("ascii", "replace").split()
+        try:
+            expected = _github(found["sha256_url"], opener, token, "application/octet-stream",
+                               30).decode("ascii", "replace").split()
+        except NotThere:
+            # 这个构建没有另外公布 SHA-256。镜像自己带着校验和，入库时照样会核对。
+            return blob
         if not expected or hashlib.sha256(blob).hexdigest() != expected[0].lower():
             raise FirmwareError("下载到的 %s 和发布里写的 SHA-256 对不上" % found["tag"])
-    return blob, found
+    return blob
 
 
 def build_locally(command: List[str], source_dir: Path, output: Path, timeout: int = 1800,

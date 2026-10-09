@@ -137,7 +137,8 @@ def _detach(config_path: Path, state_dir: Path, arguments: List[str]) -> Path:
 
 def run(config: Config, config_path: Path, args: Any, arguments: List[str],
         out: Callable[[str], None] = print,
-        opener: Callable[..., Any] = firmware_module.urllib.request.urlopen) -> int:
+        opener: Callable[..., Any] = firmware_module.urllib.request.urlopen,
+        tags: Callable[..., Any] = firmware_module.remote_tags) -> int:
     """执行一条 firmware 子命令；返回进程退出码。arguments 是 firmware 后面的原始参数。"""
     store = FirmwareStore(config.state_dir)
     try:
@@ -210,7 +211,8 @@ def run(config: Config, config_path: Path, args: Any, arguments: List[str],
             try:
                 blob, found = firmware_module.fetch_release(
                     repo, config.firmware_asset, config.firmware_tag_prefix, args.tag, commit,
-                    args.wait, opener=opener, token=os.environ.get("GITHUB_TOKEN"), say=out)
+                    args.wait, opener=opener, token=os.environ.get("GITHUB_TOKEN"), say=out,
+                    tags=tags)
             except FirmwareError as error:
                 if args.wait > 0:
                     # 等构建的这一种多半没有人守着看：记进经过里，手机 App 上看得到。

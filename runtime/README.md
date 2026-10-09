@@ -342,8 +342,14 @@ commit (`HEAD` means the commit `firmware.source_dir` is on). `--wait 900`
 waits up to 900 seconds for a build that is not there yet, and stops at once if
 the build of that commit has already failed. `--detach` does the waiting and
 fetching in the background and returns immediately; the log is
-`<state_dir>/firmware/fetch.log`. Without a login GitHub allows 60 queries an
-hour; the `GITHUB_TOKEN` environment variable raises that.
+`<state_dir>/firmware/fetch.log`.
+
+The builds are found with `git ls-remote` (each build is a tag on the commit it
+was built from) and downloaded directly, so waiting for one does not use up
+GitHub's hourly allowance for API queries. Only the question "has this build
+already failed?" goes to the API, at most every 90 seconds. On a computer
+without `git` everything goes through the API; without a login that is 60
+queries an hour, and the `GITHUB_TOKEN` environment variable raises it.
 
 On a computer with ESP-IDF, `firmware.build_command` can be set (for example
 `["bash", "-lc", "source ~/esp/esp-idf/export.sh && idf.py build"]`), and
