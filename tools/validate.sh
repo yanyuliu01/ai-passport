@@ -116,6 +116,7 @@ run_static_checks() {
     run_app_host_tests "${test_dir}"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pocket_fonts.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_firmware.py
     echo "Runtime tests: PASS"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py

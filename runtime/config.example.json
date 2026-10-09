@@ -45,5 +45,13 @@
     "model_dir": "stt-models/sense-voice",
     "language": "auto",
     "threads": 2
+  },
+  "firmware": {
+    "repo": null,
+    "asset": "FoloToy-AI-Passport-full.bin",
+    "tag_prefix": "firmware-build-",
+    "source_dir": null,
+    "build_command": [],
+    "build_output": "build/FoloToy-AI-Passport.bin"
   }
 }

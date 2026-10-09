@@ -77,6 +77,13 @@ class Config:
     stt_language: str = "auto"
     stt_threads: int = 2
     stt_timeout_seconds: int = 60
+    # 设备固件：从哪个 GitHub 仓库取构建好的镜像，源码在这台电脑的哪里，会不会自己构建
+    firmware_repo: Optional[str] = None
+    firmware_asset: str = "FoloToy-AI-Passport-full.bin"
+    firmware_tag_prefix: str = "firmware-build-"
+    firmware_source_dir: Optional[Path] = None
+    firmware_build_command: List[str] = field(default_factory=list)
+    firmware_build_output: str = "build/FoloToy-AI-Passport.bin"
     # 配置文件所在的目录；相对路径、stt.command 和 router.command 都以它为准
     base_dir: Path = Path(".")
     # 读配置时发现的、不妨碍启动但值得让人知道的事
@@ -96,6 +103,7 @@ ROUTER_TYPES = ("mention", "command")
 CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 STT_ENGINES = ("none", "sense_voice", "command")
 STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
+GITHUB_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 MIN_TOKEN_LENGTH = 16
 PLACEHOLDER_TOKEN = "change-me-to-a-long-random-string"
 AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$")
@@ -390,6 +398,26 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     if not 5 <= stt_timeout <= 600:
         raise ConfigError("stt.timeout_seconds 应该在 5 到 600 之间")
 
+    firmware = _expect(raw.get("firmware", {}), dict, "firmware")
+    firmware_repo = _optional_string(firmware.get("repo"), "firmware.repo")
+    if firmware_repo is not None and not GITHUB_REPO.match(firmware_repo):
+        raise ConfigError("firmware.repo 要写成 GitHub 的“用户名/仓库名”，例如 yanyuliu01/ai-passport")
+    firmware_asset = _expect(
+        firmware.get("asset", "FoloToy-AI-Passport-full.bin"), str, "firmware.asset").strip()
+    firmware_tag_prefix = _expect(
+        firmware.get("tag_prefix", "firmware-build-"), str, "firmware.tag_prefix").strip()
+    if not firmware_asset or not firmware_tag_prefix:
+        raise ConfigError("firmware.asset 和 firmware.tag_prefix 不能是空的")
+    firmware_source_dir = _optional_string(firmware.get("source_dir"), "firmware.source_dir")
+    firmware_build_command = _strings(firmware.get("build_command", []), "firmware.build_command")
+    firmware_build_output = _expect(
+        firmware.get("build_output", "build/FoloToy-AI-Passport.bin"), str,
+        "firmware.build_output").strip()
+    if firmware_build_command and firmware_source_dir is None:
+        raise ConfigError("设置了 firmware.build_command 就要同时设置 firmware.source_dir（固件源码在哪）")
+    if firmware_build_command and not firmware_build_output:
+        raise ConfigError("设置了 firmware.build_command 就要同时设置 firmware.build_output（构建出的文件）")
+
     return Config(
         name=name,
         host=host,
@@ -411,6 +439,12 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         stt_language=stt_language,
         stt_threads=stt_threads,
         stt_timeout_seconds=stt_timeout,
+        firmware_repo=firmware_repo,
+        firmware_asset=firmware_asset,
+        firmware_tag_prefix=firmware_tag_prefix,
+        firmware_source_dir=_path(firmware_source_dir, base) if firmware_source_dir else None,
+        firmware_build_command=firmware_build_command,
+        firmware_build_output=firmware_build_output,
         base_dir=base,
         notices=notices,
     )
