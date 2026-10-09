@@ -33,6 +33,8 @@ final class RuntimeClient {
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
+    /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小幽回话，不能排在它后面。 */
+    private static final ExecutorService FIRMWARE_WORKER = Executors.newSingleThreadExecutor();
 
     private RuntimeClient() {
     }
@@ -362,6 +364,121 @@ final class RuntimeClient {
                 store.chatFailed(null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
             }
         });
+    }
+
+    // ---- 设备固件：Runtime 那台电脑上留着每一版，手机负责把要的那一版交给设备 ----
+
+    /** 界面要的版本清单；problem 不为 null 时是没问到的原因。在后台线程回调。 */
+    interface FirmwareListCallback {
+        void onVersions(List<Map<String, String>> versions, String problem);
+    }
+
+    static void fetchFirmwareVersions(Context context, FirmwareListCallback callback) {
+        final Target target = selected(context.getApplicationContext());
+        if (target == null) {
+            callback.onVersions(new ArrayList<>(), "还没有登记电脑");
+            return;
+        }
+        FIRMWARE_WORKER.execute(() -> {
+            try {
+                callback.onVersions(firmwareVersions(target), null);
+            } catch (IOException | RuntimeException error) {
+                callback.onVersions(new ArrayList<>(), "没问到 " + target.name + " 上有哪些固件："
+                        + error.getMessage());
+            }
+        });
+    }
+
+    /** 在界面上选了一版（ref 为 null 是不推了）。结果写进日志；真正动手的是 FirmwareSync。 */
+    static void chooseFirmware(Context context, String ref, String label) {
+        final Target target = selected(context.getApplicationContext());
+        if (target == null) {
+            HubStore.get().log("固件：还没有登记电脑");
+            return;
+        }
+        FIRMWARE_WORKER.execute(() -> {
+            try {
+                Map<String, String> answer = firmwareSetTarget(target, ref, "restore");
+                String id = answer.get("id");
+                HubStore.get().setFirmwareVersions(HubStore.get().firmwareBuild(), id);
+                HubStore.get().log(ref == null ? "固件：不推了"
+                        : "固件：已请 " + target.name + " 把设备换成" + label);
+            } catch (IOException | RuntimeException error) {
+                HubStore.get().log("固件：没办成：" + error.getMessage());
+            }
+        });
+    }
+
+    private static final int FIRMWARE_MAX_BYTES = 8 * 1024 * 1024;
+
+    /**
+     * 现在该推给设备的是哪一版（一层的对象；没有时 id 是空串）。rev 不小于 0 时最多等 wait 秒，
+     * 清单一有变化就返回。
+     */
+    static Map<String, String> firmwareTarget(Target target, int rev, int waitSeconds)
+            throws IOException {
+        String query = rev < 0 ? "" : "?wait=" + waitSeconds + "&rev=" + rev;
+        return request("GET", target.url + "/v1/firmware/target" + query, target.token, null, null,
+                waitSeconds + 15);
+    }
+
+    /** 把设备的情况告诉 Runtime；回来的还是“该推哪一版”。 */
+    static Map<String, String> firmwareReport(Target target, String json) throws IOException {
+        return request("POST", target.url + "/v1/firmware/device", target.token,
+                json.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 15);
+    }
+
+    /** 指定要推给设备的那一版：序号、编号、latest、previous；null 表示不推了。 */
+    static Map<String, String> firmwareSetTarget(Target target, String ref, String reason)
+            throws IOException {
+        StringBuilder body = new StringBuilder("{\"id\":");
+        if (ref == null) {
+            body.append("null");
+        } else {
+            BuddyProtocol.quote(body, ref);
+            body.append(",\"reason\":");
+            BuddyProtocol.quote(body, reason);
+        }
+        body.append('}');
+        return request("POST", target.url + "/v1/firmware/target", target.token,
+                body.toString().getBytes(StandardCharsets.UTF_8),
+                "application/json; charset=utf-8", 15);
+    }
+
+    /** 仓库里的版本，新的在前；每项是 Runtime 清单里的一条（id、seq、version、note、build…）。 */
+    static List<Map<String, String>> firmwareVersions(Target target) throws IOException {
+        return BuddyProtocol.parseObjectArray(
+                requestText("GET", target.url + "/v1/firmware", target.token, null, null, 15),
+                "versions");
+    }
+
+    /** 一版固件的应用镜像。 */
+    static byte[] firmwareImage(Target target, String id) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection)
+                new URL(target.url + "/v1/firmware/" + id + "/image").openConnection();
+        try {
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(60000);
+            connection.setRequestProperty("Authorization", "Bearer " + target.token);
+            int code = connection.getResponseCode();
+            if (code != 200) {
+                throw new IOException("Runtime 返回 " + code);
+            }
+            try (InputStream in = connection.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream(2 * 1024 * 1024);
+                byte[] buffer = new byte[16384];
+                int count;
+                while ((count = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, count);
+                    if (out.size() > FIRMWARE_MAX_BYTES) {
+                        throw new IOException("固件超过 8 MB");
+                    }
+                }
+                return out.toByteArray();
+            }
+        } finally {
+            connection.disconnect();
+        }
     }
 
     private static Map<String, String> request(String method, String address, String token,

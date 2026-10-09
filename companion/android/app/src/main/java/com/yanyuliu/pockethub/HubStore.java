@@ -134,6 +134,11 @@ public final class HubStore {
     private Turn turn = new Turn("idle", "", "", "", "", "idle");
     /** 换了一台 Runtime，或者别的原因让“小幽有哪些帮手”需要重新问一次。 */
     private long helpersVersion;
+    /** 设备固件这件事现在怎么样了，一句话。 */
+    private String firmwareLine = "还不知道设备上是哪一版固件";
+    /** 设备现在跑的固件、Runtime 要推给它的那一版；不知道就是空串。 */
+    private String firmwareBuild = "";
+    private String firmwareTarget = "";
 
     private HubStore() {
     }
@@ -411,6 +416,47 @@ public final class HubStore {
 
     public synchronized String linkState() {
         return linkState;
+    }
+
+    // ---- 设备固件 ----
+
+    public synchronized String firmwareLine() {
+        return firmwareLine;
+    }
+
+    public synchronized String firmwareBuild() {
+        return firmwareBuild;
+    }
+
+    public synchronized String firmwareTarget() {
+        return firmwareTarget;
+    }
+
+    /** 设备固件这件事有了新情况。line 记进日志；传输中的百分比这类只更新界面，不记。 */
+    public void setFirmware(String line, boolean logIt) {
+        synchronized (this) {
+            if (line.equals(firmwareLine)) {
+                return;
+            }
+            firmwareLine = line;
+            if (logIt) {
+                appendLog("固件：" + line);
+            }
+        }
+        notifyChanged();
+    }
+
+    public void setFirmwareVersions(String build, String target) {
+        synchronized (this) {
+            String running = build == null ? "" : build;
+            String wanted = target == null ? "" : target;
+            if (running.equals(firmwareBuild) && wanted.equals(firmwareTarget)) {
+                return;
+            }
+            firmwareBuild = running;
+            firmwareTarget = wanted;
+        }
+        notifyChanged();
     }
 
     public void setLinkState(String state) {

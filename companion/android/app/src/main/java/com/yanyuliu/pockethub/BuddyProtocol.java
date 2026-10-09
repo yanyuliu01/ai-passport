@@ -284,6 +284,100 @@ public final class BuddyProtocol {
         return null;
     }
 
+    // ---- 经蓝牙换固件（固件的 main/pocket_update_core.h）----
+
+    /** 数据帧的第一个字节。0xFE 不会出现在 UTF-8 里，设备靠它把数据帧和文本行分开。 */
+    public static final int FW_MAGIC = 0xFE;
+    public static final int FW_HEADER_BYTES = 5;
+    /** 一次写入最多带这么多字节（含帧头）。 */
+    public static final int FW_FRAME_MAX = 244;
+
+    /** {"cmd":"fw","op":…}：info、end、abort、confirm、rollback 这几个不带别的参数。 */
+    public static String fwOp(String op) {
+        StringBuilder out = new StringBuilder("{\"cmd\":\"fw\",\"op\":");
+        quote(out, op);
+        return out.append("}\n").toString();
+    }
+
+    /** 开始传一份镜像：多大、SHA-256 是什么（64 位十六进制）。 */
+    public static String fwBegin(int size, String sha256) {
+        StringBuilder out = new StringBuilder("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":");
+        out.append(Math.max(0, size)).append(",\"sha256\":");
+        quote(out, sha256);
+        return out.append("}\n").toString();
+    }
+
+    /** 一帧固件数据：[0xFE][偏移，4 字节小端][image 里从 offset 开始的 length 字节]。 */
+    public static byte[] fwFrame(byte[] image, int offset, int length) {
+        byte[] frame = new byte[FW_HEADER_BYTES + length];
+        frame[0] = (byte) FW_MAGIC;
+        frame[1] = (byte) offset;
+        frame[2] = (byte) (offset >> 8);
+        frame[3] = (byte) (offset >> 16);
+        frame[4] = (byte) (offset >> 24);
+        System.arraycopy(image, offset, frame, FW_HEADER_BYTES, length);
+        return frame;
+    }
+
+    /** 设备关于换固件说的一行：对某个 op 的应答，或者传输中的进度。 */
+    public static final class FwLine {
+        /** true 是应答（"ack"），false 是进度（"evt"）。 */
+        public final boolean ack;
+        /** 应答的是哪个 op；旧固件不认识 fw，应答里没有 op，这里是空串。 */
+        public final String op;
+        public final boolean ok;
+        public final String error;
+        private final Map<String, String> fields;
+
+        FwLine(boolean ack, Map<String, String> fields) {
+            this.ack = ack;
+            this.fields = fields;
+            String name = fields.get("op");
+            this.op = name == null ? "" : name;
+            this.ok = !ack || "true".equals(fields.get("ok"));
+            String reason = fields.get("error");
+            this.error = reason == null ? "" : reason;
+        }
+
+        public String text(String key) {
+            String value = fields.get(key);
+            return value == null ? "" : value;
+        }
+
+        /** 非负整数；没有这一项或者写得不对时返回 fallback。 */
+        public int number(String key, int fallback) {
+            String value = fields.get(key);
+            if (value == null || value.isEmpty() || value.length() > 10) {
+                return fallback;
+            }
+            long total = 0;
+            for (int index = 0; index < value.length(); index++) {
+                char digit = value.charAt(index);
+                if (digit < '0' || digit > '9') {
+                    return fallback;
+                }
+                total = total * 10 + (digit - '0');
+            }
+            return total > Integer.MAX_VALUE ? fallback : (int) total;
+        }
+
+        public boolean flag(String key) {
+            return "true".equals(fields.get(key));
+        }
+    }
+
+    /** 这一行是不是设备关于换固件说的；不是返回 null。 */
+    public static FwLine parseFw(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null) {
+            return null;
+        }
+        if ("fw".equals(fields.get("ack"))) {
+            return new FwLine(true, fields);
+        }
+        return "fw".equals(fields.get("evt")) ? new FwLine(false, fields) : null;
+    }
+
     /** 把一行切成不超过 size 字节的若干段，按顺序写入蓝牙特征。 */
     public static List<byte[]> chunk(String line, int size) {
         byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
