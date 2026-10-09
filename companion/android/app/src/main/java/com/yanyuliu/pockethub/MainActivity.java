@@ -2,6 +2,7 @@ package com.yanyuliu.pockethub;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -25,10 +26,11 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * 唯一的界面：和小幽的对话（一件事一张卡，等你点头的操作在最上面）、由哪台电脑回答、
- * 三步设置（蓝牙权限、通知读取、连接设备）、来源开关、测试按钮和运行日志。
+ * 设备固件、三步设置（蓝牙权限、通知读取、连接设备）、来源开关、测试按钮和运行日志。
  * 界面全部用代码搭，不依赖任何第三方库。
  */
 public class MainActivity extends Activity implements HubStore.Listener {
@@ -49,6 +51,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private LinearLayout thingList;
     private String thingKey = null;
     private static final int CARDS_SHOWN = 12;
+    private TextView firmwareStatus;
+    private LinearLayout firmwareList;
+    /** 上次从电脑问到的版本清单，以及画列表时用的记号（清单或记号变了才重画）。 */
+    private List<Map<String, String>> firmwareVersions = new ArrayList<>();
+    private String firmwareKey = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +93,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
         pairingInput = input("粘贴连接串：http://地址:端口#令牌");
         root.addView(pairingInput);
         root.addView(button("添加这台电脑", view -> savePairing()));
+
+        root.addView(heading("设备固件"));
+        firmwareStatus = text("", 14, false);
+        root.addView(firmwareStatus);
+        firmwareList = new LinearLayout(this);
+        firmwareList.setOrientation(LinearLayout.VERTICAL);
+        root.addView(firmwareList);
+        root.addView(button("看看电脑上留着哪些版本", view -> fetchFirmware()));
+        root.addView(button("不换了（取消还没开始的）", view ->
+                RuntimeClient.chooseFirmware(this, null, "")));
 
         root.addView(heading("设置"));
         root.addView(button("① 授权蓝牙", view -> requestBluetooth()));
@@ -185,6 +202,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         chatView.setText(talk.length() == 0 ? (cards.isEmpty() ? "（还没有聊过）" : "")
                 : talk.toString().trim());
         refreshRuntimes();
+        firmwareStatus.setText(store.firmwareLine());
+        refreshFirmware();
 
         StringBuilder lines = new StringBuilder();
         for (String line : store.logLines()) {
@@ -347,6 +366,70 @@ public class MainActivity extends Activity implements HubStore.Listener {
         runtimeStatus.setText(targets.isEmpty()
                 ? "还没有登记电脑。在电脑上运行 python3 -m xiaoyou_runtime --pair 得到连接串。"
                 : "点一下切换由哪台电脑回答，长按删除。换电脑时最近的对话会带过去。");
+    }
+
+    /** 问现在用的那台电脑：仓库里有哪些固件。 */
+    private void fetchFirmware() {
+        RuntimeClient.fetchFirmwareVersions(this, (versions, problem) -> runOnUiThread(() -> {
+            if (problem != null) {
+                HubStore.get().log("固件：" + problem);
+            }
+            firmwareVersions = versions;
+            firmwareKey = null;
+            refreshFirmware();
+        }));
+    }
+
+    /** 电脑上留着的每一版一个按钮：点一下把设备换成这一版。清单和记号都没变时不重画。 */
+    private void refreshFirmware() {
+        HubStore store = HubStore.get();
+        String running = store.firmwareBuild();
+        String wanted = store.firmwareTarget();
+        String key = running + "|" + wanted + "|" + firmwareVersions.size()
+                + (firmwareVersions.isEmpty() ? "" : "|" + firmwareVersions.get(0).get("id"));
+        if (key.equals(firmwareKey)) {
+            return;
+        }
+        firmwareKey = key;
+        firmwareList.removeAllViews();
+        for (Map<String, String> version : firmwareVersions) {
+            final String id = version.get("id");
+            String seq = version.get("seq");
+            if (id == null || seq == null) {
+                continue;
+            }
+            final String label = "第 " + seq + " 版";
+            String note = version.get("note");
+            String name = version.get("version");
+            boolean onDevice = !running.isEmpty() && running.equals(version.get("build"));
+            boolean updatable = "true".equals(version.get("updatable"));
+            StringBuilder line = new StringBuilder(label);
+            if (name != null && !name.isEmpty()) {
+                line.append("  ").append(name);
+            }
+            if (note != null && !note.isEmpty()) {
+                line.append("  ").append(note);
+            }
+            if (onDevice) {
+                line.append("  ● 设备上现在是这一版");
+            } else if (id.equals(wanted)) {
+                line.append("  → 正要换成这一版");
+            } else if (!updatable) {
+                line.append("  （装上后只能插线换，这里不提供）");
+            }
+            Button choice = button(line.toString(), view -> new AlertDialog.Builder(this)
+                    .setMessage("把设备换成" + label + "？手机连着设备时会自己开始，大约一两分钟，"
+                            + "期间设备屏幕显示进度。")
+                    .setPositiveButton("换", (dialog, which) ->
+                            RuntimeClient.chooseFirmware(this, id, label))
+                    .setNegativeButton("算了", null)
+                    .show());
+            choice.setEnabled(updatable && !onDevice);
+            firmwareList.addView(choice);
+        }
+        if (firmwareVersions.isEmpty()) {
+            firmwareList.addView(text("（还没问过，或者电脑上还没有固件）", 12, false));
+        }
     }
 
     private void refreshSources() {

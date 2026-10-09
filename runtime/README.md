@@ -91,6 +91,12 @@ Relative paths are resolved against the directory of the configuration file.
 | `stt.threads` | `2` | `sense_voice`: processor threads (1 to 16). |
 | `stt.command` | `[]` | `command`: the command to run; one argument must contain `{audio}`. |
 | `stt.timeout_seconds` | `60` | `command`: a recognition run is stopped after this long (5 to 600). |
+| `firmware.repo` | none | The GitHub repository to fetch built device firmware from, as `owner/name`. See [Device firmware](#device-firmware). |
+| `firmware.asset` | `FoloToy-AI-Passport-full.bin` | The name of the firmware file in a release. |
+| `firmware.tag_prefix` | `firmware-build-` | Releases that carry firmware have a tag that starts with this. |
+| `firmware.source_dir` | none | Where the firmware source is on this computer; used by `fetch --commit HEAD` and `build`. |
+| `firmware.build_command` | `[]` | The command that builds the firmware on this computer, run in `source_dir`. Empty means this computer does not build it. |
+| `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | The firmware file a build produces, relative to `source_dir`. |
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
@@ -355,6 +361,12 @@ responses are JSON.
 | `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
+| `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`: the firmware library, newest version first. See [Device firmware](#device-firmware). |
+| `GET /v1/firmware/target?wait=<seconds>&rev=<n>` | The version the device should run, as one flat object: `id` (empty when there is none), `seq`, `build`, `size`, `sha256`, `note`, `reason`, `attempts`, `notice`, `notice_at`, `rev`. With `rev`, returns as soon as the library changes. |
+| `GET /v1/firmware/<id>/image` | That version's application image (binary). |
+| `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
+| `POST /v1/firmware/target` with `{"id": version or null, "reason"?, "force"?}` | Sets (or clears) the version the device should run; answers like `GET /v1/firmware/target`. |
+| `POST /v1/firmware/device` with `{"event", "build", "state", "prev", …}` | What the phone app says about the device. `event` is `connected`, `progress`, `installed`, `failed` or `unsupported`; answers like `GET /v1/firmware/target`. |
 
 A message record says whether Xiaoyou has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`
@@ -406,6 +418,95 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
 curl -s "http://127.0.0.1:8765/v1/feed?after=0&wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Device firmware
+
+The device's firmware can be
+[replaced over Bluetooth](../docs/claude-pocket.md#replacing-the-firmware-over-bluetooth).
+The computer that runs the runtime keeps every version and records which one
+the device should run. What writes firmware to the device is the phone app:
+while it is connected to the device and can reach this runtime, it notices that
+the two differ, fetches the image and sends it over Bluetooth; after the device
+restarts it confirms the new firmware and reports the outcome back.
+
+Each version's application image is stored as it is in
+`<state_dir>/firmware/images/`, with the list in
+`<state_dir>/firmware/index.json`. **Nothing is removed automatically** (a
+version is about 1.7 MB). Adding a version checks the image's checksum and
+reads its version string, build time and `build` (the first 16 hex digits of
+the firmware ELF's SHA-256, which is also what the device reports). Every
+version gets a number in the order it arrived, so "version 7" is enough to name
+one.
+
+```bash
+python3 -m xiaoyou_runtime firmware list              # the versions; ● on the device, → waiting to be pushed
+python3 -m xiaoyou_runtime firmware status            # what the device runs, what is pending, recent history
+python3 -m xiaoyou_runtime firmware fetch --push      # take the newest build from GitHub, store it, push it
+python3 -m xiaoyou_runtime firmware add FILE.bin      # store a firmware file (application or merged image)
+python3 -m xiaoyou_runtime firmware restore 5         # put the device back on version 5
+python3 -m xiaoyou_runtime firmware restore previous  # back to the version in the device's other slot (seconds, no transfer)
+python3 -m xiaoyou_runtime firmware cancel            # do not push after all
+python3 -m xiaoyou_runtime firmware remove 3          # delete version 3 from the library
+```
+
+A version is named by its number (`7` or `#7`), the first digits of its id,
+`latest`, `current` (what the device runs) or `previous`. `push` and `restore`
+are the same thing. These commands and the running service share one list, so
+the service does not need a restart.
+
+`fetch` takes firmware from the releases of `firmware.repo`: the newest without
+arguments, a given tag, or with `--commit <commit>` only one built from that
+commit (`HEAD` means the commit `firmware.source_dir` is on). `--wait 900`
+waits up to 900 seconds for a build that is not there yet, and stops at once if
+the build of that commit has already failed. `--detach` does the waiting and
+fetching in the background and returns immediately; the log is
+`<state_dir>/firmware/fetch.log`.
+
+The builds are found with `git ls-remote` (each build is a tag on the commit it
+was built from) and downloaded directly, so waiting for one does not use up
+GitHub's hourly allowance for API queries. Only the question "has this build
+already failed?" goes to the API, at most every 90 seconds. On a computer
+without `git` everything goes through the API; without a login that is 60
+queries an hour, and the `GITHUB_TOKEN` environment variable raises it.
+
+On a computer with ESP-IDF, `firmware.build_command` can be set (for example
+`["bash", "-lc", "source ~/esp/esp-idf/export.sh && idf.py build"]`), and
+`firmware build --push` then builds locally and pushes without waiting for
+GitHub.
+
+Safeguards:
+
+- A version that **cannot itself be replaced over Bluetooth** once installed
+  (firmware from before this feature) is not pushed without `--force`.
+- A version that fails to install twice in a row is not pushed again; `status`
+  says why.
+- A fetch that did not work (a failed build, a timeout) and a failed install
+  are recorded in the history, and the "device firmware" line of the phone app
+  shows them.
+- Images are not signed. Whoever can use this runtime's interface (that is,
+  knows the token) can have the phone push any image to the device.
+
+### Changing the screen by saying so
+
+Enable the agent called `tailor` in `config.example.json` and fill in
+`firmware.repo` and `firmware.source_dir` (`..`, this repository). It is a
+`claude_code` agent that only does work, with the firmware repository as its
+working directory, and it follows
+[`skills/pocket-screen-update`](../skills/pocket-screen-update/SKILL.md): change
+the interface code, run the checks, commit locally, then build on this computer
+and push the result to the device (when ESP-IDF is installed with
+`tools/install_idf.sh` and `firmware.build_command` is set; GitHub is not needed
+then), or else push to GitHub and have the runtime wait for the build there. Say "@tailor make the strip at the
+top thinner" to the device (the example also gives it a Chinese alias), or
+just say what should change and let Xiaoyou decide to hand it over. "Go back to the previous one" is its job as well.
+
+What has to be in place first: the repository on this computer can `git push`;
+`tailor` has `Bash` in `allowed_tools`, which lets it run commands in this
+repository. That is what the job needs, but enable it only on your own
+computer. From the spoken sentence to the device starting the update takes the
+time Claude Code needs for the change (a minute or two) plus GitHub's build
+(several minutes); the conversation waits for the change, and the build and the
+push happen in the background.
 
 ## Windows
 
@@ -676,8 +777,26 @@ request code on a desktop Java runtime: a fact told to the first runtime was
 recalled by the second after the turns were carried over, and something the
 second said was recalled by the first after carrying them back.
 
+Verified by hand on 2026-10-09 on Linux (in a cloud workspace), the firmware
+library: `firmware fetch` took `firmware-build-2` from this repository's real
+releases on GitHub, checked the published SHA-256, and read a version string
+that is the commit it was built from; `--commit … --wait … --detach` fetched the
+same version in the background; a locally compiled application image and its
+merged image stored as the same version; `list`, `status`, `push`, `restore`,
+`cancel` and `remove` behaved as described. `runtime/tests/test_firmware.py`
+covers parsing, the library, the interface and the command line with images
+assembled by hand.
+
 Not verified:
 
+- The firmware library together with the phone app and a real device: no
+  version has actually been installed on a device over Bluetooth.
+- The `tailor` agent: the whole loop of changing the interface, committing,
+  pushing and waiting for the build has not been run with a real Claude Code.
+  Whether this computer can `git push`, and whether Claude Code accepts the
+  `allowed_tools` in the example, has to be confirmed on that computer.
+- `firmware build`: tested with a stand-in command only, never against a real
+  ESP-IDF.
 - Windows: nothing in this directory has been run on Windows.
 - Voice from a real device: microphone quality, Bluetooth throughput, and
   recognition of real speech in a real room.
@@ -738,4 +857,5 @@ Known risks:
 
 ```bash
 python3 runtime/tests/test_runtime.py
+python3 runtime/tests/test_firmware.py
 ```

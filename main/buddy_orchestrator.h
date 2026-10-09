@@ -23,6 +23,10 @@ typedef struct {
     esp_err_t (*factory_reset)(void *context);
     esp_err_t (*set_ble_enabled)(void *context, bool enabled);
     esp_err_t (*persist_level)(void *context, uint64_t level);
+    /* A firmware update command. The updater answers the host itself. NULL when
+     * this build cannot be updated over the link. */
+    void (*firmware)(void *context, const pocket_update_command_t *command,
+                     uint32_t generation);
 } buddy_orchestrator_ops_t;
 
 bool buddy_orchestrator_process_rx(buddy_state_t *state,

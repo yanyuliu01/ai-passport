@@ -4,22 +4,34 @@
 
 # Firmware Layout
 
-This repository is a minimal base for user-defined firmware targeting an
-ESP32-C3 with 8 MB Flash. Its default does not reserve product-specific
-identity, OTA, or unused data partitions.
+The target is an ESP32-C3 with 8 MB Flash. The Claude Pocket firmware in this
+repository can be
+[replaced over Bluetooth](../../claude-pocket.md#replacing-the-firmware-over-bluetooth),
+so the default layout has two application slots of the same size. It does not
+reserve product-specific identity or unused data partitions.
 
 ## Default layout
 
-The default partition table contains exactly:
+The default partition table (`partitions.csv`) contains:
 
 | Partition | Type/subtype | Offset | Size | Purpose |
 | --- | --- | ---: | ---: | --- |
-| `nvs` | data/NVS | `0x9000` | `0x6000` | ESP-IDF and application key-value storage |
+| `nvs` | data/NVS | `0x9000` | `0x6000` | ESP-IDF and application key-value storage (settings, the Bluetooth bond) |
 | `phy_init` | data/PHY | `0xF000` | `0x1000` | PHY initialization data |
-| `factory` | app/factory | `0x10000` | `0x7F0000` | The single application image; all remaining Flash |
+| `otadata` | data/OTA | `0x10000` | `0x2000` | Which application slot to start from, and whether a new image has been confirmed |
+| `ota_0` | app/ota_0 | `0x20000` | `0x3F0000` | One application slot; a merged image flashed by cable puts the application here |
+| `ota_1` | app/ota_1 | `0x410000` | `0x3F0000` | The other application slot |
 
-The default has no OTA slots. This is a starting point, not a restriction on
-user firmware.
+The two slots take turns: the running one is left alone, a new image is written
+to the other, and the device switches once the image checks out.
+`sdkconfig.defaults` enables `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`: a new
+image has to be confirmed after its first start, or the bootloader goes back to
+the previous slot at the next restart. There is no `factory` partition.
+
+The partition table itself cannot be changed over Bluetooth: it is written by
+flashing over a cable. After a change to this table (resizing the slots
+included), devices already in use need one more flash by cable, and this
+document has to follow.
 
 ## Custom layouts
 

@@ -10,7 +10,7 @@
 #define PT_HOME_BLE_OFF    "蓝牙关着呢"
 #define PT_HOME_WAITING    "睡着啦"
 #define PT_HOME_LINKING    "连上啦"
-#define PT_HOME_QUIET      "我在"
+#define PT_HOME_QUIET      "待命中"
 
 #define PT_HOME_SUB_BLE_OFF   "双击确认键\n在菜单里把蓝牙打开"
 #define PT_HOME_SUB_WAITING   "手机上打开小幽中枢\n我就醒了"
@@ -149,6 +149,16 @@
 #define PT_VOICE_NO_HOST     "这个连接不能传语音"
 #define PT_VOICE_FAILED_MIC  "麦克风没准备好，再试一次"
 #define PT_VOICE_FAILED_LINK "没发出去，连接不太稳"
+
+// ---- 经蓝牙换固件（小幽独占画面：标题、进度、一行说明）----
+#define PT_UPDATE_RECEIVING   "在换新样子"
+#define PT_UPDATE_CHECKING    "快好了"
+#define PT_UPDATE_RESTARTING  "换好啦"
+#define PT_UPDATE_SUB_RECEIVING  "别关机，马上就好"
+#define PT_UPDATE_SUB_CHECKING   "照照镜子，看合不合身"
+#define PT_UPDATE_SUB_RESTARTING "重启一下就来"
+// 没换成（显示在底部提示那一行；最多 13 个汉字一行）
+#define PT_UPDATE_FAILED      "新样子没换成，还是原来的"
 
 // ---- 按键提示：图标后面跟的字 ----
 #define PT_KEY_SEPARATOR   " · "

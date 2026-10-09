@@ -58,6 +58,36 @@ static void test_voice_view(void)
     assert(pocket_view_for(&snapshot) == POCKET_VIEW_APPROVAL);
 }
 
+static void test_update_view(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+
+    /* 正在换固件时，别的都让路：审批、配对、二次确认、说话都不显示。 */
+    snprintf(snapshot.prompt_id, sizeof(snapshot.prompt_id), "%s", "req-1");
+    snapshot.confirmation = BUDDY_CONFIRM_UNPAIR;
+    snapshot.passkey_visible = true;
+    snapshot.voice_phase = BUDDY_VOICE_LISTENING;
+    snapshot.update_phase = POCKET_UPDATE_RECEIVING;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_UPDATE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
+    snapshot.update_phase = POCKET_UPDATE_CHECKING;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_UPDATE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
+    snapshot.update_phase = POCKET_UPDATE_RESTARTING;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_UPDATE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
+    /* 收到一半连接断了、等手机回来的时候不占屏幕，没在换的时候当然也不占。 */
+    snapshot.update_phase = POCKET_UPDATE_PAUSED;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_CONFIRM);
+    snapshot.update_phase = POCKET_UPDATE_IDLE;
+    assert(pocket_view_for(&snapshot) == POCKET_VIEW_CONFIRM);
+    assert(pocket_update_shown(POCKET_UPDATE_RECEIVING));
+    assert(pocket_update_shown(POCKET_UPDATE_CHECKING));
+    assert(pocket_update_shown(POCKET_UPDATE_RESTARTING));
+    assert(!pocket_update_shown(POCKET_UPDATE_PAUSED));
+    assert(!pocket_update_shown(POCKET_UPDATE_IDLE));
+}
+
 static void test_home_status(void)
 {
     buddy_ui_snapshot_t snapshot = {0};
@@ -333,6 +363,7 @@ int main(void)
     test_task_clock();
     test_view_priority();
     test_voice_view();
+    test_update_view();
     test_home_status();
     test_pet_mood();
     test_notice();

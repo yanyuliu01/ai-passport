@@ -12,6 +12,7 @@
 
 // 当前应该占据屏幕的视图。数值越小优先级越高：需要用户处理的事压过普通页面。
 typedef enum {
+    POCKET_VIEW_UPDATE,    // 正在经蓝牙换固件：这时别的都让路，按键也不管用
     POCKET_VIEW_CONFIRM,   // 取消配对 / 恢复出厂 的二次确认
     POCKET_VIEW_PAIRING,   // 配对码或“正在建立安全连接”
     POCKET_VIEW_VOICE,     // 按住确认键说话
@@ -46,7 +47,10 @@ int pocket_card_scroll(int y, int direction, int content, int view, int step, in
 // 第三屏（任务）里一件事已经做了多少秒：中枢说的秒数加上从那以后过去的时间。
 uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_ms);
 
-// 小幽此刻的表情：跟随当前视图（审批、配对、确认、说话）或第一屏的情形。
+// 换固件这件事现在要不要占着屏幕：正在收、正在核对、马上重启。
+// 收到一半连接断了（等手机回来）时不占，照常显示别的。
+bool pocket_update_shown(pocket_update_phase_t phase);
+// 小幽此刻的表情：跟随当前视图（换固件、审批、配对、确认、说话）或第一屏的情形。
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot);
 // message 里那行字现在要不要显示。连的是手机中枢时它只是一条提示，出现几秒就收起；
 // 连的是 Claude 桌面端时它是对面的状态行，一直显示。

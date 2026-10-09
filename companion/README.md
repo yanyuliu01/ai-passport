@@ -46,6 +46,7 @@ display label, and more can be added in the app.
 | Notifications not yet dismissed | The idle first screen says how many |
 | A notification with both an allow-like and a deny-like button | The pet asks; `OK` presses the allow button, `DOWN` the deny button |
 | Nothing new | A keepalive every 10 seconds so the device stays connected |
+| A version of the device firmware chosen on the computer | The device shows Xiaoyou "changing into something new" with a progress bar and restarts by itself when done; see [Device firmware](#device-firmware) below |
 
 When the app introduces itself the device announces what it understands. One
 that announces `cards` runs the three-screen firmware and gets everything
@@ -89,6 +90,33 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## Device firmware
+
+The device is only connected to the phone, so the phone carries new firmware
+across. The computer (the runtime) keeps every version and records which one
+the device should run; the app asks the device which version it runs when it
+connects, tells the computer, and keeps watching the computer after that. When
+the two differ, the app fetches that version's image, checks its SHA-256, and
+sends it to the device over Bluetooth, a minute or two. After the device
+restarts the app connects again and confirms the new firmware (without that
+within three minutes the device goes back to the previous version by itself)
+and reports the outcome to the computer. If the connection drops halfway, the
+transfer continues after reconnecting instead of starting over. When the
+version the computer wants is still in the device's other slot, nothing is
+transferred: the device switches back in seconds.
+
+The "device firmware" section of the screen shows where things stand. Tap the
+button that lists the versions kept on the computer and then one of the
+versions to put the device on that version (it asks first); old versions that could not be replaced over Bluetooth
+once installed are not offered. This is rarely needed: saying a sentence to the
+device, or running `firmware restore` on the computer, does the same.
+
+The device needs firmware that already has this feature. Older firmware is
+recognised, and the app says that one flash by cable is needed first. The
+protocol is in
+[`docs/claude-pocket.md`](../docs/claude-pocket.md#replacing-the-firmware-over-bluetooth),
+the computer's side in [`runtime/README.md`](../runtime/README.md#device-firmware).
+
 ## Privacy
 
 Notification text of registered sources is held in memory, sent only to the
@@ -103,6 +131,11 @@ plain HTTP, so anyone on the same network can read it; use it on a network you
 trust. The runtime addresses and tokens, and the 20 most recent turns of the
 conversation, are kept in the app's private storage.
 
+Device firmware is downloaded from the runtime over the same plain HTTP
+connection, and the app only checks that it matches the SHA-256 in the
+runtime's list; images are not signed. Whoever can change the firmware list on
+the runtime can therefore have the app write any image to the device.
+
 ## Layout
 
 | Path | Role |
@@ -114,8 +147,10 @@ conversation, are kept in the app's private storage.
 | `.../NotifyListener.java` | Notification listener service |
 | `.../BleLink.java`, `.../LinkService.java` | BLE central and the foreground service that keeps it alive |
 | `.../VoiceRecording.java` | Decodes voice frames from the device into a WAV recording; plain Java, unit tested |
-| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime, waits for cards to change, answers approvals, cancels a thing, and asks which agents the runtime has |
-| `.../MainActivity.java` | Operations waiting for consent, cards, chat box, setup, source list, test buttons, log |
+| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime, waits for cards to change, answers approvals, cancels a thing, and asks which agents and which firmware versions the runtime has |
+| `.../FirmwarePush.java` | One transfer of a firmware image to the device: what to send, when, and where to resend from; plain Java, unit tested |
+| `.../FirmwareSync.java` | Keeps the device on the version the runtime names: asks the device, watches the runtime, fetches, transfers, confirms, reports |
+| `.../MainActivity.java` | Operations waiting for consent, cards, chat box, device firmware, setup, source list, test buttons, log |
 
 ## Status
 
@@ -130,8 +165,12 @@ shown on the device worked. Not verified: voice from the device and
 switching between runtimes (versions 0.3.0 and 0.4.0 have not been run on a
 phone), the conversation on the device's home page and the helpers list
 (version 0.5.0, which needs the matching firmware; not run on a phone),
-cards, tasks, approvals and the three-screen firmware (version 0.6.0, which
-needs runtime 0.5.0 and the matching firmware; compiled in the build only,
-not run on a phone),
+replacing the firmware over Bluetooth (version 0.6.0; the transfer itself was
+run on a desktop Java runtime against the firmware's own protocol code,
+including lost frames and resuming, but never on a phone against a real device,
+and the speed Bluetooth actually reaches has not been measured),
+cards, tasks, approvals and the three-screen firmware (version 0.7.0, which
+needs runtime 0.5 or newer and the matching firmware; compiled in the build
+only, not run on a phone),
 reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.

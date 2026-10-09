@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pocket_update_core.h"
+
 #define BUDDY_NAME_MAX 32
 #define BUDDY_OWNER_MAX 32
 #define BUDDY_MESSAGE_MAX 160
@@ -166,6 +168,7 @@ typedef enum {
     /* The conversation screen was scrolled past the end of a card: go to the
      * previous (key UP) or next (key DOWN) one. Raised by the interface. */
     BUDDY_EVENT_CARD_STEP,
+    BUDDY_EVENT_FIRMWARE,   /* {"cmd":"fw",…}: goes to the updater, not to the state machine */
 } buddy_event_type_t;
 
 typedef enum {
@@ -363,6 +366,7 @@ typedef struct {
     char card_said[BUDDY_MESSAGE_MAX];
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
+    pocket_update_command_t firmware;
 } buddy_event_t;
 
 typedef struct {
@@ -468,4 +472,8 @@ typedef struct {
     uint64_t voice_listening_since_ms;
     /* Microphone level right now, 0 to 100; filled in by the application task. */
     uint8_t voice_level;
+    /* A new firmware image is arriving over Bluetooth; filled in by the
+     * application task. Percent is how much of it is in flash. */
+    pocket_update_phase_t update_phase;
+    uint8_t update_percent;
 } buddy_ui_snapshot_t;

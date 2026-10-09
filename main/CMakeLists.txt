@@ -5,6 +5,8 @@ idf_component_register(
          "pocket_pet.c"
          "pocket_voice.c"
          "pocket_voice_core.c"
+         "pocket_update.c"
+         "pocket_update_core.c"
          "buddy_orchestrator.c"
          "buddy_line.c"
          "buddy_ble.c"
@@ -19,7 +21,8 @@ idf_component_register(
          "../assets/fonts/pocket_font_22.c"
          "../assets/fonts/pocket_font_num_44.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_hw_support esp_timer json nvs_flash
+    REQUIRES app_update bsp bt esp_app_format esp_hw_support esp_partition esp_timer json
+             mbedtls nvs_flash
 )
 
 # ESP-IDF 5.5.3 only applies WRITE_ENC to generated CCCDs. Wrap the private

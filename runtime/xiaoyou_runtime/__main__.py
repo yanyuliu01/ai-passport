@@ -1,4 +1,8 @@
-"""命令行入口：python3 -m xiaoyou_runtime --config config.json"""
+"""命令行入口：python3 -m xiaoyou_runtime --config config.json
+
+不带子命令就是启动服务。子命令 firmware 管这台电脑上留着的设备固件，
+见 python3 -m xiaoyou_runtime firmware --help。
+"""
 
 import argparse
 import ipaddress
@@ -10,9 +14,10 @@ import time
 import uuid
 from pathlib import Path
 
-from . import __version__, agents as agent_module, router as router_module, stt
+from . import __version__, agents as agent_module, firmware_cli, router as router_module, stt
 from .agents import AgentError
 from .config import ConfigError, load
+from .firmware import FirmwareStore
 from .server import make_server
 from .service import Service
 from .store import Store
@@ -64,7 +69,9 @@ def main(argv=None) -> int:
         "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
     )
     parser.add_argument("--version", action="version", version=__version__)
-    args = parser.parse_args(argv)
+    firmware_cli.add_arguments(parser.add_subparsers(dest="command", metavar="子命令"))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(arguments)
 
     try:
         config = load(Path(args.config))
@@ -73,6 +80,10 @@ def main(argv=None) -> int:
         return 2
     for notice in config.notices:
         print("提示：%s" % notice, file=sys.stderr)
+    if args.command == "firmware":
+        # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
+        return firmware_cli.run(config, Path(args.config), args,
+                                arguments[arguments.index("firmware") + 1:])
     agents = [agent_module.create(spec) for spec in config.agents]
     router = router_module.create(
         config, lambda message: print(message, file=sys.stderr))
@@ -199,7 +210,7 @@ def main(argv=None) -> int:
                   file=sys.stderr)
     service = Service(xiaoyou, store, recognizer)
     try:
-        server = make_server(config, service)
+        server = make_server(config, service, FirmwareStore(config.state_dir))
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         return 1

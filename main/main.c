@@ -3,6 +3,7 @@
 // 数据流：BLE 字节流 → 完整 JSON 行 → 协议事件 → 状态机(buddy_state) → 快照 → 界面(pocket_ui)
 // 按键流：BSP 按键回调 → 队列 → 状态机 → 界面刷新或向电脑回发决定
 // 语音流：长按确认键 → 状态机 → 语音任务(pocket_voice) 采集并发给手机 → 结果回到状态机
+// 换固件：{"cmd":"fw"} 和数据帧 → 换固件任务(pocket_update) 写进另一个槽位 → 核对后重启
 //
 // 线程：NimBLE 回调和按键回调只入队；所有状态变更和 LVGL 调用都在 app 任务里，
 // LVGL 调用前后持有 bsp_lvgl_lock()。
@@ -36,7 +37,16 @@
 #include "buddy_state.h"
 #include "pocket_text.h"
 #include "pocket_ui.h"
+#include "pocket_update.h"
+#include "pocket_view.h"
 #include "pocket_voice.h"
+
+_Static_assert(BUDDY_BLE_RX_FRAME_MAGIC == POCKET_UPDATE_MAGIC,
+               "the only binary frames a host sends are firmware data");
+_Static_assert(POCKET_UPDATE_FRAME_MAX == BUDDY_BLE_TX_CHUNK_MAX,
+               "a firmware frame is at most one write");
+// 换固件时屏幕是熄着的，就亮到这个程度让人看得见进度。
+#define BUDDY_UPDATE_BACKLIGHT_PERCENT 40
 
 #define BUDDY_CRITICAL_QUEUE_DEPTH 1U
 #define BUDDY_BUTTON_QUEUE_DEPTH 4U
@@ -396,6 +406,11 @@ static void on_ble_event(const buddy_ble_event_t *event, void *context)
     if (event == NULL) {
         return;
     }
+    if (event->type == BUDDY_BLE_EVENT_RX_FRAME) {
+        pocket_update_frame(event->data.rx_frame.data, event->data.rx_frame.length,
+                            event->data.rx_frame.connection_generation);
+        return;
+    }
     if (event->type == BUDDY_BLE_EVENT_RX_LINE) {
         if (event->data.rx_line.length > BUDDY_JSON_LINE_MAX) {
             buddy_count(&s_rx_dropped);
@@ -444,6 +459,7 @@ static void on_ble_event(const buddy_ble_event_t *event, void *context)
         buddy_queue_critical(s_bond_queue, &control);
         break;
     case BUDDY_BLE_EVENT_RX_LINE:
+    case BUDDY_BLE_EVENT_RX_FRAME:
         return;
     }
 }
@@ -832,6 +848,13 @@ static esp_err_t buddy_orchestrator_persist_level(void *context, uint64_t level)
     return buddy_settings_set_highest_celebrated_level(level);
 }
 
+static void buddy_orchestrator_firmware(void *context, const pocket_update_command_t *command,
+                                        uint32_t generation)
+{
+    (void)context;
+    pocket_update_command(command, generation);
+}
+
 static buddy_orchestrator_ops_t buddy_orchestrator_ops(buddy_state_t *state)
 {
     const buddy_orchestrator_ops_t ops = {
@@ -846,6 +869,7 @@ static buddy_orchestrator_ops_t buddy_orchestrator_ops(buddy_state_t *state)
         .factory_reset = buddy_orchestrator_factory_reset,
         .set_ble_enabled = buddy_orchestrator_set_ble,
         .persist_level = buddy_orchestrator_persist_level,
+        .firmware = buddy_orchestrator_firmware,
     };
     return ops;
 }
@@ -943,6 +967,9 @@ static void buddy_apply_backlight(const buddy_state_t *state)
     static int applied = -1;
     int wanted = buddy_state_backlight_percent(state);
 
+    if (wanted == 0 && pocket_update_shown(pocket_update_phase())) {
+        wanted = BUDDY_UPDATE_BACKLIGHT_PERCENT;
+    }
     if (wanted != applied) {
         bsp_display_backlight((uint8_t)wanted);
         applied = wanted;
@@ -960,6 +987,8 @@ static int buddy_render(buddy_state_t *state, const buddy_action_t *action, uint
     buddy_state_snapshot(state, &snapshot);
     snapshot.uptime_ms = now_ms;
     snapshot.voice_level = pocket_voice_level_now();
+    snapshot.update_phase = pocket_update_phase();
+    snapshot.update_percent = pocket_update_percent_now();
     if (buddy_settings_load(&settings) == ESP_OK) {
         snapshot.approval_count = settings.approval_count;
         snapshot.denial_count = settings.denial_count;
@@ -1051,7 +1080,11 @@ static void buddy_app_task(void *context)
             ready == s_voice_queue) {
             buddy_control_event_t control;
 
+            /* 正在换固件时屏幕上只有进度，按键按下去不知道会碰到什么，所以不理会；
+             * “松开”照常处理，免得换之前按住说的那一句收不了尾。 */
             if (xQueueReceive(ready, &control, 0) == pdTRUE &&
+                !(control.type == BUDDY_CONTROL_KEY &&
+                  pocket_update_shown(pocket_update_phase())) &&
                 buddy_control_to_event(&control, &state, &event)) {
                 buddy_state_reduce(&state, &event, now_ms, &action);
                 reduced = true;
@@ -1073,6 +1106,16 @@ static void buddy_app_task(void *context)
 
         if (buddy_execute_action(&state, &action, &event)) {
             buddy_state_reduce(&state, &event, now_ms, &action);
+        }
+        if (pocket_update_take_failure()) {
+            buddy_copy_text(state.message, sizeof(state.message), PT_UPDATE_FAILED);
+        }
+        if (pocket_update_restart_due()) {
+            /* 新固件已经定下来（或者要切回上一版）：把还没落盘的设置存好再重启。 */
+            if (buddy_settings_flush(true) != ESP_OK) {
+                ESP_LOGW(TAG, "settings flush before restart failed");
+            }
+            esp_restart();
         }
         if (now_ms - last_battery_ms >= BUDDY_BATTERY_SAMPLE_MS) {
             buddy_sample_battery(&state);
@@ -1194,6 +1237,9 @@ void app_main(void)
                     BUDDY_APP_PRIORITY, &s_app_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "application queue/task initialization failed");
         return;
+    }
+    if (pocket_update_init() != ESP_OK) {
+        ESP_LOGW(TAG, "update task initialization failed; firmware cannot be replaced over BLE");
     }
     if (pocket_voice_init(on_voice_event, NULL) != ESP_OK) {
         ESP_LOGW(TAG, "voice task initialization failed; push-to-talk unavailable");

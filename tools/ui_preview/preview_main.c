@@ -11,6 +11,7 @@
 #include "buddy_cards.h"
 #include "buddy_types.h"
 #include "pocket_fonts.h"
+#include "pocket_text.h"
 #include "pocket_ui.h"
 
 #define W 240
@@ -550,6 +551,31 @@ int main(int argc, char **argv)
     show("69_confirm_unpair", &snap);
     snap.confirmation = BUDDY_CONFIRM_FACTORY_RESET;
     show("70_confirm_factory", &snap);
+
+    /* ---- a new firmware image arriving over Bluetooth ---- */
+    snap = hub_snapshot();
+    snap.update_phase = POCKET_UPDATE_RECEIVING;
+    snap.update_percent = 0;
+    show("71_update_start", &snap);
+    snap.update_percent = 37;
+    show("72_update_receiving", &snap);
+    /* 这时来了要点头的事，也不打断进度。 */
+    set_text_field(snap.prompt_id, sizeof(snap.prompt_id), "req-update");
+    snap.update_percent = 99;
+    show("73_update_almost", &snap);
+    snap.prompt_id[0] = '\0';
+    snap.update_phase = POCKET_UPDATE_CHECKING;
+    show("74_update_checking", &snap);
+    snap.update_phase = POCKET_UPDATE_RESTARTING;
+    show("75_update_restarting", &snap);
+    /* 没换成：回到平常的画面，底下那一行说一声。 */
+    snap = hub_snapshot();
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), "把顶上那条改细一点");
+    set_text_field(snap.reply, sizeof(snap.reply), "好，我去改。");
+    set_text_field(snap.message, sizeof(snap.message), PT_UPDATE_FAILED);
+    snap.message_since_ms = snap.uptime_ms;
+    show("76_update_failed_notice", &snap);
 
     /* ---- connected to the Claude desktop app instead of the hub ---- */
     snap = live_snapshot();

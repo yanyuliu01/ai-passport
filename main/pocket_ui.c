@@ -59,7 +59,7 @@
 #define ENTRY_ROW_H    50
 #define ENTRY_ROW_GAP  3
 
-// 小幽出现的地方：第一屏（大的）、第二屏顶上那一条（小的），和四个占满屏幕的场景。
+// 小幽出现的地方：第一屏（大的）、第二屏顶上那一条（小的），和五个占满屏幕的场景。
 enum {
     PET_SOLO,
     PET_TALK,
@@ -67,6 +67,7 @@ enum {
     PET_PAIRING,
     PET_CONFIRM,
     PET_VOICE,
+    PET_UPDATE,
     PET_COUNT,
 };
 #define PET_SOLO_SCALE  6
@@ -127,6 +128,12 @@ enum {
 // 说话时的音量条。
 #define LEVEL_BARS      15
 #define LEVEL_SAMPLE_MS 90U
+// 换固件：进度条由一格一格的方块排成，和别处的像素风一致。
+#define UPDATE_CELLS    20
+#define UPDATE_CELL_W   8
+#define UPDATE_CELL_GAP 2
+#define UPDATE_BAR_W    (UPDATE_CELLS * (UPDATE_CELL_W + UPDATE_CELL_GAP) - UPDATE_CELL_GAP)
+#define UPDATE_BAR_H    12
 
 // 审批、配对、确认这三个场景的版式：左边头像，右边气泡。气泡里每行 136 像素宽。
 #define CHAT_PET_X      8
@@ -265,6 +272,13 @@ static struct {
     lv_obj_t *voice_timer;
     uint8_t levels[LEVEL_BARS];
     uint64_t level_sampled_ms;
+    // 经蓝牙换固件
+    lv_obj_t *update;
+    lv_obj_t *update_title;
+    lv_obj_t *update_bar;
+    lv_obj_t *update_percent;
+    lv_obj_t *update_sub;
+    uint8_t update_shown_percent;
 
     pocket_view_t view;
     buddy_page_t page;
@@ -691,6 +705,25 @@ static void bars_draw_cb(lv_event_t *event)
     }
 }
 
+// 换固件的进度：UPDATE_CELLS 个格子，写进闪存多少就点亮多少。
+static void update_bar_draw_cb(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_current_target(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t dsc;
+    lv_area_t coords;
+    int lit = (int)s.update_shown_percent * UPDATE_CELLS / 100;
+    int index;
+
+    lv_obj_get_coords(obj, &coords);
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_COVER;
+    for (index = 0; index < UPDATE_CELLS; ++index) {
+        draw_block(layer, &dsc, coords.x1 + index * (UPDATE_CELL_W + UPDATE_CELL_GAP), coords.y1,
+                   UPDATE_CELL_W, UPDATE_BAR_H, index < lit ? C_XIAOYOU : C_LINE);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 构建
 // ---------------------------------------------------------------------------
@@ -1083,6 +1116,28 @@ static void build_voice(lv_obj_t *root)
     lv_obj_set_pos(s.voice_timer, SIDE, 218);
 }
 
+static void build_update(lv_obj_t *root)
+{
+    s.update = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
+    make_pet(s.update, PET_UPDATE, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 0,
+             PET_SOLO_SCALE);
+    s.update_title = make_label(s.update, &pocket_font_22, C_XIAOYOU, PT_UPDATE_RECEIVING);
+    lv_obj_set_width(s.update_title, INNER_W);
+    lv_obj_set_style_text_align(s.update_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.update_title, SIDE, 128);
+    s.update_bar = make_box(s.update, (SCREEN_W - UPDATE_BAR_W) / 2, 170, UPDATE_BAR_W,
+                            UPDATE_BAR_H);
+    lv_obj_add_event_cb(s.update_bar, update_bar_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    s.update_percent = make_label(s.update, &pocket_font_16, C_TEXT, "");
+    lv_obj_set_width(s.update_percent, INNER_W);
+    lv_obj_set_style_text_align(s.update_percent, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.update_percent, SIDE, 192);
+    s.update_sub = make_label(s.update, &pocket_font_16, C_DIM, "");
+    lv_obj_set_width(s.update_sub, INNER_W);
+    lv_obj_set_style_text_align(s.update_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.update_sub, SIDE, 226);
+}
+
 void pocket_ui_init(void)
 {
     static void (*const builders[BUDDY_PAGE_COUNT])(lv_obj_t *) = {
@@ -1108,6 +1163,8 @@ void pocket_ui_init(void)
     build_pairing(root);
     build_confirm(root);
     build_voice(root);
+    build_update(root);
+    lv_obj_add_flag(s.update, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.voice, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.approval, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s.pairing, LV_OBJ_FLAG_HIDDEN);
@@ -1909,6 +1966,30 @@ static void render_voice(const buddy_ui_snapshot_t *snap, bool entered)
     set_text(s.voice_timer, timer);
 }
 
+static void render_update(const buddy_ui_snapshot_t *snap)
+{
+    bool restarting = snap->update_phase == POCKET_UPDATE_RESTARTING;
+    bool checking = snap->update_phase == POCKET_UPDATE_CHECKING;
+    uint8_t percent = restarting || checking
+                          ? 100U
+                          : (snap->update_percent > 100U ? 100U : snap->update_percent);
+    char text[8];
+
+    pet_set(PET_UPDATE, pocket_pet_for(snap));
+    set_text(s.update_title, restarting ? PT_UPDATE_RESTARTING
+                                        : (checking ? PT_UPDATE_CHECKING : PT_UPDATE_RECEIVING));
+    set_text_color(s.update_title, restarting ? C_OK : C_XIAOYOU);
+    set_text(s.update_sub, restarting ? PT_UPDATE_SUB_RESTARTING
+                                      : (checking ? PT_UPDATE_SUB_CHECKING
+                                                  : PT_UPDATE_SUB_RECEIVING));
+    (void)snprintf(text, sizeof(text), "%u%%", (unsigned)percent);
+    set_text(s.update_percent, text);
+    if (percent != s.update_shown_percent) {
+        s.update_shown_percent = percent;
+        lv_obj_invalidate(s.update_bar);
+    }
+}
+
 void pocket_ui_render(const buddy_ui_snapshot_t *snap)
 {
     static const hint_item_t hint_none[1] = {{KEY_NONE, NULL}};
@@ -1937,6 +2018,7 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     set_visible(s.pairing, view == POCKET_VIEW_PAIRING);
     set_visible(s.confirm, view == POCKET_VIEW_CONFIRM);
     set_visible(s.voice, view == POCKET_VIEW_VOICE);
+    set_visible(s.update, view == POCKET_VIEW_UPDATE);
     if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_GUIDE && entered) {
         lv_obj_scroll_to_y(s.guide_scroll, 0, LV_ANIM_OFF);
     }
@@ -1948,6 +2030,10 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
 
     render_top_bar(snap, view == POCKET_VIEW_PAGE && page <= BUDDY_PAGE_TASKS ? (int)page : -1);
     switch (view) {
+    case POCKET_VIEW_UPDATE:
+        // 这时按键都不管用，所以底下不写提示。
+        render_update(snap);
+        break;
     case POCKET_VIEW_CONFIRM:
         render_confirm(snap);
         break;

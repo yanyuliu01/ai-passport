@@ -80,6 +80,11 @@ bool buddy_ble_should_protect_cccd_read(uint16_t uuid16, bool write_encrypted)
     return uuid16 == 0x2902U && write_encrypted;
 }
 
+bool buddy_ble_rx_is_frame(const uint8_t *data, size_t length)
+{
+    return data != NULL && length > 0U && data[0] == BUDDY_BLE_RX_FRAME_MAGIC;
+}
+
 bool buddy_ble_should_advertise(bool start_requested, bool host_synced,
                                 bool delete_bonds_pending, bool has_physical_link)
 {
@@ -384,6 +389,27 @@ static bool buddy_rx_line(const char *line, size_t length, void *context)
     return true;
 }
 
+/* One write that starts with BUDDY_BLE_RX_FRAME_MAGIC: hand it over whole. */
+static void buddy_rx_frame(struct os_mbuf *mbuf, const buddy_rx_context_t *rx_context)
+{
+    static uint8_t frame[BUDDY_BLE_TX_CHUNK_MAX];
+    uint16_t length = OS_MBUF_PKTLEN(mbuf);
+    buddy_ble_event_t event = {
+        .type = BUDDY_BLE_EVENT_RX_FRAME,
+        .data.rx_frame = {
+            .data = frame,
+            .length = length,
+            .connection_generation = rx_context->generation,
+        },
+    };
+
+    if (length > sizeof(frame) || os_mbuf_copydata(mbuf, 0, length, frame) != 0 ||
+        !buddy_rx_gate_open(rx_context)) {
+        return;
+    }
+    buddy_emit(&event);
+}
+
 static int buddy_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *context, void *arg)
 {
@@ -410,6 +436,12 @@ static int buddy_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
     xSemaphoreGive(s_ble.mutex);
     if (!accept_write) {
         return BLE_ATT_ERR_INSUFFICIENT_ENC;
+    }
+
+    if (context->om != NULL &&
+        buddy_ble_rx_is_frame(context->om->om_data, context->om->om_len)) {
+        buddy_rx_frame(context->om, &rx_context);
+        return 0;
     }
 
     for (mbuf = context->om; mbuf != NULL; mbuf = SLIST_NEXT(mbuf, om_next)) {

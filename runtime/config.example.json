@@ -58,6 +58,24 @@
       "approval_policy": "on-request",
       "sandbox": "read-only",
       "model": null
+    },
+    "tailor": {
+      "type": "claude_code",
+      "enabled": false,
+      "speaks": false,
+      "description": "改随身设备屏幕上的界面和交互：改固件代码、检查、经蓝牙推到设备上；也负责把设备换回以前的某一版。交代清楚想改成什么样。",
+      "aliases": ["裁缝"],
+      "command": ["claude"],
+      "workdir": "..",
+      "config_dir": null,
+      "model": null,
+      "permission_mode": "acceptEdits",
+      "allowed_tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+      "extra_args": [
+        "--append-system-prompt",
+        "这是小幽转交过来的、关于随身设备屏幕或固件版本的请求。严格按仓库里的 skills/pocket-screen-update/SKILL.zh_CN.md 去做；最后用两三句话说清楚改了什么、大约多久到设备上、怎么撤销。"
+      ],
+      "timeout_seconds": 1800
     }
   },
   "stt": {
@@ -65,5 +83,13 @@
     "model_dir": "stt-models/sense-voice",
     "language": "auto",
     "threads": 2
+  },
+  "firmware": {
+    "repo": null,
+    "asset": "FoloToy-AI-Passport-full.bin",
+    "tag_prefix": "firmware-build-",
+    "source_dir": null,
+    "build_command": [],
+    "build_output": "build/FoloToy-AI-Passport.bin"
   }
 }

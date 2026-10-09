@@ -85,6 +85,17 @@ bool buddy_orchestrator_process_rx_into(buddy_state_t *state,
     }
 
     scratch->ble.connection_generation = connection_generation;
+    if (scratch->type == BUDDY_EVENT_FIRMWARE) {
+        /* Not the state machine's business: the updater owns the transfer and
+         * every answer to it. */
+        if (ops->firmware == NULL) {
+            (void)buddy_orchestrator_send_ack(ops, "fw", false, "unsupported",
+                                              connection_generation);
+        } else {
+            ops->firmware(ops->context, &scratch->firmware, connection_generation);
+        }
+        return false;
+    }
     if (scratch->type == BUDDY_EVENT_NAME) {
         setting_command = true;
         err = scratch->command.value_truncated || ops->commit_name == NULL

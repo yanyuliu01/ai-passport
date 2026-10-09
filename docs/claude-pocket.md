@@ -37,6 +37,7 @@ middle of the top bar show which one you are on.
 | Notices | The four most recent entries sent by the host, in the menu. While any are waiting, the idle first screen says how many |
 | Helpers | The agents Xiaoyou can hand work to, as the host lists them, in the menu |
 | Pairing | LE Secure Connections with a six-digit passkey shown on the device |
+| Firmware updates | New firmware arrives from the phone companion over Bluetooth, no cable; a version that is never confirmed is rolled back by itself. See [Replacing the firmware over Bluetooth](#replacing-the-firmware-over-bluetooth) |
 
 Colour answers one question: who is doing the work. Xiaoyou is lavender; every
 helper has a colour of its own, fixed for a given name. Green, red and yellow
@@ -257,6 +258,72 @@ host may report that something else ended (a background thing finished, or the
 previous turn). The device then takes only the count of things running and
 does not replace the turn it is waiting for.
 
+## Replacing the firmware over Bluetooth
+
+A change to the screen no longer needs a cable: the phone companion sends the
+new application image over the existing encrypted Bluetooth link. The flash
+holds two application slots of the same size (3.9 MB each, see
+[Firmware layout](development/engineering/firmware-layout.md)). The running
+one keeps working while the new image is written to the other; once it checks
+out, the device restarts into it. A new image starts in a "pending" state: it
+only counts when the phone connects and says `confirm`. Without that within
+three minutes, or after another restart in the meantime, the device goes back
+to the previous version. So firmware that does not start, or cannot hold a
+Bluetooth connection, does not leave a device that only a cable can rescue.
+
+This too is part of the hub extension: the Claude desktop app never sends
+these, and older firmware answers with an error acknowledgement. Everything
+the device sends is a flat JSON object.
+
+| Direction | Message | Meaning |
+| --- | --- | --- |
+| Host → device | `{"cmd":"fw","op":"info"}` | Which version is this. The device answers `{"ack":"fw","ok":true,"op":"info","build":B,"ver":V,"state":"valid"\|"pending","slot":S,"prev":P,"max":N}`: `build` is the first 16 hex digits of the firmware ELF's SHA-256, `prev` is the `build` in the other slot (empty when there is none), `max` is the largest image a slot holds |
+| Host → device | `{"cmd":"fw","op":"begin","size":N,"sha256":"…"}` | An image of N bytes is coming. The device answers `{"ack":"fw","ok":true,"op":"begin","offset":K,"chunk":C,"window":W}`: start at offset K (not 0 when picking up an interrupted transfer), at most C bytes of data per frame, and never send further than "bytes in flash + W" |
+| Host → device | data frames | One per write; see below |
+| Device → host | `{"evt":"fw","got":G,"done":D}` | Sent for every 1 KB written to flash, and once a second when nothing moves. `got` is the next offset wanted, `done` the bytes in flash. With `"rewind":true`, something in between is missing: send again from `got` |
+| Host → device | `{"cmd":"fw","op":"end"}` | All sent. The device checks the SHA-256 and the image itself, answers `{"ack":"fw","ok":true,"op":"end"}` and restarts about a second later. If it does not have everything yet it answers `"ok":false,"error":"incomplete","got":G`; carry on from G |
+| Host → device | `{"cmd":"fw","op":"confirm"}` | Accept the new firmware that is running |
+| Host → device | `{"cmd":"fw","op":"rollback"}` | Switch to the version in the other slot and restart, without a transfer |
+| Host → device | `{"cmd":"fw","op":"abort"}` | Give up on this transfer; what was written is discarded and the running firmware is untouched |
+
+Data frames share the RX characteristic with text lines, one frame per write:
+`0xFE`, a four-byte little-endian offset, then image data. `0xFE` never occurs
+in UTF-8, so the first byte of a write tells the device a frame from text, the
+same way `0xFF` marks a voice frame in the other direction. Frames are written
+without response, and text lines may go between them, so heartbeats continue
+during a transfer. Every frame carries its offset: a repeated one is dropped,
+and a gap is answered with `rewind`. A lost connection is not a failure: the
+device keeps a half-received image for five minutes, and a `begin` with the same
+`size` and `sha256` after reconnecting is answered with the offset to continue
+from.
+
+When the device refuses, `error` is one of: `size` (too small, or larger than a
+slot), `no slot` (the partition table has no second slot), `unconfirmed` (the
+running firmware has not been confirmed; send `confirm` first), `link` (a write
+carries too little), `memory`, `flash`, `sha256`, `image` (the image itself does
+not check out), `restarting`, `busy`, `no previous` and `previous invalid`
+(nothing to switch back to).
+
+During a transfer the screen shows Xiaoyou and a progress bar; keys do nothing,
+a request that needs an answer does not interrupt, and a dark screen lights up.
+After a failure the usual page returns and the line at the bottom says so.
+
+These messages are only accepted on a bonded, encrypted connection, so the only
+thing that can replace the firmware is the phone (or computer) that was paired.
+Images are not signed: the chain of trust is the runtime's token, then the
+phone, then the Bluetooth bond. Whoever holds the runtime token can have the
+phone push any image to the device; the runtime should only listen on a trusted
+network.
+
+**The partition table cannot be changed over Bluetooth.** Going from older
+single-slot firmware to this one takes one flash by cable (see
+[Flashing](#flashing)); every later version can be sent over Bluetooth as long
+as `partitions.csv` stays the same.
+
+Every version of the firmware is kept on the computer that runs the runtime,
+and the device can be put back on any of them: see
+[`runtime/README.md`](../runtime/README.md#device-firmware).
+
 ## Stored data
 
 The device stores its name, the owner name sent by the host, the Bluetooth
@@ -275,6 +342,10 @@ them, or they are pushed out by newer ones; they are never written to flash.
 - Cards are kept in RAM only. A restart loses them until the phone reconnects
   and sends them again; anything older is on the phone.
 - A thing cannot be cancelled with a key: hold `OK` and tell it to stop.
+- The bootloader and the partition table cannot be replaced over Bluetooth,
+  only the application image.
+- Images are not signed, and are neither compressed nor sent as differences:
+  every update is the whole application image (about 1.7 MB).
 - The speaker, Wi-Fi, and low-power sleep are not used by this application.
 - Replies are shown as text only; nothing is read aloud.
 
@@ -296,6 +367,12 @@ turn kept before. None of this has been measured on a device; in the host
 renderer LVGL peaks at about 69 KB (a 64-bit host, where objects are larger
 than in the firmware).
 
+Replacing the firmware over Bluetooth keeps one task (a 5 KB stack) and two
+small queues at all times; the buffer for incoming image data (2.3 KB) is
+allocated the first time an image arrives and kept afterwards. Checking a
+complete image is what uses the most stack: the `image accepted` log line
+reports how much of that task's stack was left, worth a look on a device.
+
 ## Code map
 
 | Path | Role |
@@ -311,6 +388,10 @@ than in the firmware).
 | `main/pocket_ui.c` | LVGL screens |
 | `main/pocket_voice_core.c` | IMA ADPCM, voice-frame packing, the send queue, the level meter, and the line that starts a recording (no ESP-IDF) |
 | `main/pocket_voice.c` | The push-to-talk task: microphone, encoding, Bluetooth uplink |
+| `main/pocket_update_core.c` | The hardware-independent half of firmware updates: data frames, receiving by offset, when to report progress, the replies |
+| `main/pocket_update.c` | The update task: writes the other slot, checks, switches, waits to be confirmed, rolls back when it is not |
+| `tests/update_interop/` | The phone companion's transfer code run against the firmware's own protocol code on a host |
+| `tests/update_emulator/` | The update task, unchanged, on an emulated ESP32-C3: the real bootloader and both slots, with a test program playing the phone |
 | `tools/ui_preview/` | Host renderer that draws every screen with the real LVGL and fonts |
 
 The BLE, protocol, and state layers are adapted from the `demo/claude-buddy-port`
@@ -328,7 +409,33 @@ cmake -S tools/ui_preview -B /tmp/ui_preview && cmake --build /tmp/ui_preview
 ```
 
 The protocol, state-machine, and orchestrator host tests need cJSON from
-`IDF_PATH`; without it the static gate reports them as skipped.
+`IDF_PATH`; without it the static gate reports them as skipped. The firmware
+update interop test between the phone companion and the firmware needs a JDK
+as well as cJSON, and is reported as skipped when either is missing.
+
+The half of the firmware update that touches hardware (`main/pocket_update.c`:
+writing the other slot, checking, switching, waiting to be confirmed, going back
+when the deadline passes) cannot be tested on a host. It is tested in an
+emulator:
+
+```bash
+tests/update_emulator/run.sh   # needs ESP-IDF 5.5 and Espressif's QEMU (qemu-system-riscv32)
+```
+
+The script builds that file, unchanged, into a small program and runs it on an
+emulated ESP32-C3 with the real ESP-IDF bootloader and the product's partition
+table. A test program plays the phone and checks, in order: requests that must
+be refused are refused; an image whose hash does not match is not switched to
+even though all of it arrived; a transfer with lost, repeated and reordered
+frames and a dropped link that is resumed ends with the image accepted and a
+restart into the new slot; a new image that is not confirmed goes back to the
+previous one; a confirmed one stays; switching back to the version in the other
+slot works. It is not part of `tools/validate.sh` because the emulator has to be
+installed separately. The emulator has no Bluetooth, so the radio link, the real
+transfer speed and the memory headroom still have to be checked on the device.
+The emulator itself sometimes hangs (it loses timer interrupts during flash
+operations); the script notices and starts it again on the same flash contents,
+which to the firmware is a power cut.
 
 ## Flashing
 
@@ -352,6 +459,17 @@ forgets its name and its Bluetooth pairing. Remove the old pairing on the phone
 and pair again. See
 [flashing and stored data](development/engineering/firmware-layout.md#flashing-and-stored-data)
 for the alternatives that keep settings.
+
+Once the device runs a version with
+[firmware updates over Bluetooth](#replacing-the-firmware-over-bluetooth), no
+cable is needed after that: new versions come from the phone companion, and
+settings and pairing are kept. A cable is still needed in three cases: the
+device has older single-slot firmware, the partition table changed, or the
+Bluetooth path itself was broken by a change and neither slot holds a usable
+version. After flashing by cable, run
+`python3 -m xiaoyou_runtime firmware fetch` on the computer that runs the
+runtime to add the same version to its library, so the device can be put back
+on it later.
 
 ## On-device acceptance
 
@@ -396,6 +514,20 @@ version (three screens) has not run on hardware yet. Check:
     ten cards and four running things, and during a recording; free heap is
     stable over a long session; Bluetooth range and battery life are measured,
     not assumed.
+14. Firmware over Bluetooth: after a version is chosen on the runtime the
+    device shows progress, restarts by itself when the transfer is complete,
+    and after reconnecting the phone companion reports that the new firmware is
+    installed, with the name and the pairing still there; note how long the
+    whole thing took. Carrying the phone out of range and back in the middle
+    of a transfer lets it continue.
+15. Going back: choose the version in the device's other slot; the device
+    restarts into it within seconds, without a transfer.
+16. Automatic rollback: push a new version and, as it restarts, turn the
+    phone's Bluetooth off for more than three minutes; the device should
+    return to the previous version by itself, and with Bluetooth back on the
+    phone companion reports that the install failed.
+17. During and after an update, the minimum in the `heap:` log line and the
+    task stack left in the `image accepted` line both keep a margin.
 
 ## Roadmap
 

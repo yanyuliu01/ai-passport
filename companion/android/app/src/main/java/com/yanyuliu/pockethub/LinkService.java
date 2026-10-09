@@ -52,6 +52,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private final Map<String, String> sentCards = new HashMap<>();
     private long cardsEpochSent = -1;
     private String lastTasks = "";
+    /** 让设备上的固件和电脑上指定的那一版保持一致。 */
+    private FirmwareSync firmware;
 
     static void start(Context context) {
         Intent intent = new Intent(context, LinkService.class);
@@ -70,6 +72,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     public void onCreate() {
         super.onCreate();
         link = new BleLink(this, this);
+        firmware = new FirmwareSync(this, link, () -> recording != null);
+        firmware.start();
         HubStore.get().addListener(this);
         RuntimeClient.watch(this);
     }
@@ -95,6 +99,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     public void onDestroy() {
         main.removeCallbacksAndMessages(null);
         HubStore.get().removeListener(this);
+        firmware.stop();
         link.stop();
         super.onDestroy();
     }
@@ -144,12 +149,16 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         lastTasks = "";
         helpersSeen = -1;
         pushState();
+        firmware.onReady();
         main.removeCallbacks(keepalive);
         main.postDelayed(keepalive, KEEPALIVE_MS);
     }
 
     @Override
     public void onLine(String line) {
+        if (firmware.onLine(line)) {
+            return;
+        }
         BuddyProtocol.Decision decision = BuddyProtocol.parseDecision(line);
         if (decision != null) {
             // 帮手在 Runtime 上等着的授权交回 Runtime；别的是通知上的按钮。
@@ -219,6 +228,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         recording = null;
         deviceChat = false;
         deviceCards = false;
+        firmware.onClosed();
     }
 
     /** 问一次小幽有哪些帮手，告诉设备。清单没变就不重发。 */
