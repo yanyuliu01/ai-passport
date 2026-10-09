@@ -23,6 +23,12 @@ public final class BuddyProtocol {
     public static final int HINT_MAX = 319;
     public static final int TURN_TEXT_MAX = 3000;
     public static final int LINE_MAX = 4096;
+    // “chat”和“helpers”两条消息里各字段的上限（固件的缓冲区大小减去结尾的 0）。
+    public static final int REPLY_MAX = 959;
+    public static final int AGENT_MAX = 23;
+    public static final int STAGE_MAX = 159;
+    public static final int HELPER_COUNT = 4;
+    public static final int HELPER_ABOUT_MAX = 63;
 
     private BuddyProtocol() {
     }
@@ -102,6 +108,71 @@ public final class BuddyProtocol {
         return "{\"cmd\":\"hub\",\"voice\":true}\n";
     }
 
+    /**
+     * 和小幽的对话现在走到哪一步了。phase 是 idle、thinking、helper、done、failed 之一；
+     * said 是我说的话，reply 是小幽的话，agent 是正在替她干活的帮手，stage 是她转交时说的那句，
+     * mood 是 idle、busy、ask、happy、oops 之一。只有连接时声明了 chat 的固件认识这一行。
+     */
+    public static String chat(String phase, String said, String reply, String agent,
+                              String stage, String mood) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"chat\",\"phase\":");
+        quote(out, phase == null ? "idle" : phase);
+        out.append(",\"said\":");
+        quote(out, clip(said, MESSAGE_MAX));
+        out.append(",\"reply\":");
+        quote(out, clip(reply, REPLY_MAX));
+        out.append(",\"agent\":");
+        quote(out, clip(agent, AGENT_MAX));
+        out.append(",\"stage\":");
+        quote(out, clip(stage, STAGE_MAX));
+        out.append(",\"mood\":");
+        quote(out, mood == null ? "idle" : mood);
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** 小屏幕上先看结论：简报在前，完整回复跟在后面；两者一样或者回复以简报开头时只留回复。 */
+    public static String chatReply(String brief, String reply) {
+        String shortText = brief == null ? "" : brief.trim();
+        String fullText = reply == null ? "" : reply.trim();
+        if (shortText.isEmpty() || fullText.startsWith(shortText)) {
+            return fullText;
+        }
+        if (fullText.isEmpty()) {
+            return shortText;
+        }
+        return shortText + "\n\n" + fullText;
+    }
+
+    /** 小幽能找的帮手：每项是 {名字, 一句说明}，最多带 HELPER_COUNT 个，没有名字的跳过。 */
+    public static String helpers(List<String[]> helpers) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"helpers\",\"list\":[");
+        int count = 0;
+        if (helpers != null) {
+            for (String[] helper : helpers) {
+                if (count >= HELPER_COUNT) {
+                    break;
+                }
+                String name = helper == null || helper.length == 0 ? "" : clip(helper[0], AGENT_MAX);
+                if (name.isEmpty()) {
+                    continue;
+                }
+                if (count++ > 0) {
+                    out.append(',');
+                }
+                out.append("{\"name\":");
+                quote(out, name);
+                out.append(",\"about\":");
+                quote(out, clip(helper.length > 1 ? helper[1] : "", HELPER_ABOUT_MAX));
+                out.append('}');
+            }
+        }
+        out.append("]}\n");
+        return out.toString();
+    }
+
     /** 设备发来的语音控制行里的 state（start / end / cancel）；不是语音控制行返回 null。 */
     public static String parseVoiceState(String line) {
         Map<String, String> fields = parseFlatObject(line);
@@ -119,7 +190,78 @@ public final class BuddyProtocol {
         if (fields == null || !"hub".equals(fields.get("ack"))) {
             return null;
         }
-        return line.contains("\"ok\":true");
+        return "true".equals(fields.get("ok"));
+    }
+
+    /** 设备对 hubHello 的应答里有没有声明它认识 chat 和 helpers 这两条消息。 */
+    public static boolean hubAckHasChat(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return fields != null && "hub".equals(fields.get("ack")) && "true".equals(fields.get("ok"))
+                && "true".equals(fields.get("chat"));
+    }
+
+    /**
+     * 取出一层对象里某个键下面的对象数组，每个对象按 parseFlatObject 解析。
+     * 用来读 Runtime 的 /v1/agents。格式不对或者没有这个键时返回空表。
+     */
+    public static List<Map<String, String>> parseObjectArray(String text, String key) {
+        List<Map<String, String>> items = new ArrayList<>();
+        if (text == null || key == null) {
+            return items;
+        }
+        int[] at = {0};
+        skipSpace(text, at);
+        if (at[0] >= text.length() || text.charAt(at[0]) != '{') {
+            return items;
+        }
+        at[0]++;
+        while (at[0] < text.length()) {
+            skipSpace(text, at);
+            String name = readString(text, at);
+            if (name == null) {
+                return items;
+            }
+            skipSpace(text, at);
+            if (at[0] >= text.length() || text.charAt(at[0]) != ':') {
+                return items;
+            }
+            at[0]++;
+            skipSpace(text, at);
+            if (name.equals(key) && at[0] < text.length() && text.charAt(at[0]) == '[') {
+                at[0]++;
+                while (at[0] < text.length()) {
+                    skipSpace(text, at);
+                    if (at[0] < text.length() && text.charAt(at[0]) == ']') {
+                        return items;
+                    }
+                    int start = at[0];
+                    if (!skipValue(text, at) || at[0] <= start) {
+                        return items;
+                    }
+                    Map<String, String> item = parseFlatObject(text.substring(start, at[0]));
+                    if (item != null) {
+                        items.add(item);
+                    }
+                    if (at[0] < text.length() && text.charAt(at[0]) == ',') {
+                        at[0]++;
+                    }
+                }
+                return items;
+            }
+            if (at[0] < text.length() && text.charAt(at[0]) == '"') {
+                if (readString(text, at) == null) {
+                    return items;
+                }
+            } else if (!skipValue(text, at)) {
+                return items;
+            }
+            skipSpace(text, at);
+            if (at[0] >= text.length() || text.charAt(at[0]) != ',') {
+                return items;
+            }
+            at[0]++;
+        }
+        return items;
     }
 
     /** 解析设备发来的一行；不是权限决定就返回 null。 */
@@ -255,7 +397,10 @@ public final class BuddyProtocol {
         out.append('"');
     }
 
-    /** 只认一层、值为字符串的 JSON 对象；其他类型的值跳过。格式不对返回 null。 */
+    /**
+     * 只认一层的 JSON 对象。字符串原样取出；数字和 true / false 取出它们写在 JSON 里的样子
+     * （"3"、"true"）；null、嵌套的对象和数组跳过，所以值为 null 的键查不到。格式不对返回 null。
+     */
     static Map<String, String> parseFlatObject(String line) {
         if (line == null) {
             return null;
@@ -289,8 +434,15 @@ public final class BuddyProtocol {
                     return null;
                 }
                 fields.put(key, value);
-            } else if (!skipValue(line, at)) {
-                return null;
+            } else {
+                int start = at[0];
+                if (!skipValue(line, at)) {
+                    return null;
+                }
+                String raw = line.substring(start, at[0]).trim();
+                if (isNumberOrBoolean(raw)) {
+                    fields.put(key, raw);
+                }
             }
             skipSpace(line, at);
             if (at[0] >= line.length()) {
@@ -305,6 +457,24 @@ public final class BuddyProtocol {
             }
         }
         return null;
+    }
+
+    private static boolean isNumberOrBoolean(String raw) {
+        if (raw.equals("true") || raw.equals("false")) {
+            return true;
+        }
+        if (raw.isEmpty() || raw.length() > 24) {
+            return false;
+        }
+        for (int index = 0; index < raw.length(); index++) {
+            char value = raw.charAt(index);
+            boolean digit = value >= '0' && value <= '9';
+            if (!digit && value != '-' && value != '+' && value != '.' && value != 'e' && value != 'E') {
+                return false;
+            }
+        }
+        char first = raw.charAt(0);
+        return first == '-' || (first >= '0' && first <= '9');
     }
 
     private static void skipSpace(String line, int[] at) {

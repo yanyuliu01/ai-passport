@@ -91,6 +91,28 @@ public final class HubStore {
         void onHubChanged();
     }
 
+    /** 和小幽的对话现在走到哪一步了：设备的首页显示的就是它。 */
+    public static final class Turn {
+        /** idle、thinking、helper、done、failed 之一。 */
+        public final String phase;
+        public final String said;
+        public final String reply;
+        /** 正在替小幽干活的帮手；没有就是空串。 */
+        public final String agent;
+        /** 她转交时说的那句话，或者帮手做完时的一句说明。 */
+        public final String stage;
+        public final String mood;
+
+        Turn(String phase, String said, String reply, String agent, String stage, String mood) {
+            this.phase = phase;
+            this.said = said;
+            this.reply = reply;
+            this.agent = agent;
+            this.stage = stage;
+            this.mood = mood;
+        }
+    }
+
     private static final int EVENT_LIMIT = 40;
     private static final int LOG_LIMIT = 60;
     private static final int CHAT_LIMIT = 60;
@@ -109,6 +131,9 @@ public final class HubStore {
     private int pending;
     private String busyText = "";
     private long sequence;
+    private Turn turn = new Turn("idle", "", "", "", "", "idle");
+    /** 换了一台 Runtime，或者别的原因让“小幽有哪些帮手”需要重新问一次。 */
+    private long helpersVersion;
 
     private HubStore() {
     }
@@ -217,12 +242,50 @@ public final class HubStore {
         notifyChanged();
     }
 
-    /** 我说了一句话，小幽开始想。 */
+    /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
     public void chatAsked(String text) {
         synchronized (this) {
             ++pending;
             busyText = text;
             appendChat("我：" + text);
+            turn = new Turn("thinking", RuntimeClient.VOICE_PLACEHOLDER.equals(text) ? "" : text,
+                    "", "", "", "busy");
+        }
+        notifyChanged();
+    }
+
+    /**
+     * Runtime 说这一轮走到了哪一步：helper 不为空表示小幽把活交给了它，stage 是她当时说的话。
+     * 没有变化时不通知，免得白白重发。
+     */
+    public void chatProgress(String helper, String stage) {
+        synchronized (this) {
+            if (pending <= 0) {
+                return;
+            }
+            String agent = helper == null ? "" : helper;
+            String text = stage == null ? "" : stage;
+            String phase = agent.isEmpty() ? "thinking" : "helper";
+            if (turn.phase.equals(phase) && turn.agent.equals(agent) && turn.stage.equals(text)) {
+                return;
+            }
+            turn = new Turn(phase, turn.said, "", agent, text, "busy");
+        }
+        notifyChanged();
+    }
+
+    public synchronized Turn turn() {
+        return turn;
+    }
+
+    public synchronized long helpersVersion() {
+        return helpersVersion;
+    }
+
+    /** 换了一台 Runtime：帮手的清单要重新问。 */
+    public void helpersChanged() {
+        synchronized (this) {
+            ++helpersVersion;
         }
         notifyChanged();
     }
@@ -238,16 +301,19 @@ public final class HubStore {
             }
             if (pending > 0) {
                 busyText = heard;
+                turn = new Turn(turn.phase, heard, turn.reply, turn.agent, turn.stage, turn.mood);
             }
         }
         notifyChanged();
     }
 
-    /** 小幽答完了：brief 给小屏幕，reply 是完整回复。 */
-    public void chatAnswered(String brief, String reply) {
+    /** 小幽答完了：brief 给小屏幕，reply 是完整回复，mood 是她此刻的表情。 */
+    public void chatAnswered(String brief, String reply, String mood) {
         synchronized (this) {
             pending = Math.max(0, pending - 1);
             String shown = reply.isEmpty() ? brief : reply;
+            turn = new Turn("done", turn.said, BuddyProtocol.chatReply(brief, reply), "", "",
+                    mood == null || mood.isEmpty() ? "idle" : mood);
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
             trimEvents();
@@ -261,8 +327,11 @@ public final class HubStore {
         synchronized (this) {
             if (asked != null) {
                 appendChat("我：" + asked);
+                turn = new Turn("failed", RuntimeClient.VOICE_PLACEHOLDER.equals(asked) ? "" : asked,
+                        error, "", "", "oops");
             } else {
                 pending = Math.max(0, pending - 1);
+                turn = new Turn("failed", turn.said, error, "", "", "oops");
             }
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", "没成功：" + error,
                     System.currentTimeMillis(), "没成功：" + error));
@@ -301,6 +370,20 @@ public final class HubStore {
 
     public synchronized List<Event> recent(int count) {
         return new ArrayList<>(events.subList(0, Math.min(count, events.size())));
+    }
+
+    /** 最近的通知，不含小幽自己说的话：那些在设备首页上，不用在“通知”里再出现一遍。 */
+    public synchronized List<Event> recentNotices(int count) {
+        List<Event> notices = new ArrayList<>();
+        for (Event event : events) {
+            if (event.brief == null) {
+                notices.add(event);
+                if (notices.size() >= count) {
+                    break;
+                }
+            }
+        }
+        return notices;
     }
 
     public synchronized int waiting() {

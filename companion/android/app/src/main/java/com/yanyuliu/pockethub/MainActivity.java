@@ -154,7 +154,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
             talk.append(line).append("\n\n");
         }
         if (store.busy()) {
-            talk.append("小幽正在想…");
+            HubStore.Turn turn = store.turn();
+            if (!turn.stage.isEmpty()) {
+                talk.append("小幽：").append(turn.stage).append("\n");
+            }
+            talk.append(turn.agent.isEmpty() ? "小幽正在想…" : "小幽在等 " + turn.agent + " 做完…");
         }
         chatView.setText(talk.length() == 0 ? "（还没有聊过）" : talk.toString().trim());
         refreshRuntimes();

@@ -7,14 +7,16 @@
 Pocket Hub is an Android app that sits between the phone's AI assistants and
 the Claude Pocket device. It reads the notifications of registered apps
 (Claude and Codex by default), keeps the recent ones as a small feed, and sends
-that feed to the device over Bluetooth LE. The device needs no firmware change:
-the app speaks the same Hardware Buddy wire protocol that the Claude desktop
-app does, so the pet shows phone-side messages the way it shows desktop state.
+that feed to the device over Bluetooth LE. The app speaks the same Hardware
+Buddy wire protocol that the Claude desktop app does, plus the hub extension
+described in the [firmware documentation](../docs/claude-pocket.md#the-conversation).
 
 The app also has a chat box for talking to Xiaoyou. A message typed there goes
-to the [Xiaoyou Runtime](../runtime/README.md) over HTTP; while the runtime
-works the device shows the pet as busy, and when it answers the device gets the
-short brief on the home page and the full reply on the latest-reply page.
+to the [Xiaoyou Runtime](../runtime/README.md) over HTTP. The app follows the
+turn step by step and reports it to the device: what you said, that Xiaoyou is
+thinking, which agent she handed the work to and what she said when she did,
+and then her whole answer. The chat box shows the same steps. The app also
+tells the device which agents the selected runtime has.
 
 Holding `OK` on the device records a voice message. The app receives the audio
 over Bluetooth, forwards it to the runtime, and the runtime turns it into text
@@ -28,12 +30,18 @@ display label, and more can be added in the app.
 
 | On the phone | On the device |
 | --- | --- |
-| A notification from a registered source | Home summary line, recent-activity entry, and its full text on the latest-reply page |
-| Notifications not yet dismissed | The waiting count; the pet asks for attention |
+| A message sent to Xiaoyou from the chat box | The home page: what you said, Xiaoyou thinking, the agent she handed the work to, then her answer (the first 959 bytes; the whole text stays on the phone) |
+| A voice message recorded on the device | The same as a typed message; what was heard appears on the device and in the chat box once the runtime has transcribed it |
+| The agents of the selected runtime | The helpers page in the menu (the first four) |
+| A notification from a registered source | An entry on the notices page in the menu |
+| Notifications not yet dismissed | The idle home page says how many |
 | A notification with both an allow-like and a deny-like button | The pet asks; `OK` presses the allow button, `DOWN` the deny button |
-| A message sent to Xiaoyou from the chat box | Busy while the runtime works; then the brief, with the full reply on the latest-reply page |
-| A voice message recorded on the device | The same as a typed message; the chat box shows what was heard once the runtime has transcribed it |
 | Nothing new | A keepalive every 10 seconds so the device stays connected |
+
+A device with firmware from before the conversation pages does not announce
+`chat` when the app introduces itself. The app then falls back to what it sent
+before: the summary line and the full text of the latest message as a `turn`
+event.
 
 Only what a notification contains can be forwarded. Whether a given assistant
 posts notifications for cloud sessions, and whether they carry action buttons,
@@ -84,11 +92,11 @@ conversation, are kept in the app's private storage.
 | --- | --- |
 | `android/app/src/main/java/.../BuddyProtocol.java` | Wire format; plain Java, unit tested |
 | `.../Sources.java` | Registry of sources (package name, label, enabled) |
-| `.../HubStore.java` | In-memory feed, pending questions, log |
+| `.../HubStore.java` | In-memory feed, the current turn with Xiaoyou, pending questions, log |
 | `.../NotifyListener.java` | Notification listener service |
 | `.../BleLink.java`, `.../LinkService.java` | BLE central and the foreground service that keeps it alive |
 | `.../VoiceRecording.java` | Decodes voice frames from the device into a WAV recording; plain Java, unit tested |
-| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime and waits for the answer |
+| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime, follows each turn step by step, and asks which agents the runtime has |
 | `.../MainActivity.java` | Chat box, setup, source list, test buttons, log |
 
 ## Status
@@ -102,5 +110,7 @@ On a phone (2026-10-08, one Android device, version 0.2.0): Bluetooth pairing,
 the connection to the device, and a typed message answered by the runtime and
 shown on the device worked. Not verified: voice from the device and
 switching between runtimes (versions 0.3.0 and 0.4.0 have not been run on a
-phone), reconnecting by itself after the app is
+phone), the conversation on the device's home page and the helpers list
+(version 0.5.0, which needs the matching firmware; not run on a phone),
+reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.

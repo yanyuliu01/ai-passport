@@ -31,6 +31,12 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private BleLink link;
     private String lastTurnKey = "";
     private String lastHeartbeat = "";
+    private String lastChat = "";
+    private String lastHelpers = "";
+    /** 设备声明了它认识 chat 和 helpers：对话按新的方式发，不再塞在心跳和 turn 里。 */
+    private boolean deviceChat;
+    private long helpersSeen = -1;
+    private int keepalives;
     /** 设备正在说话时不为 null。 */
     private VoiceRecording recording;
 
@@ -115,6 +121,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         recording = null;
         lastHeartbeat = "";
         lastTurnKey = "";
+        lastChat = "";
+        lastHelpers = "";
+        deviceChat = false;
+        helpersSeen = -1;
         pushState();
         main.removeCallbacks(keepalive);
         main.postDelayed(keepalive, KEEPALIVE_MS);
@@ -134,7 +144,15 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         Boolean hub = BuddyProtocol.parseHubAck(line);
         if (hub != null) {
-            HubStore.get().log(hub ? "设备支持按住说话" : "设备固件较旧，不支持按住说话");
+            deviceChat = BuddyProtocol.hubAckHasChat(line);
+            HubStore.get().log(!hub ? "设备固件较旧，不支持按住说话"
+                    : (deviceChat ? "设备支持按住说话，首页显示和小幽的对话"
+                            : "设备支持按住说话（固件还是旧界面）"));
+            if (deviceChat) {
+                // 换成新的发法：心跳要重发一次（里面不再带对话），对话单独发。
+                lastHeartbeat = "";
+                pushState();
+            }
         }
     }
 
@@ -172,6 +190,21 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     public void onClosed() {
         main.removeCallbacks(keepalive);
         recording = null;
+        deviceChat = false;
+    }
+
+    /** 问一次小幽有哪些帮手，告诉设备。清单没变就不重发。 */
+    private void refreshHelpers() {
+        RuntimeClient.fetchAgents(this, agents -> main.post(() -> {
+            if (link == null || !link.isReady() || !deviceChat) {
+                return;
+            }
+            String line = BuddyProtocol.helpers(agents);
+            if (!line.equals(lastHelpers)) {
+                lastHelpers = line;
+                link.send(line);
+            }
+        }));
     }
 
     // ---- HubStore.Listener ----
@@ -186,6 +219,11 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         @Override
         public void run() {
             lastHeartbeat = "";
+            // 对话那一行比心跳长得多，不用每次都重发；每半分钟补发一次，万一设备那边
+            // 因为心跳超时清掉了画面，也能恢复。
+            if (++keepalives % 3 == 0) {
+                lastChat = "";
+            }
             pushState();
             main.postDelayed(this, KEEPALIVE_MS);
         }
@@ -196,7 +234,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             return;
         }
         HubStore store = HubStore.get();
-        List<HubStore.Event> recent = store.recent(BuddyProtocol.ENTRY_COUNT);
+        // 新界面的设备：对话在首页，通知页只放别的来源的通知。
+        List<HubStore.Event> recent = deviceChat
+                ? store.recentNotices(BuddyProtocol.ENTRY_COUNT)
+                : store.recent(BuddyProtocol.ENTRY_COUNT);
         List<String> entries = new ArrayList<>();
         for (HubStore.Event event : recent) {
             entries.add(event.entry());
@@ -204,16 +245,31 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         HubStore.Ask ask = store.currentAsk();
         BuddyProtocol.Prompt prompt = ask == null ? null
                 : new BuddyProtocol.Prompt(ask.id, ask.source, ask.text);
-        // 小幽在想的时候，设备显示“干活中”和我刚问的那句话。
         boolean busy = store.busy();
-        String message = busy ? "在想：" + store.busyText()
-                : (recent.isEmpty() ? "" : recent.get(0).summary());
+        // 旧界面的设备靠心跳里的这行字显示“在想：……”和最新一条消息；新界面不需要。
+        String message = deviceChat ? ""
+                : (busy ? "在想：" + store.busyText()
+                        : (recent.isEmpty() ? "" : recent.get(0).summary()));
         String heartbeat = BuddyProtocol.heartbeat(Sources.enabledCount(this), busy ? 1 : 0,
                 store.waiting(),
                 message, entries, 0, store.todayCount(), prompt);
         if (!heartbeat.equals(lastHeartbeat)) {
             lastHeartbeat = heartbeat;
             link.send(heartbeat);
+        }
+        if (deviceChat) {
+            HubStore.Turn turn = store.turn();
+            String chat = BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
+                    turn.stage, turn.mood);
+            if (!chat.equals(lastChat)) {
+                lastChat = chat;
+                link.send(chat);
+            }
+            if (helpersSeen != store.helpersVersion()) {
+                helpersSeen = store.helpersVersion();
+                refreshHelpers();
+            }
+            return;
         }
         if (!recent.isEmpty()) {
             // 最新一条消息的全文，显示在设备的“最新回复”页；同一条只发一次。

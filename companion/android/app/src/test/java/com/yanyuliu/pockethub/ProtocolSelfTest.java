@@ -101,6 +101,78 @@ public final class ProtocolSelfTest {
 
         voice();
         history();
+        conversation();
+    }
+
+    /** 和小幽的对话、她的帮手：发给设备的两行，以及读 Runtime 回来的记录。 */
+    private static void conversation() {
+        String chat = BuddyProtocol.chat("helper", "看看 \"retry\"", "", "codex", "我让 codex 看看", "busy");
+        check(chat.equals("{\"cmd\":\"chat\",\"phase\":\"helper\",\"said\":\"看看 \\\"retry\\\"\","
+                + "\"reply\":\"\",\"agent\":\"codex\",\"stage\":\"我让 codex 看看\",\"mood\":\"busy\"}\n"),
+                "chat shape: " + chat);
+        check(BuddyProtocol.chat(null, null, null, null, null, null).equals(
+                "{\"cmd\":\"chat\",\"phase\":\"idle\",\"said\":\"\",\"reply\":\"\",\"agent\":\"\","
+                        + "\"stage\":\"\",\"mood\":\"idle\"}\n"), "empty chat");
+        // 每个字段都按固件的上限截断，整行放得进一行。
+        StringBuilder many = new StringBuilder();
+        for (int index = 0; index < 2000; index++) {
+            many.append('长');
+        }
+        String longChat = BuddyProtocol.chat("done", many.toString(), many.toString(),
+                many.toString(), many.toString(), "happy");
+        check(BuddyProtocol.utf8Length(longChat) < BuddyProtocol.LINE_MAX, "chat line fits");
+        check(BuddyProtocol.utf8Length(longChat) > BuddyProtocol.REPLY_MAX, "reply is kept long");
+
+        // 小屏幕上先看结论：简报在前，完整回复在后；重复的不写两遍。
+        check(BuddyProtocol.chatReply("结论", "完整的说明").equals("结论\n\n完整的说明"), "brief first");
+        check(BuddyProtocol.chatReply("结论", "结论，以及更多").equals("结论，以及更多"), "no repeat");
+        check(BuddyProtocol.chatReply("", "只有回复").equals("只有回复"), "reply only");
+        check(BuddyProtocol.chatReply("只有简报", null).equals("只有简报"), "brief only");
+        check(BuddyProtocol.chatReply(null, null).isEmpty(), "nothing");
+
+        String helpers = BuddyProtocol.helpers(Arrays.asList(
+                new String[] {"claude", "日常问答"}, new String[] {"", "没有名字"}, null,
+                new String[] {"codex"}, new String[] {"c"}, new String[] {"d"}, new String[] {"e"}));
+        check(helpers.equals("{\"cmd\":\"helpers\",\"list\":[{\"name\":\"claude\",\"about\":\"日常问答\"},"
+                + "{\"name\":\"codex\",\"about\":\"\"},{\"name\":\"c\",\"about\":\"\"},"
+                + "{\"name\":\"d\",\"about\":\"\"}]}\n"), "helpers: " + helpers);
+        check(BuddyProtocol.helpers(null).equals("{\"cmd\":\"helpers\",\"list\":[]}\n"), "no helpers");
+
+        // 设备的应答里声明了 chat，才按新的方式发对话。
+        check(BuddyProtocol.hubAckHasChat("{\"ack\":\"hub\",\"ok\":true,\"chat\":true}"), "chat ack");
+        check(Boolean.TRUE.equals(BuddyProtocol.parseHubAck("{\"ack\":\"hub\",\"ok\":true,\"chat\":true}")),
+                "chat ack is still a hub ack");
+        check(!BuddyProtocol.hubAckHasChat("{\"ack\":\"hub\",\"ok\":true}"), "older firmware");
+        check(!BuddyProtocol.hubAckHasChat("{\"ack\":\"hub\",\"ok\":false,\"chat\":true}"), "refused");
+        check(!BuddyProtocol.hubAckHasChat("{\"ack\":\"name\",\"ok\":true,\"chat\":true}"), "other ack");
+        check(!BuddyProtocol.hubAckHasChat("garbage"), "garbage ack");
+
+        // Runtime 的消息记录：数字和 true / false 也读得到，null 读不到。
+        java.util.Map<String, String> record = BuddyProtocol.parseFlatObject(
+                "{\"id\":\"m1\",\"status\":\"running\",\"reply\":null,\"helper\":\"codex\","
+                        + "\"stage\":\"我去问 codex\",\"events\":[{\"kind\":\"route\",\"text\":\"a,b]}\"}],"
+                        + "\"hop\":0,\"rev\":12,\"created_at\":1790000000.25,\"ok\":true}");
+        check(record != null && "12".equals(record.get("rev")) && "0".equals(record.get("hop")), "numbers");
+        check("codex".equals(record.get("helper")) && "true".equals(record.get("ok")), "helper and bool");
+        check(!record.containsKey("reply") && !record.containsKey("events"), "null and arrays skipped");
+        check("1790000000.25".equals(record.get("created_at")), "float kept as written");
+
+        // /v1/agents：一层对象里的一个对象数组。
+        java.util.List<java.util.Map<String, String>> agents = BuddyProtocol.parseObjectArray(
+                "{\"default\":\"claude\",\"agents\":[{\"name\":\"claude\",\"type\":\"claude_code\","
+                        + "\"description\":\"问答 [和] {搜索}\",\"speaks\":true,\"default\":true},"
+                        + " {\"name\":\"codex\",\"description\":\"\",\"speaks\":false}],\"more\":1}", "agents");
+        check(agents.size() == 2 && "claude".equals(agents.get(0).get("name"))
+                && "问答 [和] {搜索}".equals(agents.get(0).get("description"))
+                && "true".equals(agents.get(0).get("speaks")), "first agent");
+        check("codex".equals(agents.get(1).get("name")) && "false".equals(agents.get(1).get("speaks")),
+                "second agent");
+        check(BuddyProtocol.parseObjectArray("{\"agents\":[]}", "agents").isEmpty(), "empty list");
+        check(BuddyProtocol.parseObjectArray("{\"default\":\"x\"}", "agents").isEmpty(), "no key");
+        check(BuddyProtocol.parseObjectArray("{\"agents\":\"claude\"}", "agents").isEmpty(), "not a list");
+        check(BuddyProtocol.parseObjectArray("{\"agents\":[{\"name\":\"a\"}", "agents").size() <= 1, "cut off");
+        check(BuddyProtocol.parseObjectArray("not json", "agents").isEmpty(), "garbage");
+        check(BuddyProtocol.parseObjectArray(null, "agents").isEmpty(), "null");
     }
 
     /** 换 Runtime 时带过去的对话：只带最近的若干轮，旧的在前，内容原样转义。 */

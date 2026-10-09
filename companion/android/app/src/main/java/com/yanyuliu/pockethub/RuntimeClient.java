@@ -116,6 +116,40 @@ final class RuntimeClient {
 
     static synchronized void select(Context context, String url) {
         store(context, targets(context), url);
+        HubStore.get().helpersChanged();
+    }
+
+    /** 收到帮手清单时的回调：每项是 {名字, 一句说明}。 */
+    interface AgentsCallback {
+        void onAgents(List<String[]> agents);
+    }
+
+    /**
+     * 问现在用的那台 Runtime：小幽有哪些帮手。默认接话的那个代理就是小幽自己用来说话的，
+     * 也列在里面——在设备上它和别的帮手一样，是她能找的人。问不到时不回调。
+     */
+    static void fetchAgents(Context context, AgentsCallback callback) {
+        final Target target = selected(context.getApplicationContext());
+        if (target == null) {
+            return;
+        }
+        WORKER.execute(() -> {
+            try {
+                String body = requestText("GET", target.url + "/v1/agents", target.token, null, null, 8);
+                List<String[]> agents = new ArrayList<>();
+                for (Map<String, String> item : BuddyProtocol.parseObjectArray(body, "agents")) {
+                    String name = item.get("name");
+                    if (name != null && !name.isEmpty()) {
+                        String about = item.get("description");
+                        agents.add(new String[] {name, about == null ? "" : about});
+                    }
+                }
+                callback.onAgents(agents);
+            } catch (IOException | RuntimeException error) {
+                // 旧版 Runtime 没有这个接口，或者暂时连不上：设备上的帮手页就先空着。
+                HubStore.get().log("没问到小幽有哪些帮手：" + error.getMessage());
+            }
+        });
     }
 
     static synchronized void remove(Context context, String url) {
@@ -297,7 +331,8 @@ final class RuntimeClient {
                     if ("done".equals(status)) {
                         String reply = message.get("reply");
                         String brief = message.get("brief");
-                        store.chatAnswered(brief == null ? "" : brief, reply == null ? "" : reply);
+                        store.chatAnswered(brief == null ? "" : brief, reply == null ? "" : reply,
+                                message.get("mood"));
                         String said = recognized != null && !recognized.isEmpty() ? recognized : text;
                         if (reply != null && !reply.isEmpty()) {
                             remember(app, new ChatTurn(id, said, reply,
@@ -313,10 +348,14 @@ final class RuntimeClient {
                     if (System.currentTimeMillis() > deadline) {
                         throw new IOException("等了太久还没有结果");
                     }
-                    // 语音还没识别出来时短轮询，好让“我说了什么”尽快显示出来。
-                    int wait = heard ? POLL_SECONDS : 2;
-                    message = request("GET", url + "/v1/messages/" + id + "?wait=" + wait,
-                            token, null, null, wait + 15);
+                    // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
+                    store.chatProgress(message.get("helper"), message.get("stage"));
+                    // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
+                    // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
+                    String rev = message.get("rev");
+                    int wait = heard || rev != null ? POLL_SECONDS : 2;
+                    message = request("GET", url + "/v1/messages/" + id + "?wait=" + wait
+                            + (rev == null ? "" : "&rev=" + rev), token, null, null, wait + 15);
                 }
             } catch (IOException | RuntimeException error) {
                 String detail = error.getMessage();
@@ -328,6 +367,18 @@ final class RuntimeClient {
     private static Map<String, String> request(String method, String address, String token,
                                                byte[] body, String contentType,
                                                int timeoutSeconds)
+            throws IOException {
+        Map<String, String> fields = BuddyProtocol.parseFlatObject(
+                requestText(method, address, token, body, contentType, timeoutSeconds));
+        if (fields == null) {
+            throw new IOException("Runtime 返回的内容看不懂");
+        }
+        return fields;
+    }
+
+    /** 发一个请求，返回响应的正文；状态码不是成功时抛出带说明的异常。 */
+    private static String requestText(String method, String address, String token,
+                                      byte[] body, String contentType, int timeoutSeconds)
             throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         try {
@@ -347,18 +398,15 @@ final class RuntimeClient {
             InputStream stream = code >= 400 ? connection.getErrorStream()
                     : connection.getInputStream();
             String text = stream == null ? "" : readAll(stream);
-            Map<String, String> fields = BuddyProtocol.parseFlatObject(text);
             if (code == 401) {
                 throw new IOException("令牌不对（401）");
             }
             if (code >= 400) {
+                Map<String, String> fields = BuddyProtocol.parseFlatObject(text);
                 String error = fields == null ? null : fields.get("error");
                 throw new IOException("Runtime 返回 " + code + (error == null ? "" : "：" + error));
             }
-            if (fields == null) {
-                throw new IOException("Runtime 返回的内容看不懂");
-            }
-            return fields;
+            return text;
         } finally {
             connection.disconnect();
         }
