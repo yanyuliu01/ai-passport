@@ -103,7 +103,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
-| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `dontAsk`）、`allowed_tools`、`extra_args` |
+| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `dontAsk`）、`allowed_tools`、`extra_args`、`env` |
 | `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
@@ -112,6 +112,33 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 `permission_mode` 为 `dontAsk` 时，Claude Code 里没有被 `allowed_tools` 放行的操作会被
 直接拒绝，而不是等一个不在场的人来点头。放行规则要写窄：每一条都是这个代理在没人看着
 时能做的事。Codex 的 `sandbox` 同理，默认只读。
+
+### 换成别家的模型（例如 DeepSeek V4）
+
+`claude_code` 类型的代理可以带一个 `env`：启动 Claude Code 时额外设置的环境变量。
+把接口地址和密钥指向一个兼容 Anthropic 接口的服务，外壳还是 Claude Code（工具、会话、
+回复格式都不变），回答的模型换成那一家的。示例配置里有一个没启用的 `deepseek`：
+
+```json
+"deepseek": {
+  "type": "claude_code",
+  "config_dir": "~/.claude-xiaoyou-deepseek",
+  "model": "deepseek-v4-pro",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "你的 DeepSeek 密钥"
+  }
+}
+```
+
+把 `"enabled"` 改成 `true`，填上密钥，再把 `xiaoyou.default_agent`（和 `voice_agent`，
+如果写了）指向它，小幽自己就由这个模型来回话；原来的 `claude` 留着当帮手，改回去只要
+把这两项指回 `claude`。给它一个单独的 `config_dir`，这样它的会话不和订阅登录的那一套
+混在一起；这个目录不用登录。密钥只写在 `config.json` 里（这个文件不进仓库）。
+
+没有实测过：这一段是照 DeepSeek 的接口文档和 Claude Code 实际发出的请求写的，没有用
+真实的密钥跑过一轮。Claude Code 的网页搜索是 Anthropic 那边的服务端工具，换了服务后
+不一定可用。
 
 示例配置里带了一个没启用的 `codex`；在同一台机器上装好并登录 Codex 命令行之后，把
 `"enabled"` 改成 `true`，再跑一次 `--check`。

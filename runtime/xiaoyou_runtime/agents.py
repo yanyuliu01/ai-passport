@@ -186,10 +186,14 @@ class ClaudeCodeAgent(Agent):
 
     def run(self, job: Job) -> Outcome:
         env = None
-        if self.spec.config_dir is not None:
-            # 让这台机器上的 Claude Code 用一套单独的登录和设置，
-            # 不受（也不影响）使用者平时那套 ~/.claude 配置。
-            env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.spec.config_dir))
+        if self.spec.config_dir is not None or self.spec.env:
+            env = dict(os.environ)
+            # 配置里写的环境变量：换接口地址、密钥、模型之类。
+            env.update(self.spec.env)
+            if self.spec.config_dir is not None:
+                # 让这台机器上的 Claude Code 用一套单独的登录和设置，
+                # 不受（也不影响）使用者平时那套 ~/.claude 配置。
+                env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
         done = run_command(
             self.command(job), job.text, self.spec.workdir, self.spec.timeout_seconds,
             "Claude Code", env=env, run=self._run,
@@ -218,7 +222,12 @@ class ClaudeCodeAgent(Agent):
         return Outcome(result, session_id, fields_from_text(result))
 
     def check(self) -> Optional[str]:
-        return self._command_problem()
+        problem = self._command_problem()
+        if problem is None and self.spec.env.get("ANTHROPIC_BASE_URL"):
+            keys = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+            if not any(self.spec.env.get(key) or os.environ.get(key) for key in keys):
+                return "env 里设了 ANTHROPIC_BASE_URL，但没有 ANTHROPIC_AUTH_TOKEN：填上那个服务的密钥"
+        return problem
 
 
 class CodexAgent(Agent):
