@@ -1,7 +1,8 @@
 // main/pocket_ui.c —— 小幽界面实现（240×320 竖屏，三键操作）。
 //
-// 首页就是和小幽的对话：上面是她和你刚说的话，下面是她的话。她把活交给别的代理时，
-// 画面上看得见她在跟谁通信。低频的东西（通知、帮手、设置）都收在长按上键的菜单里。
+// 首页就是和小幽的对话：顶上一条是她和她此刻的状态（在想、在找谁帮忙），下面是一条
+// 往下长的对话，上下键翻看这一段里说过的每一轮。低频的东西（通知、帮手、设置）都收在
+// 长按上键的菜单里。
 //
 // 结构：一块屏幕上常驻三层——顶栏、内容区、底部按键提示。内容区里每个页面和每个
 // 浮层各有一个容器，render 时只切换显隐并更新变化的内容。
@@ -16,6 +17,7 @@
 
 #include "lvgl.h"
 
+#include "buddy_history.h"
 #include "pocket_fonts.h"
 #include "pocket_pet.h"
 #include "pocket_text.h"
@@ -54,7 +56,7 @@
 #define ENTRY_ROW_H    50
 #define ENTRY_ROW_GAP  3
 
-// 小幽出现的地方：首页的两种版式，和四个占满屏幕的场景。
+// 小幽出现的地方：首页的两种版式（独占画面、对话顶上那一条），和四个占满屏幕的场景。
 enum {
     PET_SOLO,
     PET_TALK,
@@ -65,25 +67,38 @@ enum {
     PET_COUNT,
 };
 #define PET_SOLO_SCALE  6
-#define PET_TALK_SCALE  4
+#define PET_TALK_SCALE  2
 #define PET_CHAT_SCALE  3
 #define PET_FRAME_MS    450
 
-// 首页的对话版式：小幽在左上，右边是你说的话；一条细线；下面是她的话。
-#define TALK_PET_X      14
-#define TALK_SAID_X     102
-#define TALK_SAID_W     124
-#define TALK_RULE_Y     86
-#define TALK_BODY_Y     94
-#define TALK_BODY_W     (SCREEN_W - 2 * 16)
-#define TALK_BODY_LINES 7
-#define TALK_STAGE_LINES 3
-#define TALK_LINK_Y     (TALK_BODY_Y + TALK_STAGE_LINES * LINE_16 + 8)
-#define TALK_STATUS_Y   (TALK_LINK_Y + 34)
+// 首页的对话版式。顶上一条：左边是缩小的小幽，右边第一行是“小幽 ···✉··· [帮手]”，
+// 第二行是她此刻在干什么和计时。一条细线下面是对话，一屏九行。
+#define HEAD_PET_X      14
+#define HEAD_PET_Y      2
+#define HEAD_TEXT_X     62
+#define HEAD_TEXT_W     (SCREEN_W - SIDE - HEAD_TEXT_X)
+#define HEAD_ROW2_Y     23
+#define HEAD_LINK_X     (HEAD_TEXT_X + 34)
+#define HEAD_LINK_W     34
+#define HEAD_TAG_X      (HEAD_LINK_X + HEAD_LINK_W + 6)
+#define HEAD_TAG_PAD    8
+// 名牌里名字最宽能占多少：再长就打省略号。
+#define HEAD_TAG_TEXT_W (SCREEN_W - SIDE - HEAD_TAG_X - 2 * HEAD_TAG_PAD - 4)
+#define HEAD_ELAPSED_W  48
+#define HEAD_RULE_Y     46
 
-// 往下读：一屏十行，翻一次走九行，留一行让眼睛接得上。
-#define READER_LINES    10
-#define READER_STEP     (9 * LINE_16)
+// 对话是一条往下长的长卷，屏幕是它上面九行高的窗口；翻一次走八行，留一行让眼睛接得上。
+// 每一轮是两段字：你说的（暗一些，左边一条竖线）和她说的。所有高度都是整行，
+// 所以窗口的上下沿不会切到半行字。
+#define TL_Y            (HEAD_RULE_Y + 2)
+#define TL_LINES        9
+#define TL_H            (TL_LINES * LINE_16)
+#define TL_STEP         ((TL_LINES - 1) * LINE_16)
+#define TL_TEXT_W       (INNER_W - 8)
+#define TL_SLOTS        (BUDDY_HISTORY_TURNS + 1)
+#define TL_LIVE         BUDDY_HISTORY_TURNS
+// 首页比别的页面高一点：对话一直铺到按键提示上面。
+#define HOME_H          (TL_Y + TL_H)
 
 // 说话时的音量条。
 #define LEVEL_BARS      15
@@ -143,21 +158,30 @@ static struct {
     lv_obj_t *solo;
     lv_obj_t *solo_title;
     lv_obj_t *solo_sub;
-    // 首页：对话
+    // 首页：对话。顶上一条
     lv_obj_t *talk;
-    lv_obj_t *talk_you;
-    lv_obj_t *talk_said;
-    lv_obj_t *talk_body;
-    lv_obj_t *talk_link;
-    lv_obj_t *talk_xiaoyou;
-    lv_obj_t *talk_tag;
-    lv_obj_t *talk_tag_label;
-    lv_obj_t *talk_status;
-    lv_obj_t *talk_elapsed;
+    lv_obj_t *head_name;
+    lv_obj_t *head_link;
+    lv_obj_t *head_tag;
+    lv_obj_t *head_tag_label;
+    char head_tag_name[BUDDY_AGENT_MAX];
+    lv_obj_t *head_status;
+    lv_obj_t *head_elapsed;
     uint32_t link_color;
-    // 往下读
-    lv_obj_t *reader_scroll;
-    lv_obj_t *reader_body;
+    // 首页：对话。长卷：每一轮两段字，用到才创建；最后一格是正在进行的这一轮
+    lv_obj_t *tl_scroll;
+    lv_obj_t *tl_said[TL_SLOTS];
+    lv_obj_t *tl_reply[TL_SLOTS];
+    lv_style_t tl_style_said;
+    lv_style_t tl_style_reply;
+    bool tl_valid;         // 长卷里现在有东西
+    bool tl_follow;        // 窗口跟着最新一轮走
+    uint32_t tl_revision;  // 上次照着哪一版历史摆的
+    uint32_t tl_serial;
+    uint32_t tl_recall;
+    int tl_content;        // 长卷总高
+    int tl_last_top;       // 最新一轮从哪儿开始
+    int tl_y;              // 窗口现在在哪儿
     // 通知
     lv_obj_t *entry_rows[BUDDY_ENTRY_COUNT];
     lv_obj_t *entry_labels[BUDDY_ENTRY_COUNT];
@@ -348,14 +372,6 @@ static void set_visible(lv_obj_t *obj, bool visible)
     }
 }
 
-static void set_height(lv_obj_t *label, int height)
-{
-    if (lv_obj_get_height(label) != height) {
-        lv_obj_set_height(label, height);
-        lv_obj_set_user_data(label, NULL);  // 行数变了，省略号要重新算
-    }
-}
-
 static lv_obj_t *make_title(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *label = make_label(parent, &pocket_font_22, C_TEXT, text);
@@ -500,7 +516,7 @@ static void pet_timer_cb(lv_timer_t *timer)
         }
     }
     // 递信的那条路也跟着这个节拍走。
-    lv_obj_invalidate(s.talk_link);
+    lv_obj_invalidate(s.head_link);
 }
 
 // 审批、配对、确认的上半部分：左边小幽的头像，右边它说话的气泡。返回气泡容器，
@@ -680,46 +696,51 @@ static void build_home(lv_obj_t *page)
                                  LINES_16(3));
     lv_obj_set_style_text_align(s.solo_sub, LV_TEXT_ALIGN_CENTER, 0);
 
-    // 对话：左上是她，右边是你说的话；细线下面是她的话。
-    s.talk = make_box(page, 0, 0, SCREEN_W, AREA_H);
-    make_pet(s.talk, PET_TALK, TALK_PET_X, 0, PET_TALK_SCALE);
-    s.talk_you = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_YOU);
-    lv_obj_set_pos(s.talk_you, TALK_SAID_X, 8);
-    s.talk_said = make_text_block(s.talk, &pocket_font_16, C_DIM, TALK_SAID_X, 30, TALK_SAID_W,
-                                  LINES_16(2));
-    fill(make_box(s.talk, 16, TALK_RULE_Y, TALK_BODY_W, 1), C_LINE, 0);
-    s.talk_body = make_text_block(s.talk, &pocket_font_16, C_TEXT, 16, TALK_BODY_Y, TALK_BODY_W,
-                                  LINES_16(TALK_BODY_LINES));
-
-    // 她在跟谁通信：小幽 ···✉··· [帮手]
-    s.talk_xiaoyou = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_XIAOYOU);
-    lv_obj_set_pos(s.talk_xiaoyou, 16, TALK_LINK_Y + 3);
-    s.talk_link = make_box(s.talk, 54, TALK_LINK_Y + 5, 66, 13);
-    lv_obj_add_event_cb(s.talk_link, link_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
-    s.talk_tag = make_box(s.talk, 126, TALK_LINK_Y, LV_SIZE_CONTENT, 24);
-    outline(s.talk_tag, C_XIAOYOU, 12, 2);
-    lv_obj_set_style_pad_hor(s.talk_tag, 9, 0);
-    s.talk_tag_label = make_label(s.talk_tag, &pocket_font_16, C_XIAOYOU, "");
-    lv_obj_align(s.talk_tag_label, LV_ALIGN_LEFT_MID, 0, 0);
-    s.talk_status = make_text_block(s.talk, &pocket_font_16, C_DIM, 16, TALK_STATUS_Y,
-                                    TALK_BODY_W - 50, LINES_16(1));
-    s.talk_elapsed = make_label(s.talk, &pocket_font_16, C_XIAOYOU, "");
-    lv_obj_set_width(s.talk_elapsed, 48);
-    lv_obj_set_style_text_align(s.talk_elapsed, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(s.talk_elapsed, SCREEN_W - 16 - 48, TALK_STATUS_Y);
+    // 对话。顶上一条：缩小的小幽，她在跟谁通信（小幽 ···✉··· [帮手]），她在干什么。
+    s.talk = make_box(page, 0, 0, SCREEN_W, HOME_H);
+    make_pet(s.talk, PET_TALK, HEAD_PET_X, HEAD_PET_Y, PET_TALK_SCALE);
+    s.head_name = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_XIAOYOU);
+    lv_obj_set_pos(s.head_name, HEAD_TEXT_X, 3);
+    s.head_link = make_box(s.talk, HEAD_LINK_X, 5, HEAD_LINK_W, 13);
+    lv_obj_add_event_cb(s.head_link, link_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    s.head_tag = make_box(s.talk, HEAD_TAG_X, 0, LV_SIZE_CONTENT, 22);
+    outline(s.head_tag, C_XIAOYOU, 11, 2);
+    lv_obj_set_style_pad_hor(s.head_tag, HEAD_TAG_PAD, 0);
+    s.head_tag_label = make_label(s.head_tag, &pocket_font_16, C_XIAOYOU, "");
+    lv_obj_align(s.head_tag_label, LV_ALIGN_LEFT_MID, 0, 0);
+    s.head_status = make_text_block(s.talk, &pocket_font_16, C_DIM, HEAD_TEXT_X, HEAD_ROW2_Y,
+                                    HEAD_TEXT_W, LINES_16(1));
+    s.head_elapsed = make_label(s.talk, &pocket_font_16, C_XIAOYOU, "");
+    lv_obj_set_width(s.head_elapsed, HEAD_ELAPSED_W);
+    lv_obj_set_style_text_align(s.head_elapsed, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s.head_elapsed, SCREEN_W - SIDE - HEAD_ELAPSED_W, HEAD_ROW2_Y);
+    fill(make_box(s.talk, SIDE, HEAD_RULE_Y, INNER_W, 1), C_LINE, 0);
     s.link_color = C_XIAOYOU;
-    lv_obj_add_flag(s.talk, LV_OBJ_FLAG_HIDDEN);
-}
 
-static void build_reader(lv_obj_t *page)
-{
-    s.reader_scroll = make_box(page, SIDE, 8, INNER_W, READER_LINES * LINE_16);
-    lv_obj_add_flag(s.reader_scroll, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s.reader_scroll, LV_DIR_VER);
-    style_scrollbar(s.reader_scroll);
-    s.reader_body = make_label(s.reader_scroll, &pocket_font_16, C_TEXT, "");
-    lv_label_set_long_mode(s.reader_body, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_width(s.reader_body, INNER_W - 10);
+    // 对话的长卷。里面的字用到才创建（tl_label），这里只准备窗口和两种字的样式。
+    s.tl_scroll = make_box(s.talk, SIDE, TL_Y, INNER_W, TL_H);
+    lv_obj_add_flag(s.tl_scroll, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s.tl_scroll, LV_DIR_VER);
+    // 每段字后面都留一个行间距，最后一段也一样：长卷的总高才是整行的倍数。
+    lv_obj_set_style_pad_bottom(s.tl_scroll, LINE_SPACE, 0);
+    style_scrollbar(s.tl_scroll);
+    lv_style_init(&s.tl_style_reply);
+    lv_style_set_text_font(&s.tl_style_reply, &pocket_font_16);
+    lv_style_set_text_color(&s.tl_style_reply, lv_color_hex(C_TEXT));
+    lv_style_set_text_line_space(&s.tl_style_reply, LINE_SPACE);
+    lv_style_set_text_letter_space(&s.tl_style_reply, 0);
+    lv_style_init(&s.tl_style_said);
+    lv_style_set_text_font(&s.tl_style_said, &pocket_font_16);
+    lv_style_set_text_color(&s.tl_style_said, lv_color_hex(C_DIM));
+    lv_style_set_text_line_space(&s.tl_style_said, LINE_SPACE);
+    lv_style_set_text_letter_space(&s.tl_style_said, 0);
+    // 你说的话：左边一条小幽颜色的竖线，像引用。
+    lv_style_set_border_side(&s.tl_style_said, LV_BORDER_SIDE_LEFT);
+    lv_style_set_border_width(&s.tl_style_said, 3);
+    lv_style_set_border_color(&s.tl_style_said, lv_color_hex(C_XIAOYOU));
+    lv_style_set_border_opa(&s.tl_style_said, LV_OPA_COVER);
+    lv_style_set_pad_left(&s.tl_style_said, 6);
+    lv_obj_add_flag(s.talk, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_notices(lv_obj_t *page)
@@ -907,10 +928,9 @@ static void build_voice(lv_obj_t *root)
 void pocket_ui_init(void)
 {
     static void (*const builders[BUDDY_PAGE_COUNT])(lv_obj_t *) = {
-        [BUDDY_PAGE_HOME] = build_home,       [BUDDY_PAGE_READER] = build_reader,
-        [BUDDY_PAGE_MENU] = build_menu,       [BUDDY_PAGE_NOTICES] = build_notices,
-        [BUDDY_PAGE_HELPERS] = build_helpers, [BUDDY_PAGE_MORE] = build_more,
-        [BUDDY_PAGE_GUIDE] = build_guide,
+        [BUDDY_PAGE_HOME] = build_home,       [BUDDY_PAGE_MENU] = build_menu,
+        [BUDDY_PAGE_NOTICES] = build_notices, [BUDDY_PAGE_HELPERS] = build_helpers,
+        [BUDDY_PAGE_MORE] = build_more,       [BUDDY_PAGE_GUIDE] = build_guide,
     };
     lv_obj_t *root = lv_obj_create(NULL);
     int index;
@@ -921,7 +941,8 @@ void pocket_ui_init(void)
 
     build_top_bar(root);
     for (index = 0; index < BUDDY_PAGE_COUNT; ++index) {
-        s.pages[index] = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H);
+        s.pages[index] = make_box(root, 0, AREA_Y, SCREEN_W,
+                                  index == BUDDY_PAGE_HOME ? HOME_H : AREA_H);
         builders[index](s.pages[index]);
         lv_obj_add_flag(s.pages[index], LV_OBJ_FLAG_HIDDEN);
     }
@@ -1019,17 +1040,343 @@ static void render_top_bar(const buddy_ui_snapshot_t *snap)
     }
 }
 
-// 首页。返回按键提示里要不要有“往下读”。
-static void render_home(const buddy_ui_snapshot_t *snap)
+// ---- 首页的对话长卷 ----
+
+static uintptr_t text_hash(const char *text)
 {
-    static char line[BUDDY_MESSAGE_MAX + BUDDY_NAME_MAX + 8];
-    pocket_home_t home = pocket_home_for(snap);
+    uintptr_t hash = 2166136261u;
+    const unsigned char *cursor;
+
+    for (cursor = (const unsigned char *)text; *cursor != '\0'; ++cursor) {
+        hash = (hash ^ *cursor) * 16777619u;
+    }
+    return (hash & 0xFFFFFFFFu) | 1u;  // 非零，和“从未设置过”区分开
+}
+
+// 长卷里的一段字：第 slot 轮里你说的（said）或她说的。用到才创建。
+static lv_obj_t *tl_label(int slot, bool said)
+{
+    lv_obj_t **ref = said ? &s.tl_said[slot] : &s.tl_reply[slot];
+
+    if (*ref == NULL) {
+        lv_obj_t *label = lv_label_create(s.tl_scroll);
+
+        if (label == NULL) {
+            return NULL;
+        }
+        lv_obj_add_style(label, said ? &s.tl_style_said : &s.tl_style_reply, 0);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_set_width(label, TL_TEXT_W);
+        lv_label_set_text(label, "");
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        *ref = label;
+    }
+    return *ref;
+}
+
+// 给这一段字换内容；text 为空就是这一段不出现。返回有没有变（变了要重新排）。
+static bool tl_set(int slot, bool said, const char *text)
+{
+    lv_obj_t *label = said ? s.tl_said[slot] : s.tl_reply[slot];
+    uintptr_t hash;
+    bool changed;
+
+    if (text == NULL || text[0] == '\0') {
+        if (label == NULL || lv_obj_has_flag(label, LV_OBJ_FLAG_HIDDEN)) {
+            return false;
+        }
+        // 不显示的字不留着：内存留给别的。
+        lv_label_set_text(label, "");
+        lv_obj_set_user_data(label, NULL);
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
+    label = tl_label(slot, said);
+    if (label == NULL) {
+        return false;
+    }
+    hash = text_hash(text);
+    changed = lv_obj_has_flag(label, LV_OBJ_FLAG_HIDDEN) ||
+              (uintptr_t)lv_obj_get_user_data(label) != hash;
+    if ((uintptr_t)lv_obj_get_user_data(label) != hash) {
+        lv_label_set_text(label, text);
+        lv_obj_set_user_data(label, (void *)hash);
+    }
+    lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+    return changed;
+}
+
+static void tl_clear(void)
+{
+    int slot;
+
+    for (slot = 0; slot < TL_SLOTS; ++slot) {
+        (void)tl_set(slot, true, NULL);
+        (void)tl_set(slot, false, NULL);
+    }
+    s.tl_valid = false;
+    s.tl_content = 0;
+    s.tl_last_top = 0;
+    s.tl_y = 0;
+}
+
+// 把各段字从上到下排好，再决定窗口停在哪。reveal_slot >= 0 表示之前收起来的刚被
+// 接回来，窗口停在接回来的最后一轮上。
+static void tl_layout(int reveal_slot)
+{
+    int y = 0;
+    int last_top = 0;
+    int target = -1;
+    int slot;
+
+    lv_obj_update_layout(s.tl_scroll);
+    for (slot = 0; slot < TL_SLOTS; ++slot) {
+        lv_obj_t *const parts[2] = {s.tl_said[slot], s.tl_reply[slot]};
+        int top = y;
+        int part;
+
+        // 没有“你说的”那一段的轮次（电脑上的 Claude 自己说的话）靠空一行和上一轮分开。
+        if (y > 0 && (parts[0] == NULL || lv_obj_has_flag(parts[0], LV_OBJ_FLAG_HIDDEN)) &&
+            parts[1] != NULL && !lv_obj_has_flag(parts[1], LV_OBJ_FLAG_HIDDEN)) {
+            y += LINE_16;
+            top = y;
+        }
+        for (part = 0; part < 2; ++part) {
+            if (parts[part] != NULL && !lv_obj_has_flag(parts[part], LV_OBJ_FLAG_HIDDEN)) {
+                lv_obj_set_pos(parts[part], 0, y);
+                y += lv_obj_get_height(parts[part]) + LINE_SPACE;
+            }
+        }
+        if (y != top) {
+            last_top = top;
+            if (slot == reveal_slot) {
+                target = top;
+            }
+        }
+    }
+    s.tl_content = y;
+    s.tl_last_top = last_top;
+    if (target >= 0) {
+        s.tl_y = pocket_timeline_step(target, 0, y, TL_H, 0);
+        s.tl_follow = false;
+    } else if (s.tl_follow) {
+        s.tl_y = pocket_timeline_anchor(y, last_top, TL_H);
+    } else {
+        s.tl_y = pocket_timeline_step(s.tl_y, 0, y, TL_H, 0);
+    }
+    // 位置是刚设的，先让 LVGL 算好，滚动的范围才是对的。
+    lv_obj_update_layout(s.tl_scroll);
+    lv_obj_scroll_to_y(s.tl_scroll, s.tl_y, LV_ANIM_OFF);
+}
+
+// 她的话后面要不要跟一句“太长了”。
+static const char *with_cut_note(char *buffer, size_t size, const char *reply, bool cut)
+{
+    if (!cut) {
+        return reply;
+    }
+    (void)snprintf(buffer, size, "%s%s\n%s", reply, PT_ELLIPSIS, PT_READER_CUT);
+    return buffer;
+}
+
+static void render_timeline(const buddy_ui_snapshot_t *snap, pocket_home_t home)
+{
+    static char text[BUDDY_REPLY_MAX + 64];
+    static char line[BUDDY_AGENT_MAX + 48];
+    const buddy_history_t *history = snap->history;
+    unsigned visible = buddy_history_visible(history);
+    uint32_t revision = history != NULL ? history->revision : 0U;
     bool hub = snap->chat.phase != BUDDY_CHAT_NONE;
-    bool talk = pocket_home_is_talk(home);
-    bool helper = home == POCKET_HOME_HELPER;
+    bool changed = !s.tl_valid;
+    int reveal_slot = -1;
     const char *said = "";
     const char *body = "";
     uint32_t body_color = C_TEXT;
+    int slot;
+
+    if (!s.tl_valid) {
+        s.tl_follow = true;
+        s.tl_recall = snap->recall_serial;
+    }
+    // 之前的各轮：历史没变就不用再看一遍。
+    if (!s.tl_valid || s.tl_revision != revision) {
+        for (slot = 0; slot < BUDDY_HISTORY_TURNS; ++slot) {
+            unsigned index = (history != NULL ? history->floor : 0U) + (unsigned)slot;
+            bool present = (unsigned)slot < visible;
+            uint8_t flags = present ? history->turns[index].flags : 0U;
+            const char *reply = present ? buddy_history_reply(history, index) : "";
+
+            changed = tl_set(slot, true, present ? buddy_history_said(history, index) : NULL) ||
+                      changed;
+            if (present && reply[0] == '\0') {
+                reply = PT_TALK_FAILED;  // 没成，也没说为什么
+            }
+            changed = tl_set(slot, false,
+                             present ? with_cut_note(text, sizeof(text), reply,
+                                                     (flags & BUDDY_TURN_CUT) != 0U)
+                                     : NULL) ||
+                      changed;
+            if (present && s.tl_reply[slot] != NULL) {
+                // 没成的那几轮暗一些。
+                set_text_color(s.tl_reply[slot],
+                               (flags & BUDDY_TURN_FAILED) != 0U ? C_DIM : C_TEXT);
+            }
+        }
+        s.tl_revision = revision;
+    }
+    if (s.tl_recall != snap->recall_serial) {
+        // 收起来的刚被接回来：它们排在最前面，停在其中最后一轮上。
+        s.tl_recall = snap->recall_serial;
+        reveal_slot = snap->recalled > 0U ? (int)snap->recalled - 1 : -1;
+        changed = true;
+    }
+
+    // 正在进行（或刚说完）的这一轮。
+    switch (home) {
+    case POCKET_HOME_SENT:
+        said = PT_SAID_PENDING;
+        body = PT_TALK_SENT;
+        body_color = C_DIM;
+        break;
+    case POCKET_HOME_THINKING:
+        if (hub) {
+            said = snap->chat.said[0] != '\0' ? snap->chat.said : PT_SAID_PENDING;
+            body = snap->chat.stage[0] != '\0' ? snap->chat.stage : PT_TALK_THINKING;
+        } else {
+            body = snap->message[0] != '\0' ? snap->message : PT_DESKTOP_WORKING;
+        }
+        body_color = C_DIM;
+        break;
+    case POCKET_HOME_HELPER:
+        said = snap->chat.said;
+        if (snap->chat.stage[0] != '\0') {
+            body = snap->chat.stage;
+        } else {
+            (void)snprintf(line, sizeof(line), PT_HELPER_ASKED, snap->chat.agent);
+            body = line;
+        }
+        break;
+    case POCKET_HOME_FAILED:
+        said = snap->chat.said;
+        body = snap->reply[0] != '\0' ? snap->reply : PT_TALK_FAILED;
+        break;
+    case POCKET_HOME_ANSWERED:
+        said = hub ? snap->chat.said : "";
+        body = with_cut_note(text, sizeof(text), snap->reply, snap->reply_truncated);
+        break;
+    default:
+        break;  // 这一段里只有之前的对话
+    }
+    changed = tl_set(TL_LIVE, true, said) || changed;
+    changed = tl_set(TL_LIVE, false, body) || changed;
+    if (s.tl_reply[TL_LIVE] != NULL) {
+        set_text_color(s.tl_reply[TL_LIVE], body_color);
+    }
+    if (s.tl_serial != snap->turn_serial) {
+        // 新的一轮开始了：窗口回到它身上。
+        s.tl_serial = snap->turn_serial;
+        s.tl_follow = true;
+        changed = true;
+    }
+    s.tl_valid = true;
+    if (changed) {
+        tl_layout(reveal_slot);
+    }
+}
+
+// 对话版式顶上那一条：小幽的表情，她在跟谁通信，她在干什么。
+static void render_head(const buddy_ui_snapshot_t *snap, pocket_home_t home)
+{
+    bool hub = snap->chat.phase != BUDDY_CHAT_NONE;
+    bool helper = home == POCKET_HOME_HELPER;
+    bool timer = false;
+    const char *status = "";
+    uint32_t status_color = C_DIM;
+    uint32_t color = C_XIAOYOU;
+    char elapsed[12];
+
+    pet_set(PET_TALK, pocket_pet_for(snap));
+    switch (home) {
+    case POCKET_HOME_BLE_OFF:
+        status = PT_HOME_BLE_OFF;
+        break;
+    case POCKET_HOME_WAITING:
+        status = PT_HOME_WAITING;
+        break;
+    case POCKET_HOME_LINKING:
+        status = PT_HOME_LINKING;
+        break;
+    case POCKET_HOME_QUIET:
+        status = PT_HOME_QUIET;
+        break;
+    case POCKET_HOME_SENT:
+        status = PT_HEAD_SENT;
+        timer = true;
+        break;
+    case POCKET_HOME_THINKING:
+        status = hub ? PT_HEAD_THINKING : PT_DESKTOP_BUSY;
+        timer = hub;
+        break;
+    case POCKET_HOME_HELPER:
+        status = PT_HEAD_WORKING;
+        timer = true;
+        color = pocket_helper_color(snap->chat.agent);
+        break;
+    case POCKET_HOME_ANSWERED:
+        status = hub ? PT_HEAD_DONE : PT_DESKTOP_REPLY;
+        break;
+    case POCKET_HOME_FAILED:
+        status = PT_HEAD_FAILED;
+        status_color = C_DANGER;
+        break;
+    }
+
+    set_visible(s.head_link, helper);
+    set_visible(s.head_tag, helper);
+    if (helper) {
+        if (s.link_color != color) {
+            s.link_color = color;
+            lv_obj_invalidate(s.head_link);
+        }
+        if (strcmp(s.head_tag_name, snap->chat.agent) != 0 ||
+            lv_label_get_text(s.head_tag_label)[0] == '\0') {
+            // 名牌跟着名字伸缩；名字太长就定宽，打省略号。
+            (void)snprintf(s.head_tag_name, sizeof(s.head_tag_name), "%s", snap->chat.agent);
+            lv_label_set_long_mode(s.head_tag_label, LV_LABEL_LONG_MODE_WRAP);
+            lv_obj_set_size(s.head_tag_label, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(s.head_tag_label, snap->chat.agent);
+            lv_obj_update_layout(s.head_tag_label);
+            if (lv_obj_get_width(s.head_tag_label) > HEAD_TAG_TEXT_W) {
+                lv_label_set_long_mode(s.head_tag_label, LV_LABEL_LONG_MODE_DOTS);
+                lv_obj_set_size(s.head_tag_label, HEAD_TAG_TEXT_W, LINES_16(1));
+                lv_label_set_text(s.head_tag_label, snap->chat.agent);
+            }
+        }
+        set_text_color(s.head_tag_label, color);
+        set_border_color(s.head_tag, color);
+    }
+    // 计时在右边占一块；没有计时的时候这一行都给状态。
+    if (lv_obj_get_width(s.head_status) != (timer ? HEAD_TEXT_W - HEAD_ELAPSED_W - 2 : HEAD_TEXT_W)) {
+        lv_obj_set_width(s.head_status, timer ? HEAD_TEXT_W - HEAD_ELAPSED_W - 2 : HEAD_TEXT_W);
+        lv_obj_set_user_data(s.head_status, NULL);
+    }
+    set_block_text(s.head_status, status);
+    set_text_color(s.head_status, status_color);
+    set_visible(s.head_elapsed, timer);
+    if (timer) {
+        (void)pocket_format_elapsed(snap->chat_since_ms, snap->uptime_ms, elapsed,
+                                    sizeof(elapsed));
+        set_text(s.head_elapsed, elapsed);
+        set_text_color(s.head_elapsed, color);
+    }
+}
+
+// 首页。返回用的是不是对话版式。
+static bool render_home(const buddy_ui_snapshot_t *snap)
+{
+    static char line[BUDDY_MESSAGE_MAX + BUDDY_NAME_MAX + 8];
+    pocket_home_t home = pocket_home_for(snap);
+    bool talk = pocket_home_shows_talk(snap);
 
     set_visible(s.solo, !talk);
     set_visible(s.talk, talk);
@@ -1038,6 +1385,9 @@ static void render_home(const buddy_ui_snapshot_t *snap)
         const char *sub = PT_HOME_SUB_QUIET;
         bool notice = pocket_notice_visible(snap);
 
+        if (s.tl_valid) {
+            tl_clear();
+        }
         switch (home) {
         case POCKET_HOME_BLE_OFF:
             title = PT_HOME_BLE_OFF;
@@ -1069,91 +1419,11 @@ static void render_home(const buddy_ui_snapshot_t *snap)
         set_block_text(s.solo_sub, notice ? snap->message : sub);
         set_text_color(s.solo_sub, notice ? C_WARN : C_DIM);
         pet_set(PET_SOLO, pocket_pet_for(snap));
-        return;
+        return false;
     }
-
-    pet_set(PET_TALK, pocket_pet_for(snap));
-    switch (home) {
-    case POCKET_HOME_SENT:
-        said = PT_SAID_PENDING;
-        body = PT_TALK_SENT;
-        body_color = C_DIM;
-        break;
-    case POCKET_HOME_THINKING:
-        if (hub) {
-            said = snap->chat.said[0] != '\0' ? snap->chat.said : PT_SAID_PENDING;
-            body = snap->chat.stage[0] != '\0' ? snap->chat.stage : PT_TALK_THINKING;
-        } else {
-            said = PT_DESKTOP_BUSY;
-            body = snap->message[0] != '\0' ? snap->message : PT_DESKTOP_WORKING;
-        }
-        body_color = C_DIM;
-        break;
-    case POCKET_HOME_HELPER:
-        said = snap->chat.said;
-        if (snap->chat.stage[0] != '\0') {
-            body = snap->chat.stage;
-        } else {
-            (void)snprintf(line, sizeof(line), PT_HELPER_ASKED, snap->chat.agent);
-            body = line;
-        }
-        break;
-    case POCKET_HOME_FAILED:
-        said = snap->chat.said;
-        body = snap->reply[0] != '\0' ? snap->reply : PT_TALK_FAILED;
-        break;
-    default:
-        said = hub ? snap->chat.said : PT_DESKTOP_REPLY;
-        body = snap->reply;
-        break;
-    }
-    // “你”这个字只在引用你的话时出现；桌面端那两句是说明，不是你说的。
-    set_visible(s.talk_you, hub || home == POCKET_HOME_SENT);
-    set_block_text(s.talk_said, said);
-    // 她去找帮手时，下半屏要留给“她在跟谁通信”，她的话最多三行。
-    set_height(s.talk_body, LINES_16(helper ? TALK_STAGE_LINES : TALK_BODY_LINES));
-    set_block_text(s.talk_body, body);
-    set_text_color(s.talk_body, body_color);
-
-    set_visible(s.talk_xiaoyou, helper);
-    set_visible(s.talk_link, helper);
-    set_visible(s.talk_tag, helper);
-    set_visible(s.talk_status, helper);
-    set_visible(s.talk_elapsed, helper);
-    if (helper) {
-        static char status[BUDDY_AGENT_MAX + 32];
-        char elapsed[12];
-        uint32_t color = pocket_helper_color(snap->chat.agent);
-
-        if (s.link_color != color) {
-            s.link_color = color;
-            lv_obj_invalidate(s.talk_link);
-        }
-        set_text(s.talk_tag_label, snap->chat.agent);
-        set_text_color(s.talk_tag_label, color);
-        set_border_color(s.talk_tag, color);
-        (void)snprintf(status, sizeof(status), PT_HELPER_WORKING, snap->chat.agent);
-        set_block_text(s.talk_status, status);
-        (void)pocket_format_elapsed(snap->chat_since_ms, snap->uptime_ms, elapsed,
-                                    sizeof(elapsed));
-        set_text(s.talk_elapsed, elapsed);
-        set_text_color(s.talk_elapsed, color);
-    }
-}
-
-static void render_reader(const buddy_ui_snapshot_t *snap, bool entered)
-{
-    static char text[BUDDY_REPLY_MAX + 64];
-    uintptr_t before = (uintptr_t)lv_obj_get_user_data(s.reader_body);
-
-    (void)snprintf(text, sizeof(text), "%s%s%s", snap->reply,
-                   snap->reply_truncated ? PT_ELLIPSIS "\n" : "",
-                   snap->reply_truncated ? PT_READER_CUT : "");
-    set_block_text(s.reader_body, text);
-    // 刚进来，或者内容换了：从头读起。
-    if (entered || before != (uintptr_t)lv_obj_get_user_data(s.reader_body)) {
-        lv_obj_scroll_to_y(s.reader_scroll, 0, LV_ANIM_OFF);
-    }
+    render_head(snap, home);
+    render_timeline(snap, home);
+    return true;
 }
 
 static void render_notices(const buddy_ui_snapshot_t *snap)
@@ -1407,12 +1677,6 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     if (view != POCKET_VIEW_APPROVAL) {
         s.approval_id[0] = '\0';
     }
-    if ((view != POCKET_VIEW_PAGE || page != BUDDY_PAGE_READER) &&
-        lv_obj_get_user_data(s.reader_body) != NULL) {
-        // 不在读的时候不留着那一大段文字：内存留给别的。
-        lv_label_set_text(s.reader_body, "");
-        lv_obj_set_user_data(s.reader_body, NULL);
-    }
     s.view = view;
     s.page = page;
 
@@ -1440,32 +1704,43 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
         switch (page) {
         case BUDDY_PAGE_HOME: {
             pocket_home_t home = pocket_home_for(snap);
-            bool talk = pocket_home_is_talk(home);
             bool can_talk = snap->host_hub && home >= POCKET_HOME_QUIET;
+            bool busy = home == POCKET_HOME_SENT || home == POCKET_HOME_THINKING ||
+                        home == POCKET_HOME_HELPER;
+            // 之前的对话收起来了：双击上键接回来。
+            bool earlier = buddy_history_hidden(snap->history) > 0U;
+            bool talk = render_home(snap);
 
-            render_home(snap);
             // 对话版式里，设备自己要说的一句话临时占用提示这一行。
             notice = talk && pocket_notice_visible(snap) && snap->host_hub;
-            if (can_talk) {
-                bool busy = home == POCKET_HOME_SENT || home == POCKET_HOME_THINKING ||
-                            home == POCKET_HOME_HELPER;
+            if (talk) {
+                bool up = s.tl_y > 0;
+                bool down = s.tl_y < s.tl_content - TL_H;
 
-                hints[count++] =
-                    (hint_item_t){KEY_OK, busy ? PT_HINT_CUT_IN : PT_HINT_TALK};
+                if (up) {
+                    hints[count++] = (hint_item_t){KEY_UP, PT_HINT_UP};
+                } else if (earlier) {
+                    hints[count++] = (hint_item_t){KEY_UP, PT_HINT_EARLIER};
+                }
+                // “双击看之前”比较长，和“往下”挤不下，这时让给它。
+                if (down && (up || !earlier)) {
+                    hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_DOWN};
+                }
+                if (can_talk) {
+                    hints[count++] =
+                        (hint_item_t){KEY_OK, busy ? PT_HINT_CUT_IN : PT_HINT_TALK};
+                } else if (count == 0) {
+                    hints[count++] = (hint_item_t){KEY_UP, PT_HINT_MENU};
+                }
             } else {
-                hints[count++] = (hint_item_t){KEY_UP, PT_HINT_MENU};
-            }
-            if (snap->reply[0] != '\0') {
-                hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_READ};
+                hints[count++] = can_talk ? (hint_item_t){KEY_OK, PT_HINT_TALK}
+                                          : (hint_item_t){KEY_UP, PT_HINT_MENU};
+                if (earlier) {
+                    hints[count++] = (hint_item_t){KEY_UP, PT_HINT_EARLIER};
+                }
             }
             break;
         }
-        case BUDDY_PAGE_READER:
-            render_reader(snap, entered);
-            hints[count++] = (hint_item_t){KEY_UP, PT_HINT_UP};
-            hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_DOWN};
-            hints[count++] = (hint_item_t){KEY_OK, PT_HINT_TO_XIAOYOU};
-            break;
         case BUDDY_PAGE_MENU:
             render_menu(snap);
             hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
@@ -1522,8 +1797,14 @@ void pocket_ui_scroll(int delta)
         // 按整行滚动，避免卡片上下沿出现被切掉一半的字。
         lv_obj_scroll_by_bounded(s.guide_scroll, 0, delta > 0 ? -3 * LINE_16 : 3 * LINE_16,
                                  LV_ANIM_OFF);
-    } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_READER) {
-        lv_obj_scroll_by_bounded(s.reader_scroll, 0, delta > 0 ? -READER_STEP : READER_STEP,
-                                 LV_ANIM_OFF);
+    } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_HOME && s.tl_valid) {
+        int anchor = pocket_timeline_anchor(s.tl_content, s.tl_last_top, TL_H);
+
+        // 确认键：回到最新一轮。上下键：翻八行；翻回最新一轮该在的位置就继续跟着它。
+        s.tl_y = delta == BUDDY_SCROLL_LATEST
+                     ? anchor
+                     : pocket_timeline_step(s.tl_y, delta, s.tl_content, TL_H, TL_STEP);
+        s.tl_follow = s.tl_y == anchor;
+        lv_obj_scroll_to_y(s.tl_scroll, s.tl_y, LV_ANIM_OFF);
     }
 }

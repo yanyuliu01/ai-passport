@@ -15,14 +15,23 @@
 #define BUDDY_HINT_MAX 320
 #define BUDDY_JSON_LINE_MAX 4096
 /* Latest assistant reply kept for display; bytes, cut on a UTF-8 boundary.
- * About 320 Chinese characters: the home page shows the beginning, the reader
- * page scrolls through all of it. */
+ * About 320 Chinese characters; the home page scrolls through all of it. */
 #define BUDDY_REPLY_MAX 960
 /* The conversation with Xiaoyou as a hub host reports it (see buddy_chat_t). */
 #define BUDDY_AGENT_MAX 24
 #define BUDDY_STAGE_MAX 160
 #define BUDDY_HELPER_COUNT 4
 #define BUDDY_HELPER_ABOUT_MAX 64
+/* Earlier turns kept in RAM so the home page can scroll back through them:
+ * a byte budget for the words and a cap on the number of turns. One turn is at
+ * most BUDDY_MESSAGE_MAX + BUDDY_REPLY_MAX bytes, so the newest always fits. */
+#define BUDDY_HISTORY_BYTES 4096
+#define BUDDY_HISTORY_TURNS 12
+/* This long without a turn and the conversation on screen is folded away: the
+ * home page goes back to resting, and a double press on UP brings it back. */
+#define BUDDY_SESSION_IDLE_MS (30U * 60U * 1000U)
+/* scroll_delta of a UI_SCROLL action that means "back to the newest turn". */
+#define BUDDY_SCROLL_LATEST 32767
 
 typedef enum {
     BUDDY_CONNECTION_OFFLINE,
@@ -44,8 +53,7 @@ typedef enum {
 } buddy_character_t;
 
 typedef enum {
-    BUDDY_PAGE_HOME,    /* the conversation: Xiaoyou, what was said, her answer */
-    BUDDY_PAGE_READER,  /* the whole answer, scrolled with UP and DOWN */
+    BUDDY_PAGE_HOME,    /* the conversation: Xiaoyou and every turn of this session */
     BUDDY_PAGE_MENU,    /* long press UP */
     BUDDY_PAGE_NOTICES, /* recent entries from the host */
     BUDDY_PAGE_HELPERS, /* the agents Xiaoyou can hand work to */
@@ -132,6 +140,7 @@ typedef enum {
     BUDDY_EVENT_VOICE,
     BUDDY_EVENT_CHAT,
     BUDDY_EVENT_HELPERS,
+    BUDDY_EVENT_KEY_DOUBLE, /* two quick presses; only UP is reported this way */
 } buddy_event_type_t;
 
 typedef enum {
@@ -223,6 +232,28 @@ typedef struct {
     char agent[BUDDY_AGENT_MAX];   /* who is working on it, when it is not Xiaoyou herself */
     char stage[BUDDY_STAGE_MAX];   /* what she said when she handed the work over */
 } buddy_chat_t;
+
+/* A turn that is over. Its words live in buddy_history_t.text. */
+#define BUDDY_TURN_FAILED 0x01U /* reply is why it did not work */
+#define BUDDY_TURN_CUT 0x02U    /* reply was longer than the device keeps */
+
+typedef struct {
+    uint16_t said;  /* offset of the NUL-terminated words of the owner; may be empty */
+    uint16_t reply; /* offset of the NUL-terminated answer */
+    uint8_t flags;
+} buddy_past_turn_t;
+
+/* Earlier turns, oldest first. turns[floor..count) belong to the conversation
+ * on screen; the ones before floor are folded away until the owner asks for
+ * them. See buddy_history.h for the operations. */
+typedef struct {
+    char text[BUDDY_HISTORY_BYTES];
+    buddy_past_turn_t turns[BUDDY_HISTORY_TURNS];
+    uint16_t used;
+    uint8_t count;
+    uint8_t floor;
+    uint32_t revision; /* goes up whenever anything above changes */
+} buddy_history_t;
 
 /* An agent Xiaoyou can hand work to. */
 typedef struct {
@@ -335,6 +366,15 @@ typedef struct {
     buddy_chat_t chat;
     /* When the current phase of the turn began; the home page counts up from it. */
     uint64_t chat_since_ms;
+    /* Goes up when a new turn begins: the home page then shows that turn. */
+    uint32_t turn_serial;
+    /* Goes up when the owner brings folded turns back; recalled is how many
+     * came back. The home page then stops at the last of them. */
+    uint32_t recall_serial;
+    unsigned recalled;
+    /* Earlier turns. Points into the state the snapshot was taken from and is
+     * only valid on the task that owns that state; may be NULL. */
+    const buddy_history_t *history;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     /* The host introduced itself as a hub (the phone), not the Claude desktop app. */

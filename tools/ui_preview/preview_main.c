@@ -8,6 +8,7 @@
 
 #include "lvgl.h"
 
+#include "buddy_history.h"
 #include "buddy_types.h"
 #include "pocket_fonts.h"
 #include "pocket_ui.h"
@@ -189,6 +190,8 @@ static buddy_ui_snapshot_t hub_snapshot(void)
     "把调用这个函数的地方都过一遍，看看有没有哪里依赖了现在这个“只试两次”的行为。" \
     "那样大概要一两分钟，结果我会总结给你。"
 
+static buddy_history_t s_history;
+
 static void set_text_field(char *field, size_t size, const char *text)
 {
     (void)snprintf(field, size, "%s", text);
@@ -265,12 +268,17 @@ int main(int argc, char **argv)
     snap.voice_phase = BUDDY_VOICE_SENDING;
     show("09_voice_sending", &snap);
 
+    /* The first turn of a conversation: nothing above it yet. */
     snap = hub_snapshot();
+    snap.history = &s_history;
+    snap.turn_serial = 1;
     snap.chat.phase = BUDDY_CHAT_SENT;
     snap.chat.mood = BUDDY_MOOD_BUSY;
+    snap.chat_since_ms = snap.uptime_ms - 1200U;
     show("10_home_sent", &snap);
     snap.chat.phase = BUDDY_CHAT_THINKING;
     set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
+    snap.chat_since_ms = snap.uptime_ms - 5300U;
     show("11_home_thinking", &snap);
     snap.chat.phase = BUDDY_CHAT_HELPER;
     set_text_field(snap.chat.agent, sizeof(snap.chat.agent), "codex");
@@ -281,49 +289,110 @@ int main(int argc, char **argv)
     snap.chat.stage[0] = '\0';
     snap.chat_since_ms = snap.uptime_ms - 75000U;
     show("13_home_helper_other", &snap);
+    set_text_field(snap.chat.agent, sizeof(snap.chat.agent), "a-very-long-agent-name");
+    show("13b_home_helper_long_name", &snap);
 
+    /* A long answer starts at its beginning; DOWN reads on, eight lines at a time. */
     snap = hub_snapshot();
-    snap.chat.phase = BUDDY_CHAT_DONE;
-    snap.chat.mood = BUDDY_MOOD_HAPPY;
-    set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
-    set_text_field(snap.reply, sizeof(snap.reply), ANSWER);
-    show("14_home_answered", &snap);
-    snap.chat.mood = BUDDY_MOOD_ASK;
-    set_text_field(snap.reply, sizeof(snap.reply), "改好了。要不要我顺手把测试也跑一遍？");
-    show("15_home_answered_short", &snap);
-    set_text_field(snap.message, sizeof(snap.message), "按住确认键再说话哦");
-    snap.message_since_ms = snap.uptime_ms - 1000U;
-    show("16_home_notice", &snap);
-    snap.message[0] = '\0';
-
-    snap.chat.phase = BUDDY_CHAT_FAILED;
-    snap.chat.mood = BUDDY_MOOD_OOPS;
-    set_text_field(snap.reply, sizeof(snap.reply), "连不上 Runtime：电脑可能睡着了");
-    show("17_home_failed", &snap);
-
-    snap = hub_snapshot();
+    snap.history = &s_history;
+    snap.turn_serial = 1;
     snap.chat.phase = BUDDY_CHAT_DONE;
     snap.chat.mood = BUDDY_MOOD_HAPPY;
     set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
     set_text_field(snap.reply, sizeof(snap.reply), ANSWER);
     snap.reply_truncated = true;
-    snap.page = BUDDY_PAGE_READER;
-    show("18_reader_top", &snap);
+    show("14_home_answered", &snap);
     pocket_ui_scroll(60);
-    save("19_reader_scrolled");
+    show("15_home_answered_down", &snap);
     pocket_ui_scroll(60);
-    save("20_reader_end");
+    show("16_home_answered_end", &snap);
+    pocket_ui_scroll(-60);
+    pocket_ui_scroll(BUDDY_SCROLL_LATEST);
+    show("17_home_answered_back", &snap);
+
+    /* The conversation goes on: earlier turns move up, the newest stays in view. */
+    (void)buddy_history_push(&s_history, SAID, ANSWER, BUDDY_TURN_CUT);
+    snap.turn_serial = 2;
+    snap.reply_truncated = false;
+    snap.chat.phase = BUDDY_CHAT_THINKING;
+    snap.chat.mood = BUDDY_MOOD_BUSY;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), "好，一起改了吧");
+    snap.reply[0] = '\0';
+    snap.chat_since_ms = snap.uptime_ms - 3000U;
+    show("18_talk_second_turn", &snap);
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    snap.chat.mood = BUDDY_MOOD_ASK;
+    set_text_field(snap.reply, sizeof(snap.reply), "改好了。要不要我顺手把测试也跑一遍？");
+    show("19_talk_second_answer", &snap);
+    pocket_ui_scroll(-60);
+    show("20_talk_scrolled_up", &snap);
+    pocket_ui_scroll(BUDDY_SCROLL_LATEST);
+    set_text_field(snap.message, sizeof(snap.message), "按住确认键再说话哦");
+    snap.message_since_ms = snap.uptime_ms - 1000U;
+    show("21_talk_notice", &snap);
+    snap.message[0] = '\0';
+
+    (void)buddy_history_push(&s_history, "好，一起改了吧", "改好了。要不要我顺手把测试也跑一遍？", 0);
+    snap.turn_serial = 3;
+    snap.chat.phase = BUDDY_CHAT_FAILED;
+    snap.chat.mood = BUDDY_MOOD_OOPS;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), "跑一遍");
+    set_text_field(snap.reply, sizeof(snap.reply), "连不上 Runtime：电脑可能睡着了");
+    show("22_talk_failed", &snap);
+    (void)buddy_history_push(&s_history, "跑一遍", "连不上 Runtime：电脑可能睡着了",
+                             BUDDY_TURN_FAILED);
+    snap.turn_serial = 4;
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    snap.chat.mood = BUDDY_MOOD_HAPPY;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), "现在呢");
     set_text_field(snap.reply, sizeof(snap.reply),
                    "Done. All 42 tests pass (pytest -q). 龘 is outside the font.");
-    snap.reply_truncated = false;
-    show("21_reader_latin_and_missing_glyph", &snap);
+    show("23_talk_latin_and_missing_glyph", &snap);
+
+    /* The link drops: no turn is in progress, but what was said stays readable. */
+    (void)buddy_history_push(&s_history, snap.chat.said, snap.reply, 0);
+    snap.chat = (buddy_chat_t){0};
+    snap.reply[0] = '\0';
+    snap.ble_connected = false;
+    snap.ble_encrypted = false;
+    snap.connection = BUDDY_CONNECTION_OFFLINE;
+    snap.host_hub = false;
+    snap.host_chat = false;
+    show("24_talk_offline", &snap);
+
+    /* Half an hour later the conversation is folded away; a double press on UP
+     * brings it back, stopping at its last turn. */
+    snap = hub_snapshot();
+    snap.history = &s_history;
+    snap.turn_serial = 4;
+    (void)buddy_history_fold(&s_history);
+    show("25_home_folded", &snap);
+    snap.recalled = buddy_history_hidden(&s_history);
+    (void)buddy_history_reveal(&s_history);
+    snap.recall_serial = 1;
+    show("26_talk_recalled", &snap);
+    pocket_ui_scroll(-60);
+    show("27_talk_recalled_up", &snap);
+
+    /* A new conversation with the earlier one folded away: the hint says how to get it. */
+    (void)buddy_history_fold(&s_history);
+    pocket_ui_render(&snap);
+    snap.turn_serial = 5;
+    snap.chat.phase = BUDDY_CHAT_DONE;
+    snap.chat.mood = BUDDY_MOOD_HAPPY;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), "明天几点的会");
+    set_text_field(snap.reply, sizeof(snap.reply), "上午十点，在三楼。");
+    show("28_talk_new_with_earlier", &snap);
+    memset(&s_history, 0, sizeof(s_history));
+    snap = hub_snapshot();
+    pocket_ui_render(&snap);
 
     /* ---- something needs a yes or no ---- */
     snap = hub_snapshot();
     (void)snprintf(snap.prompt_id, sizeof(snap.prompt_id), "%s", "req_abc123");
     (void)snprintf(snap.prompt_tool, sizeof(snap.prompt_tool), "%s", "Bash");
     (void)snprintf(snap.prompt_hint, sizeof(snap.prompt_hint), "%s", "rm -rf /tmp/foo");
-    show("22_approval_short", &snap);
+    show("30_approval_short", &snap);
     (void)snprintf(snap.prompt_id, sizeof(snap.prompt_id), "%s", "req_long");
     (void)snprintf(snap.prompt_tool, sizeof(snap.prompt_tool), "%s",
                    "mcp__filesystem__write_file_with_a_long_name");
@@ -332,77 +401,83 @@ int main(int argc, char **argv)
                    "yarn install --frozen-lockfile && yarn build && yarn test --coverage && "
                    "把构建产物上传到 s3://releases/2026-10/ 并通知 #deploy 频道，完成后清理临时目录");
     snap.prompt_hint_truncated = true;
-    show("23_approval_long", &snap);
+    show("31_approval_long", &snap);
     pocket_ui_scroll(-48);
-    save("24_approval_long_scrolled");
+    save("32_approval_long_scrolled");
     snap.approval_locked = true;
     snap.permission_decision = BUDDY_PERMISSION_ONCE;
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENDING;
-    show("25_approval_sending", &snap);
+    show("33_approval_sending", &snap);
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENT;
-    show("26_approval_sent", &snap);
+    show("34_approval_sent", &snap);
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_FAILED;
-    show("27_approval_failed", &snap);
+    show("35_approval_failed", &snap);
     snap.permission_decision = BUDDY_PERMISSION_DENY;
     snap.permission_delivery = BUDDY_PERMISSION_DELIVERY_SENT;
-    show("28_approval_denied", &snap);
+    show("36_approval_denied", &snap);
 
     /* ---- the menu and what is under it ---- */
     snap = hub_snapshot();
     (void)snprintf(snap.entries[0], BUDDY_ENTRY_MAX, "%s", "10:42 Claude：部署完成，3 个服务已更新");
-    (void)snprintf(snap.entries[1], BUDDY_ENTRY_MAX, "%s", "10:41 小幽：找到了，计数多加了 1");
+    (void)snprintf(snap.entries[1], BUDDY_ENTRY_MAX, "%s", "10:36 Codex：评审完成，2 条建议");
     snap.page = BUDDY_PAGE_MENU;
     for (index = 0; index < BUDDY_MENU_COUNT; index += 3) {
         char name[32];
 
         snap.menu_selection = (buddy_menu_item_t)index;
-        (void)snprintf(name, sizeof(name), "29_menu_%d", index);
+        (void)snprintf(name, sizeof(name), "37_menu_%d", index);
         show(name, &snap);
     }
     snap.page = BUDDY_PAGE_NOTICES;
-    show("30_notices", &snap);
+    show("38_notices", &snap);
     memset(snap.entries, 0, sizeof(snap.entries));
-    show("31_notices_empty", &snap);
+    show("39_notices_empty", &snap);
     snap.page = BUDDY_PAGE_HELPERS;
-    show("32_helpers", &snap);
+    show("40_helpers", &snap);
     snap.helper_count = 0;
-    show("33_helpers_empty", &snap);
+    show("41_helpers_empty", &snap);
     snap.page = BUDDY_PAGE_MORE;
     snap.more_selection = BUDDY_MORE_GUIDE;
-    show("34_more", &snap);
+    show("42_more", &snap);
     snap.more_selection = BUDDY_MORE_FACTORY_RESET;
-    show("35_more_destructive", &snap);
+    show("43_more_destructive", &snap);
     snap.page = BUDDY_PAGE_GUIDE;
-    show("36_guide_top", &snap);
+    show("44_guide_top", &snap);
     pocket_ui_scroll(60);
     pocket_ui_scroll(60);
-    save("37_guide_scrolled");
+    save("45_guide_scrolled");
 
     snap = hub_snapshot();
     snap.page = BUDDY_PAGE_MORE;
     snap.confirmation = BUDDY_CONFIRM_UNPAIR;
     snap.confirmation_pending = true;
-    show("38_confirm_unpair", &snap);
+    show("46_confirm_unpair", &snap);
     snap.confirmation = BUDDY_CONFIRM_FACTORY_RESET;
-    show("39_confirm_factory", &snap);
+    show("47_confirm_factory", &snap);
 
     /* ---- connected to the Claude desktop app instead of the hub ---- */
     snap = live_snapshot();
-    show("40_desktop_quiet", &snap);
+    show("48_desktop_quiet", &snap);
     snap.running = 1;
     snap.character = BUDDY_CHARACTER_BUSY;
     set_text_field(snap.message, sizeof(snap.message),
                    "正在重构支付模块的重试逻辑，并补充单元测试覆盖边界情况");
-    show("41_desktop_busy", &snap);
+    show("49_desktop_busy", &snap);
     snap.running = 0;
     snap.message[0] = '\0';
     set_text_field(snap.reply, sizeof(snap.reply),
                    "已经把重试逻辑改成指数退避，最多 5 次，并为超时、限流、网络中断三种情况各补了一个测试。"
                    "全部 42 个用例通过。");
-    show("42_desktop_reply", &snap);
+    show("50_desktop_reply", &snap);
+    (void)buddy_history_push(&s_history, "", snap.reply, 0);
+    snap.history = &s_history;
+    snap.turn_serial = 1;
+    set_text_field(snap.reply, sizeof(snap.reply), "顺手把 README 里的示例也更新了。");
+    show("50b_desktop_second_reply", &snap);
+    snap.history = NULL;
     snap.reply[0] = '\0';
     set_text_field(snap.message, sizeof(snap.message), "这个连接不能传语音");
-    show("43_desktop_notice", &snap);
+    show("51_desktop_notice", &snap);
 
     {
         lv_mem_monitor_t monitor;

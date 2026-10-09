@@ -342,9 +342,10 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     buddy_control_event_t control = {0};
 
     (void)context;
-    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。把它当作一次短按：
-     * 既不会让“连按确认”变成没反应，也不会让一次连按被当成两次决定。 */
-    if (event == BSP_BTN_DOUBLE) {
+    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。确认键和下键把它当作一次短按：
+     * 既不会让“连按确认”变成没反应，也不会让一次连按被当成两次决定。上键的双击另有
+     * 用处（在首页把收起来的对话接回来），原样往下传；用不上时状态机也按一次短按处理。 */
+    if (event == BSP_BTN_DOUBLE && button != BSP_BTN_UP) {
         event = BSP_BTN_CLICK;
     }
     if (event == BSP_BTN_RELEASE) {
@@ -357,7 +358,8 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
         }
         return;
     }
-    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG) || s_button_queue == NULL) {
+    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG && event != BSP_BTN_DOUBLE) ||
+        s_button_queue == NULL) {
         return;
     }
     control.type = BUDDY_CONTROL_KEY;
@@ -524,6 +526,8 @@ static bool buddy_translate_key(const buddy_control_event_t *control, buddy_even
     }
     if (control->data.key.event == BSP_BTN_CLICK) {
         event->type = BUDDY_EVENT_KEY_CLICK;
+    } else if (control->data.key.event == BSP_BTN_DOUBLE) {
+        event->type = BUDDY_EVENT_KEY_DOUBLE;
     } else if (control->data.key.event == BSP_BTN_LONG) {
         event->type = BUDDY_EVENT_KEY_LONG;
     } else {

@@ -22,9 +22,10 @@ feature, not a supported product feature).
 
 | Capability | Behavior |
 | --- | --- |
-| The conversation | The home page: Xiaoyou, what you said, and what she says. Her mood is the pet's face |
-| Handing work over | While another agent works for her, the page shows a letter travelling from Xiaoyou to that agent's name tag, and a timer. Each agent has its own colour |
-| Reading | `DOWN` opens the whole answer (up to 959 bytes, about 320 Chinese characters) and scrolls it |
+| The conversation | The home page: a strip at the top with Xiaoyou and what she is doing, and below it the conversation, one turn after another, yours and hers. Her mood is the pet's face |
+| Handing work over | While another agent works for her, the strip shows a letter travelling from Xiaoyou to that agent's name tag, and a timer. Each agent has its own colour |
+| Reading back | `UP` and `DOWN` scroll through the conversation, eight lines at a time. An answer can be up to 959 bytes, about 320 Chinese characters |
+| Earlier conversations | After 30 minutes without a turn the conversation is folded away and the home page rests. A double press on `UP` brings it back |
 | Push-to-talk | Hold `OK` to record; the audio goes to the phone companion over Bluetooth; see [Push-to-talk](#push-to-talk) |
 | Approvals | Xiaoyou asks; who wants what is shown verbatim; say yes or no on the device |
 | Notices | The four most recent entries sent by the host, in the menu. While any are waiting, the idle home page says how many |
@@ -65,8 +66,7 @@ always shows what the keys do right now.
 
 | Where | `UP` / `DOWN` click | `OK` click | `OK` hold | `UP` long press |
 | --- | --- | --- | --- | --- |
-| Home | `DOWN` opens the reader when there is an answer | — | Talk; release to send | Open the menu |
-| Reader | Scroll nine lines | Back to Home | Talk; release to send | Open the menu |
+| Home | Scroll the conversation eight lines | Back to the newest turn | Talk; release to send | Open the menu |
 | Menu, More settings | Move the selection (wraps) | Run the selected item | Return to Home | Return to Home |
 | Notices, Helpers | — | Back to the menu | Return to Home | Return to Home |
 | Connection guide | Scroll three lines | Back to More settings | Return to Home | Return to Home |
@@ -84,7 +84,10 @@ Xiaoyou only phrases the question. Who is asking and what for come straight
 from the host and are never paraphrased; a name too long for the bubble is
 repeated in full at the top of the details card.
 
-A quick double press counts as one click.
+A quick double press counts as one click, with one exception: on the home
+page, while earlier turns are folded away, a double press on `UP` brings them
+back and stops at the last of them. The key hints say so when there is
+something to bring back.
 
 The menu offers notices, helpers, brightness (five steps), the Bluetooth
 switch, screen off, and more settings: the connection guide, unpair, and
@@ -113,7 +116,7 @@ punctuation mark.
 
 ## Push-to-talk
 
-Hold `OK` on the home page or in the reader. Xiaoyou says to wait a moment,
+Hold `OK` on the home page. Xiaoyou says to wait a moment,
 then says she is listening: the level bars move with your voice, which is how
 you know the microphone is live. Speak, and release to send. The home page then
 shows that the recording is on its way until the host says what it heard. A press shorter than about a third of a second sends nothing. A
@@ -171,6 +174,28 @@ Limits are 159 bytes for `said` and `stage`, 23 for `agent` and a helper's
 boundary. These messages are not acknowledged one by one; one that does not
 parse gets `{"ack":"chat","ok":false,…}` and changes nothing.
 
+### What the device keeps
+
+The host only ever reports the current turn. The device keeps the turns that
+are over, oldest first, in RAM: up to 12 turns and 4,096 bytes of text, so a
+dozen short exchanges or three to four answers of full length. When a new turn
+does not fit, the oldest are dropped. A turn is kept when the next one begins,
+when the link drops, or when no heartbeat arrives for 30 seconds; a turn that
+was still in progress then is not kept, because the host reports it again when
+it is back.
+
+The turns on the home page are one conversation. It ends, and is folded away,
+when 30 minutes pass without a turn or a key press on the home page
+(`BUDDY_SESSION_IDLE_MS`), or when the hub reports `idle` after turns, which
+the phone app does after it was restarted. This is a matter of display only:
+nothing is sent to the host, and the runtime's own context is not affected. A
+hub repeats its last `chat` line every 30 seconds and after a reconnect; a
+finished turn the device has already kept is recognized by its text and not
+shown twice.
+
+A lost link does not clear the page: the strip at the top shows that Xiaoyou
+is asleep, and what was said stays readable.
+
 A hub that sends `chat` leaves `msg` empty in its heartbeats and does not send
 `turn` events. Once a hub has sent `chat` on a connection, the firmware ignores
 its `turn` events and reads the heartbeat counters as notifications only, not
@@ -181,16 +206,18 @@ reply from `turn`.
 ## Stored data
 
 The device stores its name, the owner name sent by the host, the Bluetooth
-switch, approval and denial counters, and the BLE bond. The conversation,
-notices, helper names, details of a request, and request identifiers stay in
-RAM and are cleared when the link drops or no heartbeat arrives for 30 seconds.
+switch, approval and denial counters, and the BLE bond. Notices, helper names,
+details of a request, request identifiers, and a turn in progress stay in RAM
+and are cleared when the link drops or no heartbeat arrives for 30 seconds.
+Finished turns of the conversation stay in RAM until the device restarts or
+they are pushed out by newer ones; they are never written to flash.
 
 ## Not implemented
 
 - Folder push (`char_begin` and related commands) is refused with an error ack.
 - There is no "always allow" decision; the device sends `once` or `deny`.
-- Earlier turns are not kept on the device: it shows the current one. The
-  phone has the history.
+- Earlier turns are kept in RAM only. A restart loses them, and the device
+  does not fetch them from the phone, which has the full history.
 - A turn in progress cannot be cancelled from the device.
 - The speaker, Wi-Fi, and low-power sleep are not used by this application.
 - Replies are shown as text only; nothing is read aloud.
@@ -202,11 +229,13 @@ pool, so the interface, Bluetooth, and task stacks share one budget. The
 firmware logs `heap: free=… min=…` once a minute (a warning below 12 KB); read
 it during on-device acceptance.
 
-The conversation costs memory the earlier interface did not need: the answer
-buffer grew from 420 to 960 bytes in three places, and what was said, the
-helper in use and the helper list are kept as well, about 4 KB of static
-memory in all. The reader keeps its copy of the answer only while it is open.
-This has not been measured on a device.
+The conversation costs memory the earlier interface did not need. Static: the
+answer buffer grew from 420 to 960 bytes in three places, what was said, the
+helper in use and the helper list are kept as well, and the history of earlier
+turns takes another 4.2 KB, about 8 KB in all. Heap: the home page holds a copy
+of every turn it shows, at most the 4 KB of history plus the current turn, and
+two LVGL labels per turn, created when first needed; the copies are freed when
+the conversation is folded away. This has not been measured on a device.
 
 ## Code map
 
@@ -215,9 +244,10 @@ This has not been measured on a device.
 | `main/main.c` | Queues, the application task, BLE and settings glue |
 | `main/buddy_ble*.c` | NimBLE peripheral: Nordic UART Service, security, bonding |
 | `main/buddy_line.c`, `main/buddy_protocol.c` | Line assembly and bounded JSON parsing/serialization |
-| `main/buddy_state.c` | Link, approval, and navigation state machine |
+| `main/buddy_state.c` | Link, approval, conversation, and navigation state machine |
+| `main/buddy_history.h` | Earlier turns of the conversation: a byte-budgeted list, header-only |
 | `main/buddy_orchestrator.c`, `main/buddy_app_logic.c`, `main/buddy_settings.c` | Command handling, queue policy, NVS settings |
-| `main/pocket_view.c` | Pure view logic: which screen, what the home page shows, the pet's mood, helper colours, time formatting |
+| `main/pocket_view.c` | Pure view logic: which screen, what the home page shows, where the conversation scrolls to, the pet's mood, helper colours, time formatting |
 | `main/pocket_pet.c` | The pet's 20 × 20 pixel sprite and its moods (no LVGL) |
 | `main/pocket_ui.c` | LVGL screens |
 | `main/pocket_voice_core.c` | IMA ADPCM, voice-frame packing, the send queue, and the level meter (no ESP-IDF) |
@@ -251,19 +281,24 @@ hardware:
    reconnects without a passkey after a restart of either side.
 3. Hold `OK`, speak, release: the level bars move while speaking; the home page
    shows the recording on its way, then what was heard, then the answer. A
-   long answer scrolls in the reader, nine lines at a time, with no half lines.
+   long answer starts at its beginning and scrolls eight lines at a time, with
+   no half lines at the top or bottom.
 4. When Xiaoyou hands work over, the letter moves, the helper's name is in its
    colour, and the timer counts. A failed turn shows the reason.
-5. Every page and every state renders without boxes, clipping, or overlap,
+5. After several turns `UP` scrolls back through all of them and `OK` returns
+   to the newest. A new turn while scrolled back brings the page to that turn.
+   After 30 minutes without a turn the home page rests; a double press on `UP`
+   brings the conversation back, and a single press does not.
+6. Every page and every state renders without boxes, clipping, or overlap,
    including long mixed Chinese/Latin text.
-6. A request takes over the screen; `OK` says yes, `DOWN` says no, `UP` pages
+7. A request takes over the screen; `OK` says yes, `DOWN` says no, `UP` pages
    long details; the host reflects each decision.
-7. A request or an answer arriving while the screen is off turns it on.
-8. Unpair and factory reset ask for confirmation and behave as described above.
-9. Dropping the link returns to the sleeping page within 30 seconds and clears
-   the conversation.
-10. The minimum in the `heap:` log line keeps a comfortable margin with a long
-    answer on screen and during a recording; free heap is stable over a long
+8. A request or an answer arriving while the screen is off turns it on.
+9. Unpair and factory reset ask for confirmation and behave as described above.
+10. Dropping the link puts Xiaoyou to sleep within 30 seconds; the conversation
+    stays readable, and after reconnecting the last turn is not shown twice.
+11. The minimum in the `heap:` log line keeps a comfortable margin with a
+    conversation of a dozen turns on screen and during a recording; free heap is stable over a long
     session; Bluetooth range and battery life are measured, not assumed.
 
 ## Roadmap

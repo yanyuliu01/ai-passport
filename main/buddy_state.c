@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "buddy_history.h"
 #include "pocket_text.h"
 
 #define BUDDY_HEART_ANIMATION_MS 5000
@@ -65,6 +66,53 @@ static void buddy_invalidate_prompt(buddy_state_t *state)
     state->permission_decision = BUDDY_PERMISSION_NONE;
 }
 
+static bool buddy_chat_in_progress(buddy_chat_phase_t phase)
+{
+    return phase == BUDDY_CHAT_SENT || phase == BUDDY_CHAT_THINKING ||
+           phase == BUDDY_CHAT_HELPER;
+}
+
+/* Moves the turn on screen into the history if it is over. A turn that is still
+ * running has no answer to keep: the host reports it again when it is back. */
+static void buddy_archive_live(buddy_state_t *state)
+{
+    uint8_t flags = 0;
+
+    if (buddy_chat_in_progress(state->chat.phase)) {
+        return;
+    }
+    if (state->chat.phase == BUDDY_CHAT_FAILED) {
+        flags |= BUDDY_TURN_FAILED;
+    }
+    if (state->reply_truncated) {
+        flags |= BUDDY_TURN_CUT;
+    }
+    (void)buddy_history_push(&state->history, state->chat.said, state->reply, flags);
+}
+
+static void buddy_clear_live_turn(buddy_state_t *state)
+{
+    state->reply[0] = '\0';
+    state->reply_truncated = false;
+    memset(&state->chat, 0, sizeof(state->chat));
+    state->chat_since_ms = 0;
+}
+
+/* The conversation on screen is over: keep it, fold it away, rest. */
+static void buddy_fold_session(buddy_state_t *state)
+{
+    buddy_archive_live(state);
+    buddy_clear_live_turn(state);
+    (void)buddy_history_fold(&state->history);
+}
+
+static void buddy_begin_turn(buddy_state_t *state, uint64_t now_ms)
+{
+    buddy_archive_live(state);
+    ++state->turn_serial;
+    state->session_touched_ms = now_ms;
+}
+
 static void buddy_clear_logical_session(buddy_state_t *state)
 {
     state->connected = false;
@@ -83,13 +131,9 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     state->heartbeat.tokens_today = 0;
     state->heartbeat.message[0] = '\0';
     memset(state->heartbeat.entries, 0, sizeof(state->heartbeat.entries));
-    state->reply[0] = '\0';
-    state->reply_truncated = false;
-    memset(&state->chat, 0, sizeof(state->chat));
-    state->chat_since_ms = 0;
-    if (state->page == BUDDY_PAGE_READER) {
-        state->page = BUDDY_PAGE_HOME;
-    }
+    /* What was said stays readable; only the turn in progress is gone. */
+    buddy_archive_live(state);
+    buddy_clear_live_turn(state);
     buddy_invalidate_prompt(state);
 }
 
@@ -132,6 +176,22 @@ static buddy_character_t buddy_character_for(const buddy_state_t *state, uint64_
 static void buddy_refresh_character(buddy_state_t *state, uint64_t now_ms)
 {
     state->character = buddy_character_for(state, now_ms);
+}
+
+/* Nothing was said for a long while: the conversation on screen is folded away
+ * and the home page rests. A double press on UP brings it back. */
+static void buddy_fold_idle_session(buddy_state_t *state, uint64_t now_ms)
+{
+    bool on_screen = state->chat.phase != BUDDY_CHAT_NONE || state->reply[0] != '\0' ||
+                     buddy_history_visible(&state->history) > 0U;
+
+    if (!on_screen || buddy_chat_in_progress(state->chat.phase) ||
+        state->voice_phase != BUDDY_VOICE_IDLE || state->running > 0U ||
+        now_ms < state->session_touched_ms ||
+        now_ms - state->session_touched_ms < BUDDY_SESSION_IDLE_MS) {
+        return;
+    }
+    buddy_fold_session(state);
 }
 
 static void buddy_clear_stale_prompt(buddy_state_t *state, uint64_t now_ms)
@@ -325,24 +385,19 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
             buddy_set_ui_refresh(action);
         }
         return;
-    case BUDDY_PAGE_READER:
-        /* The whole answer: UP and DOWN move through it, OK goes back to Xiaoyou. */
-        if (key == BUDDY_KEY_OK) {
-            state->page = BUDDY_PAGE_HOME;
-            buddy_set_ui_refresh(action);
-        } else {
-            buddy_scroll(key, action);
-        }
-        return;
     case BUDDY_PAGE_HOME:
     case BUDDY_PAGE_COUNT:
         break;
     }
-    /* Home. DOWN opens the reader when there is something to read; the other
-     * short presses do nothing here: talking is a long press on OK. */
-    if (key == BUDDY_KEY_DOWN && state->reply[0] != '\0') {
-        state->page = BUDDY_PAGE_READER;
-        buddy_set_ui_refresh(action);
+    /* Home is the conversation: UP and DOWN move through it, OK goes back to the
+     * newest turn. Talking is a long press on OK. */
+    if (key == BUDDY_KEY_OK) {
+        if (action != NULL) {
+            action->type = BUDDY_ACTION_UI_SCROLL;
+            action->scroll_delta = BUDDY_SCROLL_LATEST;
+        }
+    } else {
+        buddy_scroll(key, action);
     }
 }
 
@@ -502,8 +557,8 @@ static void buddy_apply_permission_result(buddy_state_t *state,
     buddy_set_ui_refresh(action);
 }
 
-/* Long press. On the home and reader pages OK is push-to-talk and UP opens the
- * menu. On the menu and the pages under it either key goes back to the home page. */
+/* Long press. On the home page OK is push-to-talk and UP opens the menu. On the
+ * menu and the pages under it either key goes back to the home page. */
 static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     bool woke = state->screen_off;
@@ -516,7 +571,7 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     /* A long press on a dark screen wakes it; holding OK goes straight on to talking. */
     state->screen_off = false;
     buddy_set_ui_refresh(action);
-    if (state->page != BUDDY_PAGE_HOME && state->page != BUDDY_PAGE_READER) {
+    if (state->page != BUDDY_PAGE_HOME) {
         if (!woke) {
             state->page = BUDDY_PAGE_HOME;
         }
@@ -589,67 +644,160 @@ static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
     }
     if (event->voice_status == BUDDY_VOICE_FINISHED ||
         event->voice_status == BUDDY_VOICE_LIMIT) {
-        /* The recording is with the host. Until it says what it heard, the home
-         * page shows that a question is on its way instead of the previous turn. */
-        memset(&state->chat, 0, sizeof(state->chat));
+        /* The recording is with the host: a new turn. Until the host says what
+         * it heard, the home page shows that a question is on its way. */
+        buddy_begin_turn(state, now_ms);
+        buddy_clear_live_turn(state);
         state->chat.phase = BUDDY_CHAT_SENT;
         state->chat.mood = BUDDY_MOOD_BUSY;
         state->chat_since_ms = now_ms;
-        state->reply[0] = '\0';
-        state->reply_truncated = false;
     }
     buddy_set_ui_refresh(action);
-}
-
-static bool buddy_chat_in_progress(buddy_chat_phase_t phase)
-{
-    return phase == BUDDY_CHAT_SENT || phase == BUDDY_CHAT_THINKING ||
-           phase == BUDDY_CHAT_HELPER;
 }
 
 static void buddy_apply_chat(buddy_state_t *state, const buddy_event_t *event,
                              uint64_t now_ms, buddy_action_t *action)
 {
+    buddy_chat_phase_t phase = event->chat.phase;
     bool was_in_progress = buddy_chat_in_progress(state->chat.phase);
-    bool answered = event->chat.phase == BUDDY_CHAT_DONE ||
-                    event->chat.phase == BUDDY_CHAT_FAILED;
-    /* A recording that left the device and the host starting to think about it
-     * are one wait as far as the owner is concerned: keep counting. */
-    bool same_step = strcmp(state->chat.agent, event->chat.agent) == 0 &&
-                     (state->chat.phase == event->chat.phase ||
-                      (state->chat.phase == BUDDY_CHAT_SENT &&
-                       event->chat.phase == BUDDY_CHAT_THINKING));
+    bool answered = phase == BUDDY_CHAT_DONE || phase == BUDDY_CHAT_FAILED;
     bool same_words = strcmp(state->reply, event->reply) == 0 &&
                       strcmp(state->chat.said, event->chat.said) == 0;
+    bool same_step;
 
     if (event->ble.connection_generation != state->ble_connection_generation) {
         return;
     }
     state->host_chat = true;
-    /* A hub that only repeats "nothing yet" must not wipe a recording that has
-     * just left the device and is still being transcribed. */
-    if (event->chat.phase == BUDDY_CHAT_NONE && state->chat.phase == BUDDY_CHAT_SENT) {
+    if (phase == BUDDY_CHAT_HELPER && event->chat.agent[0] == '\0') {
+        /* "Somebody else is on it" without saying who is just thinking. */
+        phase = BUDDY_CHAT_THINKING;
+    }
+    if (phase == BUDDY_CHAT_NONE) {
+        /* A hub that only repeats "nothing yet" must not wipe a recording that
+         * has just left the device and is still being transcribed. */
+        if (state->chat.phase == BUDDY_CHAT_SENT) {
+            return;
+        }
+        /* The hub starts over (the phone app was restarted): what is on screen
+         * is a conversation that is finished. */
+        if (state->chat.phase != BUDDY_CHAT_NONE ||
+            buddy_history_visible(&state->history) > 0U) {
+            buddy_fold_session(state);
+            buddy_set_ui_refresh(action);
+        }
         return;
     }
-    state->chat = event->chat;
-    if (state->chat.phase == BUDDY_CHAT_HELPER && state->chat.agent[0] == '\0') {
-        /* "Somebody else is on it" without saying who is just thinking. */
-        state->chat.phase = BUDDY_CHAT_THINKING;
+    if (answered &&
+        (state->chat.phase == BUDDY_CHAT_NONE || state->chat.phase == BUDDY_CHAT_SENT) &&
+        buddy_history_last_is(&state->history, event->chat.said, event->reply)) {
+        /* The hub repeats a turn this device has already put away: after the link
+         * came back, after the conversation was folded, or while a new recording
+         * is on its way. Nothing new. */
+        return;
     }
+    if (!was_in_progress) {
+        if (!answered || state->chat.phase == BUDDY_CHAT_NONE || !same_words) {
+            /* A new turn; the one on screen moves up into the history. */
+            buddy_begin_turn(state, now_ms);
+        }
+    } else if (answered) {
+        state->session_touched_ms = now_ms;
+    }
+    /* A recording that left the device and the host starting to think about it
+     * are one wait as far as the owner is concerned: keep counting. */
+    same_step = strcmp(state->chat.agent, event->chat.agent) == 0 &&
+                (state->chat.phase == phase ||
+                 (state->chat.phase == BUDDY_CHAT_SENT && phase == BUDDY_CHAT_THINKING));
+    state->chat = event->chat;
+    state->chat.phase = phase;
     buddy_copy(state->reply, sizeof(state->reply), event->reply);
     state->reply_truncated = event->reply_truncated;
     if (!same_step) {
         state->chat_since_ms = now_ms;
-    }
-    if (!same_words && state->page == BUDDY_PAGE_READER) {
-        /* The text being read is gone; go back to where the new one appears. */
-        state->page = BUDDY_PAGE_HOME;
     }
     if (answered && was_in_progress) {
         /* The answer to something just asked is worth lighting the screen for. */
         state->screen_off = false;
     }
     buddy_set_ui_refresh(action);
+}
+
+/* A double press on UP at the home page brings back the turns that were folded
+ * away. Returns false when there is nothing to bring back or something else has
+ * the screen; the press then counts as an ordinary click. */
+static bool buddy_recall(buddy_state_t *state, const buddy_event_t *event, uint64_t now_ms,
+                         buddy_action_t *action)
+{
+    unsigned hidden = buddy_history_hidden(&state->history);
+
+    if (event->key != BUDDY_KEY_UP || state->voice_phase != BUDDY_VOICE_IDLE ||
+        state->screen_off || state->confirmation != BUDDY_CONFIRM_NONE ||
+        buddy_has_prompt(state) || state->passkey_visible ||
+        state->page != BUDDY_PAGE_HOME || !buddy_history_reveal(&state->history)) {
+        return false;
+    }
+    state->recalled = hidden;
+    ++state->recall_serial;
+    state->session_touched_ms = now_ms;
+    buddy_set_ui_refresh(action);
+    return true;
+}
+
+static void buddy_key_click(buddy_state_t *state, const buddy_event_t *event, uint64_t now_ms,
+                            buddy_action_t *action)
+{
+    if (state->voice_phase != BUDDY_VOICE_IDLE) {
+        return;
+    }
+    if (state->screen_off) {
+        state->screen_off = false;
+        if (action != NULL) {
+            action->type = BUDDY_ACTION_DISPLAY_BACKLIGHT;
+            action->brightness_percent =
+                buddy_brightness_percent(state->brightness_level);
+        }
+        return;
+    }
+    if (state->confirmation != BUDDY_CONFIRM_NONE && event->key == BUDDY_KEY_OK) {
+        buddy_confirmation_t confirmation = state->confirmation;
+        bool acknowledge = state->confirmation_acknowledge;
+        uint32_t connection_generation = state->confirmation_connection_generation;
+
+        buddy_close_confirmation(state);
+        if (action != NULL) {
+            action->type = confirmation == BUDDY_CONFIRM_UNPAIR
+                               ? BUDDY_ACTION_UNPAIR_CONFIRMED
+                               : BUDDY_ACTION_FACTORY_RESET_CONFIRMED;
+            action->confirmation_acknowledge = acknowledge;
+            action->connection_generation = connection_generation;
+        }
+        return;
+    }
+    if (state->confirmation != BUDDY_CONFIRM_NONE && event->key == BUDDY_KEY_DOWN) {
+        buddy_close_confirmation(state);
+        buddy_set_ui_refresh(action);
+        return;
+    }
+    if (state->confirmation != BUDDY_CONFIRM_NONE) {
+        return;
+    }
+    if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_OK) {
+        buddy_decide_prompt(state, event, BUDDY_PERMISSION_ONCE, action);
+    } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_DOWN) {
+        buddy_decide_prompt(state, event, BUDDY_PERMISSION_DENY, action);
+    } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_UP) {
+        if (action != NULL) {
+            action->type = BUDDY_ACTION_UI_SCROLL;
+            action->scroll_delta = -48;
+        }
+    } else if (!buddy_has_prompt(state)) {
+        if (state->page == BUDDY_PAGE_HOME) {
+            /* Reading the conversation keeps it on screen. */
+            state->session_touched_ms = now_ms;
+        }
+        buddy_normal_click(state, event->key, action);
+    }
 }
 
 void buddy_state_init(buddy_state_t *state, const buddy_settings_snapshot_t *settings)
@@ -683,6 +831,7 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     }
 
     buddy_clear_stale_prompt(state, now_ms);
+    buddy_fold_idle_session(state, now_ms);
 
     switch (event->type) {
     case BUDDY_EVENT_HEARTBEAT:
@@ -804,52 +953,11 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         buddy_apply_permission_result(state, &event->permission_result, now_ms, action);
         break;
     case BUDDY_EVENT_KEY_CLICK:
-        if (state->voice_phase != BUDDY_VOICE_IDLE) {
-            break;
-        }
-        if (state->screen_off) {
-            state->screen_off = false;
-            if (action != NULL) {
-                action->type = BUDDY_ACTION_DISPLAY_BACKLIGHT;
-                action->brightness_percent =
-                    buddy_brightness_percent(state->brightness_level);
-            }
-            break;
-        }
-        if (state->confirmation != BUDDY_CONFIRM_NONE && event->key == BUDDY_KEY_OK) {
-            buddy_confirmation_t confirmation = state->confirmation;
-            bool acknowledge = state->confirmation_acknowledge;
-            uint32_t connection_generation = state->confirmation_connection_generation;
-
-            buddy_close_confirmation(state);
-            if (action != NULL) {
-                action->type = confirmation == BUDDY_CONFIRM_UNPAIR
-                                   ? BUDDY_ACTION_UNPAIR_CONFIRMED
-                                   : BUDDY_ACTION_FACTORY_RESET_CONFIRMED;
-                action->confirmation_acknowledge = acknowledge;
-                action->connection_generation = connection_generation;
-            }
-            break;
-        }
-        if (state->confirmation != BUDDY_CONFIRM_NONE && event->key == BUDDY_KEY_DOWN) {
-            buddy_close_confirmation(state);
-            buddy_set_ui_refresh(action);
-            break;
-        }
-        if (state->confirmation != BUDDY_CONFIRM_NONE) {
-            break;
-        }
-        if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_OK) {
-            buddy_decide_prompt(state, event, BUDDY_PERMISSION_ONCE, action);
-        } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_DOWN) {
-            buddy_decide_prompt(state, event, BUDDY_PERMISSION_DENY, action);
-        } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_UP) {
-            if (action != NULL) {
-                action->type = BUDDY_ACTION_UI_SCROLL;
-                action->scroll_delta = -48;
-            }
-        } else if (!buddy_has_prompt(state)) {
-            buddy_normal_click(state, event->key, action);
+        buddy_key_click(state, event, now_ms, action);
+        break;
+    case BUDDY_EVENT_KEY_DOUBLE:
+        if (!buddy_recall(state, event, now_ms, action)) {
+            buddy_key_click(state, event, now_ms, action);
         }
         break;
     case BUDDY_EVENT_KEY_LONG:
@@ -897,8 +1005,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
          * reply this way. A hub that reports the whole conversation with "chat"
          * owns the reply, and a stray turn event must not replace it. */
         if (state->connected && !state->heartbeat_stale && !state->host_chat) {
-            if (strcmp(state->reply, event->reply) != 0 && state->page == BUDDY_PAGE_READER) {
-                state->page = BUDDY_PAGE_HOME;
+            if (strcmp(state->reply, event->reply) != 0) {
+                /* A new reply: the previous one moves up into the history. */
+                buddy_begin_turn(state, now_ms);
             }
             buddy_copy(state->reply, sizeof(state->reply), event->reply);
             state->reply_truncated = event->reply_truncated;
@@ -964,6 +1073,10 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->more_selection = state->more_selection;
     snapshot->chat = state->chat;
     snapshot->chat_since_ms = state->chat_since_ms;
+    snapshot->turn_serial = state->turn_serial;
+    snapshot->recall_serial = state->recall_serial;
+    snapshot->recalled = state->recalled;
+    snapshot->history = &state->history;
     memcpy(snapshot->helpers, state->helpers, sizeof(snapshot->helpers));
     snapshot->helper_count = state->helper_count;
     snapshot->host_hub = state->host_hub;

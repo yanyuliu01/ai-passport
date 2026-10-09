@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "buddy_history.h"
 #include "pocket_view.h"
 
 static buddy_ui_snapshot_t connected_snapshot(void)
@@ -290,8 +291,66 @@ static void test_elapsed_and_passkey(void)
     assert(strcmp(text, "234 567") == 0);
 }
 
+static void test_home_layout(void)
+{
+    static buddy_history_t history;
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+
+    memset(&history, 0, sizeof(history));
+    assert(!pocket_home_shows_talk(NULL));
+    /* 没聊过：小幽独占画面。 */
+    snapshot.host_hub = true;
+    snapshot.host_chat = true;
+    assert(!pocket_home_shows_talk(&snapshot));
+    snapshot.history = &history;
+    assert(!pocket_home_shows_talk(&snapshot));
+    /* 有一轮在屏幕上。 */
+    snapshot.chat.phase = BUDDY_CHAT_THINKING;
+    assert(pocket_home_shows_talk(&snapshot));
+    /* 没有正在进行的，但这一段里有说过的话可以回看。 */
+    snapshot.chat.phase = BUDDY_CHAT_NONE;
+    assert(buddy_history_push(&history, "q", "a", 0));
+    assert(pocket_home_shows_talk(&snapshot));
+    /* 断开了也一样：说过的话留着可以读。 */
+    snapshot.ble_connected = false;
+    assert(pocket_home_for(&snapshot) == POCKET_HOME_WAITING);
+    assert(pocket_home_shows_talk(&snapshot));
+    /* 收起来之后回到小幽独占画面。 */
+    assert(buddy_history_fold(&history));
+    assert(!pocket_home_shows_talk(&snapshot));
+}
+
+static void test_timeline_window(void)
+{
+    /* 窗口九行高（207），一行 23。 */
+    /* 内容不满一屏：窗口不动。 */
+    assert(pocket_timeline_anchor(0, 0, 207) == 0);
+    assert(pocket_timeline_anchor(92, 46, 207) == 0);
+    /* 最新一轮放得下：贴着底，前面的对话也露出来。 */
+    assert(pocket_timeline_anchor(460, 345, 207) == 253);
+    /* 最新一轮自己就比窗口高：从它的开头读起。 */
+    assert(pocket_timeline_anchor(690, 230, 207) == 230);
+    assert(pocket_timeline_anchor(690, -5, 207) == 0);
+    /* 正好一屏。 */
+    assert(pocket_timeline_anchor(437, 230, 207) == 230);
+
+    /* 上下翻：不滚出长卷。 */
+    assert(pocket_timeline_step(230, 1, 690, 207, 184) == 414);
+    assert(pocket_timeline_step(414, 1, 690, 207, 184) == 483);
+    assert(pocket_timeline_step(483, 1, 690, 207, 184) == 483);
+    assert(pocket_timeline_step(230, -1, 690, 207, 184) == 46);
+    assert(pocket_timeline_step(46, -1, 690, 207, 184) == 0);
+    assert(pocket_timeline_step(0, -1, 690, 207, 184) == 0);
+    /* 内容变短了：位置跟着收回来。 */
+    assert(pocket_timeline_step(483, 0, 300, 207, 184) == 93);
+    assert(pocket_timeline_step(50, 0, 100, 207, 184) == 0);
+    assert(pocket_timeline_step(50, 1, 100, 207, 184) == 0);
+}
+
 int main(void)
 {
+    test_home_layout();
+    test_timeline_window();
     test_view_priority();
     test_voice_view();
     test_home_status();

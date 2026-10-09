@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "buddy_protocol.h"
+#include "buddy_history.h"
 #include "buddy_state.h"
 #include "pocket_text.h"
 
@@ -444,8 +445,9 @@ static void test_heartbeat_prompt_snapshot_clears_or_preserves_approval_lock(voi
     buddy_state_reduce(&state, &heartbeat, 1003, &action);
     buddy_state_snapshot(&state, &snapshot);
     assert(snapshot.prompt_id[0] == '\0');
+    /* No request on screen: OK is only the home page's "back to the newest turn". */
     buddy_state_reduce(&state, &approve, 1004, &action);
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && !state.approval_locked);
 
     heartbeat.heartbeat.prompt = test_prompt_event("req-2", "Read", "README", 0, 1).prompt;
     buddy_state_reduce(&state, &heartbeat, 1005, &action);
@@ -492,7 +494,7 @@ static void test_absent_prompt_is_ignored(void)
 
     buddy_state_init(&state, NULL);
     buddy_state_reduce(&state, &approve, 1001, &action);
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type != BUDDY_ACTION_PERMISSION);
 }
 
 static void test_timeout_stale_prompt_is_ignored(void)
@@ -509,7 +511,7 @@ static void test_timeout_stale_prompt_is_ignored(void)
     buddy_state_reduce(&state, &prompt, 1001, &action);
     buddy_state_reduce(&state, &tick, 31001, &action);
     buddy_state_reduce(&state, &approve, 31002, &action);
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type != BUDDY_ACTION_PERMISSION);
 }
 
 static void test_standalone_prompt_refreshes_liveness_clock(void)
@@ -546,7 +548,7 @@ static void test_disconnect_then_reconnect_does_not_restore_prompt(void)
     buddy_state_reduce(&state, &approve, 1004, &action);
 
     assert(state.prompt.id[0] == '\0');
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type != BUDDY_ACTION_PERMISSION);
 }
 
 static void test_mismatched_observed_prompt_is_ignored(void)
@@ -578,7 +580,7 @@ static void test_nonterminated_prompt_id_is_ignored(void)
     buddy_state_reduce(&state, &prompt, 1000, &action);
     buddy_state_reduce(&state, &approve, 1001, &action);
 
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type != BUDDY_ACTION_PERMISSION);
 }
 
 static void test_truncated_prompt_id_is_ignored(void)
@@ -593,7 +595,7 @@ static void test_truncated_prompt_id_is_ignored(void)
     buddy_state_reduce(&state, &prompt, 1000, &action);
     buddy_state_reduce(&state, &approve, 1001, &action);
 
-    assert(action.type == BUDDY_ACTION_NONE);
+    assert(action.type != BUDDY_ACTION_PERMISSION);
 }
 
 static void test_long_up_opens_the_menu(void)
@@ -606,10 +608,8 @@ static void test_long_up_opens_the_menu(void)
 
     buddy_state_init(&state, NULL);
     state.menu_selection = BUDDY_MENU_BACK;
-    state.page = BUDDY_PAGE_READER;
     buddy_state_reduce(&state, &long_down, 999, &action);
-    assert(state.page == BUDDY_PAGE_READER && action.type == BUDDY_ACTION_NONE);
-    /* From the reader as well as from home. */
+    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
     buddy_state_reduce(&state, &long_up, 1000, &action);
 
     assert(state.page == BUDDY_PAGE_MENU);
@@ -672,8 +672,6 @@ static void test_hold_ok_talks_and_release_sends(void)
 
     voice_ready_state(&state);
     assert(state.host_hub);
-    /* Talking also works from the reader page; it goes back to Xiaoyou. */
-    state.page = BUDDY_PAGE_READER;
     buddy_state_reduce(&state, &long_ok, 1000, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && action.connection_generation == 7);
     assert(state.voice_phase == BUDDY_VOICE_PREPARING && state.page == BUDDY_PAGE_HOME);
@@ -791,7 +789,7 @@ static void test_talking_needs_a_voice_capable_host(void)
     assert(!state.host_voice);
 }
 
-static void test_home_keys_and_the_reader(void)
+static void test_home_keys_move_through_the_conversation(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
@@ -800,28 +798,18 @@ static void test_home_keys_and_the_reader(void)
     buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
 
     buddy_state_init(&state, NULL);
-    assert(state.page == BUDDY_PAGE_HOME);
-    /* Nothing to read yet: no short press does anything on the home page. */
-    buddy_state_reduce(&state, &ok, 1, &action);
-    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
-    buddy_state_reduce(&state, &up, 2, &action);
-    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
-    buddy_state_reduce(&state, &down, 3, &action);
-    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
-
-    /* With an answer, DOWN opens the reader; UP and DOWN scroll it; OK goes back. */
-    snprintf(state.reply, sizeof(state.reply), "%s", "a long answer");
-    buddy_state_reduce(&state, &up, 4, &action);
-    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
+    /* The home page is the conversation and no key leaves it: UP and DOWN move
+     * through it, OK goes back to the newest turn. */
     buddy_state_reduce(&state, &down, 5, &action);
-    assert(state.page == BUDDY_PAGE_READER && action.type == BUDDY_ACTION_UI_REFRESH);
-    buddy_state_reduce(&state, &down, 6, &action);
-    assert(state.page == BUDDY_PAGE_READER);
-    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta > 0);
-    buddy_state_reduce(&state, &up, 7, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta > 0 &&
+           action.scroll_delta != BUDDY_SCROLL_LATEST);
+    buddy_state_reduce(&state, &up, 6, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
     assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta < 0);
-    buddy_state_reduce(&state, &ok, 8, &action);
-    assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_reduce(&state, &ok, 7, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta == BUDDY_SCROLL_LATEST);
 }
 
 static void test_guide_scrolls_and_returns_to_more(void)
@@ -1065,15 +1053,14 @@ static void test_normal_navigation_and_approval_scroll_are_distinct(void)
     buddy_state_init(&state, NULL);
     snprintf(state.reply, sizeof(state.reply), "%s", "something to read");
     buddy_state_reduce(&state, &down, 1000, &action);
-    assert(state.page == BUDDY_PAGE_READER);
-    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta == 60);
 
     /* With a request on screen the same keys belong to the request. */
     buddy_state_reduce(&state, &prompt, 1002, &action);
     buddy_state_reduce(&state, &up, 1003, &action);
-    assert(state.page == BUDDY_PAGE_READER);
+    assert(state.page == BUDDY_PAGE_HOME);
     assert(action.type == BUDDY_ACTION_UI_SCROLL);
-    assert(action.scroll_delta < 0);
+    assert(action.scroll_delta == -48);
 }
 
 static void test_settings_actions_have_separate_confirmations(void)
@@ -1381,13 +1368,23 @@ static void test_the_conversation_follows_the_hub(void)
     assert(state.screen_off);
     state.screen_off = false;
 
-    /* Reading the answer: a repeat keeps the reader open, new words close it. */
-    state.page = BUDDY_PAGE_READER;
-    buddy_state_reduce(&state, &event, 9600, &action);
-    assert(state.page == BUDDY_PAGE_READER);
-    event = chat_event(BUDDY_CHAT_THINKING, "next question", "", "", 7);
-    buddy_state_reduce(&state, &event, 9700, &action);
-    assert(state.page == BUDDY_PAGE_HOME && state.reply[0] == '\0');
+    /* A repeat is not a new turn; the next question is, and the answered turn
+     * moves up into the history (behind the reply the older app left there). */
+    {
+        uint32_t serial = state.turn_serial;
+
+        assert(state.history.count == 1);
+        buddy_state_reduce(&state, &event, 9600, &action);
+        assert(state.turn_serial == serial && state.history.count == 1);
+        event = chat_event(BUDDY_CHAT_THINKING, "next question", "", "", 7);
+        buddy_state_reduce(&state, &event, 9700, &action);
+        assert(state.turn_serial == serial + 1U && state.reply[0] == '\0');
+        assert(state.history.count == 2 && buddy_history_visible(&state.history) == 2U);
+        assert(strcmp(buddy_history_reply(&state.history, 0), "from an older app") == 0);
+        assert(strcmp(buddy_history_said(&state.history, 1), "hello") == 0);
+        assert(strcmp(buddy_history_reply(&state.history, 1), "hi there") == 0);
+        assert(state.history.turns[1].flags == BUDDY_TURN_CUT);
+    }
 
     /* A hub that reports the conversation owns the reply: a turn event must not
      * overwrite her words. */
@@ -1407,15 +1404,227 @@ static void test_the_conversation_follows_the_hub(void)
         assert(state.chat.phase == BUDDY_CHAT_FAILED);
     }
 
-    /* The link goes away: nothing of the conversation stays on screen. */
-    state.page = BUDDY_PAGE_READER;
+    /* The link goes away: no turn is in progress any more, but what was said
+     * stays readable. */
     event = (buddy_event_t){.type = BUDDY_EVENT_BLE_DISCONNECTED};
     event.ble.connection_generation = 8;
     buddy_state_reduce(&state, &event, 10000, &action);
     assert(state.chat.phase == BUDDY_CHAT_NONE && state.chat.said[0] == '\0');
     assert(state.reply[0] == '\0' && state.page == BUDDY_PAGE_HOME);
     assert(!state.host_hub && !state.host_voice && !state.host_chat);
+    assert(state.history.count == 3 && buddy_history_visible(&state.history) == 3U);
+    assert(strcmp(buddy_history_reply(&state.history, 2), "runtime is asleep") == 0);
+    assert(state.history.turns[2].flags == BUDDY_TURN_FAILED);
+
+    /* Back again, the hub repeats the turn it finished last. The device already
+     * has it: nothing is added and nothing is shown twice. */
+    {
+        buddy_event_t connected = {.type = BUDDY_EVENT_BLE_CONNECTED};
+        uint32_t serial = state.turn_serial;
+
+        connected.ble.connection_generation = 9;
+        buddy_state_reduce(&state, &connected, 10100, &action);
+        event = chat_event(BUDDY_CHAT_FAILED, "next question", "runtime is asleep", "", 9);
+        buddy_state_reduce(&state, &event, 10200, &action);
+        assert(state.host_chat && state.chat.phase == BUDDY_CHAT_NONE);
+        assert(state.history.count == 3 && state.turn_serial == serial);
+        buddy_state_snapshot(&state, &snapshot);
+        assert(snapshot.history == &state.history && snapshot.turn_serial == serial);
+    }
 }
+
+static void test_history_keeps_what_fits(void)
+{
+    static buddy_history_t history;
+    char said[BUDDY_MESSAGE_MAX];
+    char reply[BUDDY_REPLY_MAX];
+    unsigned index;
+
+    memset(&history, 0, sizeof(history));
+    assert(buddy_history_visible(NULL) == 0U && buddy_history_hidden(NULL) == 0U);
+    assert(buddy_history_said(NULL, 0)[0] == '\0' && buddy_history_reply(&history, 3)[0] == '\0');
+    /* Nothing to keep; and the same turn twice in a row is kept once. */
+    assert(!buddy_history_push(&history, "", "", 0));
+    assert(buddy_history_push(&history, "q0", "a0", 0));
+    assert(!buddy_history_push(&history, "q0", "a0", 0));
+    assert(buddy_history_push(&history, "", "a reply nobody asked for", BUDDY_TURN_FAILED));
+    assert(history.count == 2 && history.revision == 2);
+    assert(buddy_history_last_is(&history, "", "a reply nobody asked for"));
+    assert(strcmp(buddy_history_said(&history, 0), "q0") == 0);
+    assert(strcmp(buddy_history_reply(&history, 0), "a0") == 0);
+
+    /* Folding hides everything so far; what comes after is the new conversation. */
+    assert(buddy_history_fold(&history) && !buddy_history_fold(&history));
+    assert(buddy_history_visible(&history) == 0U && buddy_history_hidden(&history) == 2U);
+    assert(buddy_history_push(&history, "q2", "a2", 0));
+    assert(buddy_history_visible(&history) == 1U && buddy_history_hidden(&history) == 2U);
+
+    /* More turns than there are places: the oldest go, the fold line moves with them. */
+    for (index = 3; index < BUDDY_HISTORY_TURNS + 2U; ++index) {
+        snprintf(said, sizeof(said), "q%u", index);
+        snprintf(reply, sizeof(reply), "a%u", index);
+        assert(buddy_history_push(&history, said, reply, 0));
+    }
+    assert(history.count == BUDDY_HISTORY_TURNS);
+    assert(buddy_history_hidden(&history) == 0U);
+    assert(strcmp(buddy_history_said(&history, 0), "q2") == 0);
+    assert(strcmp(buddy_history_reply(&history, BUDDY_HISTORY_TURNS - 1U), reply) == 0);
+
+    /* Long answers: the byte budget decides, and the newest is always whole. */
+    memset(reply, 'x', sizeof(reply) - 1U);
+    reply[sizeof(reply) - 1U] = '\0';
+    for (index = 0; index < 9U; ++index) {
+        snprintf(said, sizeof(said), "long %u", index);
+        assert(buddy_history_push(&history, said, reply, BUDDY_TURN_CUT));
+        assert(history.used <= sizeof(history.text));
+        assert(buddy_history_last_is(&history, said, reply));
+    }
+    assert(history.count >= 3 && history.count < BUDDY_HISTORY_TURNS);
+    for (index = 0; index < history.count; ++index) {
+        assert(strncmp(buddy_history_said(&history, index), "long ", 5) == 0);
+        assert(strlen(buddy_history_reply(&history, index)) == sizeof(reply) - 1U);
+    }
+    assert(!buddy_history_reveal(&history));
+    assert(buddy_history_fold(&history) && buddy_history_reveal(&history));
+    assert(buddy_history_visible(&history) == history.count);
+}
+
+/* Lets time pass with the link alive: a heartbeat every ten seconds. */
+static void pass_time(buddy_state_t *state, const buddy_event_t *heartbeat, uint64_t from,
+                      uint64_t until)
+{
+    buddy_action_t action = {0};
+    uint64_t now;
+
+    for (now = from + 10000U; now < until; now += 10000U) {
+        buddy_state_reduce(state, heartbeat, now, &action);
+    }
+    buddy_state_reduce(state, heartbeat, until, &action);
+}
+
+static void test_a_quiet_conversation_folds_and_a_double_up_brings_it_back(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t up = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_UP};
+    buddy_event_t double_up = {.type = BUDDY_EVENT_KEY_DOUBLE, .key = BUDDY_KEY_UP};
+    buddy_event_t heartbeat = test_heartbeat_event(0, 0);
+    buddy_event_t event;
+    uint64_t answered;
+    uint64_t now = 1000;
+
+    voice_ready_state(&state);
+    heartbeat.heartbeat.waiting = 0;
+    heartbeat.ble.connection_generation = 7;
+    buddy_state_reduce(&state, &heartbeat, now, &action);
+    /* Nothing folded away yet: a double press is just a press. */
+    buddy_state_reduce(&state, &double_up, now, &action);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta < 0);
+
+    event = chat_event(BUDDY_CHAT_THINKING, "first", "", "", 7);
+    buddy_state_reduce(&state, &event, now, &action);
+    event = chat_event(BUDDY_CHAT_DONE, "first", "one", "", 7);
+    buddy_state_reduce(&state, &event, now + 1000, &action);
+    event = chat_event(BUDDY_CHAT_THINKING, "second", "", "", 7);
+    buddy_state_reduce(&state, &event, now + 2000, &action);
+    event = chat_event(BUDDY_CHAT_DONE, "second", "two", "", 7);
+    answered = now + 3000;
+    buddy_state_reduce(&state, &event, answered, &action);
+    assert(state.history.count == 1 && state.chat.phase == BUDDY_CHAT_DONE);
+
+    /* Still the same conversation just before the limit. */
+    now = answered + BUDDY_SESSION_IDLE_MS - 1U;
+    pass_time(&state, &heartbeat, answered, now);
+    assert(state.chat.phase == BUDDY_CHAT_DONE && buddy_history_visible(&state.history) == 1U);
+    /* Reading counts: a key on the home page keeps the conversation on screen. */
+    buddy_state_reduce(&state, &up, now, &action);
+    pass_time(&state, &heartbeat, now, now + BUDDY_SESSION_IDLE_MS - 1U);
+    assert(state.chat.phase == BUDDY_CHAT_DONE);
+
+    /* Half an hour without a word or a key: it is folded away and Xiaoyou rests. */
+    buddy_state_reduce(&state, &heartbeat, now + BUDDY_SESSION_IDLE_MS, &action);
+    now += BUDDY_SESSION_IDLE_MS;
+    assert(state.chat.phase == BUDDY_CHAT_NONE && state.reply[0] == '\0');
+    assert(state.history.count == 2 && buddy_history_visible(&state.history) == 0U);
+    /* The hub keeps repeating the last turn; it stays folded. */
+    buddy_state_reduce(&state, &event, now + 100, &action);
+    assert(state.chat.phase == BUDDY_CHAT_NONE && state.history.count == 2);
+
+    /* A double press on UP brings both turns back, once. */
+    buddy_state_reduce(&state, &double_up, now + 200, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(buddy_history_visible(&state.history) == 2U);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.recall_serial == 1U && snapshot.recalled == 2U);
+    buddy_state_reduce(&state, &double_up, now + 300, &action);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && state.recall_serial == 1U);
+
+    /* Left alone again it folds again; a new question then starts a new
+     * conversation, and only that one is on screen. */
+    pass_time(&state, &heartbeat, now + 300, now + 300 + BUDDY_SESSION_IDLE_MS);
+    now += 300 + BUDDY_SESSION_IDLE_MS;
+    assert(buddy_history_visible(&state.history) == 0U);
+    event = chat_event(BUDDY_CHAT_THINKING, "third", "", "", 7);
+    buddy_state_reduce(&state, &event, now + 10, &action);
+    event = chat_event(BUDDY_CHAT_DONE, "third", "three", "", 7);
+    buddy_state_reduce(&state, &event, now + 20, &action);
+    event = chat_event(BUDDY_CHAT_THINKING, "fourth", "", "", 7);
+    buddy_state_reduce(&state, &event, now + 30, &action);
+    assert(state.history.count == 3 && buddy_history_visible(&state.history) == 1U);
+    assert(buddy_history_hidden(&state.history) == 2U);
+    /* A turn in progress is never folded, however long it takes. */
+    pass_time(&state, &heartbeat, now + 30, now + 2U * BUDDY_SESSION_IDLE_MS);
+    now += 2U * BUDDY_SESSION_IDLE_MS;
+    assert(state.chat.phase == BUDDY_CHAT_THINKING);
+
+    /* The hub says "nothing yet" after turns: the phone app started over, and so
+     * does the screen. */
+    event = chat_event(BUDDY_CHAT_DONE, "fourth", "four", "", 7);
+    buddy_state_reduce(&state, &event, now + 10, &action);
+    event = chat_event(BUDDY_CHAT_NONE, "", "", "", 7);
+    buddy_state_reduce(&state, &event, now + 20, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(state.chat.phase == BUDDY_CHAT_NONE && buddy_history_visible(&state.history) == 0U);
+    assert(state.history.count == 4);
+
+    /* Other pages and a dark screen keep the double press for themselves. */
+    state.page = BUDDY_PAGE_MENU;
+    buddy_state_reduce(&state, &double_up, now + 30, &action);
+    assert(buddy_history_visible(&state.history) == 0U && state.page == BUDDY_PAGE_MENU);
+    state.page = BUDDY_PAGE_HOME;
+    state.screen_off = true;
+    buddy_state_reduce(&state, &double_up, now + 40, &action);
+    assert(!state.screen_off && action.type == BUDDY_ACTION_DISPLAY_BACKLIGHT);
+    assert(buddy_history_visible(&state.history) == 0U);
+    buddy_state_reduce(&state, &double_up, now + 50, &action);
+    assert(buddy_history_visible(&state.history) == 4U && state.recalled == 4U);
+}
+
+static void test_desktop_replies_are_kept_too(void)
+{
+    buddy_state_t state;
+    buddy_action_t action = {0};
+    buddy_event_t heartbeat = test_heartbeat_event(0, 0);
+    buddy_event_t turn = {.type = BUDDY_EVENT_TURN};
+
+    buddy_state_init(&state, NULL);
+    heartbeat.heartbeat.waiting = 0;
+    buddy_state_reduce(&state, &heartbeat, 10, &action);
+    snprintf(turn.reply, sizeof(turn.reply), "%s", "first reply");
+    buddy_state_reduce(&state, &turn, 20, &action);
+    assert(state.turn_serial == 1U && state.history.count == 0);
+    /* The same reply again is not a new turn. */
+    buddy_state_reduce(&state, &turn, 30, &action);
+    assert(state.turn_serial == 1U);
+    snprintf(turn.reply, sizeof(turn.reply), "%s", "second reply");
+    buddy_state_reduce(&state, &turn, 40, &action);
+    assert(state.turn_serial == 2U && state.history.count == 1);
+    assert(buddy_history_said(&state.history, 0)[0] == '\0');
+    assert(strcmp(buddy_history_reply(&state.history, 0), "first reply") == 0);
+    assert(strcmp(state.reply, "second reply") == 0);
+}
+
 
 static void test_a_recording_on_its_way_is_not_wiped_by_an_idle_report(void)
 {
@@ -1439,10 +1648,18 @@ static void test_a_recording_on_its_way_is_not_wiped_by_an_idle_report(void)
     assert(state.chat.phase == BUDDY_CHAT_SENT && state.reply[0] == '\0');
     assert(state.chat.said[0] == '\0' && state.chat_since_ms == 3200);
 
+    /* It is kept, though: the home page can scroll back to it. */
+    assert(state.history.count == 1);
+    assert(strcmp(buddy_history_reply(&state.history, 0), "an earlier answer") == 0);
+
     /* The hub has not noticed yet and still says "nothing going on". */
     event = chat_event(BUDDY_CHAT_NONE, "", "", "", 7);
     buddy_state_reduce(&state, &event, 3300, &action);
     assert(state.chat.phase == BUDDY_CHAT_SENT);
+    /* Or it repeats the turn it finished before; that is not the answer to this one. */
+    event = chat_event(BUDDY_CHAT_DONE, "before", "an earlier answer", "", 7);
+    buddy_state_reduce(&state, &event, 3400, &action);
+    assert(state.chat.phase == BUDDY_CHAT_SENT && state.reply[0] == '\0');
     /* Then it starts on it; for the owner it is the same wait. */
     event = chat_event(BUDDY_CHAT_THINKING, "", "", "", 7);
     buddy_state_reduce(&state, &event, 3600, &action);
@@ -1459,10 +1676,12 @@ static void test_a_recording_on_its_way_is_not_wiped_by_an_idle_report(void)
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 6200, &action);
     assert(state.chat.phase == BUDDY_CHAT_DONE && strcmp(state.reply, "the answer") == 0);
-    /* And an idle report now does clear it: the hub decides, once nothing is in flight. */
+    /* And an idle report now does clear the screen: the hub starts over once
+     * nothing is in flight. Both turns are kept, folded away. */
     event = chat_event(BUDDY_CHAT_NONE, "", "", "", 7);
     buddy_state_reduce(&state, &event, 6300, &action);
     assert(state.chat.phase == BUDDY_CHAT_NONE && state.reply[0] == '\0');
+    assert(state.history.count == 2 && buddy_history_visible(&state.history) == 0U);
 }
 
 static void test_helpers_belong_to_the_connection(void)
@@ -1561,7 +1780,7 @@ int main(void)
     test_long_up_opens_the_menu();
     test_hold_ok_talks_and_release_sends();
     test_talking_needs_a_voice_capable_host();
-    test_home_keys_and_the_reader();
+    test_home_keys_move_through_the_conversation();
     test_guide_scrolls_and_returns_to_more();
     test_screen_off_wakes_on_key_and_on_attention();
     test_assistant_turn_is_kept_only_while_connected();
@@ -1580,6 +1799,9 @@ int main(void)
     test_stale_security_mailbox_event_cannot_override_latest_link();
     test_new_link_generation_invalidates_sensitive_state_when_disconnect_was_coalesced();
     test_the_conversation_follows_the_hub();
+    test_history_keeps_what_fits();
+    test_a_quiet_conversation_folds_and_a_double_up_brings_it_back();
+    test_desktop_replies_are_kept_too();
     test_a_recording_on_its_way_is_not_wiped_by_an_idle_report();
     test_helpers_belong_to_the_connection();
     test_a_notice_remembers_when_it_appeared();

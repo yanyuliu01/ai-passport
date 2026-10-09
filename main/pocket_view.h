@@ -19,8 +19,8 @@ typedef enum {
     POCKET_VIEW_PAGE,      // 普通页面（由 snapshot->page 决定）
 } pocket_view_t;
 
-// 首页此刻的情形。前四种小幽独占画面；后面几种是“对话”版式：
-// 上面是小幽和你说的话，下面是她的话。
+// 首页此刻的情形。后面五种是有一轮对话正在进行或刚说完；前四种没有，
+// 这时如果这一段里没有可以回看的对话，小幽独占画面。
 typedef enum {
     POCKET_HOME_BLE_OFF,   // 蓝牙被用户关闭
     POCKET_HOME_WAITING,   // 蓝牙开着，但没有人连上来
@@ -35,8 +35,19 @@ typedef enum {
 
 pocket_view_t pocket_view_for(const buddy_ui_snapshot_t *snapshot);
 pocket_home_t pocket_home_for(const buddy_ui_snapshot_t *snapshot);
-// 这种情形用不用“对话”版式。
+// 这种情形下是不是有一轮对话在屏幕上（正在进行或刚说完）。
 bool pocket_home_is_talk(pocket_home_t home);
+// 首页现在用不用“对话”版式：有一轮在屏幕上，或者这一段里有可以回看的。
+// 断开连接时也一样：说过的话留着可以读。
+bool pocket_home_shows_talk(const buddy_ui_snapshot_t *snapshot);
+
+// 对话是一条往下长的长卷，屏幕是它上面的一个窗口。以下两个函数只做算术，
+// 单位是像素；content 是长卷的总高，view 是窗口的高。
+// 跟着最新一轮时窗口该在哪：这一轮（从 last_top 开始）放得下就贴着底，
+// 让前面的对话也露出来；放不下就从这一轮的开头读起。
+int pocket_timeline_anchor(int content, int last_top, int view);
+// 按一次上（direction<0）或下（direction>0）之后窗口该在哪，不会滚出长卷。
+int pocket_timeline_step(int y, int direction, int content, int view, int step);
 // 小幽此刻的表情：跟随当前视图（审批、配对、确认、说话）或首页的情形。
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot);
 // message 里那行字现在要不要显示。连的是手机中枢时它只是一条提示，出现几秒就收起；

@@ -20,24 +20,29 @@
 #define PT_HOME_SUB_NOTICES   "有 %u 个新通知\n长按上键在菜单里看"
 #define PT_HOME_SUB_NO_VOICE  "现在没活儿\n有事我会叫你"
 
-// ---- 首页：对话版式 ----
-#define PT_YOU             "你"
+// ---- 首页：对话版式（顶上一条是小幽和她此刻的状态，下面是一条往下长的对话）----
 #define PT_XIAOYOU         "小幽"
+// 顶上那一条里，小幽此刻在干什么
+#define PT_HEAD_SENT       "在听写"
+#define PT_HEAD_THINKING   "在想"
+// 帮手在做：名字在上一行的名牌里
+#define PT_HEAD_WORKING    "在做了"
+#define PT_HEAD_DONE       "说完啦"
+#define PT_HEAD_FAILED     "这次没成"
 // 录音发出去了，还不知道听成了什么
 #define PT_SAID_PENDING    "（正在听写）"
 #define PT_TALK_SENT       "发出去啦，等我听清楚"
 #define PT_TALK_THINKING   "听到了，我想想"
 #define PT_TALK_FAILED     "这次没成，再说一次吧"
-// 连的是 Claude 桌面端时，右上角说的是谁在干活
-#define PT_DESKTOP_BUSY    "电脑上的 Claude 在干活"
-#define PT_DESKTOP_REPLY   "电脑上的 Claude 说"
+// 连的是 Claude 桌面端时，顶上那一条说的是谁在干活
+#define PT_DESKTOP_BUSY    "电脑上 Claude 在忙"
+#define PT_DESKTOP_REPLY   "电脑上 Claude 说的"
 #define PT_DESKTOP_WORKING "它还在忙，好了这里会更新"
 // 她去找帮手：%s 是帮手的名字
 #define PT_HELPER_ASKED    "这件事我去找 %s 帮忙"
-#define PT_HELPER_WORKING  "%s 在做了"
 #define PT_ELLIPSIS        "…"
 
-// ---- 往下读 ----
+// 回答比设备留得下的长
 #define PT_READER_CUT      "（太长了，后面的在手机上看）"
 
 // ---- 通知 ----
@@ -126,10 +131,10 @@
 #define PT_HINT_TALK       "按住说话"
 #define PT_HINT_CUT_IN     "按住插一句"
 #define PT_HINT_RELEASE    "松开就发送"
-#define PT_HINT_READ       "往下读"
 #define PT_HINT_UP         "往上"
 #define PT_HINT_DOWN       "往下"
-#define PT_HINT_TO_XIAOYOU "回到小幽"
+// 之前的对话收起来了：双击上键接回来
+#define PT_HINT_EARLIER    "双击看之前"
 #define PT_HINT_MENU       "长按 菜单"
 #define PT_HINT_PREV       "上"
 #define PT_HINT_NEXT       "下"

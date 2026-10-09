@@ -49,6 +49,15 @@ typedef struct {
     /* The conversation with Xiaoyou, when the host is a hub. */
     buddy_chat_t chat;
     uint64_t chat_since_ms;
+    /* Earlier turns, and which of them belong to the conversation on screen. */
+    buddy_history_t history;
+    /* Goes up when a new turn begins. */
+    uint32_t turn_serial;
+    /* Goes up when folded turns are brought back; recalled is how many. */
+    uint32_t recall_serial;
+    unsigned recalled;
+    /* When the conversation on screen was last added to or looked at. */
+    uint64_t session_touched_ms;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     bool host_hub;
