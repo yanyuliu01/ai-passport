@@ -247,11 +247,16 @@ class CodexAgent(Agent):
 
     def run(self, job: Job) -> Outcome:
         text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
+        env = None
+        if self.spec.config_dir is not None:
+            # 让这台机器上的 Codex 用一套单独的登录和设置（CODEX_HOME），
+            # 不受（也不影响）使用者平时那套 ~/.codex 配置。
+            env = dict(os.environ, CODEX_HOME=str(self.spec.config_dir))
         with tempfile.TemporaryDirectory(prefix="xiaoyou-codex-") as folder:
             last_message = Path(folder) / "last.txt"
             done = run_command(
                 self.command(job, last_message), text, self.spec.workdir,
-                self.spec.timeout_seconds, "Codex", run=self._run,
+                self.spec.timeout_seconds, "Codex", env=env, run=self._run,
             )
             try:
                 final = last_message.read_text(encoding="utf-8").strip()
@@ -294,7 +299,11 @@ class CodexAgent(Agent):
                        fields_from_text(final) if speaking else None)
 
     def check(self) -> Optional[str]:
-        return self._command_problem()
+        problem = self._command_problem()
+        if problem is None and self.spec.config_dir is not None and not self.spec.config_dir.is_dir():
+            # Codex 自己不会建这个目录，目录不在它直接报错退出。
+            return "找不到 Codex 的配置目录 %s：先建好并在里面登录（mkdir -p 这个目录，再 CODEX_HOME=这个目录 codex login）" % self.spec.config_dir
+        return problem
 
 
 class CommandAgent(Agent):

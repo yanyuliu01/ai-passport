@@ -78,7 +78,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
-`XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）。
+`XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
+`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）。
 
 0.3 及更早的配置（`backend`、`claude_code`、`tools`）仍然能读：按只有一个名叫 `claude`
 的代理处理，启动时会提示这是旧写法，原来的会话接着用。`tools` 里启用过的条目需要手动
@@ -103,7 +104,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
 | `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `dontAsk`）、`allowed_tools`、`extra_args` |
-| `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
+| `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -167,6 +168,18 @@ CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # 用订阅账号登录，/stat
 然后在这个 `claude_code` 类型的代理下设置 `"config_dir": "~/.claude-xiaoyou"`。登录时不要待在主目录：
 Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设置加载，而在主目录里，
 这正是你想绕开的那个文件。
+
+Codex 的 `~/.codex` 也一样：那里的 `config.toml` 如果指向一个网关，不管登录的是哪个账号，
+请求都会发到网关去。给小幽的 Codex 一个单独的目录（`CODEX_HOME`）；这个目录 Codex 不会
+自己建：
+
+```bash
+mkdir -p ~/.codex-xiaoyou
+CODEX_HOME=~/.codex-xiaoyou codex login
+CODEX_HOME=~/.codex-xiaoyou codex login status
+```
+
+然后在这个 `codex` 类型的代理下设置 `"config_dir": "~/.codex-xiaoyou"`。
 
 
 ## HTTP 接口

@@ -204,7 +204,11 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         sandbox = _optional_string(raw.get("sandbox", "read-only"), where + ".sandbox")
         if sandbox is not None and sandbox not in CODEX_SANDBOXES:
             raise ConfigError("%s.sandbox 只能是 %s 之一" % (where, "、".join(CODEX_SANDBOXES)))
-        return AgentSpec(sandbox=sandbox, **common, **shared)
+        codex_home = _optional_string(raw.get("config_dir"), where + ".config_dir")
+        codex_home = env.get("XIAOYOU_CODEX_CONFIG_DIR") or codex_home
+        return AgentSpec(sandbox=sandbox,
+                         config_dir=_path(codex_home, base) if codex_home else None,
+                         **common, **shared)
 
     config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
     config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir

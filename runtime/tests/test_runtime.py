@@ -66,7 +66,8 @@ import json, os, sys
 args = sys.argv[1:]
 text = sys.stdin.read()
 with open(os.environ["FAKE_CODEX_LOG"], "a", encoding="utf-8") as handle:
-    handle.write(json.dumps({"args": args, "stdin": text, "cwd": os.getcwd()}) + "\n")
+    handle.write(json.dumps({"args": args, "stdin": text, "cwd": os.getcwd(),
+                             "home": os.environ.get("CODEX_HOME")}) + "\n")
 mode = os.environ.get("FAKE_CODEX_MODE", "ok")
 resumed = args[args.index("resume") + 1] if "resume" in args else None
 print("some log line that is not JSON")
@@ -460,6 +461,28 @@ class CodexAgentTests(TempDirCase):
         self.assertEqual(args[-1], "-")
         # The file for the last message is a temporary one and is gone afterwards.
         self.assertFalse(Path(args[args.index("-o") + 1]).exists())
+
+    def test_a_separate_codex_home_is_used_only_when_set(self):
+        self.agent.run(Job("x"))
+        self.assertIsNone(self.calls()[0]["home"])
+        self.assertIsNone(self.agent.check())
+        home = self.folder / "codex-home"
+        separate = agents_module.create(dataclasses.replace(self.config.agents[0], config_dir=home))
+        # Codex refuses to start when the directory is missing; say so before it is asked anything.
+        self.assertIn(str(home), separate.check())
+        home.mkdir()
+        self.assertIsNone(separate.check())
+        separate.run(Job("x"))
+        self.assertEqual(self.calls()[1]["home"], str(home))
+        # From the config file, relative to it; an environment variable wins.
+        folder = self.folder / "other"
+        folder.mkdir()
+        agents = {"codex": {"type": "codex", "config_dir": "codex-login"}}
+        loaded = config_module.load(write_config(folder, agents=agents), {})
+        self.assertEqual(loaded.agents[0].config_dir, (folder / "codex-login").resolve())
+        from_env = config_module.load(write_config(folder, agents=agents),
+                                      {"XIAOYOU_CODEX_CONFIG_DIR": str(home)})
+        self.assertEqual(from_env.agents[0].config_dir, home)
 
     def test_continuing_uses_exec_resume_with_the_thread(self):
         outcome = self.agent.run(Job("more", session_id="thread-7"))

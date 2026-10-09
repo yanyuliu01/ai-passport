@@ -87,7 +87,8 @@ Relative paths are resolved against the directory of the configuration file.
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
 `XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`,
-`XIAOYOU_DEFAULT_AGENT`, and `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every
+`XIAOYOU_DEFAULT_AGENT`, `XIAOYOU_CODEX_CONFIG_DIR` (applied to every `codex`
+agent), and `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every
 `claude_code` agent).
 
 A configuration written for 0.3 or earlier (`backend`, `claude_code`, `tools`)
@@ -114,7 +115,7 @@ Keys by type:
 | Type | What it does | Keys |
 | --- | --- | --- |
 | `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `dontAsk`), `allowed_tools`, `extra_args` |
-| `codex` | Runs the Codex command line non-interactively (`codex exec`, and `codex exec resume` to continue). | `command` (default `["codex"]`), `workdir`, `sandbox` (default `read-only`), `model`, `extra_args` |
+| `codex` | Runs the Codex command line non-interactively (`codex exec`, and `codex exec resume` to continue). | `command` (default `["codex"]`), `workdir`, `config_dir`, `sandbox` (default `read-only`), `model`, `extra_args` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
@@ -195,6 +196,18 @@ Then set `"config_dir": "~/.claude-xiaoyou"` on that `claude_code` agent. Do the
 from a folder other than your home folder: Claude Code also loads
 `<current folder>/.claude/settings.json` as project settings, and in the home
 folder that is the very file you are trying to avoid.
+
+Codex is the same with `~/.codex`: a `config.toml` there that points at a
+gateway decides where every request goes, whatever account is logged in. Give
+Xiaoyou's Codex its own directory (`CODEX_HOME`); Codex does not create it:
+
+```bash
+mkdir -p ~/.codex-xiaoyou
+CODEX_HOME=~/.codex-xiaoyou codex login
+CODEX_HOME=~/.codex-xiaoyou codex login status
+```
+
+Then set `"config_dir": "~/.codex-xiaoyou"` on that `codex` agent.
 
 
 ## HTTP interface
