@@ -321,7 +321,9 @@ python3 -m xiaoyou_runtime firmware remove 3          # 从仓库里删掉第 3 
 `firmware.source_dir`（写 `..`，也就是这个仓库）填上。它是一个只干活的 `claude_code`
 代理，工作目录是固件仓库，按
 [`skills/pocket-screen-update`](../skills/pocket-screen-update/SKILL.zh_CN.md) 做事：
-改界面代码、跑检查、提交并推送，然后让 Runtime 去等 GitHub 的构建并推给设备。对设备
+改界面代码、跑检查、在本地提交，然后在本机编译并推给设备（这台电脑用
+`tools/install_idf.sh` 装了 ESP-IDF、配置了 `firmware.build_command` 时；这样不需要
+GitHub），否则推送到 GitHub、让 Runtime 去等那边的构建。对设备
 说“@裁缝 把顶上那条改细一点”，或者只说想改什么、让小幽自己决定交给它。“换回上一版”
 也归它。
 

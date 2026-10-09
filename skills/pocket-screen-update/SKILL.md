@@ -37,7 +37,7 @@ stays as it is. So it matters why the owner goes back:
   `firmware list` shows the commit each version was built from. For every commit
   after that one that only changed the screen (it touches nothing outside
   `main/`, `assets/fonts/` and `tools/ui_preview/`), run
-  `git revert --no-edit <commit>`, newest first, then push. Do not fetch and push
+  `git revert --no-edit <commit>`, newest first (and push if this computer pushes). Do not build or fetch
   a new firmware for this revert: the device already runs the version they asked
   for. If one of those commits also changed something else, do not revert it;
   stop and say so in your answer.
@@ -61,20 +61,28 @@ stays as it is. So it matters why the owner goes back:
    that this one needs them at the computer.
 4. Run `./tools/validate.sh --static`. Fix what fails; if you cannot, say so. Do not
    push a version that did not pass.
-5. Commit to the current feature branch and push (commit messages follow
-   `docs/contribution/commit-and-pr.md`).
-6. Get the new firmware to the device, one of:
-   - This computer has no ESP-IDF (the usual case): GitHub builds the commit you
-     pushed. Have the runtime wait for it, fetch it and push it; this command returns
-     at once:
+5. Commit to the current feature branch (commit messages follow
+   `docs/contribution/commit-and-pr.md`). The commit only has to exist on this
+   computer: the history is kept by the local git and the runtime's firmware library.
+6. Get the new firmware to the device. Look at `firmware.build_command` in
+   `runtime/config.json` first:
+   - It is set (this computer has ESP-IDF, the usual case): build here. GitHub is
+     not needed and nothing is pushed.
+
+     ```bash
+     python3 -m xiaoyou_runtime firmware build --push --note "one sentence on what this version changes"
+     ```
+
+     The first build takes a few minutes, later ones under a minute. If it does
+     not compile, fix it; if you cannot, say so.
+   - It is not set: let GitHub build. That needs `git push` to work on this
+     computer; if the push fails, stop and tell the owner the two ways out: run
+     `tools/install_idf.sh` to build locally, or sign in to GitHub. After the push:
 
      ```bash
      python3 -m xiaoyou_runtime firmware fetch --commit HEAD --wait 900 --push --detach \
          --note "one sentence on what this version changes"
      ```
-
-   - The configuration has `firmware.build_command`:
-     `python3 -m xiaoyou_runtime firmware build --push --note "…"`.
 7. Answer: what changed; that in a few minutes the device will show its "changing into
    something new" progress screen and restart by itself when done; that saying "go back to the previous one" undoes it.
    Say that the result has not been seen on a device.

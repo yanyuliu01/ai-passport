@@ -375,8 +375,10 @@ Enable the agent called `tailor` in `config.example.json` and fill in
 `claude_code` agent that only does work, with the firmware repository as its
 working directory, and it follows
 [`skills/pocket-screen-update`](../skills/pocket-screen-update/SKILL.md): change
-the interface code, run the checks, commit and push, then have the runtime wait
-for GitHub's build and push it to the device. Say "@tailor make the strip at the
+the interface code, run the checks, commit locally, then build on this computer
+and push the result to the device (when ESP-IDF is installed with
+`tools/install_idf.sh` and `firmware.build_command` is set; GitHub is not needed
+then), or else push to GitHub and have the runtime wait for the build there. Say "@tailor make the strip at the
 top thinner" to the device (the example also gives it a Chinese alias), or
 just say what should change and let Xiaoyou decide to hand it over. "Go back to the previous one" is its job as well.
 
