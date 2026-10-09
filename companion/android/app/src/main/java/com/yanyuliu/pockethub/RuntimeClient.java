@@ -33,6 +33,12 @@ final class RuntimeClient {
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
+    /** 回答授权、取消一件事：不排在正在等结果的那句话后面。 */
+    private static final ExecutorService QUICK = Executors.newCachedThreadPool();
+    private static final int FEED_WAIT_SECONDS = 50;
+    private static Thread watcher;
+    /** 正在等卡变化的那条连接：换 Runtime 时断开它，不用等它自己超时。 */
+    private static volatile HttpURLConnection feedConnection;
 
     private RuntimeClient() {
     }
@@ -116,7 +122,155 @@ final class RuntimeClient {
 
     static synchronized void select(Context context, String url) {
         store(context, targets(context), url);
+        // 手里的卡是上一台的：马上清掉，不等盯着卡的那一路发现。
+        HubStore.get().resetCards();
         HubStore.get().helpersChanged();
+        HttpURLConnection waiting = feedConnection;
+        if (waiting != null) {
+            waiting.disconnect();
+        }
+    }
+
+    // ---- 卡：一直等着 Runtime 说哪些事变了 ----
+
+    /** 开始盯着现在用的那台 Runtime 的卡；已经在盯就什么都不做。进程在它就在。 */
+    static synchronized void watch(Context context) {
+        if (watcher != null) {
+            return;
+        }
+        final Context app = context.getApplicationContext();
+        watcher = new Thread(() -> watchLoop(app), "xiaoyou-feed");
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    private static void watchLoop(Context app) {
+        HubStore store = HubStore.get();
+        String watched = null;
+        String complained = null;
+        int failures = 0;
+        while (true) {
+            Target target = selected(app);
+            if (target == null) {
+                watched = null;
+                pause(3);
+                continue;
+            }
+            if (!target.url.equals(watched)) {
+                watched = target.url;
+                store.resetCards();
+            }
+            try {
+                fetchFeed(target, FEED_WAIT_SECONDS, true);
+                failures = 0;
+                complained = null;
+            } catch (IOException | RuntimeException error) {
+                Target now = selected(app);
+                if (now != null && !now.url.equals(watched)) {
+                    continue;  // 是换 Runtime 时自己断开的
+                }
+                String detail = String.valueOf(error.getMessage());
+                boolean old = detail.contains(" 404");
+                if (!detail.equals(complained)) {
+                    complained = detail;
+                    store.log(old ? target.name + " 上的 Runtime 是旧版，没有卡和授权"
+                            : "没取到 " + target.name + " 上的卡：" + detail);
+                }
+                pause(old ? 60 : Math.min(30, 2 << Math.min(failures++, 4)));
+            }
+        }
+    }
+
+    private static void pause(int seconds) {
+        try {
+            Thread.sleep(seconds * 1000L);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 取一次“之后变过的卡”并交给中枢；没有变化时最多等 wait 秒。 */
+    private static void fetchFeed(Target target, int wait, boolean interruptible)
+            throws IOException {
+        HubStore store = HubStore.get();
+        long after = store.feedSeq();
+        long epoch = store.cardsEpoch();
+        String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait,
+                target.token, null, null, wait + 15, interruptible);
+        Map<String, Object> feed = Json.parseObject(body);
+        if (feed == null) {
+            throw new IOException("Runtime 返回的内容看不懂");
+        }
+        if (store.cardsEpoch() != epoch) {
+            return;  // 等的时候换了 Runtime：这是上一台的回答
+        }
+        long seq = (long) Json.number(feed, "seq");
+        if (seq < after) {
+            // Runtime 的序号比手里的小：它换了一份记录。手里的不算数了，从头再取。
+            store.resetCards();
+            return;
+        }
+        List<Card> cards = new ArrayList<>();
+        for (Object item : Json.list(feed, "cards")) {
+            Card card = Card.from(Json.object(item));
+            if (card != null) {
+                cards.add(card);
+            }
+        }
+        List<Card.Approval> approvals = new ArrayList<>();
+        for (Object item : Json.list(feed, "approvals")) {
+            Card.Approval approval = Card.Approval.from(Json.object(item));
+            if (approval != null) {
+                approvals.add(approval);
+            }
+        }
+        store.applyFeed(seq, cards, approvals);
+    }
+
+    /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
+    static void approve(Context context, String approval, boolean allow) {
+        final Target target = selected(context.getApplicationContext());
+        final HubStore store = HubStore.get();
+        if (target == null) {
+            store.approvalFailed(approval, "还没有设置 Runtime 的连接串");
+            return;
+        }
+        store.log((allow ? "回答：可以" : "回答：不行") + "（" + approval + "）");
+        QUICK.execute(() -> {
+            try {
+                requestText("POST", target.url + "/v1/approvals/" + approval, target.token,
+                        ("{\"decision\":\"" + (allow ? "allow" : "deny") + "\"}")
+                                .getBytes(StandardCharsets.UTF_8),
+                        "application/json; charset=utf-8", 15, false);
+            } catch (IOException | RuntimeException error) {
+                String detail = String.valueOf(error.getMessage());
+                if (detail.contains(" 404") || detail.contains(" 409")) {
+                    // 那件事已经结束，或者别处已经答过了：不用再问。
+                    store.log("这个授权已经不用回答了：" + detail);
+                } else {
+                    store.approvalFailed(approval, detail);
+                }
+            }
+        });
+    }
+
+    /** 取消一件事。结果从卡的变化里看。 */
+    static void cancel(Context context, String card) {
+        final Target target = selected(context.getApplicationContext());
+        final HubStore store = HubStore.get();
+        if (target == null) {
+            return;
+        }
+        QUICK.execute(() -> {
+            try {
+                requestText("POST", target.url + "/v1/cards/" + card + "/cancel", target.token,
+                        "{}".getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8",
+                        15, false);
+                store.log("已取消 " + card);
+            } catch (IOException | RuntimeException error) {
+                store.log("没能取消 " + card + "：" + error.getMessage());
+            }
+        });
     }
 
     /** 收到帮手清单时的回调：每项是 {名字, 一句说明}。 */
@@ -135,7 +289,8 @@ final class RuntimeClient {
         }
         WORKER.execute(() -> {
             try {
-                String body = requestText("GET", target.url + "/v1/agents", target.token, null, null, 8);
+                String body = requestText("GET", target.url + "/v1/agents", target.token, null,
+                        null, 8);
                 List<String[]> agents = new ArrayList<>();
                 for (Map<String, String> item : BuddyProtocol.parseObjectArray(body, "agents")) {
                     String name = item.get("name");
@@ -269,15 +424,18 @@ final class RuntimeClient {
 
     /** 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。 */
     static void send(Context context, String text) {
-        submit(context, text, null);
+        submit(context, text, null, null);
     }
 
-    /** 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。 */
-    static void sendVoice(Context context, byte[] wav) {
-        submit(context, VOICE_PLACEHOLDER, wav);
+    /**
+     * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
+     * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。
+     */
+    static void sendVoice(Context context, byte[] wav, String card) {
+        submit(context, VOICE_PLACEHOLDER, wav, card);
     }
 
-    private static void submit(Context context, String text, byte[] wav) {
+    private static void submit(Context context, String text, byte[] wav, String card) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -305,7 +463,8 @@ final class RuntimeClient {
                 }
                 Map<String, String> message;
                 if (wav != null) {
-                    message = request("POST", url + "/v1/voice?client_id=" + clientId, token,
+                    message = request("POST", url + "/v1/voice?client_id=" + clientId
+                                    + (BuddyProtocol.cardId(card) ? "&card=" + card : ""), token,
                             wav, "audio/wav", 30);
                 } else {
                     StringBuilder body = new StringBuilder("{\"text\":");
@@ -331,8 +490,18 @@ final class RuntimeClient {
                     if ("done".equals(status)) {
                         String reply = message.get("reply");
                         String brief = message.get("brief");
+                        String filed = message.get("card");
+                        if (filed != null) {
+                            // 这句话归到了一张卡：先把卡取来，第一屏才不会先闪一下“说完了”
+                            // 再变成“交给帮手了”。取不到也没关系，盯着卡的那一路会补上。
+                            try {
+                                fetchFeed(target, 0, false);
+                            } catch (IOException | RuntimeException ignored) {
+                                // 见上：另一路会补上。
+                            }
+                        }
                         store.chatAnswered(brief == null ? "" : brief, reply == null ? "" : reply,
-                                message.get("mood"));
+                                message.get("mood"), filed);
                         String said = recognized != null && !recognized.isEmpty() ? recognized : text;
                         if (reply != null && !reply.isEmpty()) {
                             remember(app, new ChatTurn(id, said, reply,
@@ -369,7 +538,7 @@ final class RuntimeClient {
                                                int timeoutSeconds)
             throws IOException {
         Map<String, String> fields = BuddyProtocol.parseFlatObject(
-                requestText(method, address, token, body, contentType, timeoutSeconds));
+                requestText(method, address, token, body, contentType, timeoutSeconds, false));
         if (fields == null) {
             throw new IOException("Runtime 返回的内容看不懂");
         }
@@ -380,7 +549,18 @@ final class RuntimeClient {
     private static String requestText(String method, String address, String token,
                                       byte[] body, String contentType, int timeoutSeconds)
             throws IOException {
+        return requestText(method, address, token, body, contentType, timeoutSeconds, false);
+    }
+
+    /** feed 为 true 表示这是等卡变化的那条长连接，记下来好让换 Runtime 时能断开它。 */
+    private static String requestText(String method, String address, String token,
+                                      byte[] body, String contentType, int timeoutSeconds,
+                                      boolean feed)
+            throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        if (feed) {
+            feedConnection = connection;
+        }
         try {
             connection.setRequestMethod(method);
             connection.setConnectTimeout(10000);
@@ -408,6 +588,9 @@ final class RuntimeClient {
             }
             return text;
         } finally {
+            if (feed) {
+                feedConnection = null;
+            }
             connection.disconnect();
         }
     }

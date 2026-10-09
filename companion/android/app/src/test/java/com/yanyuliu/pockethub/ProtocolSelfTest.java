@@ -280,6 +280,112 @@ public final class ProtocolSelfTest {
         wrap.add(last);
         wrap.add(zero);
         check(wrap.lostFrames() == 0, "sequence wraps");
+        runCards();
+    }
+
+    /** 卡、任务单子和 Runtime 的 feed。 */
+    static void runCards() {
+        String chat = BuddyProtocol.chat("helper", "查一下", "", "codex", "查日志", "busy", "c12", 2);
+        check(chat.endsWith("\"mood\":\"busy\",\"card\":\"c12\",\"doing\":2}\n"), "chat card: " + chat);
+        // 不带卡的那种写法和以前一字不差：上一版固件照样认。
+        check(BuddyProtocol.chat("idle", "", "", "", "", "idle")
+                .equals("{\"cmd\":\"chat\",\"phase\":\"idle\",\"said\":\"\",\"reply\":\"\","
+                        + "\"agent\":\"\",\"stage\":\"\",\"mood\":\"idle\"}\n"), "plain chat");
+        check(BuddyProtocol.chat("idle", "", "", "", "", "idle", "", 0).endsWith("\"doing\":0}\n"),
+                "empty card id is left out");
+
+        String card = BuddyProtocol.card("c12", "14:02", "working", "codex", 1, "查一下\n日志", "好");
+        check(card.equals("{\"cmd\":\"card\",\"id\":\"c12\",\"at\":\"14:02\",\"state\":\"working\","
+                + "\"agent\":\"codex\",\"edits\":1,\"said\":\"查一下\\n日志\",\"reply\":\"好\"}\n"),
+                "card: " + card);
+        check(BuddyProtocol.card("c12345678901", "", "done", "", 0, "", "") == null,
+                "a card id longer than the firmware keeps is not sent");
+        check(BuddyProtocol.card("", "", "done", "", 0, "", "") == null, "no id, no card");
+        StringBuilder longReply = new StringBuilder();
+        for (int index = 0; index < 500; index++) {
+            longReply.append('字');
+        }
+        String clipped = BuddyProtocol.card("c1", "09:00", "done", "", 0, "x", longReply.toString());
+        check(BuddyProtocol.utf8Length(clipped) < 1100 && clipped.endsWith("字\"}\n"),
+                "reply is cut on a character boundary");
+        check(BuddyProtocol.cardClear().equals("{\"cmd\":\"card\",\"clear\":true}\n"), "clear");
+
+        List<BuddyProtocol.Task> tasks = new java.util.ArrayList<>();
+        for (int index = 1; index <= 6; index++) {
+            tasks.add(new BuddyProtocol.Task("c" + index, "codex", "事 " + index,
+                    index == 2 ? "waiting" : "working", index * 10, "Bash ls", ""));
+        }
+        tasks.add(1, new BuddyProtocol.Task("c-too-long-id-x", "a", "t", "working", 0, "", ""));
+        String list = BuddyProtocol.tasks(tasks);
+        check(list.startsWith("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"c1\",\"agent\":\"codex\","
+                + "\"title\":\"事 1\",\"state\":\"working\",\"secs\":10,\"p1\":\"Bash ls\",\"p2\":\"\"},"
+                + "{\"id\":\"c2\""), "tasks: " + list);
+        check(list.contains("\"c4\"") && !list.contains("\"c5\"") && !list.contains("too-long"),
+                "four tasks at most, bad ids skipped");
+        check(BuddyProtocol.tasks(null).equals("{\"cmd\":\"tasks\",\"list\":[]}\n"), "no tasks");
+
+        check("c12".equals(BuddyProtocol.parseVoiceCard(
+                "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,\"codec\":\"ima-adpcm\","
+                        + "\"card\":\"c12\"}")), "voice card");
+        check(BuddyProtocol.parseVoiceCard(
+                "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000}") == null, "no voice card");
+        check(BuddyProtocol.parseVoiceCard(
+                "{\"cmd\":\"voice\",\"state\":\"end\",\"card\":\"c12\"}") == null, "only on start");
+        check(BuddyProtocol.hubAckHasCards("{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}"),
+                "cards ack");
+        check(!BuddyProtocol.hubAckHasCards("{\"ack\":\"hub\",\"ok\":true,\"chat\":true}"),
+                "older firmware has no cards");
+
+        // Runtime 的 /v1/feed：嵌套的对象、数组、null、转义、小数。
+        String feed = "{\"seq\": 41, \"cards\": [{\"id\": \"c7\", \"conversation\": \"default\","
+                + " \"title\": \"查日志\", \"state\": \"waiting\", \"agent\": \"codex\","
+                + " \"created_at\": 1760000000.25, \"updated_at\": 1760000050.5,"
+                + " \"entries\": [{\"role\": \"you\", \"text\": \"查一下\\\"日志\\\"\", \"at\": 1.0},"
+                + " {\"role\": \"xiaoyou\", \"text\": \"好，交给 codex\", \"at\": 2.0},"
+                + " {\"role\": \"you\", \"text\": \"只看今天的\", \"at\": 3.0},"
+                + " {\"role\": \"other\", \"text\": \"x\"}],"
+                + " \"brief\": \"交给 codex 了\", \"mood\": \"busy\","
+                + " \"progress\": [\"Read a.log\", \"Bash grep -c \\u9519 a.log\"],"
+                + " \"started_at\": 1760000001.0, \"edits\": 1, \"approval\": \"a3\","
+                + " \"queued\": false, \"seq\": 41}, {\"title\": \"no id\"}],"
+                + " \"approvals\": [{\"id\": \"a3\", \"card\": \"c7\", \"conversation\": \"default\","
+                + " \"agent\": \"codex\", \"tool\": \"codex · Bash\", \"detail\": \"rm -rf build\","
+                + " \"created_at\": 1760000049.9}]}";
+        java.util.Map<String, Object> root = Json.parseObject(feed);
+        check(root != null && Json.number(root, "seq") == 41, "feed parses");
+        List<Object> rawCards = Json.list(root, "cards");
+        check(rawCards.size() == 2 && Card.from(Json.object(rawCards.get(1))) == null,
+                "a card without an id is dropped");
+        Card parsed = Card.from(Json.object(rawCards.get(0)));
+        check(parsed.id.equals("c7") && parsed.order() == 7 && parsed.seq == 41, "card id and order");
+        check(parsed.active() && parsed.state.equals("waiting") && parsed.agent.equals("codex")
+                && parsed.edits == 1 && !parsed.queued, "card state");
+        check(parsed.entries.size() == 3 && parsed.said().equals("查一下\"日志\"")
+                && parsed.lastSay().equals("好，交给 codex"), "first sentence and latest words");
+        check(parsed.progress.size() == 2 && parsed.progress.get(1).equals("Bash grep -c 错 a.log"),
+                "progress keeps commands verbatim");
+        check(parsed.createdAt == 1760000000.25 && parsed.startedAt == 1760000001.0, "times");
+        check(parsed.stateLabel().equals("等你点头"), "state label");
+        Card.Approval approval = Card.Approval.from(Json.object(Json.list(root, "approvals").get(0)));
+        check(approval.id.equals("a3") && approval.card.equals("c7")
+                && approval.tool.equals("codex · Bash") && approval.detail.equals("rm -rf build")
+                && approval.createdAt == 1760000049L, "approval");
+        // 小幽自己答的：agent 是 null，没有进展。
+        Card plain = Card.from(Json.parseObject("{\"id\":\"c8\",\"state\":\"done\",\"agent\":null,"
+                + "\"title\":\"几点了\",\"entries\":[],\"started_at\":null}"));
+        check(plain.agent.isEmpty() && !plain.active() && plain.said().equals("几点了")
+                && plain.lastSay().isEmpty() && plain.startedAt == 0, "plain card");
+
+        check(Json.parseObject("[1]") == null && Json.parseObject("{\"a\":") == null
+                && Json.parseObject("{\"a\":1} x") == null && Json.parseObject("") == null
+                && Json.parseObject(null) == null && Json.parseObject("{\"a\":tru}") == null,
+                "malformed JSON gives null");
+        StringBuilder deep = new StringBuilder("{\"a\":");
+        for (int index = 0; index < 5000; index++) {
+            deep.append('[');
+        }
+        check(Json.parseObject(deep.toString()) == null, "deep nesting is refused, not a crash");
+        check(Json.parseObject("{}").isEmpty(), "empty object");
     }
 
     public static void main(String[] args) {

@@ -20,11 +20,15 @@ import android.widget.RadioButton;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * 唯一的界面：三步设置（蓝牙权限、通知读取、连接设备）、来源开关、测试按钮和运行日志。
+ * 唯一的界面：和小幽的对话（一件事一张卡，等你点头的操作在最上面）、由哪台电脑回答、
+ * 三步设置（蓝牙权限、通知读取、连接设备）、来源开关、测试按钮和运行日志。
  * 界面全部用代码搭，不依赖任何第三方库。
  */
 public class MainActivity extends Activity implements HubStore.Listener {
@@ -42,6 +46,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private TextView runtimeStatus;
     private LinearLayout runtimeList;
     private String runtimeKey = null;
+    private LinearLayout thingList;
+    private String thingKey = null;
+    private static final int CARDS_SHOWN = 12;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +65,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         root.addView(status);
 
         root.addView(heading("和小幽聊天"));
+        thingList = new LinearLayout(this);
+        thingList.setOrientation(LinearLayout.VERTICAL);
+        root.addView(thingList);
         chatView = text("", 15, false);
         chatView.setTextIsSelectable(true);
         root.addView(chatView);
@@ -117,6 +127,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         setContentView(scroll);
 
         RuntimeClient.restoreChat(this);
+        RuntimeClient.watch(this);
         // 上次是连着的：App 被系统关掉再打开后自己连回去，不用再点一次。
         if (hasBluetoothPermission()
                 && getSharedPreferences("link", MODE_PRIVATE).getBoolean("connect", false)) {
@@ -149,18 +160,30 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 + "\n通知读取：" + (listenerEnabled() ? "已开启" : "未开启")
                 + "\n设备连接：" + store.linkState()
                 + "\n未处理的消息：" + store.waiting() + " 条");
+        List<Card> cards = store.cards();
+        refreshThings(cards, store.approvals());
         StringBuilder talk = new StringBuilder();
-        for (String line : store.chatLines()) {
-            talk.append(line).append("\n\n");
+        HubStore.Turn turn = store.turn();
+        if (cards.isEmpty()) {
+            // 旧版 Runtime 没有卡：照以前的样子一句一句列出来。
+            for (String line : store.chatLines()) {
+                talk.append(line).append("\n\n");
+            }
+        } else if (!store.busy() && turn.phase.equals("failed") && turn.card.isEmpty()) {
+            // 没能变成卡的那一句（连不上、没收到声音）：原因写在这里。
+            talk.append("（没成功）").append(turn.reply);
         }
         if (store.busy()) {
-            HubStore.Turn turn = store.turn();
+            if (!cards.isEmpty()) {
+                talk.append("我：").append(store.busyText()).append("\n");
+            }
             if (!turn.stage.isEmpty()) {
                 talk.append("小幽：").append(turn.stage).append("\n");
             }
             talk.append(turn.agent.isEmpty() ? "小幽正在想…" : "小幽在等 " + turn.agent + " 做完…");
         }
-        chatView.setText(talk.length() == 0 ? "（还没有聊过）" : talk.toString().trim());
+        chatView.setText(talk.length() == 0 ? (cards.isEmpty() ? "（还没有聊过）" : "")
+                : talk.toString().trim());
         refreshRuntimes();
 
         StringBuilder lines = new StringBuilder();
@@ -210,6 +233,87 @@ public class MainActivity extends Activity implements HubStore.Listener {
         labelInput.setText("");
         refreshSources();
         HubStore.get().log("已添加来源 " + packageName);
+    }
+
+    /**
+     * 等你点头的操作（在最上面，谁要做什么原样显示）和最近的卡，旧的在前。
+     * 内容没变时不重建，免得打断点击和选中的文字。
+     */
+    private void refreshThings(List<Card> cards, List<Card.Approval> approvals) {
+        int first = Math.max(0, cards.size() - CARDS_SHOWN);
+        StringBuilder key = new StringBuilder();
+        for (Card.Approval approval : approvals) {
+            key.append(approval.id).append('@').append(approval.createdAt).append('|');
+        }
+        for (int index = first; index < cards.size(); index++) {
+            key.append(cards.get(index).id).append('#').append(cards.get(index).seq).append('|');
+        }
+        if (key.toString().equals(thingKey)) {
+            return;
+        }
+        thingKey = key.toString();
+        thingList.removeAllViews();
+        for (Card.Approval approval : approvals) {
+            TextView ask = text("等你点头（" + approval.card + "）\n" + approval.tool + "\n"
+                    + approval.detail, 15, true);
+            ask.setTextIsSelectable(true);
+            ask.setPadding(0, dp(8), 0, 0);
+            thingList.addView(ask);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.addView(half(button("可以", view -> answerApproval(approval.id, true))));
+            row.addView(half(button("不行", view -> answerApproval(approval.id, false))));
+            thingList.addView(row);
+        }
+        SimpleDateFormat clock = new SimpleDateFormat("HH:mm", Locale.US);
+        for (int index = first; index < cards.size(); index++) {
+            Card card = cards.get(index);
+            StringBuilder head = new StringBuilder(card.id);
+            if (card.createdAt > 0) {
+                head.append(" · ").append(clock.format(new Date((long) (card.createdAt * 1000))));
+            }
+            if (!card.agent.isEmpty()) {
+                head.append(" · ").append(card.agent);
+            }
+            head.append(" · ").append(card.stateLabel());
+            if (card.edits > 0) {
+                head.append("（改过 ").append(card.edits).append(" 次）");
+            }
+            TextView title = text(head + "\n" + card.title, 13, true);
+            title.setPadding(0, dp(12), 0, dp(2));
+            thingList.addView(title);
+            StringBuilder body = new StringBuilder();
+            for (Card.Entry entry : card.entries) {
+                body.append(entry.role.equals("you") ? "我：" : "小幽：").append(entry.text)
+                        .append("\n");
+            }
+            if (card.active()) {
+                // 帮手最近的几步：工具名和命令原样显示。
+                for (String step : card.progress) {
+                    body.append("› ").append(step).append("\n");
+                }
+            }
+            TextView content = text(body.toString().trim(), 15, false);
+            content.setTextIsSelectable(true);
+            thingList.addView(content);
+            if (card.active()) {
+                thingList.addView(button("取消这件事", view -> RuntimeClient.cancel(this, card.id)));
+            }
+        }
+    }
+
+    private void answerApproval(String id, boolean allow) {
+        // 设备上可能已经答过了：只有这里先拿到的那一方把回答交回 Runtime。
+        String approval = HubStore.get().takeApproval(id);
+        if (approval != null) {
+            RuntimeClient.approve(this, approval, allow);
+        }
+    }
+
+    private View half(View view) {
+        view.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return view;
     }
 
     /** 登记过的 Runtime：点一下切换，长按删除。列表没变时不重建，免得打断点击。 */

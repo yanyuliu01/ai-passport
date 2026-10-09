@@ -29,6 +29,12 @@ public final class BuddyProtocol {
     public static final int STAGE_MAX = 159;
     public static final int HELPER_COUNT = 4;
     public static final int HELPER_ABOUT_MAX = 63;
+    // “card”和“tasks”两条消息：卡的编号超过上限的固件不收，这里也不发。
+    public static final int CARD_ID_MAX = 11;
+    public static final int CARD_KEPT = 8;
+    public static final int TASK_COUNT = 4;
+    public static final int TASK_TITLE_MAX = 47;
+    public static final int TASK_LINE_MAX = 63;
 
     private BuddyProtocol() {
     }
@@ -115,6 +121,15 @@ public final class BuddyProtocol {
      */
     public static String chat(String phase, String said, String reply, String agent,
                               String stage, String mood) {
+        return chat(phase, said, reply, agent, stage, mood, null, -1);
+    }
+
+    /**
+     * 同上，给认识卡的固件：card 是这句话归到的那张卡（没有就不带），doing 是后台还在做的
+     * 事的件数（小于 0 表示不带）。
+     */
+    public static String chat(String phase, String said, String reply, String agent,
+                              String stage, String mood, String card, int doing) {
         StringBuilder out = new StringBuilder(256);
         out.append("{\"cmd\":\"chat\",\"phase\":");
         quote(out, phase == null ? "idle" : phase);
@@ -128,7 +143,112 @@ public final class BuddyProtocol {
         quote(out, clip(stage, STAGE_MAX));
         out.append(",\"mood\":");
         quote(out, mood == null ? "idle" : mood);
+        if (cardId(card)) {
+            out.append(",\"card\":");
+            quote(out, card);
+        }
+        if (doing >= 0) {
+            out.append(",\"doing\":").append(doing);
+        }
         out.append("}\n");
+        return out.toString();
+    }
+
+    /** 固件收得下的卡编号：不为空、不超过上限。更长的截断了就成了另一张卡，所以不发。 */
+    public static boolean cardId(String id) {
+        return id != null && !id.isEmpty() && utf8Length(id) <= CARD_ID_MAX;
+    }
+
+    /**
+     * 一件事的卡：at 是开始的“时:分”，state 是 working、waiting、done、failed、cancelled、
+     * talking 之一，said 是这件事的第一句话，reply 是小幽最新的话，edits 是补充或改过几次。
+     * 编号太长时返回 null（不发）。
+     */
+    public static String card(String id, String at, String state, String agent, int edits,
+                              String said, String reply) {
+        if (!cardId(id)) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"card\",\"id\":");
+        quote(out, id);
+        out.append(",\"at\":");
+        quote(out, clip(at, 5));
+        out.append(",\"state\":");
+        quote(out, state == null ? "done" : state);
+        out.append(",\"agent\":");
+        quote(out, clip(agent, AGENT_MAX));
+        out.append(",\"edits\":").append(Math.max(0, Math.min(edits, 99)));
+        out.append(",\"said\":");
+        quote(out, clip(said, MESSAGE_MAX));
+        out.append(",\"reply\":");
+        quote(out, clip(reply, REPLY_MAX));
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** 让设备忘掉所有的卡；接着把最近的几张重新发一遍。 */
+    public static String cardClear() {
+        return "{\"cmd\":\"card\",\"clear\":true}\n";
+    }
+
+    /** 正在做的一件事，设备第三屏上的一行。 */
+    public static final class Task {
+        public final String id;
+        public final String agent;
+        public final String title;
+        /** working、waiting、queued 之一。 */
+        public final String state;
+        public final long seconds;
+        /** 最近两步：p1 在前，p2 是最新的；只有一步时放在 p1。 */
+        public final String p1;
+        public final String p2;
+
+        public Task(String id, String agent, String title, String state, long seconds,
+                    String p1, String p2) {
+            this.id = id;
+            this.agent = agent;
+            this.title = title;
+            this.state = state;
+            this.seconds = seconds;
+            this.p1 = p1;
+            this.p2 = p2;
+        }
+    }
+
+    /** 正在做的事，最多带 TASK_COUNT 件；编号太长的跳过。空表表示没有在做的事。 */
+    public static String tasks(List<Task> tasks) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"tasks\",\"list\":[");
+        int count = 0;
+        if (tasks != null) {
+            for (Task task : tasks) {
+                if (count >= TASK_COUNT) {
+                    break;
+                }
+                if (task == null || !cardId(task.id)) {
+                    continue;
+                }
+                if (count++ > 0) {
+                    out.append(',');
+                }
+                out.append("{\"id\":");
+                quote(out, task.id);
+                out.append(",\"agent\":");
+                quote(out, clip(task.agent, AGENT_MAX));
+                out.append(",\"title\":");
+                quote(out, clip(task.title, TASK_TITLE_MAX));
+                out.append(",\"state\":");
+                quote(out, task.state == null ? "working" : task.state);
+                out.append(",\"secs\":").append(Math.max(0L, task.seconds));
+                out.append(",\"p1\":");
+                quote(out, clip(task.p1, TASK_LINE_MAX));
+                out.append(",\"p2\":");
+                quote(out, clip(task.p2, TASK_LINE_MAX));
+                out.append('}');
+            }
+        }
+        out.append("]}\n");
         return out.toString();
     }
 
@@ -182,6 +302,27 @@ public final class BuddyProtocol {
         String state = fields.get("state");
         return "start".equals(state) || "end".equals(state) || "cancel".equals(state)
                 ? state : null;
+    }
+
+    /**
+     * 设备的“录音开始”那一行里带的卡：按下时屏幕上的那件事，这句话是对它说的。
+     * 没带、或者这一行不是录音开始时返回 null。
+     */
+    public static String parseVoiceCard(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null || !"voice".equals(fields.get("cmd"))
+                || !"start".equals(fields.get("state"))) {
+            return null;
+        }
+        String card = fields.get("card");
+        return cardId(card) ? card : null;
+    }
+
+    /** 设备对 hubHello 的应答里有没有声明它认识 card 和 tasks 这两条消息。 */
+    public static boolean hubAckHasCards(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return fields != null && "hub".equals(fields.get("ack")) && "true".equals(fields.get("ok"))
+                && "true".equals(fields.get("cards"));
     }
 
     /** 设备对 hubHello 的应答：true 能说话，false 是旧固件，null 表示这一行不是应答。 */
