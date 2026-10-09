@@ -10,7 +10,7 @@
 #define PT_HOME_BLE_OFF    "蓝牙关着呢"
 #define PT_HOME_WAITING    "睡着啦"
 #define PT_HOME_LINKING    "连上啦"
-#define PT_HOME_QUIET      "我在"
+#define PT_HOME_QUIET      "待命中"
 
 #define PT_HOME_SUB_BLE_OFF   "长按上键\n在菜单里把蓝牙打开"
 #define PT_HOME_SUB_WAITING   "手机上打开小幽中枢\n我就醒了"
