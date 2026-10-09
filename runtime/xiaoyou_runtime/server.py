@@ -1,8 +1,9 @@
 """HTTP 接口：手机 App（或任何客户端）通过它和小幽说话。
 
   GET  /healthz                         不需要令牌，只说明服务活着
-  POST /v1/messages                     {"text", "conversation"?, "client_id"?} → 202 + 消息
-  POST /v1/voice?conversation=&client_id=   请求体是 16 位单声道 WAV → 202 + 消息
+  GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
+  POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?} → 202 + 消息
+  POST /v1/voice?conversation=&client_id=&agent=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>      查结果；wait 最多 60 秒，处理完会提前返回
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
@@ -28,6 +29,8 @@ MAX_WAIT_SECONDS = 60.0
 
 def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
     expected = ("Bearer " + config.token).encode("utf-8")
+    default_spec = config.agent(config.default_agent)
+    default_type = default_spec.type if default_spec is not None else ""
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "xiaoyou-runtime/" + __version__
@@ -76,12 +79,16 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             url = urlsplit(self.path)
             parts = [part for part in url.path.split("/") if part]
             if parts == ["healthz"]:
+                # backend 是给旧版手机 App 看的：默认代理的类型。
                 self._send(200, {
-                    "ok": True, "version": __version__, "backend": config.backend,
+                    "ok": True, "version": __version__, "backend": default_type,
                     "name": config.name,
                 })
                 return
             if not self._authorized():
+                return
+            if parts == ["v1", "agents"]:
+                self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
             if len(parts) == 3 and parts[:2] == ["v1", "messages"]:
                 try:
@@ -116,7 +123,7 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             try:
                 message = service.submit_voice(
                     audio, query.get("conversation", ["default"])[0],
-                    query.get("client_id", [None])[0],
+                    query.get("client_id", [None])[0], query.get("agent", [None])[0],
                 )
             except RequestError as error:
                 self._fail(400, str(error))
@@ -146,7 +153,8 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")
                     message = service.submit(
-                        body.get("text"), body.get("conversation", "default"), body.get("client_id")
+                        body.get("text"), body.get("conversation", "default"),
+                        body.get("client_id"), body.get("agent"), body.get("hop", 0),
                     )
                     self._send(202, message)
                     return

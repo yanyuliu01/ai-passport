@@ -4,18 +4,22 @@
 
 # 小幽 Runtime
 
-小幽是主人唯一的对话对象。这个 Runtime 是小幽背后那个一直开着的小服务：收到一句话，
-连同小幽的人设一起交给后端的代理，再把三样东西还回来——完整回复、给 Passport 小屏幕
-看的一两句简报、像素宠物此刻的表情。消息可以是打出来的文字，也可以是一段录音；录音先由
-配置里选定的语音识别引擎变成文字。
+小幽是主人唯一的对话对象，也是一个独立的身份：她不是某个模型的别名。这个 Runtime 是
+小幽背后那个一直开着的小服务，属于她的东西都在这里——人设、她和主人的对话记录、
+“这句话交给谁”的判断，以及别人做完之后由她怎么转述。Claude Code、Codex、另一台电脑上
+的小幽，还有以后接进来的本地模型，都只是她可以用的**代理**。
 
-目前唯一真正的后端是用非交互模式驱动本机的 **Claude Code 命令行**，用的是这台机器上
-已经登录的 Claude 账号。其他代理（比如 Codex）不是另一个说话的角色：它们在配置里登记
-为小幽的工具，小幽把活交给它们，再把结果总结给主人。
+收到一句话，Runtime 还回三样东西：完整回复、给 Passport 小屏幕看的一两句简报、像素宠物
+此刻的表情。消息可以是打出来的文字，也可以是一段录音；录音先由配置里选定的语音识别
+引擎变成文字。
 
 ```text
-手机 App / 任意客户端 ──HTTP──> 小幽 Runtime ──运行──> claude -p（人设、工具）
-                                                        └─> 其他代理的命令行，作为工具
+手机 App / 任意客户端 ──HTTP──> 小幽 Runtime
+                                  │  人设 · 对话记录 · 路由 · 转述
+                                  ├──> claude   （Claude Code 命令行，能以小幽的身份回话）
+                                  ├──> codex    （Codex 命令行，只干活）
+                                  ├──> 任意命令 （本地模型等）
+                                  └──> 另一台电脑上的小幽 Runtime
 ```
 
 状态：验证阶段，先跑在自己的电脑上。同一份代码之后要搬到虚拟机，里面没有任何假设
@@ -24,8 +28,9 @@
 ## 需要什么
 
 - Python 3.9 或更新版本。不需要第三方包，除非启用内置的语音识别引擎（见[语音](#语音)）。
-- 用 `claude_code` 后端时：同一台机器、同一个用户下装好并登录了 Claude Code
-  （终端里能直接运行 `claude`）。
+- 每个登记的代理各自要用的东西：`claude_code` 类型需要同一台机器、同一个用户下装好并
+  登录了 Claude Code（终端里能直接运行 `claude`）；`codex` 类型需要装好并登录了 Codex
+  命令行。`--check` 会指出哪个代理的命令找不到。
 
 ## 快速开始
 
@@ -40,7 +45,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 `config.json`、`state/`、`workdir/` 已被 Git 忽略。不要提交真实的令牌。
 
-想不调用任何模型先把整条链路跑通，把 `"backend"` 改成 `"echo"`。
+想不调用任何模型先把整条链路跑通，启动时加上环境变量 `XIAOYOU_DEFAULT_AGENT=echo`：
+所有的话都交给一个原样复述的代理，不用改配置文件。
 
 ## 配置
 
@@ -52,19 +58,17 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `server.port` | `8765` | 监听端口。 |
 | `server.name` | 这台机器的主机名 | 手机 App 里怎么称呼这台 Runtime，最多 40 个字符。 |
 | `server.token` | 无 | 共享令牌，至少 16 个字符；示例里的占位值会被拒绝。 |
-| `state_dir` | `state` | 存“对话 → 会话编号”这张表的目录。 |
-| `persona_file` | `persona.txt` | 小幽的人设，会追加到后端的系统提示里。 |
-| `backend` | `claude_code` | `claude_code` 或 `echo`。 |
+| `state_dir` | `state` | 存会话表和小幽的对话记录的目录。 |
+| `persona_file` | `persona.txt` | 小幽的人设。只交给以小幽的身份回话的代理。 |
 | `brief_max_chars` | `120` | 小屏幕简报的字数上限（20 到 400）。 |
-| `turn_timeout_seconds` | `600` | 一轮超过这么久就停止（10 到 7200）。 |
-| `claude_code.command` | `["claude"]` | 要运行的命令，写成列表。 |
-| `claude_code.workdir` | `workdir` | Claude Code 的工作目录，不存在会自动创建。 |
-| `claude_code.config_dir` | `null` | 可选，Claude Code 的配置目录，以 `CLAUDE_CONFIG_DIR` 传给它。见[使用单独的 Claude 登录](#使用单独的-claude-登录)。 |
-| `claude_code.model` | `null` | 可选，作为 `--model` 传入。 |
-| `claude_code.permission_mode` | `dontAsk` | 作为 `--permission-mode` 传入。 |
-| `claude_code.allowed_tools` | `[]` | 作为 `--allowedTools` 传入的规则。 |
-| `claude_code.extra_args` | `[]` | 追加在命令末尾的额外参数。 |
-| `tools[]` | `[]` | 小幽可以把活交出去的代理：`name`、`description`、`allowed_tools`、`enabled`。 |
+| `turn_timeout_seconds` | `600` | 代理没有自己设 `timeout_seconds` 时用的超时（10 到 7200）。 |
+| `agents.<名字>` | 无 | 一个代理，见[代理](#代理)。至少要有一个启用的。 |
+| `xiaoyou.default_agent` | 第一个代理 | 没人点名、路由器也没有意见时，话交给谁。 |
+| `xiaoyou.voice_agent` | 默认代理；它只干活时取第一个能说话的 | 只干活的代理做完之后，由谁用小幽的口吻转述。 |
+| `xiaoyou.max_handoffs` | `2` | 一轮里最多转交几次（0 到 5）；0 表示不转交。 |
+| `xiaoyou.router.type` | `mention` | `mention` 或 `command`，见[这句话交给谁](#这句话交给谁)。 |
+| `xiaoyou.router.command` | `[]` | `command`：用来判断的命令。 |
+| `xiaoyou.router.timeout_seconds` | `10` | `command`：超过这么久就不等了，交给默认代理（1 到 120）。 |
 | `stt.engine` | `none` | 语音识别：`none`、`sense_voice` 或 `command`。见[语音](#语音)。 |
 | `stt.model_dir` | 无 | `sense_voice`：放 `model.int8.onnx`（或 `model.onnx`）和 `tokens.txt` 的目录。 |
 | `stt.language` | `auto` | `sense_voice`：`auto`、`zh`、`en`、`ja`、`ko` 或 `yue`。 |
@@ -73,8 +77,76 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `stt.timeout_seconds` | `60` | `command`：一次识别超过这么久就停止（5 到 600）。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
-`XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、`XIAOYOU_BACKEND`、
-`XIAOYOU_CLAUDE_CONFIG_DIR`。
+`XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
+`XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）。
+
+0.3 及更早的配置（`backend`、`claude_code`、`tools`）仍然能读：按只有一个名叫 `claude`
+的代理处理，启动时会提示这是旧写法，原来的会话接着用。`tools` 里启用过的条目需要手动
+改成 `agents` 里的一个代理。
+
+## 代理
+
+`agents` 是一个对象，键是代理的名字（字母、数字、下划线和连字符，最多 24 个字符）。
+每个代理都有这几项：
+
+| 配置项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `type` | 无 | `claude_code`、`codex`、`command`、`remote` 或 `echo`。 |
+| `enabled` | `true` | `false` 时当它不存在。 |
+| `description` | 空 | 一句话说明它擅长什么。小幽决定要不要把活交给它、路由器做判断，看的都是这句话。 |
+| `aliases` | `[]` | 点名时除了名字之外还认的叫法，比如语音识别常写成的中文名。 |
+| `speaks` | 随类型 | 能不能直接以小幽的身份回话。`claude_code`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
+| `timeout_seconds` | `turn_timeout_seconds` | 这个代理一次最多跑多久。 |
+
+各类型另外认的配置项：
+
+| 类型 | 做什么 | 配置项 |
+| --- | --- | --- |
+| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `dontAsk`）、`allowed_tools`、`extra_args` |
+| `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
+| `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
+| `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
+| `echo` | 原样复述，不调用任何模型。 | 无 |
+
+`permission_mode` 为 `dontAsk` 时，Claude Code 里没有被 `allowed_tools` 放行的操作会被
+直接拒绝，而不是等一个不在场的人来点头。放行规则要写窄：每一条都是这个代理在没人看着
+时能做的事。Codex 的 `sandbox` 同理，默认只读。
+
+示例配置里带了一个没启用的 `codex`；在同一台机器上装好并登录 Codex 命令行之后，把
+`"enabled"` 改成 `true`，再跑一次 `--check`。
+
+以后接本地模型，就是加一个 `command` 类型的代理并把 `speaks` 设成 `true`：它会连同人设
+一起收到这句话，回复可以是普通文字，也可以是 `{"reply", "brief", "mood"}` 这样一个
+JSON 对象。
+
+### 这句话交给谁
+
+先后顺序是固定的：
+
+1. 调用方指定了代理（接口里的 `agent`）——照办。
+2. 主人在话的开头点了名——交给被点名的。认两种说法：`@codex 看看这个`，以及
+   “让 / 叫 / 请 / 用 / 问 / 问问 / 找 / 交给”加上名字或叫法，比如“让 Codex 看看这个报错”。
+3. 路由器有意见——听它的。
+4. 都没有——交给默认代理。
+
+路由器是可以换的那一块。`mention` 不额外判断，只靠上面的第 1、2、4 条。`command` 运行
+你指定的命令：标准输入是 `{"text", "default", "agents": [{"name", "type", "description"}]}`，
+标准输出的第一行是选中的代理名。输出为空、不认识的名字、出错或超时都退回默认代理——
+路由器坏了不应该让主人说不了话。以后用一个小模型或分类器来做判断，就接在这里。
+
+### 转交和转述
+
+接话的代理能以小幽的身份回话时，Runtime 会告诉它现在有哪些帮手（其余代理的名字和
+说明）。它可以直接回答，也可以在回复里写上“交给谁、做什么”。这时 Runtime 去运行那个
+帮手，把原始结果交回来，再由它用小幽的话总结给主人。帮手失败了、或者点了一个不存在的
+帮手，也照实交回去，由它如实告诉主人。一轮最多转交 `max_handoffs` 次，最后一次交回
+之后不再有“转交”这个选项。
+
+主人点名了一个只干活的代理时，先让它做（附上它没见过的最近几轮对话作为背景），结果交给
+`voice_agent` 转述。`voice_agent` 这时不可用的话，原样把结果给主人，不让这一轮白做。
+
+被转交的帮手只拿到任务，看不到人设和聊天记录；它在这个对话里有自己的会话，下次交给它
+时接着用。
 
 ### 使用单独的 Claude 登录
 
@@ -87,18 +159,10 @@ mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # 任意文件夹，但不能�
 CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # 用订阅账号登录，/status 确认后退出
 ```
 
-然后在 `claude_code` 下设置 `"config_dir": "~/.claude-xiaoyou"`。登录时不要待在主目录：
+然后在这个 `claude_code` 类型的代理下设置 `"config_dir": "~/.claude-xiaoyou"`。登录时不要待在主目录：
 Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设置加载，而在主目录里，
 这正是你想绕开的那个文件。
 
-### 把一个代理接成工具
-
-一条工具配置做两件事：`name` 和 `description` 会写进小幽的系统提示；`allowed_tools`
-里的规则会并入 `--allowedTools`，让 Claude Code 不用询问就能运行它。示例配置里带了一条
-没启用的 Codex；在同一台机器上装好并登录那个命令行之后，把 `"enabled"` 改成 `true`。
-
-`permission_mode` 为 `dontAsk` 时，没有被放行规则覆盖的操作会被直接拒绝，而不是等一个
-不在场的人来点头。放行规则要写窄：每一条都是小幽在没人看着时能做的事。
 
 ## HTTP 接口
 
@@ -106,17 +170,28 @@ Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设�
 
 | 请求 | 结果 |
 | --- | --- |
-| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。 |
-| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?}` | `202` 和这条消息的记录，状态为 `queued`。 |
-| `POST /v1/voice?conversation=<名字>&client_id=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
+| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`：小幽在这台 Runtime 上能用的代理。 |
+| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。 |
+| `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。 |
-| `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉模型。 |
-| `POST /v1/conversations/<名字>/reset` | 忘掉这个对话的会话，下一句话从头开始。 |
+| `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
+| `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
 
 消息记录包含 `id`、`client_id`、`conversation`、`kind`（`text` 或 `voice`）、`status`
 （`queued`、`transcribing`、`running`、`done`、`failed`）、`text`、`reply`、`brief`、`mood`
 （`idle`、`busy`、`ask`、`happy`、`oops`）、`error`、`created_at`、`finished_at`。语音消息的
 `text` 在识别完成之前是空的。
+
+这一轮交给了谁，也在记录里：
+
+- `asked`：调用方点名的代理，没点名是 `null`。
+- `agent`：处理中是现在在做这件事的代理；做完后是这一轮先接话的那个。
+- `stage`：处理中给人看的一句话，比如小幽转交时说的“我让 codex 看看”；没有转交或已经
+  结束时是 `null`。
+- `events`：这一轮走过的步骤，每项是 `{"at", "kind", "agent", "text"}`。`kind` 为 `route`
+  （交给了谁，`text` 是原因：`asked`、`mention`、`router`、`default`）、`handoff`（转交给
+  帮手）、`result`（帮手做完或没做成）、`note`。
 
 同一个 `client_id` 再发一次，返回的是已有的那条记录，不会把这一轮再跑一遍；所以客户端
 没收到响应时可以放心重试。
@@ -166,6 +241,10 @@ UTF-8（记事本里选“UTF-8”，不要选“带有 BOM 的 UTF-8”）。
 带得过去的是“说了什么”：主人的话和小幽的完整回复，转告模型时每轮分别截到 500 和 1000 个
 字。带不过去的是那边会话知道的其他一切：读过的文件、工具的输出，以及比手机还记得的那几轮
 更早的内容。
+
+另一种接法是不换台：手机只连一台 Runtime，把另一台电脑登记成它的一个 `remote` 代理。
+这样“那台电脑上的事”由小幽转交过去，或者由主人点名，对话记录只在主的那一台上。已经
+被别的 Runtime 转过手的话不会再往外转，所以两台互相登记也不会来回踢。
 
 ## 语音
 
@@ -217,12 +296,20 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 
 ## 一轮对话是怎么走的
 
-1. 消息排队，一条一条处理。
-2. 后端运行 `claude -p --output-format json --append-system-prompt <人设 + 工具清单>
-   --json-schema <reply、brief、mood> --permission-mode <模式> [--allowedTools ...]
-   [--model ...] [--resume <会话>]`。主人的话从标准输入送进去，不会出现在命令行参数里。
-3. Claude Code 返回的会话编号按对话存到 `state/sessions.json`，下次用 `--resume` 带回去。
-   对话记录本身留在 Claude Code 那边。
+1. 消息按对话排队：同一个对话里一条一条处理，不同的对话互不等待。
+2. 按[这句话交给谁](#这句话交给谁)的顺序选出先接话的代理。
+3. 这个代理能以小幽的身份回话：把人设、回复格式和帮手清单一起给它。对 Claude Code 是
+   `claude -p --output-format json --append-system-prompt <人设 + 帮手清单>
+   --json-schema <reply、brief、mood、可选的 handoff> --permission-mode <模式>
+   [--allowedTools ...] [--model ...] [--resume <会话>]`。主人的话从标准输入送进去，不会
+   出现在命令行参数里。它要转交时，见[转交和转述](#转交和转述)。
+4. 这个代理只干活：让它做，结果交给负责说话的代理转述。
+5. 每个代理返回的会话编号按“对话 + 代理”存到 `state/sessions.json`，下次接着用。
+6. 这一轮记进小幽自己的对话记录 `state/transcript.json`，并记下哪些代理听到了这一轮。
+   下次轮到没听到的代理接话，先把它错过的几轮告诉它，只说一次。
+
+对话记录属于小幽，不属于任何一个代理：换一个代理接话，小幽仍然记得刚才说过什么。
+各个代理自己的会话里只有它参与过的部分。
 
 ## 跑在别的机器或虚拟机上
 
@@ -236,9 +323,22 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 ## 哪些验证过、哪些没有
 
 `runtime/tests/test_runtime.py`（`./tools/validate.sh --static` 会运行）验证了：配置
-检查、交给假的 `claude` 可执行文件的完整命令行和标准输入、结果与错误的解析、会话续接、
-顺序处理、按 `client_id` 重试、令牌校验、用 `echo` 后端跑的 HTTP 接口，以及用一条假的识别
-命令跑的语音消息（格式检查、识别、识别为空和识别失败、录音的清理）。
+检查和旧写法的兼容；交给假的 `claude`、`codex` 可执行文件的完整命令行和标准输入、结果与
+错误的解析、会话续接；点名和路由的先后顺序、用一条命令做路由器；小幽转交、帮手失败或
+不存在、转交次数上限、点名只干活的代理后的转述、换代理时补上错过的对话；两台真的
+Runtime 之间的 `remote` 代理（用 `echo`）以及互相登记时不会来回转；按对话排队、按
+`client_id` 重试、令牌校验、HTTP 接口；以及用一条假的识别命令跑的语音消息（格式检查、
+识别、识别为空和识别失败、录音的清理）。
+
+2026-10-09 用 Claude Code 2.1.295 在 Linux 上手动验证过（是在云端工作区里，不是在
+预期运行的那台电脑上），配置是一个 `claude_code` 代理加一个 `command` 类型的替身帮手：
+
+- 直接回答：一轮约 5 秒，第二轮能接上第一轮的内容。
+- 小幽自己决定转交：一条“找个审查代码的看一下”的请求，Claude Code 按结构给出了
+  转交，Runtime 运行了帮手，再由它总结；它发现替身帮手答非所问，并如实告诉了主人。
+  通过 HTTP 接口轮询时能看到 `agent` 和 `stage` 的变化。这一轮约 18 到 21 秒。
+- 点名只干活的代理（`@名字`）：帮手先做，结果由 Claude Code 转述，约 6 秒。
+- 一份 0.3 写法的配置和会话表照常读入，原来的会话编号算在 `claude` 名下。
 
 2026-10-08 用 Claude Code 2.1.294 在 Linux 上手动验证过（是在云端工作区里，不是在
 预期运行的那台电脑上）：
@@ -246,7 +346,8 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 - `--once` 按要求的结构给出了回复、简报和表情；第二轮能说出第一轮里的细节，说明
   续接对话可用。
 - 通过 HTTP 接口：不带令牌的请求得到 `401`；一条“请别的工具给个第二意见”的请求，
-  让模型调用了 `tools` 里配置的一个替身工具，并用自己的话总结了它的输出。
+  让模型调用了一个替身工具，并用自己的话总结了它的输出。（当时是 0.2 版，别的代理还是
+  写在 `tools` 里、由 Claude Code 自己去运行。）
 - 一轮简单对话端到端大约六秒。
 
 2026-10-08 在 Linux 上用 sherpa-onnx 1.13 和 int8 版 SenseVoice 模型手动验证过，用的是
@@ -267,19 +368,24 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 - 真实设备上的语音：麦克风音质、蓝牙吞吐，以及真实环境里真人说话的识别效果。
 - macOS 上的 sherpa-onnx。
 
-- 真实的 Codex 命令行；派活的验证用的是一个替身脚本。
-- 虚拟机，以及连续运行多天的情况。macOS 上只由主人跑过一次 `--once`（用的是单独的
-  `config_dir`），HTTP 服务还没有跑过。
-- 从手机上调用。App 里发请求的那段代码在电脑的 Java 环境里对着本服务的 `echo` 后端
-  跑过（发送、等待、错误令牌），但 App 本身还没有在手机上运行过。
-- 被派出去的工具很慢、失败或输出很长时，模型的表现。
+- 真实的 Codex 命令行。`codex` 代理是对着 codex-cli 0.162.0 写的：命令行选项来自它的
+  帮助输出，事件的格式来自一次没有登录、连不上服务的运行；还没有一轮真正跑成功过。
+  转交的验证用的是一个替身脚本。
+- `remote` 代理对着另一台真实电脑、经过真实网络的情况。
+- 本地模型：`command` 类型能以小幽的身份回话这条路只在测试里用脚本走过。
+- 虚拟机，以及连续运行多天的情况。
+- 0.4 这一版在 macOS 上、以及和手机 App 一起使用的情况。主人报告 0.2 版在 macOS 上
+  跑通了“手机 App → Runtime → 设备”这条链路；这一版改动了内部结构，还没有在那里跑过。
+  手机 App 目前不显示 `stage` 和 `agent`，也不能点名代理。
+- 帮手很慢或输出很长时，模型的表现。
 
 已知风险：
 
 - 这条路依赖用订阅登录非交互地运行 Claude Code。Claude Code 的文档里有一个跳过这种
-  登录的 `--bare` 模式，并说明它将来会成为 `-p` 的默认行为；到那时这个后端需要换一种
+  登录的 `--bare` 模式，并说明它将来会成为 `-p` 的默认行为；到那时 `claude_code` 代理需要换一种
   认证方式。把它提供给自己以外的人之前，请先确认 Claude Code 当前的使用条款。
-- 每一轮都计入所登录账号的用量限制。
+- 每一轮都计入所登录账号的用量限制。转交一次要多调用一次说话的代理来总结。
+- 长任务没有做成后台任务：帮手跑多久，这个对话就等多久，期间不能取消。
 - 只有一个共享令牌，没有按设备区分身份，也没有限流。
 
 ## 测试

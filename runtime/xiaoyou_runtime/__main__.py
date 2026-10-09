@@ -6,14 +6,16 @@ import os
 import socket
 import sys
 import time
+import uuid
 from pathlib import Path
 
-from . import __version__, stt
-from .backends import BackendError, create
+from . import __version__, agents as agent_module, router as router_module, stt
+from .agents import AgentError
 from .config import ConfigError, load
 from .server import make_server
 from .service import Service
 from .store import Store
+from .xiaoyou import Xiaoyou
 
 
 def _is_loopback(host: str) -> bool:
@@ -56,6 +58,7 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--once", metavar="TEXT", help="不启动服务，直接说一句话并打印回复")
     parser.add_argument("--conversation", default="default", help="--once 使用的对话名")
+    parser.add_argument("--agent", help="--once 时点名交给这个代理；不写就由小幽决定")
     parser.add_argument(
         "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
     )
@@ -67,16 +70,35 @@ def main(argv=None) -> int:
     except ConfigError as error:
         print("配置有问题：%s" % error, file=sys.stderr)
         return 2
+    for notice in config.notices:
+        print("提示：%s" % notice, file=sys.stderr)
+    agents = [agent_module.create(spec) for spec in config.agents]
+    router = router_module.create(
+        config, lambda message: print(message, file=sys.stderr))
+    roster = "、".join(
+        "%s（%s%s）" % (agent.name, agent.type, "" if agent.speaks else "，只干活")
+        for agent in agents
+    )
     if args.check:
-        print("配置没问题：后端 %s，监听 %s:%d，工具 %s，语音识别 %s" % (
-            config.backend, config.host, config.port,
-            "、".join(tool.name for tool in config.tools) or "无", config.stt_engine,
+        print("配置没问题：监听 %s:%d，代理 %s，默认交给 %s，路由 %s，语音识别 %s" % (
+            config.host, config.port, roster, config.default_agent, config.router_type,
+            config.stt_engine,
         ))
+        failed = False
+        for agent in agents:
+            problem = agent.check()
+            if problem:
+                print("代理 %s 还用不了：%s" % (agent.name, problem), file=sys.stderr)
+                failed = True
+        problem = router.check()
+        if problem:
+            print("路由器还用不了：%s" % problem, file=sys.stderr)
+            failed = True
         problem = stt.check(stt.create(config))
         if problem:
             print("语音识别还用不了：%s" % problem, file=sys.stderr)
-            return 2
-        return 0
+            failed = True
+        return 2 if failed else 0
 
     if args.stt is not None:
         try:
@@ -105,20 +127,26 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        store = Store(config.state_dir)
+        store = Store(config.state_dir, legacy_agent=config.default_agent)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 2
-    backend = create(config)
+    xiaoyou = Xiaoyou(config, agents, store, router)
 
     if args.once is not None:
+        if args.agent is not None and not xiaoyou.has(args.agent):
+            print("没有叫 %s 的代理（现在有：%s）" % (
+                args.agent, "、".join(agent.name for agent in agents)), file=sys.stderr)
+            return 2
         try:
-            turn = backend.turn(args.once, store.session(args.conversation))
-        except BackendError as error:
+            turn = xiaoyou.answer(
+                args.once, args.conversation, uuid.uuid4().hex, asked=args.agent,
+                report=lambda kind, agent, detail: print(
+                    "（%s %s：%s）" % (kind, agent or "-", detail), file=sys.stderr),
+            )
+        except AgentError as error:
             print("没成功：%s" % error, file=sys.stderr)
             return 1
-        if turn.session_id:
-            store.remember(args.conversation, turn.session_id)
         print("[%s] %s" % (turn.mood, turn.brief))
         print()
         print(turn.reply)
@@ -128,15 +156,20 @@ def main(argv=None) -> int:
     problem = stt.check(recognizer)
     if problem:
         print("注意：语音识别还用不了，语音消息会失败：%s" % problem, file=sys.stderr)
-    service = Service(backend, store, recognizer)
+    for agent in agents:
+        problem = agent.check()
+        if problem:
+            print("注意：代理 %s 还用不了，交给它的事会失败：%s" % (agent.name, problem),
+                  file=sys.stderr)
+    service = Service(xiaoyou, store, recognizer)
     try:
         server = make_server(config, service)
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         return 1
-    print("小幽 Runtime %s「%s」已启动：http://%s:%d（后端 %s，语音识别 %s）" % (
-        __version__, config.name, config.host, config.port, config.backend, config.stt_engine),
-        file=sys.stderr)
+    print("小幽 Runtime %s「%s」已启动：http://%s:%d（代理 %s，默认交给 %s，语音识别 %s）" % (
+        __version__, config.name, config.host, config.port, roster, config.default_agent,
+        config.stt_engine), file=sys.stderr)
     if not _is_loopback(config.host):
         print(
             "注意：正在监听非本机地址，而这个服务本身只有明文 HTTP。"

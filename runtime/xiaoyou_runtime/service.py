@@ -1,21 +1,22 @@
-"""收消息、排队、一条一条交给后端，并让调用方能等到结果。
+"""收消息、排队、一条一条交给小幽，并让调用方能等到结果。
 
 语音消息多一步：先把录音交给语音识别，得到文字后和打字的消息走同一条路。
 
-所有消息排成一队、由一个工作线程顺序处理：同一个对话里的两句话不会同时去续同一个
-会话。验证阶段只有一个用户，这样最简单也最不容易出错。
+同一个对话里的消息排成一队顺序处理：两句话不会同时去续同一个会话。不同的对话
+互不等待，各走各的。每条消息在处理过程中会记下走到了哪一步（交给了谁、谁做完了），
+调用方轮询时能看到。
 """
 
-import queue
 import threading
 import time
 import uuid
-from collections import OrderedDict
-from typing import Any, Dict, Optional
+from collections import OrderedDict, deque
+from typing import Any, Deque, Dict, List, Optional
 
-from .backends import Backend, BackendError
-from .store import Store
+from .agents import AgentError
 from .stt import Stt, SttError, describe_wav
+from .store import Store
+from .xiaoyou import Xiaoyou
 
 MAX_TEXT_CHARS = 8000
 MAX_AUDIO_BYTES = 4 * 1024 * 1024
@@ -24,28 +25,11 @@ MAX_NAME_CHARS = 64
 MAX_SHARED_TURNS = 30
 MAX_SHARED_TEXT_CHARS = 4000
 MAX_SHARED_REPLY_CHARS = 8000
-# 转告模型时每轮最多引用这么多字，总共不超过这么多字（保留最近的）。
-RECAP_TEXT_CHARS = 500
-RECAP_REPLY_CHARS = 1000
-RECAP_TOTAL_CHARS = 8000
-
-
-def recap(turns: Any, text: str) -> str:
-    """把别处发生的几轮对话接在主人这句话前面，交给模型。"""
-    blocks = []
-    total = 0
-    for turn in reversed(turns):
-        block = "主人：%s\n小幽：%s" % (
-            turn["text"][:RECAP_TEXT_CHARS], turn["reply"][:RECAP_REPLY_CHARS])
-        total += len(block)
-        if total > RECAP_TOTAL_CHARS and blocks:
-            break
-        blocks.append(block)
-    return (
-        "（下面是主人刚才在另一台电脑上和你的对话。那边的你已经答过了，这里只是让你接上话，"
-        "不要复述，也不要提“另一台电脑”。）\n\n%s\n\n（现在主人说：）\n%s"
-        % ("\n\n".join(reversed(blocks)), text)
-    )
+MAX_EVENTS = 20
+MAX_EVENT_CHARS = 200
+MAX_HOP = 3
+# 同时在处理的对话数上限；超过的对话等前面的让出位置。
+MAX_BUSY_CONVERSATIONS = 4
 
 
 class RequestError(Exception):
@@ -61,28 +45,41 @@ def _name(value: Any, what: str) -> str:
 
 
 class Service:
-    def __init__(self, backend: Backend, store: Store, stt: Optional[Stt] = None):
-        self._backend = backend
+    def __init__(self, xiaoyou: Xiaoyou, store: Store, stt: Optional[Stt] = None):
+        self._xiaoyou = xiaoyou
         self._store = store
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
         self._messages = OrderedDict()  # type: OrderedDict[str, Dict[str, Any]]
         self._by_client_id: Dict[str, str] = {}
-        self._queue = queue.Queue()  # type: queue.Queue[Optional[str]]
-        self._worker = threading.Thread(target=self._work, name="xiaoyou-worker", daemon=True)
-        self._worker.start()
+        # 对话名 → 这个对话里还没处理的消息编号；有工作线程在处理的对话记在 _busy 里。
+        self._lanes: Dict[str, Deque[str]] = {}
+        self._busy: Dict[str, threading.Thread] = {}
+        self._slots = threading.Semaphore(MAX_BUSY_CONVERSATIONS)
+        self._closed = False
 
-    def submit(self, text: Any, conversation: Any = "default", client_id: Any = None) -> Dict[str, Any]:
+    def agents(self) -> List[Dict[str, Any]]:
+        """这台 Runtime 上小幽能用的代理，给客户端显示和点名用。"""
+        return [
+            {
+                "name": agent.name, "type": agent.type, "description": agent.description,
+                "speaks": agent.speaks, "default": agent.name == self._xiaoyou.default_agent,
+            }
+            for agent in self._xiaoyou.agents()
+        ]
+
+    def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
+               agent: Any = None, hop: Any = 0) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。"""
         if not isinstance(text, str) or not text.strip():
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
-        return self._enqueue("text", text, None, conversation, client_id)
+        return self._enqueue("text", text, None, conversation, client_id, agent, hop)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
-                     client_id: Any = None) -> Dict[str, Any]:
+                     client_id: Any = None, agent: Any = None) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
@@ -92,16 +89,25 @@ class Service:
             raise RequestError(
                 "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
             )
-        return self._enqueue("voice", "", bytes(audio), conversation, client_id)
+        return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
-                 client_id: Any) -> Dict[str, Any]:
+                 client_id: Any, agent: Any, hop: Any) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         if client_id is not None:
             client_id = _name(client_id, "client_id")
+        if agent is not None:
+            agent = _name(agent, "agent")
+            if not self._xiaoyou.has(agent):
+                raise RequestError("没有叫 %s 的代理（现在有：%s）" % (
+                    agent, "、".join(item["name"] for item in self.agents())))
+        if isinstance(hop, bool) or not isinstance(hop, int) or not 0 <= hop <= MAX_HOP:
+            raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
         with self._changed:
+            if self._closed:
+                raise RequestError("Runtime 正在关闭")
             if client_id is not None and client_id in self._by_client_id:
-                return dict(self._messages[self._by_client_id[client_id]])
+                return self._snapshot(self._messages[self._by_client_id[client_id]])
             message_id = uuid.uuid4().hex
             if audio is not None:
                 # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
@@ -124,6 +130,14 @@ class Service:
                 "brief": None,
                 "mood": "busy",
                 "error": None,
+                # 调用方指定的代理；没指定就是 None，由小幽决定
+                "asked": agent,
+                # 现在在做这件事的代理；做完后是这一轮先接话的那个
+                "agent": None,
+                # 给人看的一句话：现在走到哪一步了
+                "stage": None,
+                "events": [],
+                "hop": hop,
                 "created_at": time.time(),
                 "finished_at": None,
             }
@@ -131,8 +145,21 @@ class Service:
             if client_id is not None:
                 self._by_client_id[client_id] = message["id"]
             self._trim()
-            snapshot = dict(message)
-        self._queue.put(snapshot["id"])
+            snapshot = self._snapshot(message)
+            self._lanes.setdefault(conversation, deque()).append(message_id)
+            if conversation not in self._busy:
+                worker = threading.Thread(
+                    target=self._drain, args=(conversation,), daemon=True,
+                    name="xiaoyou-%s" % conversation,
+                )
+                self._busy[conversation] = worker
+                worker.start()
+        return snapshot
+
+    @staticmethod
+    def _snapshot(message: Dict[str, Any]) -> Dict[str, Any]:
+        snapshot = dict(message)
+        snapshot["events"] = [dict(event) for event in message["events"]]
         return snapshot
 
     def get(self, message_id: str, wait: float = 0.0) -> Optional[Dict[str, Any]]:
@@ -145,19 +172,17 @@ class Service:
                     return None
                 remaining = deadline - time.monotonic()
                 if message["status"] in ("done", "failed") or remaining <= 0:
-                    return dict(message)
+                    return self._snapshot(message)
                 self._changed.wait(remaining)
 
     def reset(self, conversation: Any) -> bool:
-        """忘掉一个对话的会话编号：下一句话会开一个新会话。"""
-        conversation = _name(conversation, "conversation")
-        self._store.shared.clear_pending(conversation)
-        return self._store.forget(conversation)
+        """让一个对话从头开始：下一句话每个代理都会开新会话。"""
+        return self._xiaoyou.reset(_name(conversation, "conversation"))
 
     def share(self, conversation: Any, turns: Any) -> int:
         """手机带来在别的 Runtime 上发生的对话；返回这台之前不知道的轮数。
 
-        不立刻打扰模型：等这个对话的下一句话到来时一并告诉它。
+        不立刻打扰模型：等这个对话的下一句话到来时一并告诉接话的代理。
         """
         conversation = _name(conversation, "conversation")
         if not isinstance(turns, list) or len(turns) > MAX_SHARED_TURNS:
@@ -177,11 +202,14 @@ class Service:
                 "reply": reply[:MAX_SHARED_REPLY_CHARS],
                 "at": at,
             })
-        return self._store.shared.offer(conversation, cleaned)
+        return self._xiaoyou.share(conversation, cleaned)
 
     def close(self) -> None:
-        self._queue.put(None)
-        self._worker.join(timeout=5)
+        with self._changed:
+            self._closed = True
+            workers = list(self._busy.values())
+        for worker in workers:
+            worker.join(timeout=5)
 
     def _trim(self) -> None:
         # 只丢已经处理完的旧消息，还在排队的不能丢。
@@ -201,64 +229,85 @@ class Service:
                 message.update(fields)
             self._changed.notify_all()
 
-    def _work(self) -> None:
-        while True:
-            message_id = self._queue.get()
-            if message_id is None:
+    def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
+        """小幽报告这一轮走到了哪一步。"""
+        with self._changed:
+            message = self._messages.get(message_id)
+            if message is None:
                 return
-            with self._changed:
-                message = self._messages.get(message_id)
-                if message is None:
-                    continue
-                text, conversation = message["text"], message["conversation"]
-                audio = self._audio.pop(message_id, None)
-            if audio is not None:
-                self._update(message_id, status="transcribing")
-                try:
-                    text = self._stt.transcribe(audio)
-                    if not text:
-                        raise SttError("没听清，再说一次吧")
-                except SttError as error:
-                    self._update(
-                        message_id, status="failed", error=str(error), mood="oops",
-                        finished_at=time.time(),
-                    )
-                    continue
-                except Exception as error:
-                    self._update(
-                        message_id, status="failed", mood="oops", finished_at=time.time(),
-                        error="语音识别出错：%s: %s" % (type(error).__name__, error),
-                    )
-                    continue
-                finally:
-                    try:
-                        audio.unlink()
-                    except OSError:
-                        pass
-                text = text[:MAX_TEXT_CHARS]
-            self._update(message_id, status="running", text=text)
-            carried = self._store.shared.take(conversation)
+            if len(message["events"]) < MAX_EVENTS:
+                message["events"].append({
+                    "at": time.time(), "kind": kind, "agent": agent,
+                    "text": text[:MAX_EVENT_CHARS],
+                })
+            if kind in ("route", "handoff"):
+                message["agent"] = agent
+            if kind in ("handoff", "result"):
+                message["stage"] = text[:MAX_EVENT_CHARS]
+            self._changed.notify_all()
+
+    def _drain(self, conversation: str) -> None:
+        """处理一个对话里排着的消息，直到排空。"""
+        with self._slots:
+            while True:
+                with self._changed:
+                    lane = self._lanes.get(conversation)
+                    if not lane:
+                        self._lanes.pop(conversation, None)
+                        self._busy.pop(conversation, None)
+                        return
+                    message_id = lane.popleft()
+                self._handle(message_id)
+
+    def _handle(self, message_id: str) -> None:
+        with self._changed:
+            message = self._messages.get(message_id)
+            if message is None:
+                return
+            text, conversation = message["text"], message["conversation"]
+            asked, hop = message["asked"], message["hop"]
+            audio = self._audio.pop(message_id, None)
+        if audio is not None:
+            self._update(message_id, status="transcribing")
             try:
-                turn = self._backend.turn(
-                    recap(carried, text) if carried else text, self._store.session(conversation)
-                )
-                if turn.session_id:
-                    self._store.remember(conversation, turn.session_id)
-                # 模型已经听到了带过来的那几轮；这一轮是自己答的，也记为已知。
-                if carried:
-                    self._store.shared.told(conversation, carried)
-                self._store.shared.know(conversation, message_id)
-                self._update(
-                    message_id, status="done", reply=turn.reply, brief=turn.brief,
-                    mood=turn.mood, finished_at=time.time(),
-                )
-            except BackendError as error:
+                text = self._stt.transcribe(audio)
+                if not text:
+                    raise SttError("没听清，再说一次吧")
+            except SttError as error:
                 self._update(
                     message_id, status="failed", error=str(error), mood="oops",
                     finished_at=time.time(),
                 )
-            except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
+                return
+            except Exception as error:
                 self._update(
                     message_id, status="failed", mood="oops", finished_at=time.time(),
-                    error="Runtime 内部出错：%s: %s" % (type(error).__name__, error),
+                    error="语音识别出错：%s: %s" % (type(error).__name__, error),
                 )
+                return
+            finally:
+                try:
+                    audio.unlink()
+                except OSError:
+                    pass
+            text = text[:MAX_TEXT_CHARS]
+        self._update(message_id, status="running", text=text)
+        try:
+            turn = self._xiaoyou.answer(
+                text, conversation, message_id, asked=asked, hop=hop,
+                report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
+            )
+            self._update(
+                message_id, status="done", reply=turn.reply, brief=turn.brief,
+                mood=turn.mood, agent=turn.agent, stage=None, finished_at=time.time(),
+            )
+        except AgentError as error:
+            self._update(
+                message_id, status="failed", error=str(error), mood="oops", stage=None,
+                finished_at=time.time(),
+            )
+        except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
+            self._update(
+                message_id, status="failed", mood="oops", stage=None, finished_at=time.time(),
+                error="Runtime 内部出错：%s: %s" % (type(error).__name__, error),
+            )
