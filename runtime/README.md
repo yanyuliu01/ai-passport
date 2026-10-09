@@ -120,7 +120,7 @@ Keys by type:
 
 | Type | What it does | Keys |
 | --- | --- | --- |
-| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `dontAsk`), `allowed_tools`, `extra_args` |
+| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `dontAsk`), `allowed_tools`, `extra_args`, `env` |
 | `codex` | Runs the Codex command line non-interactively (`codex exec`, and `codex exec resume` to continue). | `command` (default `["codex"]`), `workdir`, `config_dir`, `sandbox` (default `read-only`), `model`, `extra_args` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
@@ -130,6 +130,37 @@ With `permission_mode` set to `dontAsk`, anything in Claude Code not covered by
 `allowed_tools` is refused instead of waiting for a person who is not there.
 Keep the allow rules narrow: every rule is something this agent can do
 unattended. The same goes for Codex's `sandbox`, which is read-only by default.
+
+### Using another provider's model (for example DeepSeek V4)
+
+A `claude_code` agent accepts `env`: extra environment variables set when Claude
+Code is started. Point the endpoint and key at a service that speaks the Anthropic
+API and the shell is still Claude Code (tools, sessions and the reply format are
+unchanged) while the answering model is that provider's. The example configuration
+carries a disabled `deepseek` agent:
+
+```json
+"deepseek": {
+  "type": "claude_code",
+  "config_dir": "~/.claude-xiaoyou-deepseek",
+  "model": "deepseek-v4-pro",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "your DeepSeek key"
+  }
+}
+```
+
+Set `"enabled"` to `true`, fill in the key, and point `xiaoyou.default_agent` (and
+`voice_agent`, if set) at it: Xiaoyou herself is then answered by that model. The
+original `claude` stays as a helper, and switching back is pointing those two keys
+at `claude` again. Give it its own `config_dir` so its sessions stay apart from the
+subscription login; that directory needs no login. The key lives only in
+`config.json`, which is not committed.
+
+Not verified: this follows DeepSeek's API documentation and the requests Claude
+Code actually sends, but no turn has been run with a real key. Claude Code's web
+search is a server-side Anthropic tool and may not work on another service.
 
 The example configuration ships a disabled `codex` agent; set `"enabled": true`
 after installing and logging in to the Codex command line on the same machine,

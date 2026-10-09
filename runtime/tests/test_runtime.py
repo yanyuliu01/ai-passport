@@ -423,6 +423,39 @@ class ClaudeCodeAgentTests(TempDirCase):
         # 其余环境变量原样保留，否则连 PATH 都没有。
         self.assertEqual(seen[-1]["env"].get("PATH"), os.environ.get("PATH"))
 
+    def test_extra_environment_points_claude_code_at_another_service(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        extra = {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic",
+                 "ANTHROPIC_AUTH_TOKEN": "sk-example"}
+        spec = dataclasses.replace(self.config.agents[0], config_dir=self.folder / "home", env=extra)
+        agent = agents_module.ClaudeCodeAgent(spec, run=fake_run)
+        agent.run(Job("x"))
+        self.assertEqual(seen[-1]["env"]["ANTHROPIC_BASE_URL"], extra["ANTHROPIC_BASE_URL"])
+        self.assertEqual(seen[-1]["env"]["CLAUDE_CONFIG_DIR"], str(self.folder / "home"))
+        self.assertEqual(seen[-1]["env"].get("PATH"), os.environ.get("PATH"))
+        self.assertIsNone(agent.check())
+        keyless = dataclasses.replace(spec, env={"ANTHROPIC_BASE_URL": extra["ANTHROPIC_BASE_URL"]})
+        saved = {key: os.environ.pop(key, None) for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")}
+        try:
+            self.assertIn("ANTHROPIC_AUTH_TOKEN", agents_module.ClaudeCodeAgent(keyless).check())
+        finally:
+            os.environ.update({key: value for key, value in saved.items() if value is not None})
+
+    def test_agent_environment_is_validated(self):
+        def agents(env):
+            return {"claude": {"type": "claude_code", "command": ["claude"], "env": env}}
+
+        loaded = config_module.load(write_config(self.folder, agents=agents({"A_B": "1"})), {})
+        self.assertEqual(loaded.agents[0].env, {"A_B": "1"})
+        for bad in ({"A-B": "1"}, {"A": 1}, {"CLAUDE_CONFIG_DIR": "/x"}):
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load(write_config(self.folder, agents=agents(bad)), {})
+
 
 class CodexAgentTests(TempDirCase):
     def setUp(self):

@@ -43,6 +43,8 @@ class AgentSpec:
     config_dir: Optional[Path] = None
     permission_mode: str = "dontAsk"
     allowed_tools: List[str] = field(default_factory=list)
+    # claude_code：启动命令时额外设置的环境变量（例如换一个兼容 Anthropic 接口的服务）
+    env: Dict[str, str] = field(default_factory=dict)
     # codex
     sandbox: Optional[str] = None
     # remote：另一台小幽 Runtime
@@ -107,6 +109,7 @@ GITHUB_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$
 MIN_TOKEN_LENGTH = 16
 PLACEHOLDER_TOKEN = "change-me-to-a-long-random-string"
 AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$")
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_AGENTS = 12
 MAX_ALIAS_CHARS = 24
 
@@ -135,6 +138,18 @@ def _optional_string(value: Any, where: str) -> Optional[str]:
     if not value.strip():
         raise ConfigError("%s 不能是空字符串；不需要就删掉这一项" % where)
     return value.strip()
+
+
+def _env(value: Any, where: str) -> Dict[str, str]:
+    _expect(value, dict, where)
+    for key, item in value.items():
+        if not ENV_NAME.match(key):
+            raise ConfigError("%s 里的名字 %r 不像环境变量名" % (where, key))
+        if not isinstance(item, str):
+            raise ConfigError("%s.%s 应该是字符串" % (where, key))
+        if key == "CLAUDE_CONFIG_DIR":
+            raise ConfigError("%s 里不要写 CLAUDE_CONFIG_DIR；用这个代理的 config_dir" % where)
+    return dict(value)
 
 
 def _path(value: str, base: Path) -> Path:
@@ -226,6 +241,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             raw.get("permission_mode", "dontAsk"), str, where + ".permission_mode"
         ),
         allowed_tools=_strings(raw.get("allowed_tools", []), where + ".allowed_tools"),
+        env=_env(raw.get("env", {}), where + ".env"),
         **common,
         **shared,
     )

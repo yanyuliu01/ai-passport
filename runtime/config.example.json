@@ -29,6 +29,21 @@
       "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
       "extra_args": []
     },
+    "deepseek": {
+      "type": "claude_code",
+      "enabled": false,
+      "description": "Claude Code 的外壳，模型换成 DeepSeek V4。",
+      "command": ["claude"],
+      "workdir": "workdir",
+      "config_dir": "~/.claude-xiaoyou-deepseek",
+      "model": "deepseek-v4-pro",
+      "permission_mode": "dontAsk",
+      "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": ""
+      }
+    },
     "codex": {
       "type": "codex",
       "enabled": false,
