@@ -49,10 +49,13 @@
     "codex": {
       "type": "codex",
       "enabled": false,
-      "description": "OpenAI Codex 命令行：看代码、给第二意见。默认只读，不改文件。",
+      "description": "OpenAI Codex 命令行：看代码、改代码、给第二意见。",
       "aliases": [],
       "command": ["codex"],
       "workdir": "workdir",
+      "config_dir": null,
+      "mode": "app_server",
+      "approval_policy": "on-request",
       "sandbox": "read-only",
       "model": null
     }

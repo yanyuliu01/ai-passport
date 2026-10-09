@@ -50,6 +50,10 @@ class AgentSpec:
     env: Dict[str, str] = field(default_factory=dict)
     # codex
     sandbox: Optional[str] = None
+    # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
+    codex_mode: str = "app_server"
+    # app_server 模式下什么时候来问：untrusted、on-request、never
+    approval_policy: str = "on-request"
     # remote：另一台小幽 Runtime
     url: Optional[str] = None
     token: Optional[str] = None
@@ -103,6 +107,8 @@ AGENT_TYPES = ("claude_code", "codex", "command", "remote", "echo")
 SPEAKS_BY_DEFAULT = ("claude_code", "remote", "echo")
 ROUTER_TYPES = ("mention", "command")
 CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+CODEX_MODES = ("app_server", "exec")
+CODEX_APPROVAL_POLICIES = ("untrusted", "on-request", "never")
 STT_ENGINES = ("none", "sense_voice", "command")
 STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
 MIN_TOKEN_LENGTH = 16
@@ -226,9 +232,16 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         sandbox = _optional_string(raw.get("sandbox", "read-only"), where + ".sandbox")
         if sandbox is not None and sandbox not in CODEX_SANDBOXES:
             raise ConfigError("%s.sandbox 只能是 %s 之一" % (where, "、".join(CODEX_SANDBOXES)))
+        mode = _expect(raw.get("mode", "app_server"), str, where + ".mode")
+        if mode not in CODEX_MODES:
+            raise ConfigError("%s.mode 只能是 %s 之一" % (where, "、".join(CODEX_MODES)))
+        policy = _expect(raw.get("approval_policy", "on-request"), str, where + ".approval_policy")
+        if policy not in CODEX_APPROVAL_POLICIES:
+            raise ConfigError("%s.approval_policy 只能是 %s 之一" % (
+                where, "、".join(CODEX_APPROVAL_POLICIES)))
         codex_home = _optional_string(raw.get("config_dir"), where + ".config_dir")
         codex_home = env.get("XIAOYOU_CODEX_CONFIG_DIR") or codex_home
-        return AgentSpec(sandbox=sandbox,
+        return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
                          config_dir=_path(codex_home, base) if codex_home else None,
                          **common, **shared)
 

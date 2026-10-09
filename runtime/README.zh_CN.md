@@ -112,7 +112,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
 | `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env` |
-| `codex` | 非交互地运行 Codex 命令行（`codex exec`，接着聊用 `codex exec resume`）。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
+| `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -223,6 +223,21 @@ JSON 对象。
 
 命令行里用 `--once` 说一句话时没有手机和设备在场：有授权就在终端里问（`可以吗？[y/N]`），
 不是终端就当作不行。
+
+交给 Codex 的事也一样会来问，只是路不同：Codex 的 app-server 自己把询问发给 Runtime
+（跑命令、改文件、要更多权限三种），不需要权限询问工具。默认是只读沙箱加
+`approval_policy: "on-request"`：读哪里都行，任何改动、任何要出沙箱的命令都来问。`tool` 是
+`codex · 命令`、`codex · 改文件`、`codex · 权限`，`detail` 是命令和所在目录、每个文件的
+路径和改动、或者它要的权限原文，后面跟着 Codex 自己给的理由。它问别的东西（要主人填
+内容之类）一律不答应。想放宽就改 `sandbox`（`workspace-write` 时在工作目录里写不用问）或
+`approval_policy`；`mode` 是 `exec` 时没有询问，沙箱不让做的就是做不了。
+
+改要求（`redo`）对 Codex 是中途追加：新的话直接送进正在做的这一轮（`turn/steer`），不用
+停下重来。追加不进去时（这一轮刚开始或刚结束）才和 Claude Code 一样停下再做。取消是先
+打断这一轮（`turn/interrupt`），5 秒内没停就结束进程。
+
+app-server 在 Codex 的帮助里标着“实验性”。`--check` 会对每个这种模式的 `codex` 代理做一次
+握手（不调用模型）；握手不成会说明原因，这时可以先把 `mode` 改成 `exec`。
 
 ### 使用单独的 Claude 登录
 
@@ -441,7 +456,10 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 检查和旧写法的兼容；交给假的 `claude`、`codex` 可执行文件的完整命令行和标准输入、结果与
 错误的解析、会话续接；点名和路由的先后顺序、用一条命令做路由器；卡的存取、序号、落盘
 和重启后把没做完的标成失败；小幽直接回答、交给帮手后立刻能接下一句、几件事同时做、
-补充、改要求（包括真的停掉一个进程再重跑）、取消、并行上限、帮手失败或不存在、办不了
+补充、改要求（包括真的停掉一个进程再重跑）、取消（包括另开了会话的孙进程）、并行上限、
+授权的登记、等待和回答、权限询问工具本身和那个只听本机的入口、交给假的 Claude Code 时
+从询问到主人回答再到文件写或不写的整条路、Codex 的 app-server 模式（对着替身：一轮、
+接着做、三种询问、中途追加、打断、各种失败）、帮手失败或不存在、办不了
 的事重说一次、只干活的帮手做完后的转述、补上她没听到的对话；两台真的 Runtime 之间的
 `remote` 代理（用 `echo`）以及互相登记时不会来回转；按对话排队、按 `client_id` 重试、
 令牌校验、HTTP 接口（包括 feed 的长轮询）；以及用一条假的识别命令跑的语音消息（格式
@@ -513,9 +531,11 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 - 真实设备上的语音：麦克风音质、蓝牙吞吐，以及真实环境里真人说话的识别效果。
 - macOS 上的 sherpa-onnx。
 
-- 真实的 Codex 命令行。`codex` 代理是对着 codex-cli 0.162.0 写的：命令行选项来自它的
-  帮助输出，事件的格式来自一次没有登录、连不上服务的运行；还没有一轮真正跑成功过。
-  转交的验证用的是一个替身脚本。
+- 真实的 Codex 跑完一轮。`codex` 代理是对着 codex-cli 0.162.0 写的。app-server 模式：消息的
+  形状来自它自己生成的协议定义；对着真的命令行实测过握手、开线程、开始一轮，以及没有
+  登录时在限定时间内报出“一直连不上”。授权请求、中途追加、打断、一轮正常结束，都只对着
+  一个按协议定义写的替身测过——云端没有登录的 Codex。`exec` 模式的命令行选项来自帮助
+  输出，同样没有真正跑成功过一轮。
 - `remote` 代理对着另一台真实电脑、经过真实网络的情况。
 - 本地模型：`command` 类型能以小幽的身份回话这条路只在测试里用脚本走过。
 - 虚拟机，以及连续运行多天的情况。
@@ -536,7 +556,6 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   代理；只干活的帮手做完后还要再调用一次来转述。并行不设上限，用量由主人自己掌握。
 - 默认配置下，交给 Claude Code 的事能碰整个主目录，靠的是“该问的都问”。主人点了“可以”
   的操作就真的做了；设备上只显示内容的前 319 字节，长的要到手机上看全。
-- `codex` 代理还是只读沙箱的 `codex exec`，不会来问。
 - 手机 App 0.5.0 和现在的固件不会显示这些授权：在配套的 App 和固件出来之前，等授权的事
   只能用 HTTP 接口回答，或者一直等到超时。
 - 两件事同时改同一个文件夹时没有互相保护。

@@ -561,7 +561,16 @@ class Xiaoyou:
         control.progress = lambda line, card=task.card: self._cards.update(card, progress=line)
         control.scratch = self._config.state_dir
         if task.agent.type == "claude_code":
+            # Claude Code 的询问由另一个进程（权限询问工具）送进来，要一把钥匙。
             control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
+
+        def ask(tool: str, detail: str, task: Task = task) -> bool:
+            # 代理自己收到询问的（Codex 的 app-server）直接从这里问。
+            approval = self._approvals.ask(
+                task.card, task.conversation, task.agent.name, tool, detail)
+            return self._approvals.wait(approval) == "allow"
+
+        control.ask = ask
 
     def _release(self, task: Task, control: Control) -> None:
         """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了。"""

@@ -54,6 +54,7 @@ class Control:
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._steer: Optional[Callable[[str], bool]] = None
+        self._stop: Optional[Callable[[], bool]] = None
         self.cancelled = False
         # 下面几样由开任务的一方填好，代理用得上就用：
         # 做了一步操作时报一行进展
@@ -64,6 +65,9 @@ class Control:
         self.gate: Optional[Dict[str, str]] = None
         # 放临时文件（比如给 Claude Code 的 MCP 配置）的目录
         self.scratch: Optional[Path] = None
+        # 代理自己能收到“可以吗”的询问时（Codex 的 app-server），用它问主人：
+        # (谁要用什么, 内容原文) → 可以不可以。None 表示这一次没有人可问
+        self.ask: Optional[Callable[[str, str], bool]] = None
 
     def attach(self, process: Optional[subprocess.Popen]) -> None:
         with self._lock:
@@ -85,10 +89,22 @@ class Control:
         except Exception:
             return False
 
+    def can_stop(self, stop: Optional[Callable[[], bool]]) -> None:
+        """代理有比直接结束进程更好的停法时登记一个函数：它接手了返回 True。"""
+        with self._lock:
+            self._stop = stop
+
     def cancel(self) -> None:
         with self._lock:
             self.cancelled = True
             process = self._process
+            stop = self._stop
+        if stop is not None:
+            try:
+                if stop():
+                    return  # 代理自己会收尾，到时限还没停它会自己结束进程
+            except Exception:
+                pass
         if process is not None:
             kill_tree(process)
 
@@ -529,14 +545,26 @@ class ClaudeCodeAgent(Agent):
 
 
 class CodexAgent(Agent):
-    """用非交互模式驱动 Codex 命令行：codex exec，接着聊时用 codex exec resume。
+    """驱动 Codex 命令行。两种模式，配置里的 mode 选：
 
-    最后一条回复让 Codex 写进一个临时文件（-o），会话编号从它的事件输出（--json）里取。
+    app_server（默认）：`codex app-server`，见 codex_app.py。需要确认的操作会来问主人，
+    做的过程中可以追加一句话。只用于后台的事；别处（没有遥控器的调用）仍然走 exec。
+
+    exec：`codex exec`，接着聊时用 `codex exec resume`。最后一条回复让 Codex 写进一个
+    临时文件（-o），会话编号从它的事件输出（--json）里取。不会来问：沙箱不让做的就是
+    做不了。
     """
 
     def __init__(self, spec: AgentSpec, run=subprocess.run):
         super().__init__(spec)
         self._run = run
+
+    def _env(self) -> Optional[Dict[str, str]]:
+        if self.spec.config_dir is None:
+            return None
+        # 让这台机器上的 Codex 用一套单独的登录和设置（CODEX_HOME），
+        # 不受（也不影响）使用者平时那套 ~/.codex 配置。
+        return dict(os.environ, CODEX_HOME=str(self.spec.config_dir))
 
     def command(self, job: Job, last_message: Path) -> List[str]:
         spec = self.spec
@@ -553,12 +581,12 @@ class CodexAgent(Agent):
         return command
 
     def run(self, job: Job) -> Outcome:
+        if (self.spec.codex_mode == "app_server" and job.control is not None
+                and self._run is subprocess.run):
+            from . import codex_app  # 放在这里：codex_app 要用这个模块里的东西
+            return codex_app.run(self.spec, job, job.control, self._env())
         text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
-        env = None
-        if self.spec.config_dir is not None:
-            # 让这台机器上的 Codex 用一套单独的登录和设置（CODEX_HOME），
-            # 不受（也不影响）使用者平时那套 ~/.codex 配置。
-            env = dict(os.environ, CODEX_HOME=str(self.spec.config_dir))
+        env = self._env()
         with tempfile.TemporaryDirectory(prefix="xiaoyou-codex-") as folder:
             last_message = Path(folder) / "last.txt"
             done = run_command(
@@ -611,6 +639,9 @@ class CodexAgent(Agent):
         if problem is None and self.spec.config_dir is not None and not self.spec.config_dir.is_dir():
             # Codex 自己不会建这个目录，目录不在它直接报错退出。
             return "找不到 Codex 的配置目录 %s：先建好并在里面登录（mkdir -p 这个目录，再 CODEX_HOME=这个目录 codex login）" % self.spec.config_dir
+        if problem is None and self.spec.codex_mode == "app_server":
+            from . import codex_app
+            problem = codex_app.check(self.spec, self._env())
         return problem
 
 

@@ -127,7 +127,7 @@ Keys by type:
 | Type | What it does | Keys |
 | --- | --- | --- |
 | `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env` |
-| `codex` | Runs the Codex command line non-interactively (`codex exec`, and `codex exec resume` to continue). | `command` (default `["codex"]`), `workdir`, `config_dir`, `sandbox` (default `read-only`), `model`, `extra_args` |
+| `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
@@ -279,6 +279,33 @@ The runtime's token is never written to any file.
 With `--once` on the command line no phone or device is present: an approval
 is asked in the terminal (`[y/N]`), and when there is no terminal the answer
 is no.
+
+A thing given to Codex asks in the same way, by a different route: Codex's
+app-server sends its questions to the runtime itself (running a command,
+changing files, wanting more permissions), so no permission tool is involved.
+The default is a read-only sandbox with `approval_policy: "on-request"`: it
+may read anywhere, and every change and every command that has to leave the
+sandbox is asked about. `tool` is the helper's name with a short Chinese label
+for a command, a file change or permissions (the labels are in
+[`xiaoyou_runtime/codex_app.py`](xiaoyou_runtime/codex_app.py); the Chinese
+version of this page lists them), and `detail` is the command
+and its directory, each file's path and diff, or the permissions it wants as
+they are, followed by the reason Codex itself gave. Anything else it asks
+(wanting the owner to type something, for example) is refused. To loosen
+this, change `sandbox` (with `workspace-write`, writing inside the working
+directory is not asked about) or `approval_policy`; with `mode` set to `exec`
+nothing is asked, and what the sandbox forbids simply cannot be done.
+
+Changing a request (`redo`) is, for Codex, adding to the turn in progress:
+the new sentence goes straight into it (`turn/steer`) and nothing is started
+over. Only when that is not possible (the turn has just begun or just ended)
+is the round stopped and run again, as with Claude Code. Cancelling first
+interrupts the turn (`turn/interrupt`) and ends the process if it has not
+stopped within 5 seconds.
+
+Codex's help marks the app-server as experimental. `--check` shakes hands
+with every `codex` agent in this mode (without calling a model); when that
+fails it says why, and `mode` can be set to `exec` for the time being.
 
 ### Using a separate Claude login
 
@@ -548,8 +575,14 @@ routing rules and a command as the router; storing cards, their sequence numbers
 disk and marking unfinished ones as failed after a restart; Xiaoyou answering
 directly, being free for the next sentence right after handing work out,
 several things in progress at once, adding to a thing, changing its request
-(including really stopping a process and running it again), cancelling, the
-limit on parallel things, a helper that fails or does not exist, putting what
+(including really stopping a process and running it again), cancelling
+(including a grandchild process in a session of its own), the limit on
+parallel things, recording, waiting for and answering approvals, the
+permission tool itself and the entrance that listens on this machine only,
+the whole path with a fake Claude Code from the question through the owner's
+answer to the file being written or not, Codex's app-server mode (against a
+stand-in: a turn, continuing, the three kinds of question, adding to a turn,
+interrupting, the ways it fails), a helper that fails or does not exist, putting what
 cannot be done to her once more, reporting back after a work-only helper,
 telling her what she did not witness; the `remote` agent between two real
 runtimes (with `echo`), including two that list each other; queueing per
@@ -650,10 +683,15 @@ Not verified:
   recognition of real speech in a real room.
 - sherpa-onnx on macOS.
 
-- The real Codex command line. The `codex` agent was written against codex-cli
-  0.162.0: the options come from its help output and the event format from a
-  run that was not logged in and could not reach the service; no turn has
-  completed for real. The hand-over check used a stand-in script.
+- A complete turn with the real Codex. The `codex` agent was written against
+  codex-cli 0.162.0. In app-server mode the message shapes come from the
+  protocol definition it generates itself; against the real command line the
+  handshake, starting a thread, starting a turn, and reporting "cannot connect"
+  within a bounded time when not logged in were checked. Approval requests,
+  adding to a turn, interrupting, and a turn ending normally were only
+  exercised against a stand-in written from that definition: there is no
+  logged-in Codex in the cloud workspace. The options of `exec` mode come from
+  its help output, and no turn has completed for real there either.
 - The `remote` agent against another real computer over a real network.
 - A local model: a `command` agent answering as Xiaoyou has only been
   exercised with a script in the tests.
@@ -687,8 +725,6 @@ Known risks:
   whole home directory, and what keeps that safe is that everything that
   should be asked is asked. An operation the owner allows really happens; the
   device shows only the first 319 bytes of it, and the phone the whole.
-- The `codex` agent is still `codex exec` in a read-only sandbox and never
-  asks.
 - Phone app 0.5.0 and the current firmware do not show these approvals: until
   the matching app and firmware exist, a thing waiting for approval can only
   be answered through the HTTP interface, or waits until it times out.

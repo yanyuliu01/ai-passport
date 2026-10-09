@@ -29,6 +29,7 @@ from xiaoyou_runtime import agents as agents_module  # noqa: E402
 from xiaoyou_runtime import approvals as approvals_module  # noqa: E402
 from xiaoyou_runtime import permission_mcp  # noqa: E402
 from xiaoyou_runtime import cards as cards_module  # noqa: E402
+from xiaoyou_runtime import codex_app as codex_app_module  # noqa: E402
 from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import router as router_module  # noqa: E402
 from xiaoyou_runtime import stt as stt_module  # noqa: E402
@@ -130,6 +131,108 @@ print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "t
 if mode != "no-file":
     with open(args[args.index("-o") + 1], "w", encoding="utf-8") as handle:
         handle.write("written " + text + "\n")
+'''
+
+
+FAKE_CODEX_APP = r'''
+import json, os, sys, time
+args = sys.argv[1:]
+mode = os.environ.get("FAKE_CODEX_MODE", "ok")
+log = os.environ.get("FAKE_CODEX_LOG")
+def note(entry):
+    if log:
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry) + "\n")
+def send(message):
+    sys.stdout.write(json.dumps(message) + "\n"); sys.stdout.flush()
+def read():
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit(0)
+    message = json.loads(line)
+    note({"got": message})
+    return message
+note({"args": args, "home": os.environ.get("CODEX_HOME"), "cwd": os.getcwd()})
+if args[:1] != ["app-server"] or mode == "old":
+    sys.stderr.write("error: unrecognized subcommand 'app-server'\n"); sys.exit(2)
+print("a log line that is not JSON", flush=True)
+hello = read()
+if mode == "mute":
+    time.sleep(60)
+send({"id": hello["id"], "result": {"userAgent": "fake"}})
+send({"method": "configWarning", "params": {"summary": "no bubblewrap"}})
+assert read()["method"] == "initialized"
+opened = read()
+if opened is None or mode == "check-only":
+    sys.exit(0)
+thread = opened["params"].get("threadId") or "thread-1"
+if mode == "no-thread":
+    send({"id": opened["id"], "error": {"code": -32600, "message": "no rollout found for thread"}})
+    read()
+send({"id": opened["id"], "result": {"thread": {"id": thread}}})
+send({"method": "thread/started", "params": {"thread": {"id": thread}}})
+begun = read()
+text = begun["params"]["input"][0]["text"]
+send({"id": begun["id"], "result": {"turn": {"id": "turn-1", "status": "inProgress", "items": []}}})
+send({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": "turn-1"}}})
+def item(kind, **fields):
+    body = dict({"type": kind, "id": kind + "-1"}, **fields)
+    send({"method": "item/started", "params": {"item": body, "threadId": thread, "turnId": "turn-1"}})
+    return body
+def done(body):
+    send({"method": "item/completed", "params": {"item": body, "threadId": thread, "turnId": "turn-1"}})
+def finish(status="completed", error=None, say=None):
+    if say is not None:
+        done({"type": "agentMessage", "id": "m-draft", "text": "draft"})
+        done({"type": "agentMessage", "id": "m-final", "text": say})
+    send({"method": "turn/completed", "params": {"threadId": thread, "turn": {
+        "id": "turn-1", "status": status, "error": error, "items": []}}})
+    sys.exit(0)
+done(item("userMessage"))
+verdicts = []
+if mode in ("ask", "ask-all"):
+    command = item("commandExecution", command="rm -rf build", cwd="/work")
+    send({"id": 900, "method": "item/commandExecution/requestApproval", "params": {
+        "itemId": command["id"], "threadId": thread, "turnId": "turn-1", "startedAtMs": 1,
+        "command": "rm -rf build", "cwd": "/work", "reason": "needs to write outside the sandbox"}})
+    verdicts.append(read()["result"]["decision"])
+if mode == "ask-all":
+    patch = item("fileChange", changes=[{"path": "/work/a.py", "kind": {"type": "update"},
+                                         "diff": "-x = 1\n+x = 2"}])
+    send({"id": 901, "method": "item/fileChange/requestApproval", "params": {
+        "itemId": patch["id"], "threadId": thread, "turnId": "turn-1", "startedAtMs": 1,
+        "reason": None, "grantRoot": "/work"}})
+    verdicts.append(read()["result"]["decision"])
+    send({"id": 902, "method": "item/permissions/requestApproval", "params": {
+        "itemId": "p", "threadId": thread, "turnId": "turn-1", "startedAtMs": 1, "cwd": "/work",
+        "permissions": {"network": {"enabled": True}}}})
+    verdicts.append(json.dumps(read()["result"], sort_keys=True))
+    send({"id": 903, "method": "item/tool/requestUserInput", "params": {"questions": []}})
+    verdicts.append("error" if "error" in read() else "answered")
+    item("webSearch", query="python release")
+    item("reasoning")
+if mode == "steer":
+    more = read()
+    assert more["method"] == "turn/steer" and more["params"]["expectedTurnId"] == "turn-1"
+    send({"id": more["id"], "result": {"turnId": "turn-1"}})
+    finish(say="final " + text + " + " + more["params"]["input"][0]["text"])
+if mode == "hang":
+    item("commandExecution", command="sleep 60")
+    stop = read()
+    if os.environ.get("FAKE_CODEX_STUBBORN"):
+        time.sleep(60)
+    assert stop["method"] == "turn/interrupt"
+    send({"id": stop["id"], "result": {}})
+    finish(status="interrupted")
+if mode == "failed":
+    send({"method": "error", "params": {"error": {"message": "Reconnecting... 2/5",
+          "additionalDetails": "stream disconnected"}, "willRetry": True}})
+    finish(status="failed", error={"message": "quota exceeded"})
+if mode == "silent":
+    finish()
+if mode == "crash":
+    sys.stderr.write("panicked at main.rs\n"); sys.exit(101)
+finish(say="final " + text + (" " + json.dumps(verdicts) if verdicts else ""))
 '''
 
 
@@ -284,6 +387,8 @@ class ConfigTests(TempDirCase):
             {"agents": {"claude": claude, "Claude": {"type": "echo"}}},
             {"agents": {"claude": claude, "b": {"type": "echo", "aliases": ["CLAUDE"]}}},
             {"agents": {"codex": {"type": "codex", "sandbox": "anything-goes"}}},
+            {"agents": {"codex": {"type": "codex", "mode": "interactive"}}},
+            {"agents": {"codex": {"type": "codex", "approval_policy": "always"}}},
             {"agents": {"tool": {"type": "command"}}},
             {"agents": {"tool": {"type": "command", "command": ["x"], "model": "m"}}},
             {"agents": {"pc": {"type": "remote", "url": "ftp://x", "token": OTHER_TOKEN}}},
@@ -330,6 +435,9 @@ class ConfigTests(TempDirCase):
         self.assertEqual((by_name["codex"].description, by_name["codex"].aliases,
                           by_name["codex"].sandbox, by_name["codex"].command),
                          ("reviews code", ["科迪"], "read-only", ["codex"]))
+        # Codex asks before it changes anything, the way Claude Code does.
+        self.assertEqual((by_name["codex"].codex_mode, by_name["codex"].approval_policy),
+                         ("app_server", "on-request"))
         self.assertEqual(by_name["claude"].workdir, (self.folder / "workdir").resolve())
         self.assertEqual(by_name["pc"].url, "http://10.0.0.2:8765")
         # The first agent is the default; it only works, so the first one that speaks is the voice.
@@ -641,7 +749,7 @@ class CodexAgentTests(TempDirCase):
         self.addCleanup(os.environ.pop, "FAKE_CODEX_MODE", None)
         self.config = config_module.load(write_config(self.folder, agents={"codex": {
             "type": "codex", "command": [sys.executable, str(fake)], "model": "some-model",
-            "sandbox": "workspace-write", "extra_args": ["-c", "x=1"],
+            "sandbox": "workspace-write", "extra_args": ["-c", "x=1"], "mode": "exec",
         }}), {})
         self.agent = agents_module.create(self.config.agents[0])
 
@@ -682,7 +790,7 @@ class CodexAgentTests(TempDirCase):
         # From the config file, relative to it; an environment variable wins.
         folder = self.folder / "other"
         folder.mkdir()
-        agents = {"codex": {"type": "codex", "config_dir": "codex-login"}}
+        agents = {"codex": {"type": "codex", "config_dir": "codex-login", "mode": "exec"}}
         loaded = config_module.load(write_config(folder, agents=agents), {})
         self.assertEqual(loaded.agents[0].config_dir, (folder / "codex-login").resolve())
         from_env = config_module.load(write_config(folder, agents=agents),
@@ -708,6 +816,198 @@ class CodexAgentTests(TempDirCase):
         spec = dataclasses.replace(self.config.agents[0], command=[str(self.folder / "no-codex")])
         with self.assertRaisesRegex(AgentError, "no-codex"):
             agents_module.create(spec).run(Job("q"))
+
+
+class CodexAppServerTests(TempDirCase):
+    """The codex agent in its default mode, against a stand-in that speaks the app-server protocol."""
+
+    def setUp(self):
+        super().setUp()
+        fake = self.folder / "fake_codex_app.py"
+        fake.write_text(FAKE_CODEX_APP, encoding="utf-8")
+        self.log = self.folder / "codex.jsonl"
+        os.environ["FAKE_CODEX_LOG"] = str(self.log)
+        os.environ.pop("FAKE_CODEX_MODE", None)
+        for name in ("FAKE_CODEX_LOG", "FAKE_CODEX_MODE", "FAKE_CODEX_STUBBORN"):
+            self.addCleanup(os.environ.pop, name, None)
+        self.config = config_module.load(write_config(self.folder, agents={"codex": {
+            "type": "codex", "command": [sys.executable, str(fake)], "model": "some-model",
+            "extra_args": ["-c", "x=1"],
+        }}), {})
+        self.agent = agents_module.create(self.config.agents[0])
+
+    def entries(self):
+        return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
+
+    def sent(self, method):
+        return [entry["got"] for entry in self.entries()
+                if "got" in entry and entry["got"].get("method") == method]
+
+    def control(self, answers=None):
+        control = agents_module.Control()
+        self.lines, self.sessions, self.asked = [], [], []
+        control.progress, control.session = self.lines.append, self.sessions.append
+
+        def ask(tool, detail):
+            self.asked.append((tool, detail))
+            return answers.pop(0)
+
+        control.ask = ask if answers is not None else None
+        return control
+
+    def test_a_turn_runs_through_the_app_server(self):
+        outcome = self.agent.run(Job("review -- $(x)", control=self.control()))
+        self.assertEqual((outcome.text, outcome.session_id, outcome.fields),
+                         ("final review -- $(x)", "thread-1", None))
+        self.assertEqual(self.sessions, ["thread-1"])
+        start = self.entries()[0]
+        self.assertEqual((start["args"], start["home"]), (["app-server", "-c", "x=1"], None))
+        self.assertEqual(Path(start["cwd"]).resolve(), self.config.agents[0].workdir)
+        hello = self.sent("initialize")[0]["params"]["clientInfo"]
+        self.assertEqual((hello["name"], hello["title"]), ("xiaoyou-runtime", "Xiaoyou"))
+        self.assertEqual(len(self.sent("initialized")), 1)
+        # Read-only and asking: it may read anywhere, and anything else comes to the owner.
+        self.assertEqual(self.sent("thread/start")[0]["params"], {
+            "cwd": str(self.config.agents[0].workdir), "approvalPolicy": "on-request",
+            "sandbox": "read-only", "model": "some-model"})
+        turn = self.sent("turn/start")[0]["params"]
+        self.assertEqual(turn, {"threadId": "thread-1",
+                                "input": [{"type": "text", "text": "review -- $(x)"}]})
+
+    def test_continuing_resumes_the_thread_and_a_speaking_codex_gets_the_shape(self):
+        schema = xiaoyou_module.reply_schema()
+        outcome = self.agent.run(Job("more", session_id="thread-7", system="PERSONA",
+                                     schema=schema, control=self.control()))
+        self.assertEqual(outcome.session_id, "thread-7")
+        self.assertEqual(self.sent("thread/resume")[0]["params"]["threadId"], "thread-7")
+        self.assertEqual(self.sent("thread/start"), [])
+        turn = self.sent("turn/start")[0]["params"]
+        self.assertEqual((turn["input"][0]["text"], turn["outputSchema"]), ("PERSONA\n\nmore", schema))
+
+    def test_what_codex_asks_goes_to_the_owner_as_it_is(self):
+        os.environ["FAKE_CODEX_MODE"] = "ask-all"
+        outcome = self.agent.run(Job("clean up", control=self.control([True, False, True])))
+        self.assertEqual(self.asked, [
+            ("codex · 命令", "rm -rf build\n（在 /work）\n（Codex 说明：needs to write outside the sandbox）"),
+            ("codex · 改文件", "update /work/a.py\n-x = 1\n+x = 2\n（并允许之后写 /work）"),
+            ("codex · 权限", '{"network": {"enabled": true}}'),
+        ])
+        verdicts = json.loads(outcome.text[len("final clean up "):])
+        # A question it cannot put to the owner is refused, not left hanging.
+        self.assertEqual(verdicts, ["accept", "decline", json.dumps(
+            {"permissions": {"network": {"enabled": True}}, "scope": "turn"}, sort_keys=True), "error"])
+        # Each step as it is: the command, the files, the search. Thinking is not a step.
+        self.assertEqual(self.lines, ["rm -rf build", "改文件 /work/a.py", "搜索 python release"])
+
+    def test_nobody_to_ask_means_no(self):
+        os.environ["FAKE_CODEX_MODE"] = "ask"
+        outcome = self.agent.run(Job("clean up", control=self.control()))
+        self.assertEqual(outcome.text, 'final clean up ["decline"]')
+
+    def test_a_sentence_can_be_added_while_it_works(self):
+        os.environ["FAKE_CODEX_MODE"] = "steer"
+        control = self.control()
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(
+            outcome=self.agent.run(Job("write tests", control=control))))
+        thread.start()
+        # Not possible before the turn exists; once it does, the helper takes it.
+        self.assertTrue(until(lambda: control.steer("also for Windows")))
+        thread.join(10)
+        self.assertEqual(result["outcome"].text, "final write tests + also for Windows")
+        # After the turn is over there is nothing left to steer.
+        self.assertFalse(control.steer("too late"))
+
+    def test_stopping_interrupts_the_turn_and_ends_the_process_if_that_is_ignored(self):
+        os.environ["FAKE_CODEX_MODE"] = "hang"
+        for stubborn in (False, True):
+            if stubborn:
+                os.environ["FAKE_CODEX_STUBBORN"] = "1"
+                codex_app_module.INTERRUPT_SECONDS, kept = 0.5, codex_app_module.INTERRUPT_SECONDS
+                self.addCleanup(setattr, codex_app_module, "INTERRUPT_SECONDS", kept)
+            control = self.control()
+            result = {}
+
+            def work():
+                try:
+                    self.agent.run(Job("long", control=control))
+                except AgentError as error:
+                    result["error"] = error
+
+            thread = threading.Thread(target=work)
+            thread.start()
+            self.assertTrue(until(lambda: self.lines == ["sleep 60"]))
+            control.cancel()
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+            self.assertIsInstance(result["error"], agents_module.Cancelled)
+        self.assertEqual(len(self.sent("turn/interrupt")), 2)
+
+    def test_failures_are_explained(self):
+        cases = {"failed": "quota exceeded", "silent": "什么都没说", "crash": "panicked at main.rs",
+                 "no-thread": "no rollout found", "old": "unrecognized subcommand"}
+        for mode, expected in cases.items():
+            os.environ["FAKE_CODEX_MODE"] = mode
+            with self.assertRaisesRegex(AgentError, expected, msg=mode):
+                self.agent.run(Job("q", control=self.control()))
+        missing = agents_module.create(dataclasses.replace(
+            self.config.agents[0], command=[str(self.folder / "no-codex")]))
+        with self.assertRaisesRegex(AgentError, "no-codex"):
+            missing.run(Job("q", control=self.control()))
+        slow = agents_module.create(dataclasses.replace(self.config.agents[0], timeout_seconds=1))
+        os.environ["FAKE_CODEX_MODE"] = "hang"
+        with self.assertRaisesRegex(AgentError, "超过 1 秒"):
+            slow.run(Job("q", control=self.control()))
+
+    def test_the_check_at_start_shakes_hands_without_asking_a_model(self):
+        os.environ["FAKE_CODEX_MODE"] = "check-only"
+        self.assertIsNone(self.agent.check())
+        self.assertEqual(self.sent("turn/start"), [])
+        # A Codex too old to have this mode: said so, with the way back.
+        os.environ["FAKE_CODEX_MODE"] = "old"
+        problem = self.agent.check()
+        self.assertIn("unrecognized subcommand", problem)
+        codex_app_module.HANDSHAKE_SECONDS, kept = 0.5, codex_app_module.HANDSHAKE_SECONDS
+        self.addCleanup(setattr, codex_app_module, "HANDSHAKE_SECONDS", kept)
+        os.environ["FAKE_CODEX_MODE"] = "mute"
+        self.assertIn("mode 改成 exec", self.agent.check())
+
+    def test_a_call_that_cannot_be_stopped_still_goes_through_exec(self):
+        # Without a control (no background thing behind it) the one-shot mode is used.
+        fake = self.folder / "fake_codex.py"
+        fake.write_text(FAKE_CODEX, encoding="utf-8")
+        agent = agents_module.create(dataclasses.replace(
+            self.config.agents[0], command=[sys.executable, str(fake)]))
+        self.assertEqual(agent.run(Job("q")).text, "written q")
+
+    def test_through_xiaoyou_the_owner_answers_on_the_card(self):
+        os.environ["FAKE_CODEX_MODE"] = "ask"
+        claude = Scripted("claude")
+        xiaoyou, store = make_xiaoyou(self.folder / "x", [claude, self.agent])
+        service = Service(xiaoyou, store)
+        self.addCleanup(service.close)
+        message = service.get(service.submit("@codex 清理一下")["id"], wait=5)
+        self.assertTrue(until(lambda: service.feed("default")["approvals"], 10))
+        asked = service.feed("default")["approvals"][0]
+        self.assertEqual((asked["card"], asked["agent"], asked["tool"]),
+                         (message["card"], "codex", "codex · 命令"))
+        self.assertTrue(asked["detail"].startswith("rm -rf build\n"))
+        card = xiaoyou.cards.get(message["card"])
+        self.assertEqual((card["state"], card["approval"], card["progress"]),
+                         ("waiting", asked["id"], ["rm -rf build"]))
+        service.approve(asked["id"], "allow")
+        card = xiaoyou.settle(message["card"], 10)
+        self.assertEqual((card["state"], card["approval"]), ("done", None))
+        # Codex only does the work; the result is voiced by the agent that speaks for her.
+        self.assertIn('["accept"]', claude.jobs[-1].text)
+        self.assertEqual(store.session("default/%s" % message["card"], "codex"), "thread-1")
+        # Changing the request while it works is passed on mid-turn, not started over.
+        os.environ["FAKE_CODEX_MODE"] = "steer"
+        again = service.get(service.submit("@codex 写测试")["id"], wait=5)
+        self.assertTrue(until(lambda: len(self.sent("turn/start")) == 2))
+        self.assertEqual(xiaoyou._tasks.amend(again["card"], "redo", "Windows 也要"), "steer")
+        card = xiaoyou.settle(again["card"], 10)
+        self.assertIn("+ Windows 也要", claude.jobs[-1].text)
 
 
 class CommandAgentTests(TempDirCase):
