@@ -271,6 +271,29 @@ cmake -S tools/ui_preview -B /tmp/ui_preview && cmake --build /tmp/ui_preview
 The protocol, state-machine, and orchestrator host tests need cJSON from
 `IDF_PATH`; without it the static gate reports them as skipped.
 
+## Flashing
+
+Each push to a feature branch that touches the firmware builds it in GitHub
+Actions and attaches the merged image to a prerelease named *Claude Pocket
+firmware build N*. With the device switched on and connected over a USB data
+cable:
+
+```bash
+./tools/flash_pocket.sh              # downloads the newest build and writes it
+./tools/flash_pocket.sh image.bin    # writes a merged image you already have
+```
+
+The script finds the serial port (it stops when it sees none, or more than one
+without `--port`), installs `esptool` into a private Python environment the
+first time, shows the image, its SHA-256 and the port, and asks before
+writing. It refuses a file that is not a merged image.
+
+The merged image is written at `0x0` and resets the settings area: the device
+forgets its name and its Bluetooth pairing. Remove the old pairing on the phone
+and pair again. See
+[flashing and stored data](development/engineering/firmware-layout.md#flashing-and-stored-data)
+for the alternatives that keep settings.
+
 ## On-device acceptance
 
 A successful build and the host preview are not device validation. Check on

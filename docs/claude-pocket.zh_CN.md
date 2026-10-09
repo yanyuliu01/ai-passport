@@ -222,6 +222,25 @@ cmake -S tools/ui_preview -B /tmp/ui_preview && cmake --build /tmp/ui_preview
 协议、状态机和编排层的主机测试需要 `IDF_PATH` 里的 cJSON；没有时静态门禁会把它们
 报告为跳过。
 
+## 刷机
+
+每次推送到功能分支且改动了固件，GitHub Actions 都会构建一次，并把合并镜像挂到名为
+*Claude Pocket firmware build N* 的预发布版本上。设备开机，用能传数据的 USB 线接到
+电脑之后：
+
+```bash
+./tools/flash_pocket.sh              # downloads the newest build and writes it
+./tools/flash_pocket.sh image.bin    # writes a merged image you already have
+```
+
+脚本会自己找串口（一个都没有，或者有不止一个而没有用 `--port` 指定时会停下），第一次
+使用时把 `esptool` 装进一个独立的 Python 环境，列出镜像、它的 SHA-256 和串口，写入前
+先问一句。不是合并镜像的文件它不会写。
+
+合并镜像写在 `0x0`，会重置设置区：设备会忘掉自己的名称和蓝牙配对。在手机上删掉原来
+的配对，再重新配对。想保留设置的做法见
+[烧录与已存数据](development/engineering/firmware-layout.zh_CN.md#烧录与已存数据)。
+
 ## 上板验收
 
 构建通过和主机预览都不等于设备验证。需要在硬件上检查：

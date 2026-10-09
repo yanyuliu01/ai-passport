@@ -1,0 +1,77 @@
+name: Pocket firmware
+
+# Builds the Claude Pocket firmware on a push to a feature branch and attaches
+# the merged image to a prerelease, so it can be downloaded for flashing
+# without signing in (tools/flash_pocket.sh fetches the newest one). The
+# companion app is published the same way by companion-app.yml.
+on:
+  push:
+    branches:
+      - "feature/**"
+    paths:
+      - "main/**"
+      - "components/**"
+      - "assets/fonts/**"
+      - "CMakeLists.txt"
+      - "dependencies.lock"
+      - "partitions*.csv"
+      - "sdkconfig.defaults*"
+      - ".github/workflows/pocket-firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pocket-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Build and publish the merged image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Restore ccache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .ccache
+          key: ci-ccache-${{ github.sha }}
+          restore-keys: |
+            ci-ccache-
+
+      - name: Build and verify merged firmware
+        uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32c3
+          extra_docker_args: >-
+            -e CCACHE_DIR=/app/${{ github.repository }}/.ccache
+            -e IDF_CCACHE_ENABLE=1
+          command: ./tools/validate.sh --firmware
+
+      - name: Record the image hash
+        id: image
+        run: |
+          sum="$(sha256sum build/FoloToy-AI-Passport-full.bin | cut -d' ' -f1)"
+          echo "sha256=${sum}" >> "${GITHUB_OUTPUT}"
+          echo "${sum}  FoloToy-AI-Passport-full.bin" > "${RUNNER_TEMP}/FoloToy-AI-Passport-full.bin.sha256"
+
+      - name: Publish prerelease for flashing
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: firmware-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Claude Pocket firmware build ${{ github.run_number }}
+          prerelease: true
+          body: |
+            Merged Claude Pocket firmware image for the AI Passport, built from
+            ${{ github.sha }} with ESP-IDF 5.5.3. Write it at 0x0; that resets
+            the settings area, so the device has to be paired again.
+            Not verified on a device.
+
+            SHA-256: `${{ steps.image.outputs.sha256 }}`
+          files: |
+            build/FoloToy-AI-Passport-full.bin
+            ${{ runner.temp }}/FoloToy-AI-Passport-full.bin.sha256
