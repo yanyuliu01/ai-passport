@@ -772,6 +772,36 @@ class XiaoyouTests(TempDirCase):
         self.assertNotIn("我们在聊重试逻辑", self.codex.jobs[1].text)
         self.assertEqual(self.codex.jobs[1].session_id, "s1")
 
+    def test_naming_the_agent_that_speaks_for_her_is_shown_as_handing_it_the_work(self):
+        turn = self.ask("让 Claude 查一下明天的天气")
+        self.assertEqual((turn.agent, turn.helpers), ("claude", []))
+        job = self.claude.jobs[0]
+        # It is told that it was named and that it is to do the work itself...
+        self.assertIn("主人点名要 claude 来做这件事", job.text)
+        self.assertTrue(job.text.endswith("让 Claude 查一下明天的天气"))
+        self.assertIn("PERSONA-MARKER", job.system)
+        # ...and it is not offered anybody to pass it on to.
+        self.assertEqual(job.schema, xiaoyou_module.reply_schema([]))
+        self.assertNotIn("codex：codex helper", job.system)
+        self.assertEqual(self.codex.jobs, [])
+        # Every client can see who has the work, the same way as for a helper.
+        self.assertEqual(self.events, [("route", "claude", "mention"),
+                                       ("handoff", "claude", "交给 claude 了"),
+                                       ("result", "claude", "claude 做完了")])
+        # Named by the caller instead of in the sentence: the same.
+        self.events.clear()
+        self.ask("几点了", asked="claude")
+        self.assertEqual([event[:2] for event in self.events],
+                         [("route", "claude"), ("handoff", "claude"), ("result", "claude")])
+        # (The sentence does not mention it, so there is nothing to explain to it.)
+        self.assertEqual(self.claude.jobs[1].text, "几点了")
+        self.assertEqual(self.claude.jobs[1].schema, xiaoyou_module.reply_schema([]))
+        # Not named: she answers as before, and nothing is shown as handed over.
+        self.events.clear()
+        self.ask("几点了")
+        self.assertEqual(self.events, [("route", "claude", "default")])
+        self.assertEqual(self.claude.jobs[2].text, "几点了")
+
     def test_the_result_still_reaches_the_owner_when_nobody_can_voice_it(self):
         self.claude.fail_on = "帮手 codex 做完了"
         turn = self.ask("@codex list files")

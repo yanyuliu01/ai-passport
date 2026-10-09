@@ -145,6 +145,13 @@ The order is fixed:
 3. The router has an opinion: its choice.
 4. Otherwise: the default agent.
 
+An agent that was named (rules 1 and 2) is always shown as the one Xiaoyou
+handed the work to: the message record gets a `handoff` event, and `helper` is
+that agent while it works, so the phone and the device show who has it. This
+includes the agent that speaks as Xiaoyou. With the default setup, `@claude …`
+is answered by `claude` in a single step and in Xiaoyou's voice; it is told
+that it was the one named, and that turn is not passed on to another helper.
+
 The router is the replaceable part. `mention` adds nothing beyond rules 1, 2
 and 4. `command` runs a command of yours: standard input is
 `{"text", "default", "agents": [{"name", "type", "description"}]}` and the first

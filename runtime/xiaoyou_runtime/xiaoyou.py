@@ -12,6 +12,8 @@ Codex 和以后接进来的本地模型，都只是她能用的代理（agents.p
      把结果交回来，由它用小幽的话总结。可以连着转交几次，有上限。
   3. 那个代理只会干活：让它做，结果交给负责说话的代理转述。说话的代理不在时，
      原样把结果给主人，不让主人空手而归。
+  主人点了名（“@claude ……”“让 Codex 看看……”）的那个代理，不管它会不会说话，都算
+  小幽把这件事交给了它：调用方看得见是谁在做，这一轮也不会再转给别人。
   4. 这一轮记进小幽的对话记录，并记下哪些代理见过。下次轮到没见过的代理接话，
      先把它错过的几轮告诉它。
 """
@@ -148,6 +150,14 @@ def background(turns: List[Dict[str, Any]], text: str) -> str:
     )
 
 
+def named_note(agent: str, text: str) -> str:
+    """主人点名的代理正好也是替小幽说话的那个：告诉它这件事它自己做。主人看不到这段。"""
+    return (
+        "（主人点名要 %s 来做这件事。你现在用的就是 %s，所以直接做，不要转交给别的帮手，"
+        "也不用向主人解释这一点。）\n\n%s" % (agent, agent, text)
+    )
+
+
 def relay(helper: str, result: Optional[str], error: Optional[str],
           asked: Optional[str] = None) -> str:
     """帮手做完（或没做成）之后，交回给说话的代理的那段话。主人看不到这段。"""
@@ -205,7 +215,15 @@ class Xiaoyou:
         say("route", first.name, route.reason)
         witnesses: List[str] = []
         if first.speaks:
-            turn = self._lead(first, route.text, conversation, available, hop, say, witnesses)
+            named = route.reason in ("asked", "mention")
+            if named:
+                # 主人点了名：和点名只干活的代理一样，让调用方看得见这件事交给了谁。
+                say("handoff", first.name, "交给 %s 了" % first.name)
+            # 话里点的名还留在话里，要告诉它说的就是它自己；接口里指定的不用。
+            turn = self._lead(first, route.text, conversation, available, hop, say, witnesses,
+                              named=named, told=route.reason == "mention")
+            if named:
+                say("result", first.name, "%s 做完了" % first.name)
         else:
             turn = self._direct(first, route.text, text, conversation, hop, say, witnesses)
         self._store.transcript.add(conversation, turn_id, text, turn.reply, turn.agent, witnesses)
@@ -214,10 +232,14 @@ class Xiaoyou:
     # ---- 说话的代理接话，必要时转交 ----
 
     def _lead(self, lead: Agent, text: str, conversation: str, available: List[Agent], hop: int,
-              say: Report, witnesses: List[str]) -> Turn:
+              say: Report, witnesses: List[str], named: bool = False,
+              told: bool = False) -> Turn:
         helpers = [agent for agent in available if agent.name != lead.name]
-        if self._config.max_handoffs == 0:
+        if self._config.max_handoffs == 0 or named:
+            # 主人指定了由它来做：这一轮不再转给别人。
             helpers = []
+        if told:
+            text = named_note(lead.name, text)
         used: List[str] = []
         outcome = self._speak(lead, text, conversation, helpers, hop, catch_up=True)
         witnesses.append(lead.name)
