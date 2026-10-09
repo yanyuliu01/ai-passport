@@ -217,7 +217,9 @@ single step goes in `p1`.
 
 Limits: 159 bytes for `said` and `stage`, 23 for `agent` and a helper's
 `name`, 63 for `about`, 959 for `reply`, 47 for a task's `title`, and 63 each
-for `p1` and `p2`; longer text is cut on a character boundary. A card `id` is
+for `p1` and `p2`; longer text is cut on a character boundary. A `reply` of 956 bytes or more has
+no room for another character, so it counts as already cut by the host and is
+marked as cut too. A card `id` is
 at most 11 bytes; a longer one is refused, because cut short it would be a
 different card. These messages are not acknowledged one by one; one that does
 not parse gets `{"ack":"…","ok":false,…}` and changes nothing.

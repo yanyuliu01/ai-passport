@@ -490,6 +490,13 @@ static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
                           &event->reply_truncated)) {
         return false;
     }
+    /* The phone cuts the reply to the documented limit before sending it, so a
+     * cut reply arrives just short enough to fit and nothing above notices.
+     * A reply with no room left for one more character (at most 4 UTF-8 bytes)
+     * was almost certainly cut on the way, so it says so too. */
+    if (strlen(event->reply) > sizeof(event->reply) - 1U - 4U) {
+        event->reply_truncated = true;
+    }
     if (!buddy_copy_id(object, "card", event->chat.card, sizeof(event->chat.card))) {
         /* An id that does not fit names no card this device could hold. */
         event->chat.card[0] = '\0';
@@ -547,6 +554,13 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
         !buddy_copy_field(object, "reply", event->reply, sizeof(event->reply),
                           &event->reply_truncated)) {
         return false;
+    }
+    /* The phone cuts the reply to the documented limit before sending it, so a
+     * cut reply arrives just short enough to fit and nothing above notices.
+     * A reply with no room left for one more character (at most 4 UTF-8 bytes)
+     * was almost certainly cut on the way, so it says so too. */
+    if (strlen(event->reply) > sizeof(event->reply) - 1U - 4U) {
+        event->reply_truncated = true;
     }
     if (cJSON_GetObjectItemCaseSensitive(object, "edits") != NULL &&
         !buddy_json_unsigned(object, "edits", &edits)) {

@@ -570,6 +570,31 @@ static void test_chat_reports_the_conversation(void)
     assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"doing\":\"2\"}", &event) ==
            BUDDY_EVENT_MALFORMED);
 
+    /* The phone cuts the reply to the limit itself (959 bytes of 3-byte characters
+     * is 957). It fits, but there is no room left, so it still says it was cut. */
+    {
+        size_t start = (size_t)snprintf(line, sizeof(line),
+                                        "{\"cmd\":\"chat\",\"phase\":\"done\",\"reply\":\"");
+        size_t at;
+
+        for (at = start; at < start + (BUDDY_REPLY_MAX - 1U) / 3U * 3U;) {
+            memcpy(line + at, "\xE5\xA5\xBD", 3);
+            at += 3;
+        }
+        (void)snprintf(line + at, sizeof(line) - at, "\"}");
+        assert(parse(line, &event) == BUDDY_EVENT_CHAT);
+        assert(strlen(event.reply) == (BUDDY_REPLY_MAX - 1U) / 3U * 3U);
+        assert(event.reply_truncated);
+        /* A long answer that leaves room for more is taken as complete. */
+        for (at = start; at < start + 600U;) {
+            memcpy(line + at, "\xE5\xA5\xBD", 3);
+            at += 3;
+        }
+        (void)snprintf(line + at, sizeof(line) - at, "\"}");
+        assert(parse(line, &event) == BUDDY_EVENT_CHAT);
+        assert(strlen(event.reply) == 600U && !event.reply_truncated);
+    }
+
     assert(buddy_protocol_hub_ack_json(output, sizeof(output)) > 0);
     assert(strcmp(output, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}\n") == 0);
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
