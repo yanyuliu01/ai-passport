@@ -332,6 +332,7 @@ reports how much of that task's stack was left, worth a look on a device.
 | `main/pocket_update_core.c` | The hardware-independent half of firmware updates: data frames, receiving by offset, when to report progress, the replies |
 | `main/pocket_update.c` | The update task: writes the other slot, checks, switches, waits to be confirmed, rolls back when it is not |
 | `tests/update_interop/` | The phone companion's transfer code run against the firmware's own protocol code on a host |
+| `tests/update_emulator/` | The update task, unchanged, on an emulated ESP32-C3: the real bootloader and both slots, with a test program playing the phone |
 | `tools/ui_preview/` | Host renderer that draws every screen with the real LVGL and fonts |
 
 The BLE, protocol, and state layers are adapted from the `demo/claude-buddy-port`
@@ -352,6 +353,30 @@ The protocol, state-machine, and orchestrator host tests need cJSON from
 `IDF_PATH`; without it the static gate reports them as skipped. The firmware
 update interop test between the phone companion and the firmware needs a JDK
 as well as cJSON, and is reported as skipped when either is missing.
+
+The half of the firmware update that touches hardware (`main/pocket_update.c`:
+writing the other slot, checking, switching, waiting to be confirmed, going back
+when the deadline passes) cannot be tested on a host. It is tested in an
+emulator:
+
+```bash
+tests/update_emulator/run.sh   # needs ESP-IDF 5.5 and Espressif's QEMU (qemu-system-riscv32)
+```
+
+The script builds that file, unchanged, into a small program and runs it on an
+emulated ESP32-C3 with the real ESP-IDF bootloader and the product's partition
+table. A test program plays the phone and checks, in order: requests that must
+be refused are refused; an image whose hash does not match is not switched to
+even though all of it arrived; a transfer with lost, repeated and reordered
+frames and a dropped link that is resumed ends with the image accepted and a
+restart into the new slot; a new image that is not confirmed goes back to the
+previous one; a confirmed one stays; switching back to the version in the other
+slot works. It is not part of `tools/validate.sh` because the emulator has to be
+installed separately. The emulator has no Bluetooth, so the radio link, the real
+transfer speed and the memory headroom still have to be checked on the device.
+The emulator itself sometimes hangs (it loses timer interrupts during flash
+operations); the script notices and starts it again on the same flash contents,
+which to the firmware is a power cut.
 
 ## Flashing
 
