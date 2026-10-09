@@ -342,10 +342,11 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     buddy_control_event_t control = {0};
 
     (void)context;
-    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。确认键和下键把它当作一次短按：
-     * 既不会让“连按确认”变成没反应，也不会让一次连按被当成两次决定。上键的双击另有
-     * 用处（在首页把收起来的对话接回来），原样往下传；用不上时状态机也按一次短按处理。 */
-    if (event == BSP_BTN_DOUBLE && button != BSP_BTN_UP) {
+    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。上键和下键把它当作一次短按。
+     * 确认键的双击另有用处（打开菜单），原样往下传；有授权、确认、配对这些浮层时
+     * 状态机也按一次短按处理：既不会让“连按确认”变成没反应，也不会让一次连按被
+     * 当成两次决定。 */
+    if (event == BSP_BTN_DOUBLE && button != BSP_BTN_OK) {
         event = BSP_BTN_CLICK;
     }
     if (event == BSP_BTN_RELEASE) {
@@ -867,7 +868,7 @@ static bool buddy_execute_action(buddy_state_t *state, const buddy_action_t *act
     }
     if (action->type == BUDDY_ACTION_VOICE_START) {
         memset(result_event, 0, sizeof(*result_event));
-        if (pocket_voice_start(action->connection_generation) == ESP_OK) {
+        if (pocket_voice_start(action->connection_generation, action->voice_card) == ESP_OK) {
             return false;
         }
         /* 语音任务没起来或上一轮还没收尾：让状态机按“麦克风没准备好”收场。 */
@@ -948,10 +949,13 @@ static void buddy_apply_backlight(const buddy_state_t *state)
     }
 }
 
-static void buddy_render(buddy_state_t *state, const buddy_action_t *action, uint64_t now_ms)
+/* 返回界面要不要换一件事：第二屏里这件事已经翻到头还往那个方向按时是 -1（上）或
+ * 1（下），其余是 0。 */
+static int buddy_render(buddy_state_t *state, const buddy_action_t *action, uint64_t now_ms)
 {
     static buddy_ui_snapshot_t snapshot;
     buddy_settings_snapshot_t settings;
+    int edge = 0;
 
     buddy_state_snapshot(state, &snapshot);
     snapshot.uptime_ms = now_ms;
@@ -961,15 +965,16 @@ static void buddy_render(buddy_state_t *state, const buddy_action_t *action, uin
         snapshot.denial_count = settings.denial_count;
     }
     if (!bsp_lvgl_lock(1000)) {
-        return;
+        return 0;
     }
     pocket_ui_render(&snapshot);
     if (action->type == BUDDY_ACTION_UI_SCROLL) {
-        pocket_ui_scroll(action->scroll_delta);
+        edge = pocket_ui_scroll(action->scroll_delta);
     }
     bsp_lvgl_unlock();
     buddy_publish_rendered_view(&snapshot);
     buddy_apply_backlight(state);
+    return edge;
 }
 
 static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
@@ -978,9 +983,10 @@ static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
 {
     buddy_orchestrator_ops_t ops = buddy_orchestrator_ops(state);
 
-    (void)event;
-    return buddy_orchestrator_process_rx(state, &ops, slot->data, slot->length,
-                                         slot->connection_generation, now_ms, action);
+    /* 事件结构有几 KB，解析到应用任务那个静态的缓冲里，不放在任务栈上。 */
+    return buddy_orchestrator_process_rx_into(state, &ops, slot->data, slot->length,
+                                              slot->connection_generation, now_ms, action,
+                                              event);
 }
 
 static QueueHandle_t buddy_next_ready_queue(void)
@@ -1094,7 +1100,18 @@ static void buddy_app_task(void *context)
         }
         state.ble_connected = atomic_load(&s_ble_initialized) && buddy_ble_is_connected();
         state.ble_encrypted = atomic_load(&s_ble_initialized) && buddy_ble_is_encrypted();
-        buddy_render(&state, &action, now_ms);
+        {
+            int edge = buddy_render(&state, &action, now_ms);
+
+            if (edge != 0) {
+                /* 第二屏里这件事翻到头了：换到上一件 / 下一件，再画一遍。 */
+                memset(&event, 0, sizeof(event));
+                event.type = BUDDY_EVENT_CARD_STEP;
+                event.key = edge > 0 ? BUDDY_KEY_DOWN : BUDDY_KEY_UP;
+                buddy_state_reduce(&state, &event, now_ms, &action);
+                (void)buddy_render(&state, &action, now_ms);
+            }
+        }
     }
 }
 

@@ -30,6 +30,15 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
                                    const char *json, size_t length,
                                    uint32_t connection_generation,
                                    uint64_t now_ms, buddy_action_t *action);
+/* The same, with the event parsed into a buffer of the caller's. An event is a
+ * few kilobytes (a reply, a list of tasks): the firmware passes a static one
+ * instead of putting it on the task stack. */
+bool buddy_orchestrator_process_rx_into(buddy_state_t *state,
+                                        const buddy_orchestrator_ops_t *ops,
+                                        const char *json, size_t length,
+                                        uint32_t connection_generation,
+                                        uint64_t now_ms, buddy_action_t *action,
+                                        buddy_event_t *scratch);
 bool buddy_orchestrator_execute_action(buddy_state_t *state,
                                        const buddy_orchestrator_ops_t *ops,
                                        const buddy_action_t *action,

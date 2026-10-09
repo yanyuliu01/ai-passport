@@ -8,7 +8,8 @@ Claude Pocket turns the FoloToy AI Passport into the wearable face of Xiaoyou,
 a small ghost that is the one voice you talk to. The device connects over
 encrypted Bluetooth LE to the phone companion; you hold a button, speak, and
 her answer appears on the screen. When she hands the work to another agent,
-the screen shows who she is talking to.
+the screen shows who is doing it and which step it is on; when an agent wants
+to do something that needs your consent, the device asks you.
 
 The link speaks the public *Hardware Buddy* BLE protocol documented by
 Anthropic in
@@ -20,15 +21,20 @@ feature, not a supported product feature).
 
 ## What it does
 
+Three screens; a click on `OK` goes round them. The three small dots in the
+middle of the top bar show which one you are on.
+
+| Screen | What it shows |
+| --- | --- |
+| 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
+| 2 Conversation | One thing per screen: every request you make is one thing with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
+| 3 Tasks | The things being worked on, at most four: who is doing it, the title, for how long (or that it waits for your consent, or is queued). Below are the two latest steps of the selected one, with tool names and commands shown verbatim |
+
 | Capability | Behavior |
 | --- | --- |
-| The conversation | The home page: a strip at the top with Xiaoyou and what she is doing, and below it the conversation, one turn after another, yours and hers. Her mood is the pet's face |
-| Handing work over | While another agent works for her, the strip shows a letter travelling from Xiaoyou to that agent's name tag, and a timer. Each agent has its own colour |
-| Reading back | `UP` and `DOWN` scroll through the conversation, eight lines at a time. An answer can be up to 959 bytes, about 320 Chinese characters |
-| Earlier conversations | After 30 minutes without a turn the conversation is folded away and the home page rests. A double press on `UP` brings it back |
-| Push-to-talk | Hold `OK` to record; the audio goes to the phone companion over Bluetooth; see [Push-to-talk](#push-to-talk) |
-| Approvals | Xiaoyou asks; who wants what is shown verbatim; say yes or no on the device |
-| Notices | The four most recent entries sent by the host, in the menu. While any are waiting, the idle home page says how many |
+| Push-to-talk | Hold `OK` to record; the audio goes to the phone companion over Bluetooth; see [Push-to-talk](#push-to-talk). Held on screen 2 or 3, the sentence is addressed to the thing on screen (or the selected one): an addition, a change of the request, or a cancellation |
+| Approvals | When an agent wants to do something that needs consent, Xiaoyou asks; who wants what is shown verbatim; say yes or no on the device. The request covers whichever screen is showing |
+| Notices | The four most recent entries sent by the host, in the menu. While any are waiting, the idle first screen says how many |
 | Helpers | The agents Xiaoyou can hand work to, as the host lists them, in the menu |
 | Pairing | LE Secure Connections with a six-digit passkey shown on the device |
 
@@ -36,9 +42,14 @@ Colour answers one question: who is doing the work. Xiaoyou is lavender; every
 helper has a colour of its own, fixed for a given name. Green, red and yellow
 mean yes, no and "look at this", and nothing else.
 
-Connected to the Claude desktop app instead of the phone companion, the home
-page shows what the desktop app reports: its status line while it works, and
-its latest reply. There is no talking in that mode, because the desktop
+The screen never switches by itself: when an answer arrives you stay on the
+screen you were reading. The count in the top bar is the number of things
+still running in the background; it is hidden when there are none.
+
+Connected to the Claude desktop app instead of the phone companion, the first
+screen shows what the desktop app reports: its status line while it works, and
+the beginning of its latest reply. The second screen holds that latest reply
+and the third is empty. There is no talking in that mode, because the desktop
 protocol has no message for prompts or audio.
 
 ## Pairing
@@ -52,7 +63,7 @@ With Claude desktop:
 1. Choose **Help → Troubleshooting → Enable Developer Mode**.
 2. Choose **Developer → Open Hardware Buddy…** and click **Connect**.
 3. Pick the device named `Claude-XXXXXX`; the same name is shown on the
-   sleeping home page and in the connection guide.
+   first screen while Xiaoyou sleeps and in the connection guide.
 4. Type the six digits shown on the device into the operating system's
    Bluetooth prompt.
 
@@ -64,30 +75,44 @@ list, check that Bluetooth is switched on in the device menu.
 The three buttons are `UP`, `DOWN`, and `OK`. The bottom line of the screen
 always shows what the keys do right now.
 
-| Where | `UP` / `DOWN` click | `OK` click | `OK` hold | `UP` long press |
+| Where | `UP` / `DOWN` click | `OK` click | `OK` double press | `OK` hold |
 | --- | --- | --- | --- | --- |
-| Home | Scroll the conversation eight lines | Back to the newest turn | Talk; release to send | Open the menu |
-| Menu, More settings | Move the selection (wraps) | Run the selected item | Return to Home | Return to Home |
-| Notices, Helpers | — | Back to the menu | Return to Home | Return to Home |
-| Connection guide | Scroll three lines | Back to More settings | Return to Home | Return to Home |
-| Request for a yes or no | `UP` pages through the details; `DOWN` says no | Yes | — | — |
-| Unpair / factory-reset confirmation | `DOWN` cancels | Confirm | — | — |
-| Screen off | Any click turns the screen on and does nothing else | | Turns the screen on, then talks | Turns the screen on |
+| Screen 1, mascot | — | To screen 2 | Open the menu | Talk; release to send |
+| Screen 2, conversation | Scroll seven lines within this thing; at the end, one more press goes to the previous / next thing | To screen 3 | Open the menu | Talk, addressed to the thing on screen |
+| Screen 3, tasks | Select the previous / next one | To screen 1 | Open the menu | Talk, addressed to the selected thing |
+| Menu, More settings | Move the selection (wraps) | Run the selected item | Return to screen 1 | Return to screen 1 |
+| Notices, Helpers | — | Back to the menu | Return to screen 1 | Return to screen 1 |
+| Connection guide | Scroll three lines | Back to More settings | Return to screen 1 | Return to screen 1 |
+| Request for a yes or no | `UP` pages through the details; `DOWN` says no | Yes | Counts as one click | — |
+| Unpair / factory-reset confirmation | `DOWN` cancels | Confirm | Counts as one click | — |
+| Screen off | Turns the screen on, nothing else | Turns the screen on, nothing else | Turns the screen on, nothing else | Turns the screen on, then talks |
+
+`UP` and `DOWN` have no long-press or double-press function: a long press
+turns the screen on when it is off and does nothing otherwise, and two quick
+presses count as one click. The power key only controls hardware power; the
+firmware cannot read it.
+
+The button library reports a single click only after the double-press window
+has passed, so a click on `OK` changes the screen about 0.2 seconds after the
+press.
 
 A request, a pairing passkey, or a confirmation takes over the screen and turns
 it back on if it was off. So does the answer to something you just asked. A key
 press only counts for what was on screen when the key went down; a press that
 races a new request is dropped rather than applied to it. Each request accepts
-one decision, and a failed send is shown as failed, never as approved.
+one decision, and a failed send is shown as failed, never as approved. Two
+quick presses of `OK` on a request count as one yes: they are neither ignored
+nor counted twice.
 
 Xiaoyou only phrases the question. Who is asking and what for come straight
 from the host and are never paraphrased; a name too long for the bubble is
 repeated in full at the top of the details card.
 
-A quick double press counts as one click, with one exception: on the home
-page, while earlier turns are folded away, a double press on `UP` brings them
-back and stops at the last of them. The key hints say so when there is
-something to bring back.
+The thing selected on screen 3 is the one screen 2 shows when it is opened
+next. After you say something new, screen 2 follows that sentence: while it
+has no card yet the screen shows the turn itself (what you said, that she is
+thinking), and once the card arrives it shows the card. After you page to
+another card yourself, it stays on that card until you speak again.
 
 The menu offers notices, helpers, brightness (five steps), the Bluetooth
 switch, screen off, and more settings: the connection guide, unpair, and
@@ -106,21 +131,21 @@ Sans SC by [`tools/gen_pocket_fonts.py`](../tools/gen_pocket_fonts.py); see the
 
 Text that arrives from the host (what you said, Xiaoyou's words, helper names,
 notices, who is asking and for what) is drawn with a font that covers printable
-ASCII and all 6,763 GB2312 hanzi plus common punctuation. Anything outside that set, such as emoji,
-traditional-only characters, or other scripts, is drawn as a placeholder box;
-it is not dropped or replaced. Text longer than its area ends with an ellipsis;
-details longer than 319 bytes and an answer longer than 959 bytes are marked
-as cut. LVGL
-does not apply CJK line-breaking rules, so a wrapped line can begin with a
-punctuation mark.
+ASCII and all 6,763 GB2312 hanzi plus common punctuation. Anything outside
+that set, such as emoji, traditional-only characters, or other scripts, is
+drawn as a placeholder box; it is not dropped or replaced. Text longer than
+its area ends with an ellipsis; details longer than 319 bytes and an answer
+longer than 959 bytes are marked as cut. LVGL does not apply CJK line-breaking
+rules, so a wrapped line can begin with a punctuation mark.
 
 ## Push-to-talk
 
-Hold `OK` on the home page. Xiaoyou says to wait a moment,
-then says she is listening: the level bars move with your voice, which is how
-you know the microphone is live. Speak, and release to send. The home page then
-shows that the recording is on its way until the host says what it heard. A press shorter than about a third of a second sends nothing. A
-recording stops by itself at 30 seconds and is sent as it is.
+Hold `OK` on any of the three screens. Xiaoyou says to wait a moment, then
+says she is listening: the level bars move with your voice, which is how you
+know the microphone is live. Speak, and release to send. Screens 1 and 2 then
+show that the recording is on its way until the host says what it heard. A
+press shorter than about a third of a second sends nothing. A recording stops
+by itself at 30 seconds and is sent as it is.
 
 The device only records and transmits. Turning speech into text and answering
 is done by the host: the phone companion forwards the recording to the Xiaoyou
@@ -133,8 +158,8 @@ understand:
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true}`; `chat` says the firmware understands the messages under [The conversation](#the-conversation) |
-| Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm"}` | A recording begins |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true}`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), and `cards` says it understands `card` and `tasks` |
+| Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it |
 | Device → host | voice frames | One notification per frame; see below |
 | Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
 | Device → host | `{"cmd":"voice","state":"cancel"}` | Discard what was received |
@@ -155,70 +180,101 @@ after every recording.
 ## The conversation
 
 A host that introduced itself with `hub` reports the conversation with Xiaoyou
-in two more messages. They are part of the same extension, so the Claude
+in the messages below. They are part of the same extension, so the Claude
 desktop app never sends them, and an older firmware answers them with an error
-ack that the host ignores.
+ack that the host ignores. A host sends `card` and `tasks` only after it saw
+`cards` in the acknowledgement.
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M}` | Where the current turn stands. Only `phase` is required |
+| Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | What Xiaoyou is doing right now: this is what **screen 1** shows. Only `phase` is required |
+| Host → device | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | Adds or updates the card of one thing: **screen 2**. `id` and `state` are required |
+| Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
+| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things being worked on: **screen 3**. At most four are kept; an empty list means nothing is running |
 | Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
 
-`phase` is `idle` (nothing said yet), `thinking`, `helper` (the agent named in
-`agent` is working for her; `stage` is what she said when handing over), `done`
-(her answer is in `reply`) or `failed` (`reply` says why). `mood` is `idle`,
-`busy`, `ask`, `happy` or `oops` and sets the pet's face when the turn is done.
-`said` is what the owner said, empty until a recording has been transcribed.
-Limits are 159 bytes for `said` and `stage`, 23 for `agent` and a helper's
-`name`, 63 for `about`, and 959 for `reply`; longer text is cut on a character
-boundary. These messages are not acknowledged one by one; one that does not
-parse gets `{"ack":"chat","ok":false,…}` and changes nothing.
+`chat`: `phase` is `idle` (nothing is being said), `thinking`, `helper` (she
+handed the work to the agent named in `agent`; `stage` is the title of the
+thing), `done` (`reply` holds her brief, a sentence or two) or `failed`
+(`reply` says why). `mood` is `idle`, `busy`, `ask`, `happy` or `oops` and sets
+the pet's face when the turn is done. `said` is what the owner said, empty
+until a recording has been transcribed. `card` is the card this sentence was
+filed under; `doing` is the number of things still running in the background.
+
+`card`: `state` is `working` (a helper is on it), `waiting` (it waits for your
+consent), `done`, `failed`, `cancelled` or `talking`. `agent` is who is doing
+or did it, empty when Xiaoyou answered herself. `said` is the first sentence
+of the thing, `reply` is the latest thing Xiaoyou said, `edits` is how many
+times it was added to or changed, and `at` is when it began (hours and
+minutes). A card that arrives again under the same `id` is updated in place;
+the order of the cards does not change.
+
+`tasks`: `state` is `working`, `waiting` or `queued`. `secs` is how many
+seconds the work has taken so far; the device keeps counting from there. `p1`
+and `p2` are the two latest steps: `p1` is the earlier, `p2` the newest; a
+single step goes in `p1`.
+
+Limits: 159 bytes for `said` and `stage`, 23 for `agent` and a helper's
+`name`, 63 for `about`, 959 for `reply`, 47 for a task's `title`, and 63 each
+for `p1` and `p2`; longer text is cut on a character boundary. A card `id` is
+at most 11 bytes; a longer one is refused, because cut short it would be a
+different card. These messages are not acknowledged one by one; one that does
+not parse gets `{"ack":"…","ok":false,…}` and changes nothing.
+
+Approval requests need no new message: the host puts the operation to confirm
+into the heartbeat's `prompt` (`tool` is the helper and the tool, `hint` is
+the content verbatim, of which up to 319 bytes are shown), and the device
+answers with the existing `permission` command.
 
 ### What the device keeps
 
-The host only ever reports the current turn. The device keeps the turns that
-are over, oldest first, in RAM: up to 12 turns and 4,096 bytes of text, so a
-dozen short exchanges or three to four answers of full length. When a new turn
-does not fit, the oldest are dropped. A turn is kept when the next one begins,
-when the link drops, or when no heartbeat arrives for 30 seconds; a turn that
-was still in progress then is not kept, because the host reports it again when
-it is back.
+Cards stay in RAM in the order they were opened: up to 12 cards and 4,096
+bytes of text. When a new one does not fit, the oldest are dropped. A card
+holds two pieces of text only, the first sentence and the latest thing Xiaoyou
+said; the additions in between appear as a count, and the full exchange is on
+the phone.
 
-The turns on the home page are one conversation. It ends, and is folded away,
-when 30 minutes pass without a turn or a key press on the home page
-(`BUDDY_SESSION_IDLE_MS`), or when the hub reports `idle` after turns, which
-the phone app does after it was restarted. This is a matter of display only:
-nothing is sent to the host, and the runtime's own context is not affected. A
-hub repeats its last `chat` line every 30 seconds and after a reconnect; a
-finished turn the device has already kept is recognized by its text and not
-shown twice.
+A lost link does not clear the cards: Xiaoyou is asleep and what was said
+stays readable. The turn on screen 1 and the task list on screen 3 are
+cleared, because nobody is reporting them any more. After reconnecting, the
+host first sends `card clear` and then the most recent cards again.
 
-A lost link does not clear the page: the strip at the top shows that Xiaoyou
-is asleep, and what was said stays readable.
+A turn that has no card yet (the recording is being transcribed, she is still
+thinking) and a turn that never gets one (the recording was not understood)
+are shown on screen 2 as the turn itself. The same goes for a host that never
+sends `card` (the Claude desktop app, an older phone app): screen 2 holds the
+latest reply only.
 
 A hub that sends `chat` leaves `msg` empty in its heartbeats and does not send
 `turn` events. Once a hub has sent `chat` on a connection, the firmware ignores
 its `turn` events and reads the heartbeat counters as notifications only, not
-as Xiaoyou being busy. A hub that never sends `chat` (an older phone app) is
-shown the way the desktop app is: busy while the counters are non-zero, and the
-reply from `turn`.
+as Xiaoyou being busy. A hub that never sends `chat` is shown the way the
+desktop app is: busy while the counters are non-zero, and the reply from
+`turn`.
+
+While a recording has just been sent and its transcription is awaited, the
+host may report that something else ended (a background thing finished, or the
+previous turn). The device then takes only the count of things running and
+does not replace the turn it is waiting for.
 
 ## Stored data
 
 The device stores its name, the owner name sent by the host, the Bluetooth
 switch, approval and denial counters, and the BLE bond. Notices, helper names,
-details of a request, request identifiers, and a turn in progress stay in RAM
-and are cleared when the link drops or no heartbeat arrives for 30 seconds.
-Finished turns of the conversation stay in RAM until the device restarts or
-they are pushed out by newer ones; they are never written to flash.
+details of a request, request identifiers, the turn in progress and the task
+list stay in RAM and are cleared when the link drops or no heartbeat arrives
+for 30 seconds. Cards stay in RAM until the device restarts, the host clears
+them, or they are pushed out by newer ones; they are never written to flash.
 
 ## Not implemented
 
 - Folder push (`char_begin` and related commands) is refused with an error ack.
 - There is no "always allow" decision; the device sends `once` or `deny`.
-- Earlier turns are kept in RAM only. A restart loses them, and the device
-  does not fetch them from the phone, which has the full history.
-- A turn in progress cannot be cancelled from the device.
+  Rules that allow something for good belong in the settings of the respective
+  command-line tool.
+- Cards are kept in RAM only. A restart loses them until the phone reconnects
+  and sends them again; anything older is on the phone.
+- A thing cannot be cancelled with a key: hold `OK` and tell it to stop.
 - The speaker, Wi-Fi, and low-power sleep are not used by this application.
 - Replies are shown as text only; nothing is read aloud.
 
@@ -229,13 +285,16 @@ pool, so the interface, Bluetooth, and task stacks share one budget. The
 firmware logs `heap: free=… min=…` once a minute (a warning below 12 KB); read
 it during on-device acceptance.
 
-The conversation costs memory the earlier interface did not need. Static: the
-answer buffer grew from 420 to 960 bytes in three places, what was said, the
-helper in use and the helper list are kept as well, and the history of earlier
-turns takes another 4.2 KB, about 8 KB in all. Heap: the home page holds a copy
-of every turn it shows, at most the 4 KB of history plus the current turn, and
-two LVGL labels per turn, created when first needed; the copies are freed when
-the conversation is folded away. This has not been measured on a device.
+Compared with the long-conversation version, static memory grew by about 3 KB:
+the card records (12, about 50 bytes each), the task list (4 entries of about
+220 bytes, once in the state and once in the snapshot for the interface), and
+one task list and one card in the event structure. A line received over
+Bluetooth is now parsed into the application task's static event buffer
+instead of an event structure of several KB on the task stack. Heap: screen 2
+holds the two pieces of text of a single card, less than the copy of every
+turn kept before. None of this has been measured on a device; in the host
+renderer LVGL peaks at about 69 KB (a 64-bit host, where objects are larger
+than in the firmware).
 
 ## Code map
 
@@ -244,13 +303,13 @@ the conversation is folded away. This has not been measured on a device.
 | `main/main.c` | Queues, the application task, BLE and settings glue |
 | `main/buddy_ble*.c` | NimBLE peripheral: Nordic UART Service, security, bonding |
 | `main/buddy_line.c`, `main/buddy_protocol.c` | Line assembly and bounded JSON parsing/serialization |
-| `main/buddy_state.c` | Link, approval, conversation, and navigation state machine |
-| `main/buddy_history.h` | Earlier turns of the conversation: a byte-budgeted list, header-only |
+| `main/buddy_state.c` | Link, approval, conversation, and three-screen navigation state machine |
+| `main/buddy_cards.h` | Cards: a byte-budgeted list, updated in place by id, header-only |
 | `main/buddy_orchestrator.c`, `main/buddy_app_logic.c`, `main/buddy_settings.c` | Command handling, queue policy, NVS settings |
-| `main/pocket_view.c` | Pure view logic: which screen, what the home page shows, where the conversation scrolls to, the pet's mood, helper colours, time formatting |
+| `main/pocket_view.c` | Pure view logic: which view, what screen 1 shows, how a thing scrolls, the pet's mood, helper colours, time formatting |
 | `main/pocket_pet.c` | The pet's 20 × 20 pixel sprite and its moods (no LVGL) |
 | `main/pocket_ui.c` | LVGL screens |
-| `main/pocket_voice_core.c` | IMA ADPCM, voice-frame packing, the send queue, and the level meter (no ESP-IDF) |
+| `main/pocket_voice_core.c` | IMA ADPCM, voice-frame packing, the send queue, the level meter, and the line that starts a recording (no ESP-IDF) |
 | `main/pocket_voice.c` | The push-to-talk task: microphone, encoding, Bluetooth uplink |
 | `tools/ui_preview/` | Host renderer that draws every screen with the real LVGL and fonts |
 
@@ -296,33 +355,47 @@ for the alternatives that keep settings.
 
 ## On-device acceptance
 
-A successful build and the host preview are not device validation. Check on
-hardware:
+A successful build and the host preview are not device validation. This
+version (three screens) has not run on hardware yet. Check:
 
-1. Startup shows Xiaoyou asleep; the top bar shows the link dot and the battery.
+1. Startup shows Xiaoyou asleep; the top bar shows the link dot, the three
+   small dots and the battery.
 2. Pairing: the passkey page appears, the passkey is accepted, and the device
    reconnects without a passkey after a restart of either side.
-3. Hold `OK`, speak, release: the level bars move while speaking; the home page
-   shows the recording on its way, then what was heard, then the answer. A
-   long answer starts at its beginning and scrolls eight lines at a time, with
-   no half lines at the top or bottom.
-4. When Xiaoyou hands work over, the letter moves, the helper's name is in its
-   colour, and the timer counts. A failed turn shows the reason.
-5. After several turns `UP` scrolls back through all of them and `OK` returns
-   to the newest. A new turn while scrolled back brings the page to that turn.
-   After 30 minutes without a turn the home page rests; a double press on `UP`
-   brings the conversation back, and a single press does not.
-6. Every page and every state renders without boxes, clipping, or overlap,
-   including long mixed Chinese/Latin text.
-7. A request takes over the screen; `OK` says yes, `DOWN` says no, `UP` pages
-   long details; the host reflects each decision.
-8. A request or an answer arriving while the screen is off turns it on.
-9. Unpair and factory reset ask for confirmation and behave as described above.
-10. Dropping the link puts Xiaoyou to sleep within 30 seconds; the conversation
-    stays readable, and after reconnecting the last turn is not shown twice.
-11. The minimum in the `heap:` log line keeps a comfortable margin with a
-    conversation of a dozen turns on screen and during a recording; free heap is stable over a long
-    session; Bluetooth range and battery life are measured, not assumed.
+3. A click on `OK` goes round the three screens and the dots in the top bar
+   follow; a double press opens the menu, and a double press in the menu
+   returns to screen 1. Judge whether the short delay of the click is
+   acceptable.
+4. Hold `OK`, speak, release: the level bars move while speaking; screen 1
+   shows transcribing, then thinking and what you said, then the brief or that
+   the work was handed over.
+5. Screen 2: the sentence just spoken first appears as a new thing and is
+   replaced by its card when that arrives. A long answer starts at its
+   beginning, `DOWN` scrolls seven lines at a time with no half lines at the
+   top or bottom, and one more press at the end goes to the next thing; `UP`
+   likewise.
+6. When Xiaoyou hands work over, the letter moves, the helper's name is in its
+   colour, and the timer counts; the count of running things appears in the
+   top bar.
+7. Screen 3: several things running at once are all listed, each with its own
+   timer; `UP` and `DOWN` change the selection and the two steps below follow;
+   going back to screen 2 shows the card of the selected one.
+8. Hold `OK` on screen 2 or 3 and ask for a change or tell it to stop: that
+   thing is changed or cancelled, and no new one is opened.
+9. When an agent wants to do something that needs consent, the request appears
+   and turns the screen on; `OK` says yes, `DOWN` says no, `UP` pages long
+   details; the host reflects each decision. Two quick presses of `OK` count
+   once.
+10. Every page and every state renders without boxes, clipping, or overlap,
+    including long mixed Chinese/Latin text.
+11. Unpair and factory reset ask for confirmation and behave as described
+    above.
+12. Dropping the link puts Xiaoyou to sleep within 30 seconds; the cards stay
+    readable, and after reconnecting no card appears twice.
+13. The minimum in the `heap:` log line keeps a comfortable margin with about
+    ten cards and four running things, and during a recording; free heap is
+    stable over a long session; Bluetooth range and battery life are measured,
+    not assumed.
 
 ## Roadmap
 

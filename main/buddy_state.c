@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "buddy_history.h"
+#include "buddy_cards.h"
 #include "pocket_text.h"
 
 #define BUDDY_HEART_ANIMATION_MS 5000
@@ -72,24 +72,6 @@ static bool buddy_chat_in_progress(buddy_chat_phase_t phase)
            phase == BUDDY_CHAT_HELPER;
 }
 
-/* Moves the turn on screen into the history if it is over. A turn that is still
- * running has no answer to keep: the host reports it again when it is back. */
-static void buddy_archive_live(buddy_state_t *state)
-{
-    uint8_t flags = 0;
-
-    if (buddy_chat_in_progress(state->chat.phase)) {
-        return;
-    }
-    if (state->chat.phase == BUDDY_CHAT_FAILED) {
-        flags |= BUDDY_TURN_FAILED;
-    }
-    if (state->reply_truncated) {
-        flags |= BUDDY_TURN_CUT;
-    }
-    (void)buddy_history_push(&state->history, state->chat.said, state->reply, flags);
-}
-
 static void buddy_clear_live_turn(buddy_state_t *state)
 {
     state->reply[0] = '\0';
@@ -98,19 +80,42 @@ static void buddy_clear_live_turn(buddy_state_t *state)
     state->chat_since_ms = 0;
 }
 
-/* The conversation on screen is over: keep it, fold it away, rest. */
-static void buddy_fold_session(buddy_state_t *state)
+/* A new turn begins: the conversation screen goes with it. */
+static void buddy_begin_turn(buddy_state_t *state)
 {
-    buddy_archive_live(state);
-    buddy_clear_live_turn(state);
-    (void)buddy_history_fold(&state->history);
+    state->card_follow = true;
+    state->card_current[0] = '\0';
+    ++state->card_serial;
 }
 
-static void buddy_begin_turn(buddy_state_t *state, uint64_t now_ms)
+/* Which card the conversation screen shows: the one the owner picked, the one
+ * the turn in progress went onto, otherwise the newest. -1 when there is none. */
+static int buddy_card_index(const buddy_state_t *state)
 {
-    buddy_archive_live(state);
-    ++state->turn_serial;
-    state->session_touched_ms = now_ms;
+    int index = buddy_cards_find(&state->cards, state->card_current);
+
+    if (index < 0 && state->card_follow) {
+        index = buddy_cards_find(&state->cards, state->chat.card);
+    }
+    return index >= 0 ? index : (int)state->cards.count - 1;
+}
+
+/* Whether the conversation screen shows the turn in progress instead of a card:
+ * it has no card yet (a recording being transcribed, Xiaoyou still thinking), it
+ * never gets one (the recording was not understood), or the host does not send
+ * cards at all (the Claude desktop app, an older phone app). */
+static bool buddy_card_live(const buddy_state_t *state)
+{
+    bool turn = state->chat.phase != BUDDY_CHAT_NONE || state->reply[0] != '\0';
+
+    if (!turn) {
+        return false;
+    }
+    if (state->cards.count == 0U) {
+        return true;
+    }
+    return state->card_follow && state->chat.phase != BUDDY_CHAT_NONE &&
+           buddy_cards_find(&state->cards, state->chat.card) < 0;
 }
 
 static void buddy_clear_logical_session(buddy_state_t *state)
@@ -131,9 +136,12 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     state->heartbeat.tokens_today = 0;
     state->heartbeat.message[0] = '\0';
     memset(state->heartbeat.entries, 0, sizeof(state->heartbeat.entries));
-    /* What was said stays readable; only the turn in progress is gone. */
-    buddy_archive_live(state);
+    /* The cards stay readable; the turn in progress and the list of things in
+     * progress are gone, because nobody is reporting them any more. */
     buddy_clear_live_turn(state);
+    memset(state->tasks, 0, sizeof(state->tasks));
+    state->task_count = 0;
+    state->task_selected = 0;
     buddy_invalidate_prompt(state);
 }
 
@@ -176,22 +184,6 @@ static buddy_character_t buddy_character_for(const buddy_state_t *state, uint64_
 static void buddy_refresh_character(buddy_state_t *state, uint64_t now_ms)
 {
     state->character = buddy_character_for(state, now_ms);
-}
-
-/* Nothing was said for a long while: the conversation on screen is folded away
- * and the home page rests. A double press on UP brings it back. */
-static void buddy_fold_idle_session(buddy_state_t *state, uint64_t now_ms)
-{
-    bool on_screen = state->chat.phase != BUDDY_CHAT_NONE || state->reply[0] != '\0' ||
-                     buddy_history_visible(&state->history) > 0U;
-
-    if (!on_screen || buddy_chat_in_progress(state->chat.phase) ||
-        state->voice_phase != BUDDY_VOICE_IDLE || state->running > 0U ||
-        now_ms < state->session_touched_ms ||
-        now_ms - state->session_touched_ms < BUDDY_SESSION_IDLE_MS) {
-        return;
-    }
-    buddy_fold_session(state);
 }
 
 static void buddy_clear_stale_prompt(buddy_state_t *state, uint64_t now_ms)
@@ -314,6 +306,30 @@ static void buddy_menu_click(buddy_state_t *state, buddy_key_t key, buddy_action
     }
 }
 
+/* The third screen: UP and DOWN pick a thing. The conversation screen then
+ * opens on the card of the one picked. */
+static void buddy_tasks_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
+{
+    unsigned selected = state->task_selected;
+
+    if (state->task_count == 0U) {
+        return;
+    }
+    if (key == BUDDY_KEY_UP && selected > 0U) {
+        --selected;
+    } else if (key == BUDDY_KEY_DOWN && selected + 1U < state->task_count) {
+        ++selected;
+    }
+    if (selected != state->task_selected) {
+        state->task_selected = selected;
+        buddy_cards_copy(state->card_current, sizeof(state->card_current),
+                         state->tasks[selected].id);
+        state->card_follow = false;
+        ++state->card_serial;
+        buddy_set_ui_refresh(action);
+    }
+}
+
 static void buddy_more_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     if (key == BUDDY_KEY_UP) {
@@ -386,19 +402,31 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
         }
         return;
     case BUDDY_PAGE_HOME:
+    case BUDDY_PAGE_TALK:
+    case BUDDY_PAGE_TASKS:
     case BUDDY_PAGE_COUNT:
         break;
     }
-    /* Home is the conversation: UP and DOWN move through it, OK goes back to the
-     * newest turn. Talking is a long press on OK. */
+    /* The three screens. A short press on OK goes to the next one, round and
+     * round; UP and DOWN only act inside the screen that is showing. */
     if (key == BUDDY_KEY_OK) {
-        if (action != NULL) {
-            action->type = BUDDY_ACTION_UI_SCROLL;
-            action->scroll_delta = BUDDY_SCROLL_LATEST;
-        }
-    } else {
+        state->page = state->page == BUDDY_PAGE_HOME
+                          ? BUDDY_PAGE_TALK
+                          : (state->page == BUDDY_PAGE_TALK ? BUDDY_PAGE_TASKS : BUDDY_PAGE_HOME);
+        buddy_set_ui_refresh(action);
+    } else if (state->page == BUDDY_PAGE_TALK) {
+        /* Within the thing on screen; at its end the interface asks for the
+         * previous or the next one (BUDDY_EVENT_CARD_STEP). */
         buddy_scroll(key, action);
+    } else if (state->page == BUDDY_PAGE_TASKS) {
+        buddy_tasks_click(state, key, action);
     }
+}
+
+static bool buddy_on_a_screen(const buddy_state_t *state)
+{
+    return state->page == BUDDY_PAGE_HOME || state->page == BUDDY_PAGE_TALK ||
+           state->page == BUDDY_PAGE_TASKS;
 }
 
 static bool buddy_prompt_ids_match(const buddy_prompt_t *left, const buddy_prompt_t *right)
@@ -557,34 +585,52 @@ static void buddy_apply_permission_result(buddy_state_t *state,
     buddy_set_ui_refresh(action);
 }
 
-/* Long press. On the home page OK is push-to-talk and UP opens the menu. On the
- * menu and the pages under it either key goes back to the home page. */
+/* The thing a recording started now is about: on the conversation screen the
+ * card that is showing, on the third screen the thing that is selected. */
+static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size)
+{
+    id[0] = '\0';
+    if (state->page == BUDDY_PAGE_TASKS) {
+        if (state->task_selected < state->task_count) {
+            buddy_cards_copy(id, size, state->tasks[state->task_selected].id);
+        }
+    } else if (state->page == BUDDY_PAGE_TALK && !buddy_card_live(state)) {
+        int index = buddy_card_index(state);
+
+        if (index >= 0) {
+            buddy_cards_copy(id, size, state->cards.cards[index].id);
+        }
+    }
+}
+
+/* Long press. On the three screens holding OK is push-to-talk. On the menu and
+ * the pages under it, it goes back to the first screen. UP and DOWN have no
+ * long press. */
 static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     bool woke = state->screen_off;
 
     if (state->confirmation != BUDDY_CONFIRM_NONE || buddy_has_prompt(state) ||
-        state->passkey_visible || state->voice_phase != BUDDY_VOICE_IDLE ||
-        (key != BUDDY_KEY_OK && key != BUDDY_KEY_UP)) {
+        state->passkey_visible || state->voice_phase != BUDDY_VOICE_IDLE) {
         return;
     }
-    /* A long press on a dark screen wakes it; holding OK goes straight on to talking. */
+    if (key != BUDDY_KEY_OK) {
+        /* Any key held on a dark screen wakes it; that is all UP and DOWN do. */
+        if (woke) {
+            state->screen_off = false;
+            buddy_set_ui_refresh(action);
+        }
+        return;
+    }
+    /* Holding OK on a dark screen wakes it and goes straight on to talking. */
     state->screen_off = false;
     buddy_set_ui_refresh(action);
-    if (state->page != BUDDY_PAGE_HOME) {
+    if (!buddy_on_a_screen(state)) {
         if (!woke) {
             state->page = BUDDY_PAGE_HOME;
         }
         return;
     }
-    if (key == BUDDY_KEY_UP) {
-        if (!woke) {
-            state->page = BUDDY_PAGE_MENU;
-            state->menu_selection = BUDDY_MENU_NOTICES;
-        }
-        return;
-    }
-    state->page = BUDDY_PAGE_HOME;
     if (!state->ble_connected || !state->ble_encrypted) {
         buddy_copy(state->message, sizeof(state->message), PT_VOICE_NEED_LINK);
         return;
@@ -599,7 +645,30 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     if (action != NULL) {
         action->type = BUDDY_ACTION_VOICE_START;
         action->connection_generation = state->ble_connection_generation;
+        buddy_voice_card(state, action->voice_card, sizeof(action->voice_card));
     }
+}
+
+/* Two quick presses on OK. On the three screens: the menu. On the menu and the
+ * pages under it: back to the first screen. Returns false when something else
+ * has the screen; the press then counts as one ordinary click, so that pressing
+ * OK twice on a prompt neither does nothing nor decides twice. */
+static bool buddy_double_press(buddy_state_t *state, const buddy_event_t *event,
+                               buddy_action_t *action)
+{
+    if (event->key != BUDDY_KEY_OK || state->voice_phase != BUDDY_VOICE_IDLE ||
+        state->screen_off || state->confirmation != BUDDY_CONFIRM_NONE ||
+        buddy_has_prompt(state) || state->passkey_visible) {
+        return false;
+    }
+    if (buddy_on_a_screen(state)) {
+        state->page = BUDDY_PAGE_MENU;
+        state->menu_selection = BUDDY_MENU_NOTICES;
+    } else {
+        state->page = BUDDY_PAGE_HOME;
+    }
+    buddy_set_ui_refresh(action);
+    return true;
 }
 
 static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
@@ -621,7 +690,7 @@ static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
         buddy_set_ui_refresh(action);
         return;
     case BUDDY_VOICE_FINISHED:
-        /* Nothing to add: the home page itself shows that the question is on its way. */
+        /* Nothing to add: the screen itself shows that the question is on its way. */
         break;
     case BUDDY_VOICE_LIMIT:
         message = PT_VOICE_LIMIT;
@@ -645,11 +714,14 @@ static void buddy_apply_voice(buddy_state_t *state, const buddy_event_t *event,
     if (event->voice_status == BUDDY_VOICE_FINISHED ||
         event->voice_status == BUDDY_VOICE_LIMIT) {
         /* The recording is with the host: a new turn. Until the host says what
-         * it heard, the home page shows that a question is on its way. */
-        buddy_begin_turn(state, now_ms);
+         * it heard, the screen shows that a question is on its way. */
+        unsigned doing = state->chat.doing;
+
+        buddy_begin_turn(state);
         buddy_clear_live_turn(state);
         state->chat.phase = BUDDY_CHAT_SENT;
         state->chat.mood = BUDDY_MOOD_BUSY;
+        state->chat.doing = doing;
         state->chat_since_ms = now_ms;
     }
     buddy_set_ui_refresh(action);
@@ -661,8 +733,6 @@ static void buddy_apply_chat(buddy_state_t *state, const buddy_event_t *event,
     buddy_chat_phase_t phase = event->chat.phase;
     bool was_in_progress = buddy_chat_in_progress(state->chat.phase);
     bool answered = phase == BUDDY_CHAT_DONE || phase == BUDDY_CHAT_FAILED;
-    bool same_words = strcmp(state->reply, event->reply) == 0 &&
-                      strcmp(state->chat.said, event->chat.said) == 0;
     bool same_step;
 
     if (event->ble.connection_generation != state->ble_connection_generation) {
@@ -674,35 +744,26 @@ static void buddy_apply_chat(buddy_state_t *state, const buddy_event_t *event,
         phase = BUDDY_CHAT_THINKING;
     }
     if (phase == BUDDY_CHAT_NONE) {
-        /* A hub that only repeats "nothing yet" must not wipe a recording that
-         * has just left the device and is still being transcribed. */
-        if (state->chat.phase == BUDDY_CHAT_SENT) {
-            return;
+        /* Nothing is being said right now. A recording that has just left the
+         * device and is still being transcribed is not wiped by that. */
+        if (state->chat.phase != BUDDY_CHAT_SENT) {
+            buddy_clear_live_turn(state);
         }
-        /* The hub starts over (the phone app was restarted): what is on screen
-         * is a conversation that is finished. */
-        if (state->chat.phase != BUDDY_CHAT_NONE ||
-            buddy_history_visible(&state->history) > 0U) {
-            buddy_fold_session(state);
-            buddy_set_ui_refresh(action);
-        }
+        state->chat.doing = event->chat.doing;
+        buddy_set_ui_refresh(action);
         return;
     }
-    if (answered &&
-        (state->chat.phase == BUDDY_CHAT_NONE || state->chat.phase == BUDDY_CHAT_SENT) &&
-        buddy_history_last_is(&state->history, event->chat.said, event->reply)) {
-        /* The hub repeats a turn this device has already put away: after the link
-         * came back, after the conversation was folded, or while a new recording
-         * is on its way. Nothing new. */
+    if (state->chat.phase == BUDDY_CHAT_SENT && answered && event->chat.said[0] != '\0') {
+        /* A recording has just left the device, and this is the end of something
+         * else (a thing in the background, or the turn before). It is on its card;
+         * the wait for what was just said stays on screen. */
+        state->chat.doing = event->chat.doing;
+        buddy_set_ui_refresh(action);
         return;
     }
-    if (!was_in_progress) {
-        if (!answered || state->chat.phase == BUDDY_CHAT_NONE || !same_words) {
-            /* A new turn; the one on screen moves up into the history. */
-            buddy_begin_turn(state, now_ms);
-        }
-    } else if (answered) {
-        state->session_touched_ms = now_ms;
+    if (buddy_chat_in_progress(phase) && !was_in_progress) {
+        /* Something new was said (typed on the phone, for example). */
+        buddy_begin_turn(state);
     }
     /* A recording that left the device and the host starting to think about it
      * are one wait as far as the owner is concerned: keep counting. */
@@ -723,28 +784,91 @@ static void buddy_apply_chat(buddy_state_t *state, const buddy_event_t *event,
     buddy_set_ui_refresh(action);
 }
 
-/* A double press on UP at the home page brings back the turns that were folded
- * away. Returns false when there is nothing to bring back or something else has
- * the screen; the press then counts as an ordinary click. */
-static bool buddy_recall(buddy_state_t *state, const buddy_event_t *event, uint64_t now_ms,
-                         buddy_action_t *action)
+static void buddy_apply_card(buddy_state_t *state, const buddy_event_t *event,
+                             buddy_action_t *action)
 {
-    unsigned hidden = buddy_history_hidden(&state->history);
-
-    if (event->key != BUDDY_KEY_UP || state->voice_phase != BUDDY_VOICE_IDLE ||
-        state->screen_off || state->confirmation != BUDDY_CONFIRM_NONE ||
-        buddy_has_prompt(state) || state->passkey_visible ||
-        state->page != BUDDY_PAGE_HOME || !buddy_history_reveal(&state->history)) {
-        return false;
+    if (event->ble.connection_generation != state->ble_connection_generation) {
+        return;
     }
-    state->recalled = hidden;
-    ++state->recall_serial;
-    state->session_touched_ms = now_ms;
-    buddy_set_ui_refresh(action);
-    return true;
+    if (event->card.clear) {
+        if (buddy_cards_clear(&state->cards)) {
+            state->card_current[0] = '\0';
+            ++state->card_serial;
+            buddy_set_ui_refresh(action);
+        }
+        return;
+    }
+    if (buddy_cards_put(&state->cards, &event->card, event->card_said, event->reply,
+                        event->reply_truncated)) {
+        buddy_set_ui_refresh(action);
+    }
 }
 
-static void buddy_key_click(buddy_state_t *state, const buddy_event_t *event, uint64_t now_ms,
+static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
+                              uint64_t now_ms, buddy_action_t *action)
+{
+    unsigned count = event->task_count < BUDDY_TASK_COUNT ? event->task_count : BUDDY_TASK_COUNT;
+    char selected[BUDDY_CARD_ID_MAX] = "";
+    unsigned index;
+
+    if (event->ble.connection_generation != state->ble_connection_generation) {
+        return;
+    }
+    if (state->task_selected < state->task_count) {
+        buddy_cards_copy(selected, sizeof(selected), state->tasks[state->task_selected].id);
+    }
+    memset(state->tasks, 0, sizeof(state->tasks));
+    memcpy(state->tasks, event->tasks, count * sizeof(state->tasks[0]));
+    state->task_count = count;
+    state->tasks_since_ms = now_ms;
+    /* The selection stays on the same thing when the list is reordered or
+     * shortened; when that thing is gone it stays at the same place in the list. */
+    if (state->task_selected >= count) {
+        state->task_selected = count > 0U ? count - 1U : 0U;
+    }
+    for (index = 0; index < count; ++index) {
+        if (selected[0] != '\0' && strcmp(state->tasks[index].id, selected) == 0) {
+            state->task_selected = index;
+        }
+    }
+    buddy_set_ui_refresh(action);
+}
+
+/* The conversation screen was scrolled past the end of the card it shows. */
+static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
+{
+    int index = buddy_card_index(state);
+    int next = index + (key == BUDDY_KEY_DOWN ? 1 : -1);
+
+    if (state->page != BUDDY_PAGE_TALK || index < 0) {
+        return;
+    }
+    if (buddy_card_live(state)) {
+        /* From the turn in progress the way back leads to the newest card. */
+        if (key != BUDDY_KEY_UP) {
+            return;
+        }
+        next = (int)state->cards.count - 1;
+    }
+    if (next >= (int)state->cards.count && !state->card_follow &&
+        state->chat.phase != BUDDY_CHAT_NONE &&
+        buddy_cards_find(&state->cards, state->chat.card) < 0) {
+        /* Past the newest card there is a turn that has no card: back to it. */
+        buddy_begin_turn(state);
+        buddy_set_ui_refresh(action);
+        return;
+    }
+    if (next < 0 || next >= (int)state->cards.count) {
+        return;
+    }
+    buddy_cards_copy(state->card_current, sizeof(state->card_current),
+                     state->cards.cards[next].id);
+    state->card_follow = false;
+    ++state->card_serial;
+    buddy_set_ui_refresh(action);
+}
+
+static void buddy_key_click(buddy_state_t *state, const buddy_event_t *event,
                             buddy_action_t *action)
 {
     if (state->voice_phase != BUDDY_VOICE_IDLE) {
@@ -792,10 +916,6 @@ static void buddy_key_click(buddy_state_t *state, const buddy_event_t *event, ui
             action->scroll_delta = -48;
         }
     } else if (!buddy_has_prompt(state)) {
-        if (state->page == BUDDY_PAGE_HOME) {
-            /* Reading the conversation keeps it on screen. */
-            state->session_touched_ms = now_ms;
-        }
         buddy_normal_click(state, event->key, action);
     }
 }
@@ -810,6 +930,7 @@ void buddy_state_init(buddy_state_t *state, const buddy_settings_snapshot_t *set
     state->connection = BUDDY_CONNECTION_OFFLINE;
     state->page = BUDDY_PAGE_HOME;
     state->heartbeat_stale = true;
+    state->card_follow = true;
     state->brightness_level = BUDDY_BRIGHTNESS_LEVELS - 1U;
     if (settings != NULL) {
         state->settings = *settings;
@@ -831,7 +952,6 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     }
 
     buddy_clear_stale_prompt(state, now_ms);
-    buddy_fold_idle_session(state, now_ms);
 
     switch (event->type) {
     case BUDDY_EVENT_HEARTBEAT:
@@ -953,12 +1073,21 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         buddy_apply_permission_result(state, &event->permission_result, now_ms, action);
         break;
     case BUDDY_EVENT_KEY_CLICK:
-        buddy_key_click(state, event, now_ms, action);
+        buddy_key_click(state, event, action);
         break;
     case BUDDY_EVENT_KEY_DOUBLE:
-        if (!buddy_recall(state, event, now_ms, action)) {
-            buddy_key_click(state, event, now_ms, action);
+        if (!buddy_double_press(state, event, action)) {
+            buddy_key_click(state, event, action);
         }
+        break;
+    case BUDDY_EVENT_CARD_STEP:
+        buddy_card_step(state, event->key, action);
+        break;
+    case BUDDY_EVENT_CARD:
+        buddy_apply_card(state, event, action);
+        break;
+    case BUDDY_EVENT_TASKS:
+        buddy_apply_tasks(state, event, now_ms, action);
         break;
     case BUDDY_EVENT_KEY_LONG:
         buddy_long_press(state, event->key, action);
@@ -1006,8 +1135,8 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
          * owns the reply, and a stray turn event must not replace it. */
         if (state->connected && !state->heartbeat_stale && !state->host_chat) {
             if (strcmp(state->reply, event->reply) != 0) {
-                /* A new reply: the previous one moves up into the history. */
-                buddy_begin_turn(state, now_ms);
+                /* A new reply: the conversation screen starts from its top. */
+                buddy_begin_turn(state);
             }
             buddy_copy(state->reply, sizeof(state->reply), event->reply);
             state->reply_truncated = event->reply_truncated;
@@ -1073,10 +1202,18 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->more_selection = state->more_selection;
     snapshot->chat = state->chat;
     snapshot->chat_since_ms = state->chat_since_ms;
-    snapshot->turn_serial = state->turn_serial;
-    snapshot->recall_serial = state->recall_serial;
-    snapshot->recalled = state->recalled;
-    snapshot->history = &state->history;
+    snapshot->cards = &state->cards;
+    snapshot->card_index = buddy_card_index(state);
+    snapshot->card_live = buddy_card_live(state);
+    snapshot->card_serial = state->card_serial;
+    memcpy(snapshot->tasks, state->tasks, sizeof(snapshot->tasks));
+    snapshot->task_count = state->task_count;
+    snapshot->task_selected = state->task_selected;
+    snapshot->tasks_since_ms = state->tasks_since_ms;
+    /* The hub says how many things are in progress; the list shows at most a
+     * few of them, so whichever says more is right. */
+    snapshot->doing = state->chat.doing > state->task_count ? state->chat.doing
+                                                             : state->task_count;
     memcpy(snapshot->helpers, state->helpers, sizeof(snapshot->helpers));
     snapshot->helper_count = state->helper_count;
     snapshot->host_hub = state->host_hub;

@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "buddy_history.h"
 #include "pocket_view.h"
 
 static buddy_ui_snapshot_t connected_snapshot(void)
@@ -74,7 +73,7 @@ static void test_home_status(void)
     snapshot.connection = BUDDY_CONNECTION_OFFLINE;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_LINKING);
 
-    /* 连着手机中枢：首页跟着和小幽的对话走。 */
+    /* 连着手机中枢：第一屏跟着和小幽的对话走。 */
     snapshot = connected_snapshot();
     snapshot.host_hub = true;
     snapshot.host_chat = true;
@@ -291,66 +290,47 @@ static void test_elapsed_and_passkey(void)
     assert(strcmp(text, "234 567") == 0);
 }
 
-static void test_home_layout(void)
+static void test_scrolling_inside_a_card(void)
 {
-    static buddy_history_t history;
-    buddy_ui_snapshot_t snapshot = connected_snapshot();
+    int edge = 7;
 
-    memset(&history, 0, sizeof(history));
-    assert(!pocket_home_shows_talk(NULL));
-    /* 没聊过：小幽独占画面。 */
-    snapshot.host_hub = true;
-    snapshot.host_chat = true;
-    assert(!pocket_home_shows_talk(&snapshot));
-    snapshot.history = &history;
-    assert(!pocket_home_shows_talk(&snapshot));
-    /* 有一轮在屏幕上。 */
-    snapshot.chat.phase = BUDDY_CHAT_THINKING;
-    assert(pocket_home_shows_talk(&snapshot));
-    /* 没有正在进行的，但这一段里有说过的话可以回看。 */
-    snapshot.chat.phase = BUDDY_CHAT_NONE;
-    assert(buddy_history_push(&history, "q", "a", 0));
-    assert(pocket_home_shows_talk(&snapshot));
-    /* 断开了也一样：说过的话留着可以读。 */
-    snapshot.ble_connected = false;
-    assert(pocket_home_for(&snapshot) == POCKET_HOME_WAITING);
-    assert(pocket_home_shows_talk(&snapshot));
-    /* 收起来之后回到小幽独占画面。 */
-    assert(buddy_history_fold(&history));
-    assert(!pocket_home_shows_talk(&snapshot));
+    /* 窗口八行高（184），一行 23，一次翻七行（161）。 */
+    /* 这件事的话不满一屏：翻不动，往哪边按都是“该换一件了”。 */
+    assert(pocket_card_scroll(0, 1, 92, 184, 161, &edge) == 0 && edge == 1);
+    assert(pocket_card_scroll(0, -1, 92, 184, 161, &edge) == 0 && edge == -1);
+    assert(pocket_card_scroll(0, 1, 0, 184, 161, &edge) == 0 && edge == 1);
+    /* 比一屏长：在里面翻，不翻出这件事；到头了再按才是换一件。 */
+    assert(pocket_card_scroll(0, 1, 460, 184, 161, &edge) == 161 && edge == 0);
+    assert(pocket_card_scroll(161, 1, 460, 184, 161, &edge) == 276 && edge == 0);
+    assert(pocket_card_scroll(276, 1, 460, 184, 161, &edge) == 276 && edge == 1);
+    assert(pocket_card_scroll(276, -1, 460, 184, 161, &edge) == 115 && edge == 0);
+    assert(pocket_card_scroll(115, -1, 460, 184, 161, &edge) == 0 && edge == 0);
+    assert(pocket_card_scroll(0, -1, 460, 184, 161, &edge) == 0 && edge == -1);
+    /* 内容变短了：位置跟着收回来，这不算按了键。 */
+    assert(pocket_card_scroll(276, 0, 300, 184, 161, &edge) == 116 && edge == 0);
+    assert(pocket_card_scroll(50, 0, 100, 184, 161, &edge) == 0 && edge == 0);
+    assert(pocket_card_scroll(-5, 0, 460, 184, 161, &edge) == 0 && edge == 0);
+    /* 位置已经不合法时先收回来再翻：收回来之后还能动，就不是到头。 */
+    assert(pocket_card_scroll(400, -1, 460, 184, 161, &edge) == 115 && edge == 0);
+    /* 不关心到没到头的调用方可以不给 edge。 */
+    assert(pocket_card_scroll(0, 1, 460, 184, 161, NULL) == 161);
 }
 
-static void test_timeline_window(void)
+static void test_task_clock(void)
 {
-    /* 窗口九行高（207），一行 23。 */
-    /* 内容不满一屏：窗口不动。 */
-    assert(pocket_timeline_anchor(0, 0, 207) == 0);
-    assert(pocket_timeline_anchor(92, 46, 207) == 0);
-    /* 最新一轮放得下：贴着底，前面的对话也露出来。 */
-    assert(pocket_timeline_anchor(460, 345, 207) == 253);
-    /* 最新一轮自己就比窗口高：从它的开头读起。 */
-    assert(pocket_timeline_anchor(690, 230, 207) == 230);
-    assert(pocket_timeline_anchor(690, -5, 207) == 0);
-    /* 正好一屏。 */
-    assert(pocket_timeline_anchor(437, 230, 207) == 230);
-
-    /* 上下翻：不滚出长卷。 */
-    assert(pocket_timeline_step(230, 1, 690, 207, 184) == 414);
-    assert(pocket_timeline_step(414, 1, 690, 207, 184) == 483);
-    assert(pocket_timeline_step(483, 1, 690, 207, 184) == 483);
-    assert(pocket_timeline_step(230, -1, 690, 207, 184) == 46);
-    assert(pocket_timeline_step(46, -1, 690, 207, 184) == 0);
-    assert(pocket_timeline_step(0, -1, 690, 207, 184) == 0);
-    /* 内容变短了：位置跟着收回来。 */
-    assert(pocket_timeline_step(483, 0, 300, 207, 184) == 93);
-    assert(pocket_timeline_step(50, 0, 100, 207, 184) == 0);
-    assert(pocket_timeline_step(50, 1, 100, 207, 184) == 0);
+    /* 中枢说做了 42 秒；从那以后设备自己接着数。 */
+    assert(pocket_task_seconds(42, 1000, 1000) == 42U);
+    assert(pocket_task_seconds(42, 1000, 1999) == 42U);
+    assert(pocket_task_seconds(42, 1000, 4500) == 45U);
+    /* 时钟回退（不该发生）时不倒着数。 */
+    assert(pocket_task_seconds(42, 5000, 1000) == 42U);
+    assert(pocket_task_seconds(UINT32_MAX, 0, 10000) == UINT32_MAX);
 }
 
 int main(void)
 {
-    test_home_layout();
-    test_timeline_window();
+    test_scrolling_inside_a_card();
+    test_task_clock();
     test_view_priority();
     test_voice_view();
     test_home_status();

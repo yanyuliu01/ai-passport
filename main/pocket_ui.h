@@ -10,7 +10,8 @@
 void pocket_ui_init(void);
 // 用最新快照刷新界面。可以每个 tick 调用：内容没变的控件不会重绘。
 void pocket_ui_render(const buddy_ui_snapshot_t *snapshot);
-// 滚动当前视图里的长文本：审批页为“向下翻一屏，到底回到开头”；首页的对话和连接
-// 指引页按 delta 的方向滚动（各自一次滚几行），首页上 BUDDY_SCROLL_LATEST 表示回到
-// 最新一轮。其他视图忽略。
-void pocket_ui_scroll(int delta);
+// 滚动当前视图里的长文本：审批页为“向下翻一屏，到底回到开头”；连接指引页和第二屏
+// （对话）按 delta 的方向翻。其他视图忽略。
+// 返回值只对第二屏有意义：这件事已经翻到头、还往那个方向按时返回 -1（上）或 1（下），
+// 调用方据此换到上一件 / 下一件（BUDDY_EVENT_CARD_STEP）；其余情况返回 0。
+int pocket_ui_scroll(int delta);

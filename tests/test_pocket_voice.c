@@ -297,10 +297,37 @@ static void test_level(void)
     }
 }
 
+static void test_start_line(void)
+{
+    char line[160];
+    char small[40];
+
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, NULL) > 0);
+    assert(strcmp(line, "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,"
+                        "\"codec\":\"ima-adpcm\"}\n") == 0);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "") > 0);
+    assert(strstr(line, "card") == NULL);
+    /* 按下时屏幕上有一件事：这句话是对它说的。 */
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c12") == strlen(line));
+    assert(strcmp(line, "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,"
+                        "\"codec\":\"ima-adpcm\",\"card\":\"c12\"}\n") == 0);
+    /* 编号里有会破坏这一行的字符就不带：宁可当作没有，也不发一行坏的。 */
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c\"1") > 0);
+    assert(strstr(line, "card") == NULL);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c\\1") > 0);
+    assert(strstr(line, "card") == NULL);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "\xE4\xBA\x8B") > 0);
+    assert(strstr(line, "card") == NULL);
+    /* 放不下：什么都不写。 */
+    assert(pocket_voice_start_line(small, sizeof(small), 16000, "c12") == 0 && small[0] == '\0');
+    assert(pocket_voice_start_line(NULL, 0, 16000, "c12") == 0);
+}
+
 int main(void)
 {
     make_speech_like();
     test_level();
+    test_start_line();
     test_adpcm_round_trip();
     test_adpcm_extremes();
     test_packer();

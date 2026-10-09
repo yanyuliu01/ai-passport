@@ -6,44 +6,70 @@
 // 约定：这里的字面量只用普通 UTF-8 字符和 \n，不用其他转义。
 #pragma once
 
-// ---- 首页：小幽独占画面的几种情形（标题 + 两三行说明）----
+// ---- 第一屏：形象。小幽、一个标题、下面两三行 ----
 #define PT_HOME_BLE_OFF    "蓝牙关着呢"
 #define PT_HOME_WAITING    "睡着啦"
 #define PT_HOME_LINKING    "连上啦"
 #define PT_HOME_QUIET      "我在"
 
-#define PT_HOME_SUB_BLE_OFF   "长按上键\n在菜单里把蓝牙打开"
+#define PT_HOME_SUB_BLE_OFF   "双击确认键\n在菜单里把蓝牙打开"
 #define PT_HOME_SUB_WAITING   "手机上打开小幽中枢\n我就醒了"
 #define PT_HOME_SUB_LINKING   "等对面跟我打个招呼"
 #define PT_HOME_SUB_QUIET     "有事按住确认键\n直接说"
+// 后台在做的事的个数填在 %u 里。
+#define PT_HOME_SUB_DOING     "后台有 %u 件事在做\n有事按住确认键直接说"
 // 通知的个数填在 %u 里。
-#define PT_HOME_SUB_NOTICES   "有 %u 个新通知\n长按上键在菜单里看"
+#define PT_HOME_SUB_NOTICES   "有 %u 个新通知\n双击确认键在菜单里看"
 #define PT_HOME_SUB_NO_VOICE  "现在没活儿\n有事我会叫你"
+// 她把活交给了帮手：是谁写在下面那一行的名牌里
+#define PT_HOME_HANDED     "交给帮手了"
 
-// ---- 首页：对话版式（顶上一条是小幽和她此刻的状态，下面是一条往下长的对话）----
+// ---- 小幽此刻在干什么：第一屏的标题，也是第二屏顶上那一条 ----
 #define PT_XIAOYOU         "小幽"
-// 顶上那一条里，小幽此刻在干什么
 #define PT_HEAD_SENT       "在听写"
 #define PT_HEAD_THINKING   "在想"
-// 帮手在做：名字在上一行的名牌里
+// 帮手在做：名字在旁边的名牌里
 #define PT_HEAD_WORKING    "在做了"
 #define PT_HEAD_DONE       "说完啦"
 #define PT_HEAD_FAILED     "这次没成"
+// 连的是 Claude 桌面端时，说的是谁在干活
+#define PT_DESKTOP_BUSY    "电脑上 Claude 在忙"
+#define PT_DESKTOP_REPLY   "电脑上 Claude 说的"
+#define PT_DESKTOP_WORKING "它还在忙，好了这里会更新"
+
+// ---- 第二屏：对话，一屏一件事 ----
 // 录音发出去了，还不知道听成了什么
 #define PT_SAID_PENDING    "（正在听写）"
 #define PT_TALK_SENT       "发出去啦，等我听清楚"
 #define PT_TALK_THINKING   "听到了，我想想"
 #define PT_TALK_FAILED     "这次没成，再说一次吧"
-// 连的是 Claude 桌面端时，顶上那一条说的是谁在干活
-#define PT_DESKTOP_BUSY    "电脑上 Claude 在忙"
-#define PT_DESKTOP_REPLY   "电脑上 Claude 说的"
-#define PT_DESKTOP_WORKING "它还在忙，好了这里会更新"
-// 她去找帮手：%s 是帮手的名字
-#define PT_HELPER_ASKED    "这件事我去找 %s 帮忙"
+#define PT_TALK_EMPTY      "还没聊过"
+#define PT_TALK_EMPTY_SUB  "按住确认键\n跟我说说话"
+// 这件事右上角的一句说明。%s 是帮手的名字，%u 是次数。
+#define PT_CARD_NEW        "新的一件"
+#define PT_CARD_SELF       "小幽答的"
+#define PT_CARD_WORKING    "%s 在做"
+#define PT_CARD_WAITING    "等你点头"
+#define PT_CARD_DONE       "%s 做完"
+#define PT_CARD_FAILED     "没成"
+#define PT_CARD_CANCELLED  "取消了"
+#define PT_CARD_EDITS      "改过 %u 次"
+// 帮手的名字太长、那一行放不下时用这个代替
+#define PT_CARD_HELPER     "帮手"
 #define PT_ELLIPSIS        "…"
 
 // 回答比设备留得下的长
 #define PT_READER_CUT      "（太长了，后面的在手机上看）"
+
+// ---- 第三屏：任务，正在做的事 ----
+#define PT_TASKS_EMPTY     "现在没有在做的事"
+#define PT_TASK_WAITING    "等你点头"
+#define PT_TASK_QUEUED     "排队"
+#define PT_TASK_NO_STEPS   "（还没有进展）"
+#define PT_TASKS_HINT      "按住确认键 补充或改要求"
+
+// ---- 顶栏：后台在做几件事 ----
+#define PT_TOP_DOING       "在做 %u"
 
 // ---- 通知 ----
 #define PT_NOTICES_TITLE   "通知"
@@ -128,14 +154,13 @@
 #define PT_KEY_SEPARATOR   " · "
 #define PT_KEY_DOWN        "下键"
 #define PT_KEY_OK          "确认键"
-#define PT_HINT_TALK       "按住说话"
-#define PT_HINT_CUT_IN     "按住插一句"
 #define PT_HINT_RELEASE    "松开就发送"
-#define PT_HINT_UP         "往上"
-#define PT_HINT_DOWN       "往下"
-// 之前的对话收起来了：双击上键接回来
-#define PT_HINT_EARLIER    "双击看之前"
-#define PT_HINT_MENU       "长按 菜单"
+// 三屏：确认键短按到下一屏，按住说话，双击打开菜单
+#define PT_HINT_HOME       "下一屏 按住说话 双击菜单"
+#define PT_HINT_HOME_MUTE  "下一屏 双击菜单"
+#define PT_HINT_SCREEN     "下一屏"
+#define PT_HINT_SCREEN_TALK "下一屏 按住说话"
+#define PT_HINT_SCREEN_ADD "下一屏 按住补充"
 #define PT_HINT_PREV       "上"
 #define PT_HINT_NEXT       "下"
 #define PT_HINT_ENTER      "进入"

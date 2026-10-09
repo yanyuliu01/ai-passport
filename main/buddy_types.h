@@ -22,16 +22,18 @@
 #define BUDDY_STAGE_MAX 160
 #define BUDDY_HELPER_COUNT 4
 #define BUDDY_HELPER_ABOUT_MAX 64
-/* Earlier turns kept in RAM so the home page can scroll back through them:
- * a byte budget for the words and a cap on the number of turns. One turn is at
- * most BUDDY_MESSAGE_MAX + BUDDY_REPLY_MAX bytes, so the newest always fits. */
-#define BUDDY_HISTORY_BYTES 4096
-#define BUDDY_HISTORY_TURNS 12
-/* This long without a turn and the conversation on screen is folded away: the
- * home page goes back to resting, and a double press on UP brings it back. */
-#define BUDDY_SESSION_IDLE_MS (30U * 60U * 1000U)
-/* scroll_delta of a UI_SCROLL action that means "back to the newest turn". */
-#define BUDDY_SCROLL_LATEST 32767
+/* Cards the hub has sent, kept in RAM: every request to Xiaoyou is one "thing"
+ * with a card of its own. A byte budget for the words and a cap on the number of
+ * cards. One card is at most BUDDY_MESSAGE_MAX + BUDDY_REPLY_MAX bytes of words,
+ * so the newest always fits. */
+#define BUDDY_CARD_BYTES 4096
+#define BUDDY_CARD_COUNT 12
+#define BUDDY_CARD_ID_MAX 12
+#define BUDDY_CARD_AT_MAX 6 /* "HH:MM" */
+/* Things in progress, as the hub lists them for the third screen. */
+#define BUDDY_TASK_COUNT 4
+#define BUDDY_TASK_TITLE_MAX 48
+#define BUDDY_TASK_LINE_MAX 64
 
 typedef enum {
     BUDDY_CONNECTION_OFFLINE,
@@ -53,8 +55,10 @@ typedef enum {
 } buddy_character_t;
 
 typedef enum {
-    BUDDY_PAGE_HOME,    /* the conversation: Xiaoyou and every turn of this session */
-    BUDDY_PAGE_MENU,    /* long press UP */
+    BUDDY_PAGE_HOME,    /* first screen: Xiaoyou herself and what she is doing */
+    BUDDY_PAGE_TALK,    /* second screen: the conversation, one thing at a time */
+    BUDDY_PAGE_TASKS,   /* third screen: the things in progress */
+    BUDDY_PAGE_MENU,    /* double press OK */
     BUDDY_PAGE_NOTICES, /* recent entries from the host */
     BUDDY_PAGE_HELPERS, /* the agents Xiaoyou can hand work to */
     BUDDY_PAGE_MORE,    /* rarely used and destructive settings */
@@ -96,6 +100,22 @@ typedef enum {
     BUDDY_CHAT_DONE,     /* her answer is in reply */
     BUDDY_CHAT_FAILED,   /* the turn did not work; reply says why */
 } buddy_chat_phase_t;
+
+/* Where a thing stands (see the runtime's cards). */
+typedef enum {
+    BUDDY_CARD_TALKING,
+    BUDDY_CARD_WORKING,
+    BUDDY_CARD_WAITING, /* for the owner's approval */
+    BUDDY_CARD_DONE,
+    BUDDY_CARD_FAILED,
+    BUDDY_CARD_CANCELLED,
+} buddy_card_state_t;
+
+typedef enum {
+    BUDDY_TASK_WORKING,
+    BUDDY_TASK_WAITING, /* for the owner's approval */
+    BUDDY_TASK_QUEUED,
+} buddy_task_state_t;
 
 typedef enum {
     BUDDY_MOOD_IDLE,
@@ -140,7 +160,12 @@ typedef enum {
     BUDDY_EVENT_VOICE,
     BUDDY_EVENT_CHAT,
     BUDDY_EVENT_HELPERS,
-    BUDDY_EVENT_KEY_DOUBLE, /* two quick presses; only UP is reported this way */
+    BUDDY_EVENT_KEY_DOUBLE, /* two quick presses; only OK is reported this way */
+    BUDDY_EVENT_CARD,
+    BUDDY_EVENT_TASKS,
+    /* The conversation screen was scrolled past the end of a card: go to the
+     * previous (key UP) or next (key DOWN) one. Raised by the interface. */
+    BUDDY_EVENT_CARD_STEP,
 } buddy_event_type_t;
 
 typedef enum {
@@ -230,30 +255,53 @@ typedef struct {
     buddy_mood_t mood;
     char said[BUDDY_MESSAGE_MAX];  /* what the owner said; empty until transcribed */
     char agent[BUDDY_AGENT_MAX];   /* who is working on it, when it is not Xiaoyou herself */
-    char stage[BUDDY_STAGE_MAX];   /* what she said when she handed the work over */
+    char stage[BUDDY_STAGE_MAX];   /* the title of the thing she handed over */
+    char card[BUDDY_CARD_ID_MAX];  /* the card this turn went onto; empty when there is none */
+    unsigned doing;                /* how many things are in progress in the background */
 } buddy_chat_t;
 
-/* A turn that is over. Its words live in buddy_history_t.text. */
-#define BUDDY_TURN_FAILED 0x01U /* reply is why it did not work */
-#define BUDDY_TURN_CUT 0x02U    /* reply was longer than the device keeps */
-
+/* One card. Its words live in buddy_cards_t.text. */
 typedef struct {
-    uint16_t said;  /* offset of the NUL-terminated words of the owner; may be empty */
-    uint16_t reply; /* offset of the NUL-terminated answer */
-    uint8_t flags;
-} buddy_past_turn_t;
+    char id[BUDDY_CARD_ID_MAX];
+    char at[BUDDY_CARD_AT_MAX];    /* when it began, "HH:MM" */
+    char agent[BUDDY_AGENT_MAX];   /* who is or was on it; empty: Xiaoyou answered herself */
+    uint16_t said;                 /* offset of the first thing the owner said; may be empty */
+    uint16_t reply;                /* offset of the latest thing Xiaoyou said */
+    uint8_t state;                 /* buddy_card_state_t */
+    uint8_t edits;                 /* how many times it was added to or changed */
+    bool cut;                      /* reply was longer than the device keeps */
+} buddy_card_t;
 
-/* Earlier turns, oldest first. turns[floor..count) belong to the conversation
- * on screen; the ones before floor are folded away until the owner asks for
- * them. See buddy_history.h for the operations. */
+/* Cards in the order they were opened, oldest first. See buddy_cards.h. */
 typedef struct {
-    char text[BUDDY_HISTORY_BYTES];
-    buddy_past_turn_t turns[BUDDY_HISTORY_TURNS];
+    char text[BUDDY_CARD_BYTES];
+    buddy_card_t cards[BUDDY_CARD_COUNT];
     uint16_t used;
     uint8_t count;
-    uint8_t floor;
     uint32_t revision; /* goes up whenever anything above changes */
-} buddy_history_t;
+} buddy_cards_t;
+
+/* A card as it arrives from the hub; said travels in card_said and the reply in
+ * the event's reply field. */
+typedef struct {
+    char id[BUDDY_CARD_ID_MAX];
+    char at[BUDDY_CARD_AT_MAX];
+    char agent[BUDDY_AGENT_MAX];
+    buddy_card_state_t state;
+    uint8_t edits;
+    bool clear; /* forget every card (the hub is about to send them again) */
+} buddy_card_update_t;
+
+/* A thing in progress. */
+typedef struct {
+    char id[BUDDY_CARD_ID_MAX];
+    char agent[BUDDY_AGENT_MAX];
+    char title[BUDDY_TASK_TITLE_MAX];
+    char line1[BUDDY_TASK_LINE_MAX]; /* the latest two steps, as they are */
+    char line2[BUDDY_TASK_LINE_MAX];
+    buddy_task_state_t state;
+    uint32_t seconds; /* how long it had been going when the hub said so */
+} buddy_task_t;
 
 /* An agent Xiaoyou can hand work to. */
 typedef struct {
@@ -311,6 +359,10 @@ typedef struct {
     buddy_chat_t chat;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
+    buddy_card_update_t card;
+    char card_said[BUDDY_MESSAGE_MAX];
+    buddy_task_t tasks[BUDDY_TASK_COUNT];
+    unsigned task_count;
 } buddy_event_t;
 
 typedef struct {
@@ -332,6 +384,8 @@ typedef struct {
     bool ble_enabled;
     bool confirmation_acknowledge;
     bool voice_cancel;
+    /* VOICE_START: the thing on screen when the key went down; empty for none. */
+    char voice_card[BUDDY_CARD_ID_MAX];
 } buddy_action_t;
 
 typedef struct {
@@ -364,17 +418,26 @@ typedef struct {
     char reply[BUDDY_REPLY_MAX];
     bool reply_truncated;
     buddy_chat_t chat;
-    /* When the current phase of the turn began; the home page counts up from it. */
+    /* When the current phase of the turn began; the first screen counts up from it. */
     uint64_t chat_since_ms;
-    /* Goes up when a new turn begins: the home page then shows that turn. */
-    uint32_t turn_serial;
-    /* Goes up when the owner brings folded turns back; recalled is how many
-     * came back. The home page then stops at the last of them. */
-    uint32_t recall_serial;
-    unsigned recalled;
-    /* Earlier turns. Points into the state the snapshot was taken from and is
-     * only valid on the task that owns that state; may be NULL. */
-    const buddy_history_t *history;
+    /* The cards. Points into the state the snapshot was taken from and is only
+     * valid on the task that owns that state; may be NULL. */
+    const buddy_cards_t *cards;
+    /* Which card the conversation screen shows: an index into cards, or -1 when
+     * there is none. card_live: instead of a card, show the turn in progress
+     * (chat and reply above), because it has no card yet or never gets one. */
+    int card_index;
+    bool card_live;
+    /* Goes up whenever the conversation screen should start again from the top
+     * of what it shows (another card, or a new turn). */
+    uint32_t card_serial;
+    /* Things in progress; tasks_since_ms is when the list arrived. */
+    buddy_task_t tasks[BUDDY_TASK_COUNT];
+    unsigned task_count;
+    unsigned task_selected;
+    uint64_t tasks_since_ms;
+    /* How many things are in progress in the background, for the top bar. */
+    unsigned doing;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     /* The host introduced itself as a hub (the phone), not the Claude desktop app. */

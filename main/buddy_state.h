@@ -49,15 +49,22 @@ typedef struct {
     /* The conversation with Xiaoyou, when the host is a hub. */
     buddy_chat_t chat;
     uint64_t chat_since_ms;
-    /* Earlier turns, and which of them belong to the conversation on screen. */
-    buddy_history_t history;
-    /* Goes up when a new turn begins. */
-    uint32_t turn_serial;
-    /* Goes up when folded turns are brought back; recalled is how many. */
-    uint32_t recall_serial;
-    unsigned recalled;
-    /* When the conversation on screen was last added to or looked at. */
-    uint64_t session_touched_ms;
+    /* The cards the hub has sent. They outlive the connection: what was said
+     * stays readable until the hub sends them again. */
+    buddy_cards_t cards;
+    /* The card the conversation screen shows; empty means the newest. */
+    char card_current[BUDDY_CARD_ID_MAX];
+    /* The conversation screen goes with the turn in progress: it shows that turn
+     * until its card arrives, then that card. Ends when the owner moves to
+     * another card himself; starts again with the next turn. */
+    bool card_follow;
+    /* Goes up whenever the conversation screen should start from the top again. */
+    uint32_t card_serial;
+    /* Things in progress, the one selected on the third screen, when the list came. */
+    buddy_task_t tasks[BUDDY_TASK_COUNT];
+    unsigned task_count;
+    unsigned task_selected;
+    uint64_t tasks_since_ms;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     bool host_hub;

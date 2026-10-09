@@ -553,9 +553,145 @@ static void test_chat_reports_the_conversation(void)
     assert(strlen(event.chat.said) == (BUDDY_MESSAGE_MAX - 1U) / 3U * 3U);
     assert(event.chat.said[strlen(event.chat.said) - 1] == '\xA0');
 
+    /* Which card the turn went onto, and how many things are in the background. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"helper\",\"agent\":\"codex\",\"card\":\"c12\","
+                 "\"doing\":3}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(strcmp(event.chat.card, "c12") == 0 && event.chat.doing == 3U);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"idle\",\"doing\":1}", &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.card[0] == '\0' && event.chat.doing == 1U);
+    /* An id this device could not hold names no card here; the rest still counts. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"reply\":\"ok\","
+                 "\"card\":\"a-card-id-that-is-too-long\"}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.card[0] == '\0' && strcmp(event.reply, "ok") == 0);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"doing\":-1}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"done\",\"doing\":\"2\"}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+
     assert(buddy_protocol_hub_ack_json(output, sizeof(output)) > 0);
-    assert(strcmp(output, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true}\n") == 0);
+    assert(strcmp(output, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}\n") == 0);
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
+}
+
+static void test_card_carries_one_thing(void)
+{
+    static char line[BUDDY_JSON_LINE_MAX + 1U];
+    buddy_event_t event;
+    size_t index;
+
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c12\",\"at\":\"14:02\",\"state\":\"working\","
+                 "\"agent\":\"codex\",\"edits\":1,\"said\":\"\xE7\x9C\x8B\xE7\x9C\x8B\","
+                 "\"reply\":\"handed to codex\"}",
+                 &event) == BUDDY_EVENT_CARD);
+    assert(event.type == BUDDY_EVENT_CARD && !event.card.clear);
+    assert(strcmp(event.card.id, "c12") == 0 && strcmp(event.card.at, "14:02") == 0);
+    assert(event.card.state == BUDDY_CARD_WORKING && event.card.edits == 1);
+    assert(strcmp(event.card.agent, "codex") == 0);
+    assert(strcmp(event.card_said, "\xE7\x9C\x8B\xE7\x9C\x8B") == 0);
+    assert(strcmp(event.reply, "handed to codex") == 0 && !event.reply_truncated);
+
+    /* Only the id and the state are required. Every state is known. */
+    {
+        static const struct {
+            const char *name;
+            buddy_card_state_t state;
+        } states[] = {
+            {"talking", BUDDY_CARD_TALKING}, {"working", BUDDY_CARD_WORKING},
+            {"waiting", BUDDY_CARD_WAITING}, {"done", BUDDY_CARD_DONE},
+            {"failed", BUDDY_CARD_FAILED},   {"cancelled", BUDDY_CARD_CANCELLED},
+        };
+
+        for (index = 0; index < sizeof(states) / sizeof(states[0]); ++index) {
+            (void)snprintf(line, sizeof(line), "{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"%s\"}",
+                           states[index].name);
+            assert(parse(line, &event) == BUDDY_EVENT_CARD);
+            assert(event.card.state == states[index].state);
+            assert(event.card.agent[0] == '\0' && event.card_said[0] == '\0' &&
+                   event.reply[0] == '\0' && event.card.edits == 0);
+        }
+    }
+    /* A very large count of edits is still just "many". */
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"done\",\"edits\":900}", &event) ==
+           BUDDY_EVENT_CARD);
+    assert(event.card.edits == 255);
+
+    assert(parse("{\"cmd\":\"card\",\"clear\":true}", &event) == BUDDY_EVENT_CARD);
+    assert(event.card.clear && event.card.id[0] == '\0');
+
+    /* Without an id, with one that is too long to be kept whole, with an unknown
+     * state or a field of the wrong type, it is refused. */
+    assert(parse("{\"cmd\":\"card\",\"state\":\"done\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "card") == 0 && event.card.id[0] == '\0');
+    assert(parse("{\"cmd\":\"card\",\"clear\":false}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"\",\"state\":\"done\"}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"a-card-id-that-is-too-long\",\"state\":\"done\"}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"paused\"}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"done\",\"reply\":5}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"done\",\"edits\":\"1\"}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+
+    /* Long words are cut on a character boundary; only the reply says so. */
+    index = (size_t)snprintf(line, sizeof(line),
+                             "{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"done\",\"said\":\"");
+    while (index < 300U) {
+        memcpy(line + index, "\xE4\xBD\xA0", 3);
+        index += 3;
+    }
+    index += (size_t)snprintf(line + index, sizeof(line) - index, "\",\"reply\":\"");
+    while (index < 300U + 3U * (BUDDY_REPLY_MAX / 3U + 20U)) {
+        memcpy(line + index, "\xE5\xA5\xBD", 3);
+        index += 3;
+    }
+    (void)snprintf(line + index, sizeof(line) - index, "\"}");
+    assert(parse(line, &event) == BUDDY_EVENT_CARD);
+    assert(event.reply_truncated);
+    assert(strlen(event.reply) == (BUDDY_REPLY_MAX - 1U) / 3U * 3U);
+    assert(strlen(event.card_said) == (BUDDY_MESSAGE_MAX - 1U) / 3U * 3U);
+}
+
+static void test_tasks_lists_the_things_in_progress(void)
+{
+    buddy_event_t event;
+
+    assert(parse("{\"cmd\":\"tasks\",\"list\":["
+                 "{\"id\":\"c12\",\"agent\":\"codex\",\"title\":\"review retry()\","
+                 "\"state\":\"working\",\"secs\":42,\"p1\":\"git diff\",\"p2\":\"pytest -q\"},"
+                 "{\"id\":\"c13\",\"agent\":\"claude\",\"state\":\"waiting\"},"
+                 "{\"title\":\"no id\"},"
+                 "{\"id\":\"c14\",\"state\":\"queued\"},"
+                 "{\"id\":\"c15\"},{\"id\":\"c16\"}]}",
+                 &event) == BUDDY_EVENT_TASKS);
+    /* Entries without an id are skipped; the list holds the first four that have one. */
+    assert(event.type == BUDDY_EVENT_TASKS && event.task_count == BUDDY_TASK_COUNT);
+    assert(strcmp(event.tasks[0].id, "c12") == 0 && strcmp(event.tasks[0].agent, "codex") == 0);
+    assert(strcmp(event.tasks[0].title, "review retry()") == 0);
+    assert(event.tasks[0].state == BUDDY_TASK_WORKING && event.tasks[0].seconds == 42U);
+    assert(strcmp(event.tasks[0].line1, "git diff") == 0 &&
+           strcmp(event.tasks[0].line2, "pytest -q") == 0);
+    assert(event.tasks[1].state == BUDDY_TASK_WAITING && event.tasks[1].title[0] == '\0');
+    assert(strcmp(event.tasks[2].id, "c14") == 0 && event.tasks[2].state == BUDDY_TASK_QUEUED);
+    /* A state it does not know counts as working: the thing is in the list. */
+    assert(strcmp(event.tasks[3].id, "c15") == 0 && event.tasks[3].state == BUDDY_TASK_WORKING);
+
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[]}", &event) == BUDDY_EVENT_TASKS);
+    assert(event.task_count == 0);
+    assert(parse("{\"cmd\":\"tasks\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "tasks") == 0);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":\"c1\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[\"c1\"]}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":7}]}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"c1\",\"secs\":\"9\"}]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"a-card-id-that-is-too-long\"}]}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(event.task_count == 0);
 }
 
 static void test_helpers_lists_who_xiaoyou_can_ask(void)
@@ -596,6 +732,8 @@ int main(void)
     test_hub_hello_reports_voice_support();
     test_chat_reports_the_conversation();
     test_helpers_lists_who_xiaoyou_can_ask();
+    test_card_carries_one_thing();
+    test_tasks_lists_the_things_in_progress();
     test_file_transfer_commands_are_unsupported();
     test_unknown_command_is_rejected();
     test_malformed_or_nonobject_json_is_rejected();

@@ -1,7 +1,5 @@
 #include "pocket_view.h"
 
-#include "buddy_history.h"
-
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -72,29 +70,18 @@ bool pocket_home_is_talk(pocket_home_t home)
     return home >= POCKET_HOME_SENT;
 }
 
-bool pocket_home_shows_talk(const buddy_ui_snapshot_t *snapshot)
-{
-    if (snapshot == NULL) {
-        return false;
-    }
-    return pocket_home_is_talk(pocket_home_for(snapshot)) ||
-           buddy_history_visible(snapshot->history) > 0U;
-}
-
-int pocket_timeline_anchor(int content, int last_top, int view)
+int pocket_card_scroll(int y, int direction, int content, int view, int step, int *edge)
 {
     int bottom = content > view ? content - view : 0;
+    int before;
 
-    if (last_top < 0) {
-        last_top = 0;
+    if (y > bottom) {
+        y = bottom;
     }
-    return content - last_top > view ? last_top : bottom;
-}
-
-int pocket_timeline_step(int y, int direction, int content, int view, int step)
-{
-    int bottom = content > view ? content - view : 0;
-
+    if (y < 0) {
+        y = 0;
+    }
+    before = y;
     if (direction > 0) {
         y += step;
     } else if (direction < 0) {
@@ -103,7 +90,23 @@ int pocket_timeline_step(int y, int direction, int content, int view, int step)
     if (y > bottom) {
         y = bottom;
     }
-    return y < 0 ? 0 : y;
+    if (y < 0) {
+        y = 0;
+    }
+    if (edge != NULL) {
+        *edge = direction != 0 && y == before ? (direction > 0 ? 1 : -1) : 0;
+    }
+    return y;
+}
+
+uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_ms)
+{
+    uint64_t total = reported;
+
+    if (now_ms > since_ms) {
+        total += (now_ms - since_ms) / 1000U;
+    }
+    return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
 static pocket_pet_mood_t pocket_pet_from_mood(buddy_mood_t mood)

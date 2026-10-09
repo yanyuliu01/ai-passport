@@ -41,6 +41,12 @@ size_t pocket_adpcm_decode(pocket_adpcm_state_t *state, const uint8_t *data, siz
 // 正常说话在 40 到 80 之间，贴着麦克风喊接近 100。
 uint8_t pocket_voice_level(const int16_t *pcm, size_t samples);
 
+// 一轮开始时发给手机的那一行：
+//   {"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}\n
+// card 是按下时屏幕上那件事的编号；为 NULL、空串，或者里面有字母、数字、下划线、
+// 连字符以外的字符时不带这一项。返回写入的字节数；放不下返回 0 并写入空串。
+size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card);
+
 // 一帧能用的总字节数：通知载荷和 POCKET_VOICE_FRAME_MAX 取小；太小返回 0。
 size_t pocket_voice_frame_size(size_t notify_payload);
 

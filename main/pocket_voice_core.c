@@ -1,5 +1,7 @@
 #include "pocket_voice_core.h"
 
+#include <stdio.h>
+
 #include <string.h>
 
 static const int16_t s_step_table[89] = {
@@ -151,6 +153,37 @@ uint8_t pocket_voice_level(const int16_t *pcm, size_t samples)
         return 100;
     }
     return (uint8_t)((scaled - FLOOR) * 100U / (CEILING - FLOOR));
+}
+
+size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card)
+{
+    const char *cursor;
+    bool plain = card != NULL && card[0] != '\0';
+    int written;
+
+    if (line == NULL || size == 0U) {
+        return 0;
+    }
+    for (cursor = card; plain && *cursor != '\0'; ++cursor) {
+        plain = (*cursor >= 'a' && *cursor <= 'z') || (*cursor >= 'A' && *cursor <= 'Z') ||
+                (*cursor >= '0' && *cursor <= '9') || *cursor == '_' || *cursor == '-';
+    }
+    if (plain) {
+        written = snprintf(line, size,
+                           "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":%u,"
+                           "\"codec\":\"ima-adpcm\",\"card\":\"%s\"}\n",
+                           rate, card);
+    } else {
+        written = snprintf(line, size,
+                           "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":%u,"
+                           "\"codec\":\"ima-adpcm\"}\n",
+                           rate);
+    }
+    if (written < 0 || (size_t)written >= size) {
+        line[0] = '\0';
+        return 0;
+    }
+    return (size_t)written;
 }
 
 size_t pocket_voice_frame_size(size_t notify_payload)

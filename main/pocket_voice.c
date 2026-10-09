@@ -44,6 +44,8 @@ static atomic_bool s_stop;
 static atomic_bool s_cancel;
 static atomic_uint s_generation;
 static atomic_uint s_level;
+/* 这一轮是对哪件事说的；空串是没有。只在语音任务等通知时由应用任务写。 */
+static char s_card[BUDDY_CARD_ID_MAX];
 static bool s_audio_initialized;
 
 static uint32_t voice_now_ms(void)
@@ -134,7 +136,7 @@ static buddy_voice_status_t voice_run(uint32_t generation, uint8_t *storage)
     static int16_t pcm[VOICE_CHUNK_SAMPLES];
     static pocket_voice_packer_t packer;
     pocket_voice_fifo_t fifo;
-    char line[112];
+    char line[160];
     size_t frame_size =
         pocket_voice_frame_size(buddy_ble_notify_payload_for_generation(generation));
     uint32_t started_ms;
@@ -161,10 +163,7 @@ static buddy_voice_status_t voice_run(uint32_t generation, uint8_t *storage)
         /* Released before the microphone was even ready: a tap, not a message. */
         return atomic_load(&s_cancel) ? BUDDY_VOICE_CANCELLED : BUDDY_VOICE_TOO_SHORT;
     }
-    (void)snprintf(line, sizeof(line),
-                   "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":%u,"
-                   "\"codec\":\"ima-adpcm\"}\n",
-                   (unsigned)POCKET_VOICE_SAMPLE_RATE);
+    pocket_voice_start_line(line, sizeof(line), POCKET_VOICE_SAMPLE_RATE, s_card);
     if (!voice_send_line(line, generation)) {
         return BUDDY_VOICE_FAILED_LINK;
     }
@@ -270,7 +269,7 @@ esp_err_t pocket_voice_init(pocket_voice_event_cb_t callback, void *context)
     return ESP_OK;
 }
 
-esp_err_t pocket_voice_start(uint32_t connection_generation)
+esp_err_t pocket_voice_start(uint32_t connection_generation, const char *card)
 {
     bool idle = false;
 
@@ -280,6 +279,8 @@ esp_err_t pocket_voice_start(uint32_t connection_generation)
     if (!atomic_compare_exchange_strong(&s_busy, &idle, true)) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* 语音任务这时在等通知，还没开始读这个编号：先写好再叫醒它。 */
+    (void)snprintf(s_card, sizeof(s_card), "%s", card != NULL ? card : "");
     atomic_store(&s_stop, false);
     atomic_store(&s_cancel, false);
     atomic_store(&s_generation, connection_generation);
