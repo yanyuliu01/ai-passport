@@ -2,10 +2,13 @@
 
   GET  /healthz                         不需要令牌，只说明服务活着
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
-  POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?} → 202 + 消息
-  POST /v1/voice?conversation=&client_id=&agent=   请求体是 16 位单声道 WAV → 202 + 消息
+  POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?} → 202 + 消息
+  POST /v1/voice?conversation=&client_id=&agent=&card=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
                                         带 rev 时记录一有变化就返回
+  GET  /v1/feed?conversation=&after=<序号>&wait=<秒>   之后变过的卡；没有变化时最多等 wait 秒
+  GET  /v1/cards?conversation=          最近的卡
+  POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
 
@@ -91,8 +94,17 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
-            if len(parts) == 3 and parts[:2] == ["v1", "messages"]:
-                query = parse_qs(url.query)
+            query = parse_qs(url.query)
+            if parts == ["v1", "cards"]:
+                try:
+                    cards = service.cards(query.get("conversation", ["default"])[0])
+                except RequestError as error:
+                    self._fail(400, str(error))
+                    return
+                self._send(200, {"cards": cards})
+                return
+            waits = parts == ["v1", "feed"] or (len(parts) == 3 and parts[:2] == ["v1", "messages"])
+            if waits:
                 try:
                     wait = float(query.get("wait", ["0"])[0])
                 except ValueError:
@@ -101,6 +113,20 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                 if not 0 <= wait <= MAX_WAIT_SECONDS:  # 同时挡掉 NaN
                     self._fail(400, "wait 应该在 0 到 %d 之间" % MAX_WAIT_SECONDS)
                     return
+            if parts == ["v1", "feed"]:
+                try:
+                    after = int(query.get("after", ["0"])[0])
+                except ValueError:
+                    self._fail(400, "after 应该是整数")
+                    return
+                try:
+                    feed = service.feed(query.get("conversation", ["default"])[0], after, wait)
+                except RequestError as error:
+                    self._fail(400, str(error))
+                    return
+                self._send(200, feed)
+                return
+            if len(parts) == 3 and parts[:2] == ["v1", "messages"]:
                 rev = None
                 if "rev" in query:
                     try:
@@ -133,6 +159,7 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                 message = service.submit_voice(
                     audio, query.get("conversation", ["default"])[0],
                     query.get("client_id", [None])[0], query.get("agent", [None])[0],
+                    query.get("card", [None])[0],
                 )
             except RequestError as error:
                 self._fail(400, str(error))
@@ -164,8 +191,16 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                     message = service.submit(
                         body.get("text"), body.get("conversation", "default"),
                         body.get("client_id"), body.get("agent"), body.get("hop", 0),
+                        body.get("card"),
                     )
                     self._send(202, message)
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "cancel":
+                    card = service.cancel(parts[2])
+                    if card is None:
+                        self._fail(404, "没有这件事")
+                    else:
+                        self._send(200, card)
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "reset":
                     self._send(200, {"reset": service.reset(parts[2])})

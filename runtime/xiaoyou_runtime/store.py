@@ -1,7 +1,7 @@
 """小幽记在这台电脑上的东西。
 
 三样：
-  sessions.json    每个对话里、每个代理接着聊要用的会话编号
+  sessions.json    每个对话里（以及每件事里）、每个代理接着聊要用的会话编号
   transcript.json  小幽自己的对话记录：主人说了什么、她答了什么、是谁做的、哪些代理见过
   voice/           还没识别的录音（只在识别前短暂存在）
 
@@ -90,9 +90,12 @@ class Store:
             self._save()
 
     def forget(self, conversation: str) -> bool:
-        """忘掉这个对话里所有代理的会话；返回之前有没有。"""
+        """忘掉这个对话里所有代理的会话，包括这个对话里每件事各自的会话；返回之前有没有。"""
         with self._lock:
-            existed = bool(self._sessions.pop(conversation, None))
+            # 一件事的会话记在“对话名/卡的编号”下面。
+            names = [name for name in self._sessions
+                     if name == conversation or name.startswith(conversation + "/")]
+            existed = any([self._sessions.pop(name, None) for name in names])
             if existed:
                 self._save()
             return existed

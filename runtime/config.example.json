@@ -8,11 +8,12 @@
   "state_dir": "state",
   "persona_file": "persona.txt",
   "brief_max_chars": 120,
-  "turn_timeout_seconds": 600,
+  "turn_timeout_seconds": 3600,
   "xiaoyou": {
     "default_agent": "claude",
     "voice_agent": null,
-    "max_handoffs": 2,
+    "max_parallel": 0,
+    "voice_timeout_seconds": 60,
     "router": {
       "type": "mention"
     }

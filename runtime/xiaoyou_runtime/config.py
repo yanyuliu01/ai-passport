@@ -67,8 +67,12 @@ class Config:
     default_agent: str
     # 只会干活的代理做完之后，由谁用小幽的口吻转述
     voice_agent: str
-    # 一轮里最多转交几次
+    # 0.4 的设置，现在不用了（帮手在后台做事，不再在一轮里来回转交）；留着只为旧配置能读
     max_handoffs: int
+    # 同时在做的事最多几件；0 是不限
+    max_parallel: int = 0
+    # 小幽这条线上一次调用最长多久：她只负责听懂、马上答、把活派出去
+    voice_timeout_seconds: int = 60
     router_type: str = "mention"
     router_command: List[str] = field(default_factory=list)
     router_timeout_seconds: int = 10
@@ -319,7 +323,8 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     brief = _expect(raw.get("brief_max_chars", 120), int, "brief_max_chars")
     if not 20 <= brief <= 400:
         raise ConfigError("brief_max_chars 应该在 20 到 400 之间")
-    timeout = _timeout(raw.get("turn_timeout_seconds", 600), "turn_timeout_seconds")
+    # 一件后台的事最长做多久（各代理可以用自己的 timeout_seconds 改）。
+    timeout = _timeout(raw.get("turn_timeout_seconds", 3600), "turn_timeout_seconds")
 
     if "agents" in raw:
         for old in ("backend", "claude_code", "tools"):
@@ -371,6 +376,13 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     max_handoffs = _expect(xiaoyou.get("max_handoffs", 2), int, "xiaoyou.max_handoffs")
     if not 0 <= max_handoffs <= 5:
         raise ConfigError("xiaoyou.max_handoffs 应该在 0 到 5 之间")
+    max_parallel = _expect(xiaoyou.get("max_parallel", 0), int, "xiaoyou.max_parallel")
+    if not 0 <= max_parallel <= 64:
+        raise ConfigError("xiaoyou.max_parallel 应该在 0 到 64 之间（0 是不限）")
+    voice_timeout = _expect(
+        xiaoyou.get("voice_timeout_seconds", 60), int, "xiaoyou.voice_timeout_seconds")
+    if not 5 <= voice_timeout <= 600:
+        raise ConfigError("xiaoyou.voice_timeout_seconds 应该在 5 到 600 之间")
     router = _expect(xiaoyou.get("router", {}), dict, "xiaoyou.router")
     router_type = _expect(router.get("type", "mention"), str, "xiaoyou.router.type")
     if router_type not in ROUTER_TYPES:
@@ -418,6 +430,8 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         default_agent=default_agent,
         voice_agent=voice_agent,
         max_handoffs=max_handoffs,
+        max_parallel=max_parallel,
+        voice_timeout_seconds=voice_timeout,
         router_type=router_type,
         router_command=router_command,
         router_timeout_seconds=router_timeout,

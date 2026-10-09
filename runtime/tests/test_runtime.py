@@ -26,9 +26,11 @@ RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
 from xiaoyou_runtime import agents as agents_module  # noqa: E402
+from xiaoyou_runtime import cards as cards_module  # noqa: E402
 from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import router as router_module  # noqa: E402
 from xiaoyou_runtime import stt as stt_module  # noqa: E402
+from xiaoyou_runtime import tasks as tasks_module  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
 from xiaoyou_runtime.agents import AgentError, Job, Outcome  # noqa: E402
@@ -123,6 +125,7 @@ class Scripted(agents_module.Agent):
             speaks=speaks, timeout_seconds=60,
         ))
         self.jobs = []
+        self.started = []
         self.gate = threading.Event()
         self.gate.set()
         self.fail_on = None
@@ -133,12 +136,13 @@ class Scripted(agents_module.Agent):
         return [job.text for job in self.jobs]
 
     def run(self, job):
+        self.started.append(job.text)
         if job.text.endswith("slow"):
             self.gate.wait(5)
         self.jobs.append(job)
         if self.fail_on is not None and self.fail_on in job.text:
             raise AgentError("boom")
-        if job.text == "explode":
+        if job.text.endswith("explode"):
             raise ValueError("unexpected")
         session = "s%d" % (int(job.session_id[1:]) + 1 if job.session_id else 1)
         if self.script:
@@ -171,6 +175,12 @@ class ConfigTests(TempDirCase):
         self.assertEqual([spec.name for spec in loaded.agents], ["echo"])
         self.assertEqual((loaded.default_agent, loaded.voice_agent), ("echo", "echo"))
         self.assertEqual((loaded.router_type, loaded.max_handoffs), ("mention", 2))
+        # Any number of things may run at once; her own line is kept short.
+        self.assertEqual((loaded.max_parallel, loaded.voice_timeout_seconds), (0, 60))
+        # A thing in the background may take an hour unless the agent says otherwise.
+        self.assertEqual(loaded.agents[0].timeout_seconds, 3600)
+        tuned = self.load(xiaoyou={"max_parallel": 3, "voice_timeout_seconds": 20})
+        self.assertEqual((tuned.max_parallel, tuned.voice_timeout_seconds), (3, 20))
 
     def test_runtime_name(self):
         self.assertTrue(config_module.load(write_config(self.folder), {}).name)
@@ -237,6 +247,9 @@ class ConfigTests(TempDirCase):
             {"agents": {"claude": claude, "codex": {"type": "codex"}},
              "xiaoyou": {"voice_agent": "codex"}},
             {"agents": {"claude": claude}, "xiaoyou": {"max_handoffs": 9}},
+            {"agents": {"claude": claude}, "xiaoyou": {"max_parallel": -1}},
+            {"agents": {"claude": claude}, "xiaoyou": {"max_parallel": True}},
+            {"agents": {"claude": claude}, "xiaoyou": {"voice_timeout_seconds": 1}},
             {"agents": {"claude": claude}, "xiaoyou": {"router": {"type": "magic"}}},
             {"agents": {"claude": claude}, "xiaoyou": {"router": {"type": "command"}}},
             {"agents": {"claude": claude}, "claude_code": {}},
@@ -315,8 +328,8 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(len(clipped), 20)
         self.assertTrue(clipped.endswith("…"))
         turn = xiaoyou_module.shape("  hello  ", "", "angry", 20, "claude")
-        self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.helpers),
-                         ("hello", "hello", "idle", "claude", []))
+        self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.card, turn.started),
+                         ("hello", "hello", "idle", "claude", "", False))
 
     def test_a_structured_reply_written_as_text_is_recognised(self):
         fields = {"reply": "好", "brief": "好", "mood": "happy"}
@@ -326,13 +339,35 @@ class ShapeTests(unittest.TestCase):
         for text in ("just words", "{broken", '{"mood": "happy"}', '["reply"]', ""):
             self.assertIsNone(agents_module.fields_from_text(text))
 
-    def test_the_reply_schema_offers_handoff_only_when_there_are_helpers(self):
-        alone = xiaoyou_module.reply_schema([])
-        self.assertNotIn("handoff", alone["properties"])
-        helped = xiaoyou_module.reply_schema([Scripted("codex", speaks=False), Scripted("pc")])
-        self.assertEqual(helped["properties"]["handoff"]["properties"]["agent"]["enum"], ["codex", "pc"])
-        # Handing off is always optional.
+    def test_what_she_may_ask_the_runtime_to_do_depends_on_the_helpers(self):
+        plain = xiaoyou_module.reply_schema()
+        self.assertEqual(plain["required"], ["reply", "brief", "mood"])
+        self.assertNotIn("action", plain["properties"])
+        alone = xiaoyou_module.lane_schema([])["properties"]["action"]["properties"]
+        self.assertEqual(alone["type"]["enum"], ["none", "cancel"])
+        self.assertNotIn("agent", alone)
+        helped = xiaoyou_module.lane_schema([Scripted("codex", speaks=False), Scripted("pc")])
+        action = helped["properties"]["action"]["properties"]
+        self.assertEqual(action["type"]["enum"], ["none", "start", "amend", "cancel"])
+        self.assertEqual(action["agent"]["enum"], ["codex", "pc"])
+        # Doing nothing more is always allowed: the action itself is optional.
         self.assertEqual(helped["required"], ["reply", "brief", "mood"])
+
+    def test_the_things_in_hand_are_listed_for_her(self):
+        cards = [
+            {"id": "c1", "title": "查天气", "state": "working", "agent": "codex", "started_at": 100},
+            {"id": "c2", "title": "闲聊", "state": "done", "agent": None, "started_at": None},
+            {"id": "c3", "title": "改文档", "state": "waiting", "agent": "claude", "started_at": 1},
+        ]
+        prompt = xiaoyou_module.lane_prompt("P", 60, [Scripted("codex")], cards, "c3", 290)
+        self.assertIn("- c1「查天气」：codex 在做，已经 3 分钟", prompt)
+        self.assertIn("- c2「闲聊」：做完了", prompt)
+        self.assertIn("- c3「改文档」：claude 在做，等主人点头", prompt)
+        self.assertIn("正看着 c3", prompt)
+        nothing = xiaoyou_module.lane_prompt("P", 60, [], [], None, 0)
+        self.assertIn("还没有。", nothing)
+        self.assertNotIn("- start", nothing)
+        self.assertNotIn("正看着", nothing)
 
 
 class ClaudeCodeAgentTests(TempDirCase):
@@ -350,7 +385,7 @@ class ClaudeCodeAgentTests(TempDirCase):
             "allowed_tools": ["Read", "Grep"], "extra_args": ["--max-turns", "9"],
         }}), {})
         self.agent = agents_module.create(self.config.agents[0])
-        self.schema = xiaoyou_module.reply_schema([])
+        self.schema = xiaoyou_module.reply_schema()
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
@@ -373,6 +408,24 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(args[args.index("--model") + 1], "some-model")
         self.assertNotIn("--resume", args)
         self.assertEqual(args[-2:], ["--max-turns", "9"])
+
+    def test_when_she_only_talks_it_gets_no_tools_and_little_time(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        agent = agents_module.ClaudeCodeAgent(self.config.agents[0], run=fake_run)
+        args = agent.command(Job("hi", system="S", schema=self.schema, plain=True))
+        self.assertEqual(args[args.index("--tools") + 1], "")
+        self.assertEqual(args[args.index("--permission-mode") + 1], "dontAsk")
+        self.assertNotIn("--allowedTools", args)
+        agent.run(Job("hi", plain=True, timeout=42))
+        self.assertEqual(seen[-1]["timeout"], 42)
+        agent.run(Job("hi"))
+        self.assertEqual(seen[-1]["timeout"], 3600)
+        self.assertNotIn("--tools", agent.command(Job("hi")))
 
     def test_plain_work_gets_no_persona_and_returns_the_raw_result(self):
         outcome = self.agent.run(Job("count the files", session_id="s-prev"))
@@ -705,224 +758,577 @@ class StoreTests(TempDirCase):
         self.assertEqual(transcript.offer("default", [{"id": "a", "text": "x", "reply": "y", "at": 1}]), 0)
 
 
+def until(condition, seconds=5.0):
+    """Poll until the condition holds; say whether it did."""
+    import time
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return bool(condition())
+
+
+def start(agent, task, title="", card="new", reply="我让它看看"):
+    return {"reply": reply, "brief": "去问了", "mood": "busy", "card": card,
+            "action": {"type": "start", "agent": agent, "title": title, "task": task}}
+
+
+def amend(card, task, mode, reply="好，告诉它了"):
+    return {"reply": reply, "brief": "", "mood": "busy", "card": card,
+            "action": {"type": "amend", "mode": mode, "task": task}}
+
+
+class CardsTests(TempDirCase):
+    def cards(self):
+        return cards_module.Cards(self.folder / "cards.json")
+
+    def test_a_card_collects_what_was_said_and_numbers_every_change(self):
+        cards = self.cards()
+        first = cards.open("default", "  帮我 看看\n这个很长很长很长很长很长很长很长很长的标题  ")
+        self.assertEqual((first["id"], first["state"], first["agent"], first["seq"]),
+                         ("c1", "done", None, 1))
+        self.assertEqual(len(first["title"]), 24)
+        cards.update("c1", said="问", say="答", brief="b", mood="happy")
+        second = cards.open("work", "别的对话", "working", "codex")
+        self.assertEqual(second["id"], "c2")
+        card = cards.get("c1")
+        self.assertEqual([(entry["role"], entry["text"]) for entry in card["entries"]],
+                         [("you", "问"), ("xiaoyou", "答")])
+        self.assertEqual((card["brief"], card["mood"], card["seq"]), ("b", "happy", 2))
+        self.assertIsNone(cards.update("c9", say="x"))
+        for number in range(8):
+            cards.update("c2", progress="Bash  step\n%d" % number + "x" * 300)
+        progress = cards.get("c2")["progress"]
+        self.assertEqual((len(progress), len(progress[-1])), (5, 200))
+        self.assertTrue(progress[-1].startswith("Bash step 7"))
+        self.assertEqual([card["id"] for card in cards.recent("default")], ["c1"])
+        self.assertEqual([card["id"] for card in cards.recent(None)], ["c1", "c2"])
+
+    def test_only_what_changed_is_fed_and_a_caller_can_wait_for_it(self):
+        cards = self.cards()
+        cards.open("default", "一")
+        cards.open("default", "二")
+        feed = cards.changed("default", 0)
+        self.assertEqual(([card["id"] for card in feed["cards"]], feed["seq"]), (["c1", "c2"], 2))
+        self.assertEqual(cards.changed("default", 2, wait=0.05), {"seq": 2, "cards": []})
+        self.assertEqual(cards.changed("other", 0)["cards"], [])
+        waiter = {}
+        thread = threading.Thread(target=lambda: waiter.update(cards.changed("default", 2, wait=5)))
+        thread.start()
+        cards.update("c1", say="后来的话")
+        thread.join(5)
+        self.assertEqual(([card["id"] for card in waiter["cards"]], waiter["seq"]), (["c1"], 3))
+        seen = []
+        cards.subscribe(seen.append)
+        cards.update("c2", state="failed")
+        self.assertEqual([(card["id"], card["state"]) for card in seen], [("c2", "failed")])
+
+    def test_cards_survive_a_restart_and_unfinished_ones_are_marked(self):
+        cards = self.cards()
+        cards.open("default", "做完的")
+        cards.update("c1", said="问", say="答")
+        cards.open("default", "没做完的", "working", "codex")
+        cards.open("default", "等点头的", "waiting", "claude")
+        again = self.cards()
+        self.assertEqual([(card["id"], card["state"]) for card in again.recent("default")],
+                         [("c1", "done"), ("c2", "failed"), ("c3", "failed")])
+        lost = again.get("c2")
+        self.assertEqual((lost["entries"][-1]["text"], lost["mood"]),
+                         ("Runtime 重启了，这件事没做完", "oops"))
+        # The changes made at start-up are fed like any other, and numbering goes on.
+        self.assertEqual([card["id"] for card in again.changed("default", 4)["cards"]], ["c2", "c3"])
+        self.assertEqual(again.open("default", "新的")["id"], "c4")
+        (self.folder / "cards.json").write_text("{broken", encoding="utf-8")
+        self.assertEqual(self.cards().recent(None), [])
+
+    def test_old_cards_are_dropped_but_never_one_that_is_still_going(self):
+        cards = self.cards()
+        cards.open("default", "还在做", "working", "codex")
+        for number in range(cards_module.MAX_CARDS + 5):
+            cards.open("default", "第 %d 件" % number)
+        kept = cards.recent(None, 1000)
+        self.assertEqual(len(kept), cards_module.MAX_CARDS)
+        self.assertEqual(kept[0]["id"], "c1")
+        self.assertIsNone(cards.get("c2"))
+
+
+class TasksTests(TempDirCase):
+    def setUp(self):
+        super().setUp()
+        self.store = Store(self.folder / "state")
+        self.finished = []
+        self.done = threading.Event()
+
+    def tasks(self, limit=0, started=None):
+        def finish(task, outcome, error):
+            self.finished.append((task.card, outcome.text if outcome else None, error))
+            self.done.set()
+
+        tasks = tasks_module.Tasks(self.store, finish, limit, started)
+        self.addCleanup(tasks.close)
+        return tasks
+
+    def command(self, script):
+        loaded = config_module.load(write_config(self.folder, agents={
+            "tool": {"type": "command", "command": [sys.executable, "-c", script]}}), {})
+        return agents_module.create(loaded.agents[0])
+
+    def test_changing_the_request_stops_the_process_and_runs_again(self):
+        # Sleeps for ever unless it is told the request changed.
+        agent = self.command(
+            "import sys, time\ntext = sys.stdin.read()\n"
+            "if '改了要求' not in text: time.sleep(60)\nprint(text)")
+        tasks = self.tasks()
+        self.assertTrue(tasks.start(tasks_module.Task("c1", "default", agent, "数一数文件")))
+        self.assertFalse(tasks.start(tasks_module.Task("c1", "default", agent, "again")))
+        self.assertTrue(until(lambda: tasks.active("c1")))
+        import time
+        time.sleep(0.3)  # let the process start, so there is something to stop
+        self.assertEqual(tasks.amend("c1", "redo", "只数 Python 文件"), "redo")
+        self.assertTrue(self.done.wait(10))
+        card, text, error = self.finished[0]
+        self.assertIsNone(error)
+        # A command keeps no session, so the original task is given again with the change.
+        self.assertIn("（原来的任务：数一数文件）", text)
+        self.assertIn("主人改了要求：只数 Python 文件", text)
+        self.assertFalse(tasks.active("c1"))
+        self.assertIsNone(tasks.amend("c1", "redo", "x"))
+
+    def test_cancelling_stops_the_process_and_nothing_is_reported(self):
+        agent = self.command("import time; time.sleep(60)")
+        tasks = self.tasks()
+        tasks.start(tasks_module.Task("c1", "default", agent, "x"))
+        import time
+        time.sleep(0.3)
+        started = time.monotonic()
+        self.assertTrue(tasks.cancel("c1"))
+        self.assertFalse(tasks.cancel("c1"))
+        tasks.close()
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.finished, [])
+
+    def test_an_agent_that_can_be_steered_is_told_without_starting_over(self):
+        heard = []
+
+        class Steerable(Scripted):
+            def run(self, job):
+                job.control.can_steer(lambda text: heard.append(text) or True)
+                return super().run(job)
+
+        agent = Steerable("codex", speaks=False)
+        agent.gate.clear()
+        self.addCleanup(agent.gate.set)
+        tasks = self.tasks()
+        tasks.start(tasks_module.Task("c1", "default", agent, "one slow"))
+        self.assertTrue(until(lambda: agent.started))
+        self.assertEqual(tasks.amend("c1", "redo", "换个做法"), "steer")
+        agent.gate.set()
+        self.assertTrue(self.done.wait(5))
+        self.assertEqual((heard, len(agent.jobs)), (["换个做法"], 1))
+
+    def test_with_a_limit_the_rest_wait_their_turn(self):
+        agent = Scripted("codex", speaks=False)
+        agent.gate.clear()
+        self.addCleanup(agent.gate.set)
+        begun = []
+        tasks = self.tasks(limit=1, started=lambda task: begun.append(task.card))
+        tasks.start(tasks_module.Task("c1", "default", agent, "one slow"))
+        tasks.start(tasks_module.Task("c2", "default", agent, "two slow"))
+        self.assertTrue(until(lambda: agent.started == ["one slow"]))
+        self.assertEqual((begun, tasks.count()), (["c1"], 2))
+        agent.gate.set()
+        self.assertTrue(until(lambda: len(self.finished) == 2))
+        self.assertEqual(begun, ["c1", "c2"])
+
+
 class XiaoyouTests(TempDirCase):
-    """Xiaoyou is her own identity: she routes, hands work over and reports back."""
+    """Xiaoyou is her own identity: she answers, hands work out and reports back."""
 
     def setUp(self):
         super().setUp()
         self.claude = Scripted("claude")
         self.codex = Scripted("codex", speaks=False, aliases=["科迪"])
         self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.claude, self.codex])
+        self.addCleanup(self.xiaoyou.close)
+        self.addCleanup(self.codex.gate.set)
+        self.addCleanup(self.claude.gate.set)
         self.events = []
         self.count = 0
 
-    def ask(self, text, conversation="default", **extra):
+    def say(self, text, conversation="default", **extra):
         self.count += 1
-        return self.xiaoyou.answer(
+        return self.xiaoyou.hear(
             text, conversation, "turn-%d" % self.count,
             report=lambda kind, agent, detail: self.events.append((kind, agent, detail)), **extra)
 
+    def settled(self, card_id):
+        card = self.xiaoyou.settle(card_id, 5)
+        self.assertNotIn(card["state"], cards_module.ACTIVE)
+        return card
+
+    def words(self, card_id):
+        return [(entry["role"], entry["text"]) for entry in self.xiaoyou.cards.get(card_id)["entries"]]
+
     def test_she_answers_herself_when_she_can(self):
-        turn = self.ask("几点了")
-        self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.helpers),
-                         ("re:几点了", "b:几点了", "happy", "claude", []))
+        turn = self.say("几点了")
+        self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.card, turn.started),
+                         ("re:几点了", "b:几点了", "happy", "claude", "c1", False))
         job = self.claude.jobs[0]
         self.assertEqual((job.text, job.session_id, job.conversation), ("几点了", None, "default"))
+        # On her own line she only talks: no tools, and not for long.
+        self.assertEqual((job.plain, job.timeout), (True, 60))
         self.assertIn("PERSONA-MARKER", job.system)
-        # She is told who she can hand work to, and the reply shape lets her do it.
+        # She is told who she can hand work to (the agent that voices her included)...
         self.assertIn("codex：codex helper", job.system)
-        self.assertEqual(job.schema["properties"]["handoff"]["properties"]["agent"]["enum"], ["codex"])
+        self.assertEqual(job.schema["properties"]["action"]["properties"]["agent"]["enum"],
+                         ["claude", "codex"])
         self.assertEqual(self.codex.jobs, [])
         self.assertEqual(self.events, [("route", "claude", "default")])
+        card = self.xiaoyou.cards.get("c1")
+        self.assertEqual((card["state"], card["agent"], card["title"], card["brief"], card["mood"]),
+                         ("done", None, "几点了", "b:几点了", "happy"))
+        self.assertEqual(self.words("c1"), [("you", "几点了"), ("xiaoyou", "re:几点了")])
         self.assertEqual(self.store.session("default", "claude"), "s1")
-        self.assertEqual(self.ask("再问").agent, "claude")
+        # ...and the next sentence continues her session and gets a card of its own.
+        self.assertEqual(self.say("再问").card, "c2")
         self.assertEqual(self.claude.jobs[1].session_id, "s1")
+        self.assertIn("- c1「几点了」：做完了", self.claude.jobs[1].system)
 
-    def test_she_hands_work_to_a_helper_and_reports_back_in_her_own_words(self):
+    def test_a_follow_up_goes_on_the_card_it_belongs_to(self):
+        self.say("几点了")
+        self.claude.script = [{"reply": "北京时间", "brief": "北京", "mood": "idle", "card": "c1"}]
+        turn = self.say("哪个时区", card="c1")
+        self.assertEqual(turn.card, "c1")
+        self.assertIn("正看着 c1", self.claude.jobs[-1].system)
+        self.assertEqual(self.words("c1")[2:], [("you", "哪个时区"), ("xiaoyou", "北京时间")])
+        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+        # A card of another conversation, or one that does not exist, is not "the one on screen".
+        self.say("别处", "work", card="c1")
+        self.assertNotIn("正看着", self.claude.jobs[-1].system)
+        self.say("哪件", card="c77")
+        self.assertNotIn("正看着", self.claude.jobs[-1].system)
+
+    def test_she_hands_work_to_a_helper_and_is_free_at_once(self):
+        self.codex.gate.clear()
         self.claude.script = [
-            {"reply": "我让 codex 看看", "brief": "去问了", "mood": "busy",
-             "handoff": {"agent": "codex", "task": "review retry() in retry.py"}},
+            start("codex", "review retry() in retry.py slow", "retry 的问题", reply="我让 codex 看看"),
+            {"reply": "还在看呢", "brief": "在看", "mood": "busy", "card": "c1"},
             {"reply": "codex 说第 42 行有问题", "brief": "第 42 行", "mood": "happy"},
         ]
-        turn = self.ask("帮我看看 retry 的问题")
-        self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.helpers),
-                         ("codex 说第 42 行有问题", "第 42 行", "happy", "claude", ["codex"]))
-        # The helper gets the task only: no persona, no chat.
+        turn = self.say("帮我看看 retry 的问题")
+        self.assertEqual((turn.reply, turn.mood, turn.agent, turn.card, turn.started),
+                         ("我让 codex 看看", "busy", "codex", "c1", True))
+        card = self.xiaoyou.cards.get("c1")
+        self.assertEqual((card["state"], card["agent"], card["title"]),
+                         ("working", "codex", "retry 的问题"))
+        self.assertIsNotNone(card["started_at"])
+        self.assertEqual(self.events, [("route", "claude", "default"),
+                                       ("handoff", "codex", "我让 codex 看看")])
+        # While the helper is busy she still answers, and knows what is going on.
+        self.assertTrue(until(lambda: self.codex.started))
+        self.assertEqual(self.say("好了吗").reply, "还在看呢")
+        self.assertIn("- c1「retry 的问题」：codex 在做，已经 0 秒", self.claude.jobs[1].system)
+        # A word about a thing that is still going does not replace its brief.
+        self.assertEqual(self.xiaoyou.cards.get("c1")["brief"], "我让 codex 看看")
+        self.codex.gate.set()
+        card = self.settled("c1")
+        self.assertEqual((card["state"], card["brief"], card["mood"]), ("done", "第 42 行", "happy"))
+        self.assertEqual(self.words("c1")[-1], ("xiaoyou", "codex 说第 42 行有问题"))
+        # The helper gets the task only: no persona, no chat, a session of its own for this card.
         work = self.codex.jobs[0]
-        self.assertEqual((work.text, work.system, work.schema), ("review retry() in retry.py", None, None))
-        # Its raw result goes back to her, in the same session, not to the owner.
-        back = self.claude.jobs[1]
-        self.assertEqual(back.session_id, "s1")
-        self.assertIn("raw:review retry() in retry.py", back.text)
-        self.assertIn("帮手 codex 做完了", back.text)
-        self.assertEqual(self.events, [
-            ("route", "claude", "default"),
-            ("handoff", "codex", "我让 codex 看看"),
-            ("result", "codex", "codex 做完了"),
+        self.assertEqual((work.text, work.system, work.schema, work.plain, work.session_id),
+                         ("review retry() in retry.py slow", None, None, False, None))
+        self.assertEqual(self.store.session("default/c1", "codex"), "s1")
+        self.assertIsNone(self.store.session("default", "codex"))
+        # Its raw result goes back to her, on her own session, not to the owner.
+        back = self.claude.jobs[2]
+        self.assertEqual((back.session_id, back.plain), ("s2", True))
+        self.assertIn("raw:review retry() in retry.py slow", back.text)
+        self.assertIn("后台那件事「retry 的问题」，帮手 codex 做完了", back.text)
+        self.assertNotIn("action", back.schema["properties"])
+        turns = self.store.transcript.turns("default")
+        self.assertEqual([(turn["text"], turn["reply"], turn["by"], turn["seen"]) for turn in turns], [
+            ("帮我看看 retry 的问题", "我让 codex 看看", "codex", ["claude"]),
+            ("好了吗", "还在看呢", "claude", ["claude"]),
+            ("（后台的事「retry 的问题」有结果了）", "codex 说第 42 行有问题", "codex", ["claude"]),
         ])
-        self.assertEqual((self.store.session("default", "claude"), self.store.session("default", "codex")),
-                         ("s2", "s1"))
-        recorded = self.store.transcript.turns("default")[0]
-        self.assertEqual((recorded["text"], recorded["reply"], recorded["by"], recorded["seen"]),
-                         ("帮我看看 retry 的问题", "codex 说第 42 行有问题", "claude", ["claude"]))
 
-    def test_a_helper_that_fails_or_does_not_exist_is_reported_to_her_not_hidden(self):
-        self.codex.fail_on = "task"
+    def test_a_helper_that_speaks_for_her_reports_in_her_words_itself(self):
         self.claude.script = [
-            {"reply": "", "brief": "", "mood": "busy", "handoff": {"agent": "codex", "task": "the task"}},
-            {"reply": "没做成", "brief": "没做成", "mood": "oops"},
+            start("claude", "查一下明天的天气", "明天的天气"),
+            {"reply": "明天晴", "brief": "晴", "mood": "happy"},
         ]
-        turn = self.ask("做件事")
-        self.assertEqual((turn.reply, turn.mood, turn.helpers), ("没做成", "oops", ["codex"]))
-        self.assertIn("帮手 codex 没做成：boom", self.claude.jobs[1].text)
-        self.assertEqual(self.events[1:], [("handoff", "codex", "交给 codex 了"),
-                                           ("result", "codex", "codex 没做成")])
+        turn = self.say("明天天气怎么样")
+        self.assertEqual((turn.agent, turn.started), ("claude", True))
+        card = self.settled("c1")
+        self.assertEqual((card["state"], card["agent"], card["brief"]), ("done", "claude", "晴"))
+        work = self.claude.jobs[1]
+        # The work runs with tools, in a session of its own, with the persona.
+        self.assertEqual((work.text, work.plain, work.session_id, work.timeout),
+                         ("查一下明天的天气", False, None, None))
+        self.assertIn("PERSONA-MARKER", work.system)
+        self.assertIn("后台", work.system)
+        self.assertEqual(work.schema, xiaoyou_module.reply_schema())
+        self.assertEqual((self.store.session("default", "claude"),
+                          self.store.session("default/c1", "claude")), ("s1", "s1"))
+        # Nobody voiced it on her own line, so her line is told the next time it speaks.
+        self.say("谢谢")
+        self.assertIn("主人：（后台的事「明天的天气」有结果了）\n小幽：明天晴", self.claude.jobs[2].text)
+        self.say("再见")
+        self.assertEqual(self.claude.jobs[3].text, "再见")
 
-        self.claude.script = [
-            {"reply": "", "brief": "", "mood": "busy", "handoff": {"agent": "gemini", "task": "x"}},
-            {"reply": "找不到这个帮手", "brief": "找不到", "mood": "oops"},
-        ]
-        turn = self.ask("再做一件")
-        self.assertEqual((turn.reply, turn.helpers), ("找不到这个帮手", []))
-        self.assertIn("没有叫 gemini 的帮手", self.claude.jobs[-1].text)
-        self.assertEqual(len(self.codex.jobs), 1)
+    def test_things_run_side_by_side(self):
+        self.codex.gate.clear()
+        first = self.say("@codex one slow")
+        second = self.say("@codex two slow")
+        self.assertEqual((first.card, second.card), ("c1", "c2"))
+        # Both are with the helper at the same time; neither waits for the other.
+        self.assertTrue(until(lambda: len(self.codex.started) == 2))
+        self.assertEqual(self.codex.jobs, [])
+        self.assertTrue(self.say("几点了").reply.endswith("几点了"))
+        self.codex.gate.set()
+        self.assertEqual((self.settled("c1")["state"], self.settled("c2")["state"]), ("done", "done"))
+        self.assertEqual((self.store.session("default/c1", "codex"),
+                          self.store.session("default/c2", "codex")), ("s1", "s1"))
 
-    def test_handing_off_cannot_go_on_for_ever(self):
-        again = {"reply": "再找一次", "brief": "", "mood": "busy",
-                 "handoff": {"agent": "codex", "task": "again"}}
-        self.claude.script = [dict(again), dict(again), dict(again), dict(again)]
-        turn = self.ask("绕圈")
-        # Two hand-offs are allowed; the last report back no longer offers the option.
-        self.assertEqual(len(self.codex.jobs), 2)
-        self.assertEqual(len(self.claude.jobs), 3)
-        self.assertIn("handoff", self.claude.jobs[1].schema["properties"])
-        self.assertNotIn("handoff", self.claude.jobs[2].schema["properties"])
-        self.assertIn("现在没有别的帮手", self.claude.jobs[2].system)
-        self.assertEqual((turn.reply, turn.helpers), ("再找一次", ["codex", "codex"]))
-
-        never, _ = make_xiaoyou(self.folder / "b", [Scripted("claude"), self.codex], max_handoffs=0)
-        lead = never.agents()[0]
-        never.answer("hi", "default", "t")
-        self.assertNotIn("handoff", lead.jobs[0].schema["properties"])
-
-    def test_naming_a_helper_sends_the_work_there_and_she_still_does_the_talking(self):
-        self.ask("我们在聊重试逻辑")
-        turn = self.ask("@codex 看看 parse()")
-        # The reply is hers (the stand-in voices it as "re:" + what it was told), not the raw result.
-        self.assertEqual((turn.agent, turn.reply), ("codex", "re:" + self.claude.jobs[-1].text))
+    def test_naming_a_helper_sends_the_work_there_without_asking_a_model(self):
+        self.say("我们在聊重试逻辑")
+        self.codex.gate.clear()
+        turn = self.say("@codex 看看 parse() slow")
+        self.assertEqual((turn.reply, turn.agent, turn.card, turn.started),
+                         ("交给 codex 了", "codex", "c2", True))
+        self.assertEqual(len(self.claude.jobs), 1)
+        self.assertEqual(self.events[-2:], [("route", "codex", "mention"),
+                                            ("handoff", "codex", "交给 codex 了")])
+        card = self.xiaoyou.cards.get("c2")
+        self.assertEqual((card["title"], card["state"]), ("看看 parse() slow", "working"))
+        self.assertEqual(self.words("c2"), [("you", "@codex 看看 parse() slow"),
+                                            ("xiaoyou", "交给 codex 了")])
+        self.codex.gate.set()
+        self.settled("c2")
         work = self.codex.jobs[0]
         # The helper was not there for the earlier turn, so it gets it as background.
         self.assertIn("我们在聊重试逻辑", work.text)
-        self.assertTrue(work.text.endswith("看看 parse()"))
+        self.assertTrue(work.text.endswith("看看 parse() slow"))
         self.assertIsNone(work.system)
-        told = self.claude.jobs[-1].text
-        self.assertIn("主人点名让 codex 做这件事，原话是：@codex 看看 parse()", told)
-        self.assertIn("raw:", told)
-        self.assertEqual(self.claude.jobs[-1].schema, xiaoyou_module.reply_schema([]))
-        self.assertEqual(self.events[-3:], [("route", "codex", "mention"),
-                                            ("handoff", "codex", "交给 codex 了"),
-                                            ("result", "codex", "codex 做完了")])
-        self.assertEqual(self.store.transcript.turns("default")[1]["seen"], ["claude", "codex"])
-        # Next time the helper already knows that turn.
-        self.ask("让科迪再看看")
-        self.assertNotIn("我们在聊重试逻辑", self.codex.jobs[1].text)
-        self.assertEqual(self.codex.jobs[1].session_id, "s1")
+        # She still does the talking: the result is voiced on her line.
+        self.assertEqual(self.words("c2")[-1], ("xiaoyou", "re:" + self.claude.jobs[-1].text))
+        self.assertIn("帮手 codex 做完了", self.claude.jobs[-1].text)
+        # She was not there when it was handed over, so she is told that too.
+        self.assertIn("主人：@codex 看看 parse() slow\n小幽：交给 codex 了", self.claude.jobs[-1].text)
 
-    def test_naming_the_agent_that_speaks_for_her_is_shown_as_handing_it_the_work(self):
-        turn = self.ask("让 Claude 查一下明天的天气")
-        self.assertEqual((turn.agent, turn.helpers), ("claude", []))
+    def test_naming_the_agent_that_speaks_for_her_makes_it_a_thing_too(self):
+        turn = self.say("让 Claude 查一下明天的天气")
+        self.assertEqual((turn.agent, turn.started, turn.reply), ("claude", True, "交给 claude 了"))
+        self.settled("c1")
         job = self.claude.jobs[0]
-        # It is told that it was named and that it is to do the work itself...
+        # It is told that it was named, and works with tools as her.
         self.assertIn("主人点名要 claude 来做这件事", job.text)
         self.assertTrue(job.text.endswith("让 Claude 查一下明天的天气"))
         self.assertIn("PERSONA-MARKER", job.system)
-        # ...and it is not offered anybody to pass it on to.
-        self.assertEqual(job.schema, xiaoyou_module.reply_schema([]))
-        self.assertNotIn("codex：codex helper", job.system)
+        self.assertEqual((job.plain, job.schema), (False, xiaoyou_module.reply_schema()))
         self.assertEqual(self.codex.jobs, [])
-        # Every client can see who has the work, the same way as for a helper.
         self.assertEqual(self.events, [("route", "claude", "mention"),
-                                       ("handoff", "claude", "交给 claude 了"),
-                                       ("result", "claude", "claude 做完了")])
-        # Named by the caller instead of in the sentence: the same.
+                                       ("handoff", "claude", "交给 claude 了")])
+        # Named by the caller instead of in the sentence: the same, with nothing to explain.
         self.events.clear()
-        self.ask("几点了", asked="claude")
-        self.assertEqual([event[:2] for event in self.events],
-                         [("route", "claude"), ("handoff", "claude"), ("result", "claude")])
-        # (The sentence does not mention it, so there is nothing to explain to it.)
-        self.assertEqual(self.claude.jobs[1].text, "几点了")
-        self.assertEqual(self.claude.jobs[1].schema, xiaoyou_module.reply_schema([]))
-        # Not named: she answers as before, and nothing is shown as handed over.
-        self.events.clear()
-        self.ask("几点了")
-        self.assertEqual(self.events, [("route", "claude", "default")])
-        self.assertEqual(self.claude.jobs[2].text, "几点了")
+        self.settled(self.say("几点了", asked="claude").card)
+        self.assertEqual([event[:2] for event in self.events], [("route", "claude"), ("handoff", "claude")])
+        self.assertTrue(self.claude.jobs[1].text.endswith("（任务：）\n几点了"))
+
+    def test_more_can_be_added_to_a_thing_that_is_still_going(self):
+        self.codex.gate.clear()
+        self.say("@codex one slow")
+        self.assertTrue(until(lambda: self.codex.started))
+        self.claude.script = [amend("c1", "再加一个测试", "after", reply="好，做完接着加")]
+        turn = self.say("顺便加个测试", card="c1")
+        self.assertEqual((turn.card, turn.agent, turn.started, turn.mood), ("c1", "codex", True, "busy"))
+        card = self.xiaoyou.cards.get("c1")
+        self.assertEqual((card["state"], card["edits"]), ("working", 1))
+        self.codex.gate.set()
+        self.settled("c1")
+        self.assertEqual([(job.text, job.session_id) for job in self.codex.jobs], [
+            ("one slow", None), ("（主人补充了一句：再加一个测试。在刚才的基础上接着做。）", "s1")])
+        # Only the final result is voiced.
+        relays = [job.text for job in self.claude.jobs if "做完了" in job.text]
+        self.assertEqual(len(relays), 1)
+        self.assertIn("raw:（主人补充了一句", relays[0])
+
+    def test_changing_the_request_starts_the_round_over_in_the_same_session(self):
+        self.codex.gate.clear()
+        self.say("@codex one slow")
+        self.assertTrue(until(lambda: self.codex.started))
+        # No card named: the one on screen is meant.
+        self.claude.script = [amend("", "改成用 Python", "redo")]
+        self.say("改成 Python", card="c1")
+        self.assertEqual(self.xiaoyou.cards.get("c1")["edits"], 1)
+        self.codex.gate.set()
+        self.settled("c1")
+        self.assertEqual([(job.text, job.session_id) for job in self.codex.jobs], [
+            ("one slow", None),
+            ("（主人改了要求：改成用 Python。按新的要求继续，已经做过的不用重复。）", "s1")])
+        relays = [job.text for job in self.claude.jobs if "做完了" in job.text]
+        self.assertEqual(len(relays), 1)
+        self.assertIn("raw:（主人改了要求", relays[0])
+
+    def test_a_finished_thing_can_be_picked_up_again(self):
+        self.settled(self.say("@codex one").card)
+        self.claude.script = [amend("c1", "再检查一遍", "redo", reply="让它再看一遍")]
+        turn = self.say("再检查一遍", card="c1")
+        self.assertEqual((turn.card, turn.started), ("c1", True))
+        card = self.settled("c1")
+        self.assertEqual((card["state"], card["edits"]), ("done", 1))
+        self.assertEqual((self.codex.jobs[1].text, self.codex.jobs[1].session_id), ("再检查一遍", "s1"))
+        # Starting on a card that is still going is the same as adding to it.
+        self.codex.gate.clear()
+        self.claude.script = [start("codex", "three slow", card="c1"), start("codex", "four", card="c1")]
+        self.say("再来")
+        self.assertTrue(until(lambda: "three slow" in self.codex.started))
+        self.say("还有")
+        self.codex.gate.set()
+        self.settled("c1")
+        self.assertIn("主人补充了一句：four", self.codex.jobs[-1].text)
+        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+
+    def test_a_thing_can_be_cancelled(self):
+        self.codex.gate.clear()
+        self.say("@codex one slow")
+        self.assertTrue(until(lambda: self.codex.started))
+        self.claude.script = [{"reply": "好，不做了", "brief": "", "mood": "idle", "card": "c1",
+                               "action": {"type": "cancel"}}]
+        turn = self.say("算了不用了")
+        self.assertEqual((turn.card, turn.started), ("c1", False))
+        self.assertEqual(self.xiaoyou.cards.get("c1")["state"], "cancelled")
+        self.codex.gate.set()
+        self.assertTrue(until(lambda: len(self.codex.jobs) == 1))
+        # The result that arrives afterwards is dropped: nothing is voiced, the card stays cancelled.
+        self.assertFalse(any("做完了" in job.text for job in self.claude.jobs))
+        self.assertEqual((self.xiaoyou.cards.get("c1")["state"], self.words("c1")[-1]),
+                         ("cancelled", ("xiaoyou", "好，不做了")))
+        self.assertFalse(self.xiaoyou.cancel("c1"))
+        self.assertFalse(self.xiaoyou.cancel("c9"))
+
+    def test_what_cannot_be_done_is_put_to_her_once_then_told_as_it_is(self):
+        self.say("几点了")
+        self.claude.script = [
+            start("gemini", "x"),
+            {"reply": "我这里没有 gemini", "brief": "没有", "mood": "oops"},
+        ]
+        turn = self.say("让 gemini 看看")
+        self.assertEqual((turn.reply, turn.mood, turn.started), ("我这里没有 gemini", "oops", False))
+        retry = self.claude.jobs[-1]
+        self.assertIn("没有叫 gemini 的帮手（现在能找的：claude、codex）", retry.text)
+        self.assertEqual(retry.session_id, "s2")
+        # Still impossible the second time: she is not allowed to pretend.
+        problems = [
+            ({"card": "c9"}, "没有编号是 c9 的事"),
+            ({"action": {"type": "cancel"}}, "cancel 要在 card 里写明"),
+            ({"card": "c1", "action": {"type": "cancel"}}, "c1 这件事已经不在做了"),
+            ({"card": "c1", "action": {"type": "amend", "task": "x"}}, "c1 这件事不是哪个帮手做的"),
+            ({"card": "c1", "action": {"type": "amend"}}, "amend 要在 task 里"),
+            ({"action": {"type": "start", "agent": "codex"}}, "start 要在 task 里"),
+        ]
+        for fields, problem in problems:
+            wrong = dict({"reply": "好的", "brief": "", "mood": "happy"}, **fields)
+            self.claude.script = [dict(wrong), dict(wrong)]
+            turn = self.say("做不到的事")
+            self.assertEqual(turn.mood, "oops", msg=problem)
+            self.assertIn("这件事我没办成：" + problem, turn.reply)
+        self.assertEqual(self.codex.jobs, [])
+        with self.assertRaisesRegex(AgentError, "空的回复"):
+            self.claude.script = [{"reply": " ", "brief": "", "mood": "idle"}]
+            self.say("嗯")
+
+    def test_a_helper_that_fails_is_reported_as_it_is(self):
+        self.codex.fail_on = "task"
+        card = self.settled(self.say("@codex the task").card)
+        self.assertEqual((card["state"], card["mood"], card["brief"]),
+                         ("failed", "oops", "codex 没做成：boom"))
+        self.assertEqual(self.claude.jobs, [])
+        self.assertEqual(self.store.transcript.turns("default")[-1]["reply"], "codex 没做成：boom")
+        # Something unexpected inside the helper is a failure of that thing only.
+        self.codex.fail_on = None
+        card = self.settled(self.say("explode", asked="codex").card)
+        self.assertEqual(card["state"], "failed")
+        self.assertIn("ValueError", card["brief"])
+        self.assertEqual(self.say("还在吗").reply[:3], "re:")
 
     def test_the_result_still_reaches_the_owner_when_nobody_can_voice_it(self):
         self.claude.fail_on = "帮手 codex 做完了"
-        turn = self.ask("@codex list files")
-        self.assertEqual((turn.agent, turn.reply, turn.mood), ("codex", "raw:list files", "idle"))
-        self.assertEqual(self.events[-1][0], "note")
-        # The helper itself failing is a failure of the turn.
-        self.codex.fail_on = "again"
-        with self.assertRaisesRegex(AgentError, "boom"):
-            self.ask("@codex again")
-        self.assertEqual(len(self.store.transcript.turns("default")), 1)
+        card = self.settled(self.say("@codex list files").card)
+        self.assertEqual((card["state"], card["mood"]), ("done", "idle"))
+        self.assertEqual(self.words("c1")[-1], ("xiaoyou", "raw:list files"))
+        # No agent that speaks at all: the default agent just gets every sentence.
+        alone, _ = make_xiaoyou(self.folder / "b", [self.codex])
+        self.addCleanup(alone.close)
+        turn = alone.hear("数一数", "default", "t1")
+        self.assertEqual((turn.agent, turn.started), ("codex", True))
+        self.assertEqual(alone.settle(turn.card, 5)["entries"][-1]["text"], "raw:数一数")
 
-    def test_an_agent_that_missed_some_turns_is_caught_up_once(self):
-        local = Scripted("local")
-        local.script = [{"reply": "记住了", "brief": "记住了", "mood": "happy"}]
-        xiaoyou, store = make_xiaoyou(self.folder / "c", [self.claude, local])
-        xiaoyou.answer("我叫小明", "default", "t1")
-        xiaoyou.answer("记住了吗", "default", "t2", asked="local")
-        caught_up = local.jobs[0].text
-        self.assertIn("主人：我叫小明", caught_up)
-        self.assertIn("小幽：re:我叫小明", caught_up)
-        self.assertTrue(caught_up.endswith("记住了吗"))
-        xiaoyou.answer("再说一遍", "default", "t3", asked="local")
-        self.assertEqual(local.jobs[1].text, "再说一遍")
-        # And the first agent hears what happened while the other one was answering.
-        xiaoyou.answer("回来了", "default", "t4")
-        self.assertIn("主人：记住了吗\n小幽：记住了", self.claude.jobs[-1].text)
-        self.assertNotIn("我叫小明", self.claude.jobs[-1].text)
-        # The owner's own words are recorded as said, without the catch-up.
-        self.assertEqual([turn["text"] for turn in store.transcript.turns("default")],
-                         ["我叫小明", "记住了吗", "再说一遍", "回来了"])
-
-    def test_a_failed_turn_keeps_what_was_waiting_to_be_told(self):
+    def test_what_she_missed_is_told_once_and_survives_a_failed_turn(self):
         self.xiaoyou.share("default", [{"id": "o1", "text": "别处问的", "reply": "别处答的", "at": 1}])
         self.claude.fail_on = "试一次"
         with self.assertRaises(AgentError):
-            self.ask("试一次")
+            self.say("试一次")
         self.claude.fail_on = None
-        self.ask("再试")
-        self.assertIn("别处问的", self.claude.jobs[-1].text)
+        self.say("再试")
+        self.assertIn("主人：别处问的\n小幽：别处答的", self.claude.jobs[-1].text)
+        self.assertTrue(self.claude.jobs[-1].text.endswith("再试"))
+        self.say("然后呢")
+        self.assertEqual(self.claude.jobs[-1].text, "然后呢")
+        self.assertEqual([turn["text"] for turn in self.store.transcript.turns("default")][-2:],
+                         ["再试", "然后呢"])
 
-    def test_starting_over_forgets_every_agents_session(self):
-        self.ask("@codex one")
-        self.assertEqual((self.store.session("default", "claude"), self.store.session("default", "codex")),
-                         ("s1", "s1"))
+    def test_starting_over_forgets_every_session_of_the_conversation(self):
+        self.settled(self.say("@codex one").card)
+        self.settled(self.say("@codex 别的对话", "work").card)
+        self.assertEqual((self.store.session("default", "claude"),
+                          self.store.session("default/c1", "codex")), ("s1", "s1"))
         self.assertTrue(self.xiaoyou.reset("default"))
         self.assertFalse(self.xiaoyou.reset("default"))
-        self.ask("@codex two")
-        self.assertIsNone(self.codex.jobs[-1].session_id)
-        self.assertEqual(self.codex.jobs[-1].text, "two")
+        self.assertEqual((self.store.session("default", "claude"),
+                          self.store.session("default/c1", "codex")), (None, None))
+        self.assertEqual(self.store.session("work/c2", "codex"), "s1")
 
     def test_words_passed_on_by_another_runtime_are_not_passed_on_again(self):
         other = Scripted("pc", kind="remote")
         xiaoyou, _ = make_xiaoyou(self.folder / "d", [self.claude, other])
-        xiaoyou.answer("hi", "default", "t1")
+        self.addCleanup(xiaoyou.close)
+        xiaoyou.hear("hi", "default", "t1")
         self.assertIn("pc：pc helper", self.claude.jobs[-1].system)
-        xiaoyou.answer("hi", "default", "t2", hop=1)
+        xiaoyou.hear("hi", "default", "t2", hop=1)
         self.assertEqual(self.claude.jobs[-1].hop, 1)
         self.assertNotIn("pc helper", self.claude.jobs[-1].system)
         # Even when it is named.
-        self.assertEqual(xiaoyou.answer("@pc hi", "default", "t3", hop=1).agent, "claude")
-        self.assertEqual(xiaoyou.answer("hi", "default", "t4", asked="pc", hop=1).agent, "claude")
+        self.assertEqual(xiaoyou.hear("@pc hi", "default", "t3", hop=1).agent, "claude")
+        self.assertEqual(xiaoyou.hear("hi", "default", "t4", asked="pc", hop=1).agent, "claude")
         self.assertEqual(other.jobs, [])
         only_remote, _ = make_xiaoyou(self.folder / "e", [other])
+        self.addCleanup(only_remote.close)
         with self.assertRaises(AgentError):
-            only_remote.answer("hi", "default", "t", hop=1)
+            only_remote.hear("hi", "default", "t", hop=1)
+
+    def test_a_limit_on_how_many_things_run_at_once(self):
+        xiaoyou, _ = make_xiaoyou(self.folder / "f", [self.claude, self.codex], max_parallel=1)
+        self.addCleanup(xiaoyou.close)
+        self.codex.gate.clear()
+        xiaoyou.hear("@codex one slow", "default", "t1")
+        xiaoyou.hear("@codex two slow", "default", "t2")
+        self.assertTrue(until(lambda: self.codex.started == ["one slow"]))
+        self.assertEqual([card["queued"] for card in xiaoyou.cards.recent("default")], [False, True])
+        self.codex.gate.set()
+        self.assertEqual(xiaoyou.settle("c2", 5)["state"], "done")
+        self.assertEqual([card["queued"] for card in xiaoyou.cards.recent("default")], [False, False])
+
+    def test_a_restart_marks_what_was_still_going(self):
+        self.codex.gate.clear()
+        self.say("@codex one slow")
+        again, _ = make_xiaoyou(self.folder, [Scripted("claude"), Scripted("codex", speaks=False)])
+        self.addCleanup(again.close)
+        card = again.cards.get("c1")
+        self.assertEqual((card["state"], card["entries"][-1]["text"]),
+                         ("failed", "Runtime 重启了，这件事没做完"))
 
 
 class ServiceTests(TempDirCase):
@@ -930,17 +1336,18 @@ class ServiceTests(TempDirCase):
         super().setUp()
         self.agent = Scripted("claude")
         self.codex = Scripted("codex", speaks=False)
-        xiaoyou, self.store = make_xiaoyou(self.folder, [self.agent, self.codex])
-        self.service = Service(xiaoyou, self.store)
+        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.agent, self.codex])
+        self.service = Service(self.xiaoyou, self.store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.agent.gate.set)
+        self.addCleanup(self.codex.gate.set)
 
     def finish(self, message):
         done = self.service.get(message["id"], wait=5)
         self.assertIn(done["status"], ("done", "failed"))
         return done
 
-    def test_turns_run_in_order_and_continue_the_session(self):
+    def test_her_line_takes_one_sentence_at_a_time_and_continues_the_session(self):
         self.agent.gate.clear()
         first = self.service.submit("one slow")
         second = self.service.submit("two")
@@ -952,8 +1359,8 @@ class ServiceTests(TempDirCase):
                          [("one slow", None), ("two", "s1")])
         self.assertEqual(self.store.session("default", "claude"), "s2")
         done = self.finish(first)
-        self.assertEqual((done["brief"], done["mood"], done["error"], done["agent"]),
-                         ("b:one slow", "happy", None, "claude"))
+        self.assertEqual((done["brief"], done["mood"], done["error"], done["agent"], done["card"]),
+                         ("b:one slow", "happy", None, "claude", "c1"))
 
     def test_one_long_conversation_does_not_hold_up_another(self):
         self.agent.gate.clear()
@@ -971,6 +1378,7 @@ class ServiceTests(TempDirCase):
         self.finish(self.service.submit("c", "home"))
         self.assertEqual([(job.text, job.session_id) for job in self.agent.jobs],
                          [("a", None), ("b", None), ("c", None)])
+        self.assertEqual([card["id"] for card in self.service.cards("work")], ["c2"])
 
     def test_same_client_id_is_not_run_twice(self):
         first = self.service.submit("pay", client_id="cmd-1")
@@ -980,52 +1388,83 @@ class ServiceTests(TempDirCase):
         self.assertEqual(again["status"], "done")
         self.assertEqual(len(self.agent.jobs), 1)
 
-    def test_a_message_shows_who_is_working_on_it(self):
+    def test_a_message_is_done_when_the_work_is_handed_out_and_the_feed_tells_the_rest(self):
         self.agent.script = [
-            {"reply": "我去问 codex", "brief": "", "mood": "busy",
-             "handoff": {"agent": "codex", "task": "check slow"}},
+            start("codex", "check slow", "查一下", reply="我去问 codex"),
+            {"reply": "在查", "brief": "在查", "mood": "busy", "card": "c1"},
             {"reply": "好了", "brief": "好了", "mood": "happy"},
         ]
         self.codex.gate.clear()
-        self.addCleanup(self.codex.gate.set)
-        message = self.service.submit("帮我查一下")
-        for _ in range(100):
-            waiting = self.service.get(message["id"], wait=0.05)
-            if waiting["agent"] == "codex":
-                break
-        self.assertEqual((waiting["status"], waiting["agent"], waiting["stage"], waiting["helper"]),
-                         ("running", "codex", "我去问 codex", "codex"))
-        # With the revision it last saw, a caller is told as soon as anything changes,
-        # instead of only when the turn is over.
-        self.assertEqual(self.service.get(message["id"], wait=0.05, rev=waiting["rev"])["rev"],
-                         waiting["rev"])
-        early = self.service.get(message["id"], wait=5, rev=message["rev"])
-        self.assertEqual((early["status"], early["rev"] > message["rev"]), ("running", True))
+        done = self.finish(self.service.submit("帮我查一下"))
+        self.assertEqual((done["status"], done["reply"], done["agent"], done["card"], done["mood"]),
+                         ("done", "我去问 codex", "codex", "c1", "busy"))
+        self.assertEqual((done["stage"], done["helper"]), (None, None))
+        self.assertEqual([(event["kind"], event["agent"]) for event in done["events"]],
+                         [("route", "claude"), ("handoff", "codex")])
+        feed = self.service.feed("default")
+        self.assertEqual([(card["id"], card["state"]) for card in feed["cards"]], [("c1", "working")])
+        self.assertEqual(feed["approvals"], [])
+        # A second sentence does not wait for the first thing: it is answered while that goes on.
+        quick = self.finish(self.service.submit("好了吗", card="c1"))
+        self.assertEqual((quick["reply"], quick["card"]), ("在查", "c1"))
+        self.assertEqual(self.xiaoyou.cards.get("c1")["state"], "working")
+        feed = self.service.feed("default", feed["seq"])
+        self.assertEqual(len(feed["cards"]), 1)
+        # Nothing new: the caller waits, and hears as soon as the helper is done.
+        self.assertEqual(self.service.feed("default", feed["seq"], wait=0.05)["cards"], [])
         waiter = {}
-        thread = threading.Thread(target=lambda: waiter.update(
-            self.service.get(message["id"], wait=5, rev=waiting["rev"])))
+        thread = threading.Thread(
+            target=lambda: waiter.update(self.service.feed("default", feed["seq"], wait=5)))
         thread.start()
         self.codex.gate.set()
         thread.join(5)
-        self.assertGreater(waiter["rev"], waiting["rev"])
-        done = self.finish(message)
-        self.assertEqual((done["status"], done["reply"], done["agent"], done["stage"], done["helper"]),
-                         ("done", "好了", "claude", None, None))
-        self.assertEqual([(event["kind"], event["agent"]) for event in done["events"]],
-                         [("route", "claude"), ("handoff", "codex"), ("result", "codex")])
+        self.assertGreater(waiter["seq"], feed["seq"])
+        card = self.xiaoyou.settle("c1", 5)
+        self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "好了"))
+        # The report was voiced on her line, after the sentences that were already there.
+        self.assertIn("帮手 codex 做完了", self.agent.jobs[-1].text)
+        self.assertEqual(self.agent.jobs[-1].session_id, "s2")
         # A caller may name the agent; one that does not exist is refused up front.
         named = self.finish(self.service.submit("list", agent="codex"))
-        self.assertEqual((named["asked"], named["agent"]), ("codex", "codex"))
+        self.assertEqual((named["asked"], named["agent"], named["reply"], named["card"]),
+                         ("codex", "codex", "交给 codex 了", "c2"))
         with self.assertRaisesRegex(RequestError, "gemini"):
             self.service.submit("hi", agent="gemini")
         self.assertEqual([agent["name"] for agent in self.service.agents()], ["claude", "codex"])
         self.assertEqual([agent["default"] for agent in self.service.agents()], [True, False])
+        self.assertEqual([card["id"] for card in self.service.cards()], ["c1", "c2"])
+
+    def test_a_thing_can_be_cancelled_by_the_caller(self):
+        self.codex.gate.clear()
+        message = self.finish(self.service.submit("one slow", agent="codex"))
+        self.assertEqual(self.service.cancel(message["card"])["state"], "cancelled")
+        # Cancelling again changes nothing; a card that does not exist is said to be missing.
+        self.assertEqual(self.service.cancel(message["card"])["state"], "cancelled")
+        self.assertIsNone(self.service.cancel("c9"))
+
+    def test_another_runtime_waits_for_the_end_of_the_thing(self):
+        self.codex.gate.clear()
+        message = self.service.submit("check slow", agent="codex", hop=1)
+        self.assertTrue(until(lambda: self.codex.started))
+        waiting = self.service.get(message["id"])
+        self.assertEqual((waiting["status"], waiting["reply"], waiting["card"]),
+                         ("running", "交给 codex 了", "c1"))
+        self.codex.gate.set()
+        done = self.finish(message)
+        self.assertEqual((done["status"], done["reply"]), ("done", "re:" + self.agent.jobs[-1].text))
+        self.codex.fail_on = "bad"
+        failed = self.finish(self.service.submit("bad", agent="codex", hop=1))
+        self.assertEqual((failed["status"], failed["error"]), ("failed", "codex 没做成：boom"))
 
     def test_failure_is_reported_and_keeps_the_session_and_the_worker(self):
         self.finish(self.service.submit("ok"))
         self.agent.fail_on = "bad"
         failed = self.finish(self.service.submit("bad"))
         self.assertEqual((failed["status"], failed["error"], failed["mood"]), ("failed", "boom", "oops"))
+        # The sentence and what went wrong are on a card, so the conversation shows them.
+        card = self.xiaoyou.cards.get(failed["card"])
+        self.assertEqual((card["state"], [entry["text"] for entry in card["entries"]]),
+                         ("failed", ["bad", "boom"]))
         crashed = self.finish(self.service.submit("explode"))
         self.assertEqual(crashed["status"], "failed")
         self.assertIn("ValueError", crashed["error"])
@@ -1036,10 +1475,16 @@ class ServiceTests(TempDirCase):
         for args in (("",), ("   ",), (None,), ("x" * 8001,), ("hi", "a/b"), ("hi", ""),
                      ("hi", "default", "has space"), ("hi", 5), ("hi", "default", None, "a b"),
                      ("hi", "default", None, None, 9), ("hi", "default", None, None, True),
-                     ("hi", "default", None, None, "1")):
+                     ("hi", "default", None, None, "1"), ("hi", "default", None, None, 0, "c 1"),
+                     ("hi", "default", None, None, 0, 7)):
             with self.assertRaises(RequestError, msg=repr(args)[:60]):
                 self.service.submit(*args)
         self.assertIsNone(self.service.get("nope"))
+        for args in (("a b",), ("default", -1), ("default", "1"), ("default", True)):
+            with self.assertRaises(RequestError, msg=repr(args)):
+                self.service.feed(*args)
+        with self.assertRaises(RequestError):
+            self.service.cards("a/b")
 
 
 class SharedHistoryTests(TempDirCase):
@@ -1176,7 +1621,14 @@ class HttpTests(TempDirCase):
         self.assertEqual(status, 202)
         status, done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])
         self.assertEqual((status, done["status"], done["reply"]), (200, "done", "（回声）你好"))
-        self.assertEqual((done["mood"], done["agent"]), ("happy", "echo"))
+        self.assertEqual((done["mood"], done["agent"], done["card"]), ("happy", "echo", "c1"))
+        status, feed = self.call("GET", "/v1/feed?after=0&wait=5")
+        self.assertEqual((status, feed["seq"] > 0, feed["approvals"]), (200, True, []))
+        self.assertEqual([(card["id"], card["state"], card["entries"][-1]["text"])
+                          for card in feed["cards"]], [("c1", "done", "（回声）你好")])
+        self.assertEqual(self.call("GET", "/v1/feed?after=%d&wait=0.05" % feed["seq"])[1]["cards"], [])
+        self.assertEqual(self.call("GET", "/v1/feed?conversation=work")[1]["cards"], [])
+        self.assertEqual([card["id"] for card in self.call("GET", "/v1/cards")[1]["cards"]], ["c1"])
         # Nothing changes after the end, so asking with the last revision returns at once.
         self.assertEqual(
             self.call("GET", "/v1/messages/%s?wait=5&rev=%d" % (message["id"], done["rev"]))[1]["rev"],
@@ -1194,9 +1646,19 @@ class HttpTests(TempDirCase):
             "name": "echo", "type": "echo", "description": "原样复述，用来测试链路",
             "speaks": True, "default": True,
         }])
-        message = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo"})[1]
+        message = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo", "card": "c9"})[1]
         done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])[1]
         self.assertEqual((done["asked"], done["events"][0]["text"]), ("echo", "asked"))
+        # Asked for by name: the message is over once the work is handed out; the card has the rest.
+        self.assertEqual((done["status"], done["reply"], done["card"]), ("done", "交给 echo 了", "c1"))
+        for _ in range(100):
+            card = self.call("GET", "/v1/cards")[1]["cards"][0]
+            if card["state"] == "done":
+                break
+        self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "（回声）hi"))
+        self.assertEqual(self.call("POST", "/v1/cards/c1/cancel", {})[1]["state"], "done")
+        self.assertEqual(self.call("POST", "/v1/cards/c9/cancel", {})[0], 404)
+        self.assertEqual(self.call("POST", "/v1/cards/c1/cancel", {}, token=None)[0], 401)
         status, body = self.call("POST", "/v1/messages", {"text": "hi", "agent": "codex"})
         self.assertEqual(status, 400)
         self.assertIn("codex", body["error"])
@@ -1227,6 +1689,13 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("GET", "/v1/messages/unknown?wait=999")[0], 400)
         self.assertEqual(self.call("GET", "/v1/messages/unknown?wait=nan")[0], 400)
         self.assertEqual(self.call("GET", "/v1/messages/unknown?rev=x")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/feed?wait=999")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/feed?after=x")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/feed?after=-1")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/feed?conversation=a%20b")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/cards?conversation=a%20b")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/feed", token=None)[0], 401)
+        self.assertEqual(self.call("POST", "/v1/messages", {"text": "hi", "card": "c 1"})[0], 400)
         self.assertEqual(self.call("GET", "/v1/other")[0], 404)
         self.assertEqual(self.call("POST", "/v1/other", {})[0], 404)
 
@@ -1264,15 +1733,30 @@ class RemoteAgentTests(TempDirCase):
 
     def test_xiaoyou_can_hand_work_to_the_other_computer(self):
         lead = Scripted("claude")
-        lead.script = [
-            {"reply": "我让那台电脑看看", "brief": "", "mood": "busy",
-             "handoff": {"agent": "pc", "task": "列出桌面上的文件"}},
-            {"reply": "它说好了", "brief": "好了", "mood": "happy"},
-        ]
+        lead.script = [start("pc", "列出桌面上的文件", "桌面上有什么", reply="我让那台电脑看看")]
         xiaoyou, _ = make_xiaoyou(self.folder / "here", [lead, self.remote()])
-        turn = xiaoyou.answer("那台电脑上有什么", "default", "t1")
-        self.assertEqual((turn.reply, turn.helpers), ("它说好了", ["pc"]))
-        self.assertIn("（回声）列出桌面上的文件", lead.jobs[1].text)
+        self.addCleanup(xiaoyou.close)
+        turn = xiaoyou.hear("那台电脑上有什么", "default", "t1")
+        self.assertEqual((turn.agent, turn.started), ("pc", True))
+        # The other side is Xiaoyou too, so what it says is already in her words.
+        card = xiaoyou.settle(turn.card, 10)
+        self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "（回声）列出桌面上的文件"))
+        self.assertEqual(len(lead.jobs), 1)
+
+    def test_a_named_agent_on_the_other_side_is_waited_for(self):
+        # Over there the sentence becomes a thing in the background; the caller here still
+        # gets the final words, not just "handed over".
+        request = urllib.request.Request(
+            self.other + "/v1/messages", method="POST",
+            data=json.dumps({"text": "在吗", "agent": "echo", "hop": 1}).encode())
+        request.add_header("Authorization", "Bearer " + OTHER_TOKEN)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            message = json.loads(response.read())
+        request = urllib.request.Request(self.other + "/v1/messages/%s?wait=10" % message["id"])
+        request.add_header("Authorization", "Bearer " + OTHER_TOKEN)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            done = json.loads(response.read())
+        self.assertEqual((done["status"], done["reply"]), ("done", "（回声）在吗"))
 
     def test_two_runtimes_that_list_each_other_do_not_bounce_a_message_for_ever(self):
         # Each side's default agent is the other side. Whoever is asked first passes it on
@@ -1429,15 +1913,16 @@ class VoiceTests(TempDirCase):
         self.assertEqual(post("/v1/voice", make_wav(), token=None)[0], 401)
         self.assertEqual(post("/v1/voice", b"junk")[0], 400)
         self.assertEqual(post("/v1/voice?agent=nobody", make_wav())[0], 400)
-        status, message = post("/v1/voice?client_id=p1&conversation=walk&agent=echo", make_wav(2))
-        self.assertEqual((status, message["kind"], message["conversation"], message["asked"]),
-                         (202, "voice", "walk", "echo"))
+        self.assertEqual(post("/v1/voice?card=c%201", make_wav())[0], 400)
+        status, message = post("/v1/voice?client_id=p1&conversation=walk&card=c7", make_wav(2))
+        self.assertEqual((status, message["kind"], message["conversation"], message["card"]),
+                         (202, "voice", "walk", "c7"))
         request = urllib.request.Request(base + "/v1/messages/%s?wait=10" % message["id"])
         request.add_header("Authorization", "Bearer " + TOKEN)
         with urllib.request.urlopen(request, timeout=15) as response:
             done = json.loads(response.read())
-        self.assertEqual((done["status"], done["text"], done["reply"]),
-                         ("done", "你好小幽 2.0", "（回声）你好小幽 2.0"))
+        self.assertEqual((done["status"], done["text"], done["reply"], done["card"]),
+                         ("done", "你好小幽 2.0", "（回声）你好小幽 2.0", "c1"))
 
 
 class CommandLineTests(TempDirCase):
@@ -1457,9 +1942,14 @@ class CommandLineTests(TempDirCase):
         self.assertEqual(self.run_main("--config", path, "--once", "hi")[0], 0)
         code, out, err = self.run_main("--config", path, "--once", "hi", "--agent", "echo")
         self.assertEqual(code, 0)
+        # Named: the work goes to the background; the command waits and prints the result.
         self.assertIn("[happy]", out)
+        self.assertIn("（回声）", out)
         self.assertIn("asked", err)
-        self.assertEqual(Store(self.folder / "state").session("default", "echo"), "echo-2")
+        self.assertIn("c2：交给 echo 了", err)
+        store = Store(self.folder / "state")
+        self.assertEqual((store.session("default", "echo"), store.session("default/c2", "echo")),
+                         ("echo-1", "echo-1"))
         self.assertEqual(self.run_main("--config", path, "--once", "hi", "--agent", "nobody")[0], 2)
         code, out, err = self.run_main("--config", str(self.folder / "missing.json"), "--check")
         self.assertEqual(code, 2)

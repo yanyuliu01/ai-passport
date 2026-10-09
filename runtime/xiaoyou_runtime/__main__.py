@@ -139,7 +139,7 @@ def main(argv=None) -> int:
                 args.agent, "、".join(agent.name for agent in agents)), file=sys.stderr)
             return 2
         try:
-            turn = xiaoyou.answer(
+            turn = xiaoyou.hear(
                 args.once, args.conversation, uuid.uuid4().hex, asked=args.agent,
                 report=lambda kind, agent, detail: print(
                     "（%s %s：%s）" % (kind, agent or "-", detail), file=sys.stderr),
@@ -147,6 +147,26 @@ def main(argv=None) -> int:
         except AgentError as error:
             print("没成功：%s" % error, file=sys.stderr)
             return 1
+        if turn.started:
+            # 这件事交到后台了：先把她的第一句打出来，再等结果。
+            print("（%s：%s）" % (turn.card, turn.reply), file=sys.stderr)
+            limit = config.agent(turn.agent).timeout_seconds + config.voice_timeout_seconds + 30
+            try:
+                card = xiaoyou.settle(turn.card, limit)
+            except KeyboardInterrupt:
+                xiaoyou.cancel(turn.card)
+                xiaoyou.close()
+                print("取消了", file=sys.stderr)
+                return 1
+            xiaoyou.close()
+            said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
+            if card["state"] != "done":
+                print("没成功：%s" % (said[-1] if said else card["state"]), file=sys.stderr)
+                return 1
+            print("[%s] %s" % (card["mood"], card["brief"]))
+            print()
+            print(said[-1])
+            return 0
         print("[%s] %s" % (turn.mood, turn.brief))
         print()
         print(turn.reply)

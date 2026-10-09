@@ -2,18 +2,24 @@
 
 语音消息多一步：先把录音交给语音识别，得到文字后和打字的消息走同一条路。
 
-同一个对话里的消息排成一队顺序处理：两句话不会同时去续同一个会话。不同的对话
-互不等待，各走各的。每条消息在处理过程中会记下走到了哪一步（交给了谁、谁做完了），
-调用方轮询时能看到。
+每个对话一条线，线上的话一句一句处理：两句话不会同时去续同一个会话。这条线只做
+快的事——小幽听懂、马上能答的答掉、要花时间的派到后台——所以一条消息在这里“处理
+完”（status 变成 done）时，后台的事可能才刚开始；它的进展和结果出现在卡上，调用方
+用 feed 等卡的变化。不同的对话互不等待。
+
+别的 Runtime 转过来的话（hop 大于 0）是例外：那边在等最终结果，所以这样的消息要
+等到那件事结束才算处理完。
 """
 
+import sys
 import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Union
 
 from .agents import AgentError
+from .cards import ACTIVE
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -53,11 +59,16 @@ class Service:
         self._changed = threading.Condition()
         self._messages = OrderedDict()  # type: OrderedDict[str, Dict[str, Any]]
         self._by_client_id: Dict[str, str] = {}
-        # 对话名 → 这个对话里还没处理的消息编号；有工作线程在处理的对话记在 _busy 里。
-        self._lanes: Dict[str, Deque[str]] = {}
+        # 对话名 → 这条线上还没处理的东西：消息编号，或者一件要在这条线上做的事（转述
+        # 帮手的结果）。有工作线程在处理的对话记在 _busy 里。
+        self._lanes: Dict[str, Deque[Union[str, Callable[[], None]]]] = {}
         self._busy: Dict[str, threading.Thread] = {}
         self._slots = threading.Semaphore(MAX_BUSY_CONVERSATIONS)
         self._closed = False
+        # 卡的编号 → 等这件事结束才算处理完的消息（别的 Runtime 转过来的）。
+        self._held: Dict[str, str] = {}
+        xiaoyou.defer = self._defer
+        xiaoyou.cards.subscribe(self._card_changed)
 
     def agents(self) -> List[Dict[str, Any]]:
         """这台 Runtime 上小幽能用的代理，给客户端显示和点名用。"""
@@ -70,16 +81,17 @@ class Service:
         ]
 
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
-               agent: Any = None, hop: Any = 0) -> Dict[str, Any]:
+               agent: Any = None, hop: Any = 0, card: Any = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。"""
         if not isinstance(text, str) or not text.strip():
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
-        return self._enqueue("text", text, None, conversation, client_id, agent, hop)
+        return self._enqueue("text", text, None, conversation, client_id, agent, hop, card)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
-                     client_id: Any = None, agent: Any = None) -> Dict[str, Any]:
+                     client_id: Any = None, agent: Any = None,
+                     card: Any = None) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
@@ -89,11 +101,14 @@ class Service:
             raise RequestError(
                 "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
             )
-        return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0)
+        return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
-                 client_id: Any, agent: Any, hop: Any) -> Dict[str, Any]:
+                 client_id: Any, agent: Any, hop: Any, card: Any = None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
+        if card is not None:
+            # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
+            card = _name(card, "card")
         if client_id is not None:
             client_id = _name(client_id, "client_id")
         if agent is not None:
@@ -132,7 +147,9 @@ class Service:
                 "error": None,
                 # 调用方指定的代理；没指定就是 None，由小幽决定
                 "asked": agent,
-                # 现在在做这件事的代理；做完后是这一轮先接话的那个
+                # 主人说这句话时屏幕上的那件事；处理完后是这句话归到的那张卡
+                "card": card,
+                # 接这句话的代理；交给了帮手时是那个帮手
                 "agent": None,
                 # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
                 "helper": None,
@@ -150,15 +167,65 @@ class Service:
                 self._by_client_id[client_id] = message["id"]
             self._trim()
             snapshot = self._snapshot(message)
-            self._lanes.setdefault(conversation, deque()).append(message_id)
-            if conversation not in self._busy:
-                worker = threading.Thread(
-                    target=self._drain, args=(conversation,), daemon=True,
-                    name="xiaoyou-%s" % conversation,
-                )
-                self._busy[conversation] = worker
-                worker.start()
+            self._line_up(conversation, message_id)
         return snapshot
+
+    def _line_up(self, conversation: str, item: Union[str, Callable[[], None]]) -> None:
+        """调用时已经拿着锁：排到这个对话的线上，线上没人在处理就起一个。"""
+        self._lanes.setdefault(conversation, deque()).append(item)
+        if conversation not in self._busy:
+            worker = threading.Thread(
+                target=self._drain, args=(conversation,), daemon=True,
+                name="xiaoyou-%s" % conversation,
+            )
+            self._busy[conversation] = worker
+            worker.start()
+
+    def _defer(self, conversation: str, work: Callable[[], None]) -> None:
+        """小幽要在这个对话的线上做一件事（转述帮手的结果）：排在已经到的话后面。"""
+        with self._changed:
+            if not self._closed:
+                self._line_up(conversation, work)
+
+    # ---- 卡 ----
+
+    def feed(self, conversation: Any, after: Any = 0, wait: float = 0.0) -> Dict[str, Any]:
+        """这个对话里序号比 after 大的卡，和还在等回答的授权；没有变化时最多等 wait 秒。"""
+        conversation = _name(conversation, "conversation")
+        if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+            raise RequestError("after 应该是不小于 0 的整数")
+        result = self._xiaoyou.cards.changed(conversation, after, wait)
+        result["approvals"] = []
+        return result
+
+    def cards(self, conversation: Any = "default") -> List[Dict[str, Any]]:
+        return self._xiaoyou.cards.recent(_name(conversation, "conversation"), 30)
+
+    def cancel(self, card_id: str) -> Optional[Dict[str, Any]]:
+        """取消一件事。没有这张卡返回 None；它已经不在做了就原样返回。"""
+        if self._xiaoyou.cards.get(card_id) is None:
+            return None
+        self._xiaoyou.cancel(card_id)
+        return self._xiaoyou.cards.get(card_id)
+
+    def _card_changed(self, card: Dict[str, Any]) -> None:
+        if card["state"] in ACTIVE:
+            return
+        with self._changed:
+            message_id = self._held.pop(card["id"], None)
+        if message_id is not None:
+            self._settle(message_id, card)
+
+    def _settle(self, message_id: str, card: Dict[str, Any]) -> None:
+        """等着一件事结束的消息：那件事结束了，把最终的话填进去。"""
+        said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
+        reply = said[-1] if said else card["brief"]
+        if card["state"] == "done":
+            self._update(message_id, status="done", reply=reply, brief=card["brief"],
+                         mood=card["mood"], stage=None, helper=None, finished_at=time.time())
+        else:
+            self._update(message_id, status="failed", error=reply or "这件事没做成",
+                         mood="oops", stage=None, helper=None, finished_at=time.time())
 
     @staticmethod
     def _snapshot(message: Dict[str, Any]) -> Dict[str, Any]:
@@ -219,6 +286,7 @@ class Service:
         with self._changed:
             self._closed = True
             workers = list(self._busy.values())
+        self._xiaoyou.close()
         for worker in workers:
             worker.join(timeout=5)
 
@@ -270,8 +338,15 @@ class Service:
                         self._lanes.pop(conversation, None)
                         self._busy.pop(conversation, None)
                         return
-                    message_id = lane.popleft()
-                self._handle(message_id)
+                    item = lane.popleft()
+                if isinstance(item, str):
+                    self._handle(item)
+                    continue
+                try:
+                    item()
+                except Exception as error:  # 工作线程不能死
+                    sys.stderr.write("这条线上的一件事出错了：%s: %s\n" % (
+                        type(error).__name__, error))
 
     def _handle(self, message_id: str) -> None:
         with self._changed:
@@ -279,7 +354,7 @@ class Service:
             if message is None:
                 return
             text, conversation = message["text"], message["conversation"]
-            asked, hop = message["asked"], message["hop"]
+            asked, hop, card = message["asked"], message["hop"], message["card"]
             audio = self._audio.pop(message_id, None)
         if audio is not None:
             self._update(message_id, status="transcribing")
@@ -307,23 +382,37 @@ class Service:
             text = text[:MAX_TEXT_CHARS]
         self._update(message_id, status="running", text=text)
         try:
-            turn = self._xiaoyou.answer(
-                text, conversation, message_id, asked=asked, hop=hop,
+            turn = self._xiaoyou.hear(
+                text, conversation, message_id, asked=asked, card=card, hop=hop,
                 report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
             )
-            self._update(
-                message_id, status="done", reply=turn.reply, brief=turn.brief,
-                mood=turn.mood, agent=turn.agent, stage=None, helper=None,
-                finished_at=time.time(),
-            )
         except AgentError as error:
-            self._update(
-                message_id, status="failed", error=str(error), mood="oops", stage=None,
-                helper=None, finished_at=time.time(),
-            )
+            self._fail(message_id, conversation, text, str(error))
+            return
         except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
-            self._update(
-                message_id, status="failed", mood="oops", stage=None, helper=None,
-                finished_at=time.time(),
-                error="Runtime 内部出错：%s: %s" % (type(error).__name__, error),
-            )
+            self._fail(message_id, conversation, text,
+                       "Runtime 内部出错：%s: %s" % (type(error).__name__, error))
+            return
+        if hop > 0 and turn.started:
+            # 那台 Runtime 在等最终结果：这条消息等那件事结束才算完。
+            self._update(message_id, card=turn.card, agent=turn.agent, reply=turn.reply,
+                         brief=turn.brief, mood=turn.mood)
+            with self._changed:
+                self._held[turn.card] = message_id
+            current = self._xiaoyou.cards.get(turn.card)
+            if current is not None and current["state"] not in ACTIVE:
+                self._card_changed(current)
+            return
+        self._update(
+            message_id, status="done", reply=turn.reply, brief=turn.brief, mood=turn.mood,
+            agent=turn.agent, card=turn.card, stage=None, helper=None, finished_at=time.time(),
+        )
+
+    def _fail(self, message_id: str, conversation: str, text: str, error: str) -> None:
+        """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
+        card = self._xiaoyou.cards.open(conversation, text, "failed")
+        self._xiaoyou.cards.update(card["id"], said=text, say=error, brief=error, mood="oops")
+        self._update(
+            message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
+            card=card["id"], finished_at=time.time(),
+        )

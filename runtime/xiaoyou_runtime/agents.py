@@ -16,15 +16,17 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .config import AgentSpec
 
@@ -33,6 +35,68 @@ MAX_OUTPUT_CHARS = 200000
 
 class AgentError(Exception):
     """这个代理这一次没有给出结果；消息可以直接给用户看。"""
+
+
+class Cancelled(AgentError):
+    """这一次是被叫停的（取消，或者主人改了要求要重做），不是代理自己出的错。"""
+
+
+class Control:
+    """后台任务手里的遥控器：叫停正在跑的这一次，或者中途追加一句话。
+
+    每跑一次用一个新的。代理把自己起的进程登记进来，叫停时整个进程组一起结束；
+    不起进程的代理不用管它，叫停之后它的结果会被丢掉。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._process: Optional[subprocess.Popen] = None
+        self._steer: Optional[Callable[[str], bool]] = None
+        self.cancelled = False
+
+    def attach(self, process: Optional[subprocess.Popen]) -> None:
+        with self._lock:
+            self._process = process
+            late = self.cancelled and process is not None
+        if late:
+            kill_tree(process)
+
+    def can_steer(self, steer: Optional[Callable[[str], bool]]) -> None:
+        """代理支持中途追加时登记一个函数：收下了返回 True。"""
+        with self._lock:
+            self._steer = steer
+
+    def steer(self, text: str) -> bool:
+        with self._lock:
+            steer = None if self.cancelled else self._steer
+        try:
+            return bool(steer(text)) if steer is not None else False
+        except Exception:
+            return False
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.cancelled = True
+            process = self._process
+        if process is not None:
+            kill_tree(process)
+
+
+def kill_tree(process: subprocess.Popen) -> None:
+    """结束一个进程和它起的所有子进程。"""
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        try:
+            process.kill()
+        except OSError:
+            pass
 
 
 @dataclass(frozen=True)
@@ -50,6 +114,12 @@ class Job:
     schema: Optional[Dict[str, Any]] = None
     # 这句话已经被别的 Runtime 转过几次手
     hop: int = 0
+    # 只要它说话，不让它动手：不给任何工具。小幽这条线上的调用用这个，为的是几秒内答完
+    plain: bool = False
+    # 这一次最长多久；None 用代理自己配置的
+    timeout: Optional[int] = None
+    # 后台任务的遥控器；None 表示这一次不能中途叫停
+    control: Optional[Control] = None
 
 
 @dataclass(frozen=True)
@@ -58,7 +128,7 @@ class Outcome:
     text: str
     # 下一次接着聊要用的会话编号
     session_id: Optional[str] = None
-    # 代理按要求的结构给出的字段（reply、brief、mood、handoff）；没有就是 None
+    # 代理按要求的结构给出的字段（reply、brief、mood、action……）；没有就是 None
     fields: Optional[Dict[str, Any]] = None
 
 
@@ -89,8 +159,30 @@ def fields_from_text(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _run_controlled(command: List[str], control: Control, timeout: int, **extra: Any):
+    """和 subprocess.run 一样，但进程登记在遥控器上，可以中途叫停。"""
+    text = extra.pop("input", None)
+    if text is not None:
+        extra["stdin"] = subprocess.PIPE
+    if os.name != "nt":
+        # 独立的进程组：叫停时连它起的子进程一起结束。
+        extra["start_new_session"] = True
+    process = subprocess.Popen(command, **extra)
+    control.attach(process)
+    try:
+        out, err = process.communicate(text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(process)
+        process.communicate()
+        raise
+    finally:
+        control.attach(None)
+    return subprocess.CompletedProcess(command, process.returncode, out, err)
+
+
 def run_command(command: List[str], text: Optional[str], cwd: Optional[Path], timeout: int,
-                what: str, env: Optional[Dict[str, str]] = None, run=subprocess.run):
+                what: str, env: Optional[Dict[str, str]] = None, run=subprocess.run,
+                control: Optional[Control] = None):
     """运行一条命令并把常见的失败换成说得清楚的 AgentError。"""
     command = list(command)
     # 按 PATH 找到完整路径再启动：Windows 上这样才能找到 claude.exe / claude.cmd。
@@ -105,11 +197,17 @@ def run_command(command: List[str], text: Optional[str], cwd: Optional[Path], ti
         extra["stdin"] = subprocess.DEVNULL
     else:
         extra["input"] = text
+    extra.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                 encoding="utf-8", errors="replace")
     try:
-        return run(
-            command, **extra, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout,
-        )
+        if control is not None and run is subprocess.run:
+            if control.cancelled:
+                raise Cancelled("%s 被叫停了" % what)
+            done = _run_controlled(command, control, timeout, **extra)
+            if control.cancelled:
+                raise Cancelled("%s 被叫停了" % what)
+            return done
+        return run(command, **extra, timeout=timeout)
     except FileNotFoundError:
         raise AgentError("找不到命令 %s。请先安装并登录 %s，或在配置里改这个代理的 command"
                          % (command[0], what))
@@ -174,9 +272,13 @@ class ClaudeCodeAgent(Agent):
             command += ["--append-system-prompt", job.system]
         if job.schema:
             command += ["--json-schema", json.dumps(job.schema, ensure_ascii=False)]
-        command += ["--permission-mode", spec.permission_mode]
-        if spec.allowed_tools:
-            command += ["--allowedTools", ",".join(spec.allowed_tools)]
+        if job.plain:
+            # 只说话：内置工具一个不给，别的（比如登记过的 MCP）一律不批。
+            command += ["--tools", "", "--permission-mode", "dontAsk"]
+        else:
+            command += ["--permission-mode", spec.permission_mode]
+            if spec.allowed_tools:
+                command += ["--allowedTools", ",".join(spec.allowed_tools)]
         if spec.model:
             command += ["--model", spec.model]
         if job.session_id:
@@ -195,8 +297,9 @@ class ClaudeCodeAgent(Agent):
                 # 不受（也不影响）使用者平时那套 ~/.claude 配置。
                 env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
         done = run_command(
-            self.command(job), job.text, self.spec.workdir, self.spec.timeout_seconds,
-            "Claude Code", env=env, run=self._run,
+            self.command(job), job.text, self.spec.workdir,
+            job.timeout or self.spec.timeout_seconds, "Claude Code", env=env, run=self._run,
+            control=job.control,
         )
         return self.parse(done.returncode, done.stdout, done.stderr)
 
@@ -265,7 +368,8 @@ class CodexAgent(Agent):
             last_message = Path(folder) / "last.txt"
             done = run_command(
                 self.command(job, last_message), text, self.spec.workdir,
-                self.spec.timeout_seconds, "Codex", env=env, run=self._run,
+                job.timeout or self.spec.timeout_seconds, "Codex", env=env, run=self._run,
+                control=job.control,
             )
             try:
                 final = last_message.read_text(encoding="utf-8").strip()
@@ -333,8 +437,9 @@ class CommandAgent(Agent):
             stdin = None
         else:
             stdin = text
-        done = run_command(command, stdin, self.spec.workdir, self.spec.timeout_seconds,
-                           self.name, run=self._run)
+        done = run_command(command, stdin, self.spec.workdir,
+                           job.timeout or self.spec.timeout_seconds, self.name, run=self._run,
+                           control=job.control)
         output = done.stdout.strip()
         if done.returncode != 0 or not output:
             detail = (done.stderr.strip().splitlines() or ["没有输出"])[-1]
@@ -381,7 +486,7 @@ class RemoteAgent(Agent):
         return payload
 
     def run(self, job: Job) -> Outcome:
-        deadline = time.monotonic() + self.spec.timeout_seconds
+        deadline = time.monotonic() + (job.timeout or self.spec.timeout_seconds)
         message = self._call("POST", "/v1/messages", {
             "text": job.text, "conversation": job.conversation,
             "client_id": uuid.uuid4().hex, "hop": job.hop + 1,

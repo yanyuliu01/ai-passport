@@ -11,14 +11,20 @@ conversations with the owner, the decision of who gets each message, and how
 somebody else's result is reported back. Claude Code, Codex, Xiaoyou on another
 computer, and a local model added later are all **agents** she can use.
 
-For each message the runtime returns a full reply, a short brief for the
-Passport screen, and a mood for the pixel pet. A message can be typed text or a
-voice recording; a recording is first turned into text by a speech recognition
-engine chosen in the configuration.
+Every request the owner makes is **one thing** with a card of its own: what he
+said, what Xiaoyou answered and anything added later are kept on that card.
+Xiaoyou herself only does what is quick: she understands the sentence, answers
+at once when she can, and hands anything that takes time to a helper working in
+the background. So an unfinished thing does not hold up the next sentence,
+several things can be in progress at once, and a thing can be added to, changed
+or cancelled while it runs. Whatever Xiaoyou says comes as a full reply, a
+short brief for the Passport screen, and a mood for the pixel pet. A message
+can be typed text or a voice recording; a recording is first turned into text
+by a speech recognition engine chosen in the configuration.
 
 ```text
 phone app / any client ──HTTP──> Xiaoyou Runtime
-                                   │  persona · transcript · routing · reporting back
+                                   │  persona · transcript · cards · routing · reporting back
                                    ├──> claude   (Claude Code command line; can answer as Xiaoyou)
                                    ├──> codex    (Codex command line; does work only)
                                    ├──> any command (a local model, for example)
@@ -66,14 +72,16 @@ Relative paths are resolved against the directory of the configuration file.
 | `server.port` | `8765` | Port to listen on. |
 | `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
-| `state_dir` | `state` | Where the session table and Xiaoyou's transcript are kept. |
+| `state_dir` | `state` | Where the session table, the cards and Xiaoyou's transcript are kept. |
 | `persona_file` | `persona.txt` | Xiaoyou's persona. Given only to an agent that answers as Xiaoyou. |
 | `brief_max_chars` | `120` | Upper bound for the small-screen brief (20 to 400). |
-| `turn_timeout_seconds` | `600` | Timeout for agents that do not set their own `timeout_seconds` (10 to 7200). |
+| `turn_timeout_seconds` | `3600` | How long one thing in the background may take; used by agents that do not set their own `timeout_seconds` (10 to 7200). |
 | `agents.<name>` | none | An agent; see [Agents](#agents). At least one must be enabled. |
 | `xiaoyou.default_agent` | the first agent | Who gets a message when nobody is named and the router has no opinion. |
 | `xiaoyou.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyou, after an agent that only does work. |
-| `xiaoyou.max_handoffs` | `2` | How many times work may be handed over in one turn (0 to 5); 0 means never. |
+| `xiaoyou.max_parallel` | `0` | How many things may be in progress at once (0 to 64); `0` means no limit. The rest wait their turn. |
+| `xiaoyou.voice_timeout_seconds` | `60` | How long Xiaoyou herself may take over one sentence (5 to 600). She gets no tools for this step; it is only understanding and dispatching. |
+| `xiaoyou.max_handoffs` | `2` | A 0.4 setting that no longer has any effect; still read so that old configurations load. |
 | `xiaoyou.router.type` | `mention` | `mention` or `command`; see [Who gets a message](#who-gets-a-message). |
 | `xiaoyou.router.command` | `[]` | `command`: the command that decides. |
 | `xiaoyou.router.timeout_seconds` | `10` | `command`: after this long the default agent is used instead (1 to 120). |
@@ -177,12 +185,13 @@ The order is fixed:
 3. The router has an opinion: its choice.
 4. Otherwise: the default agent.
 
-An agent that was named (rules 1 and 2) is always shown as the one Xiaoyou
-handed the work to: the message record gets a `handoff` event, and `helper` is
-that agent while it works, so the phone and the device show who has it. This
-includes the agent that speaks as Xiaoyou. With the default setup, `@claude …`
-is answered by `claude` in a single step and in Xiaoyou's voice; it is told
-that it was the one named, and that turn is not passed on to another helper.
+The first three rules all mean "it was decided who does this": the runtime
+does not ask a model. It opens a card, Xiaoyou says one sentence to the effect
+of "handed to codex", and that agent works in the background. The message
+record gets a `handoff` event and `agent` is that agent. This includes the
+agent that speaks as Xiaoyou: `@claude …` makes `claude` do the thing in the
+background, with its tools and as Xiaoyou, and it is told that it was the one
+named. When the default agent only does work, rule 4 is handled the same way.
 
 The router is the replaceable part. `mention` adds nothing beyond rules 1, 2
 and 4. `command` runs a command of yours: standard input is
@@ -192,24 +201,45 @@ name, an error or a timeout all fall back to the default agent: a broken router
 must not leave the owner unable to talk. A small model or a classifier that
 decides routing plugs in here.
 
-### Handing work over and reporting back
+### One thing, one card
 
-When the agent that takes the message can answer as Xiaoyou, the runtime tells
-it which helpers exist (the other agents' names and descriptions). It may answer
-directly, or say in its reply who should do what. The runtime then runs that
-helper, gives the raw result back, and the agent sums it up for the owner in
-Xiaoyou's words. A helper that failed, or a helper that does not exist, is
-reported back just the same, to be told to the owner as it is. A turn allows at
-most `max_handoffs` hand-overs; after the last one the option is no longer
-offered.
+A sentence that nobody was named for is taken by the agent that speaks as
+Xiaoyou. For this step it gets **no tools** and at most
+`voice_timeout_seconds`: it only has to understand. The runtime tells it which
+helpers exist (its own agent included), which things there are at the moment
+(number, title, who is on it, for how long), and which thing was on the
+owner's screen when he spoke. Besides what to say, its reply states which card
+the sentence belongs to (a new one, or an existing number) and what the
+runtime is to do:
 
-When the owner names an agent that only does work, it runs first (with the
-recent turns it has not seen as background) and `voice_agent` reports the
-result. If `voice_agent` is unavailable at that moment, the owner gets the raw
-result rather than nothing.
+| Action | Meaning |
+| --- | --- |
+| `none` | She has answered directly. |
+| `start` | Hand it to a helper in the background. She names the helper, a short title for the thing, and the task for the helper. |
+| `amend` | The owner has more to say about a thing. `after`: when the current round is done, carry on with the addition. `redo`: the request changed. A helper that can be told mid-way is told; otherwise the round is stopped and started over in the same session with the new request. If the thing had already ended, another round runs in its old session. |
+| `cancel` | Stop a thing that is in progress and drop its result. |
 
-A helper receives the task only, without the persona or the chat. It has a
-session of its own in that conversation and continues it next time.
+What cannot be done (no such number, no such helper, nothing left to cancel)
+is put to her with the reason, and she answers once more; if it still cannot
+be done the owner is told so as it is, and she does not get to present
+something as done that was not.
+
+Each thing in the background has a thread of its own and none waits for
+another. One helper can be on several things at once, because a helper's
+session is kept per thing and helper (`conversation/card` in
+`state/sessions.json`). A helper that can speak as Xiaoyou works with the
+persona, and its result is what Xiaoyou says. A helper that only does work
+receives the task only, without the persona or the chat; its raw result comes
+back to the conversation's own line and `voice_agent` reports it. If
+`voice_agent` is unavailable at that moment, the owner gets the raw result
+rather than nothing. When a helper fails, the card says so, with the reason.
+
+A card is in one of the states `working` (a helper is on it), `waiting` (for
+the owner's approval; used by the approval prompt in the next version),
+`done`, `failed`, `cancelled`; `talking` is reserved. Cards are stored in
+`state/cards.json`, the latest 50. Things that were in progress when the
+runtime restarts cannot be continued; they are marked `failed` with a note
+saying the runtime was restarted.
 
 ### Using a separate Claude login
 
@@ -250,11 +280,23 @@ responses are JSON.
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`: the agents Xiaoyou can use on this runtime. |
-| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. |
-| `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
-| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes, which is how a client follows a turn step by step. |
+| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. |
+| `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
+| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": []}`: the cards of that conversation, in full, whose sequence number is above `after`. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
+| `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
+
+A message record says whether Xiaoyou has dealt with the sentence, not whether
+the thing is finished: once she has answered or handed the work out, `status`
+is `done`, and the progress and the result are on the card, to be waited for
+with `/v1/feed`. Only a sentence passed on by another runtime (a `remote`
+agent) waits until the thing has ended. A client that only reads message
+records (phone app 0.5.0) can therefore still send and receive with this
+version, but sees the "handed to codex" sentence and never the result from
+the background.
 
 A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
 `voice`), `status` (`queued`, `transcribing`, `running`, `done`, `failed`),
@@ -262,24 +304,31 @@ A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
 `error`, `created_at`, and `finished_at`. For a voice message `text` is empty
 until the recording has been transcribed.
 
-The record also says who the turn went to:
+The record also says who the sentence went to:
 
 - `asked`: the agent the caller named, or `null`.
-- `agent`: while running, the agent working on it now; afterwards, the agent
-  that took the message.
-- `stage`: while running, one sentence for a person to read, such as what
-  Xiaoyou said when handing over; `null` when nothing was handed over or the
-  turn is finished.
-- `helper`: while Xiaoyou waits for an agent she handed the work to, that
-  agent's name; otherwise `null`. Unlike `agent`, it is only set for a handoff.
+- `card`: the card the sentence was put on. Until it has been dealt with, this
+  is the number the caller sent.
+- `agent`: the agent that took the sentence, or the helper it was handed to.
+- `stage`, `helper`: fields left from 0.4. They may hold a value for the few
+  seconds Xiaoyou is dealing with the sentence and are `null` afterwards.
 - `rev`: a counter that goes up every time the record changes.
-- `events`: the steps of the turn, each `{"at", "kind", "agent", "text"}`.
-  `kind` is `route` (who got it; `text` is the reason: `asked`, `mention`,
-  `router`, `default`), `handoff` (handed to a helper), `result` (the helper
-  finished or failed), or `note`.
+- `events`: the steps taken, each `{"at", "kind", "agent", "text"}`. `kind` is
+  `route` (who got it; `text` is the reason: `asked`, `mention`, `router`,
+  `default`) or `handoff` (handed to a helper; `text` is what Xiaoyou said).
+
+A card has `id` (`c1`, `c2`, …), `conversation`, `title` (at most 24
+characters), `state`, `agent` (who is or was on it; `null` when Xiaoyou
+answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at"}]`,
+the latest 40), `brief`, `mood`, `progress` (the latest lines of progress;
+still empty in this version), `started_at`, `edits` (how many times it was
+added to or changed), `approval` (always `null` in this version), `queued`
+(waiting its turn under a limit on parallel things), `created_at`,
+`updated_at`, and `seq`.
 
 Sending the same `client_id` again returns the existing record instead of
-running the turn twice, so a client may retry safely after a lost response.
+dealing with the sentence twice, so a client may retry safely after a lost
+response.
 
 ```bash
 TOKEN=...   # the value of server.token
@@ -287,6 +336,7 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"text": "hello", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8765/v1/feed?after=0&wait=60" -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Windows
@@ -396,26 +446,33 @@ machine, and the traffic is unencrypted HTTP, so do this only on a network you
 trust. `--pair` guesses the machine's local address; if the machine has several
 network interfaces, check that the address is the one the phone can reach.
 
-## How a turn works
+## How a sentence is processed
 
-1. Messages are queued per conversation: one at a time within a conversation,
-   and conversations do not wait for each other.
-2. The agent that takes the message is chosen in the order given under
-   [Who gets a message](#who-gets-a-message).
-3. If that agent can answer as Xiaoyou, it gets the persona, the reply format
-   and the list of helpers. For Claude Code that is `claude -p --output-format
-   json --append-system-prompt <persona + helpers> --json-schema <reply, brief,
-   mood, optional handoff> --permission-mode <mode> [--allowedTools ...]
-   [--model ...] [--resume <session>]`. The owner's text is sent on standard
-   input, never as a command-line argument. If it hands work over, see
-   [Handing work over and reporting back](#handing-work-over-and-reporting-back).
-4. If that agent only does work, it runs, and the agent that speaks reports the
-   result.
-5. The session identifier each agent returns is stored per conversation and
-   agent in `state/sessions.json` and used again next time.
-6. The turn is added to Xiaoyou's own transcript, `state/transcript.json`,
-   together with which agents witnessed it. When an agent that did not witness
-   some turns takes a later message, it is told about them first, once.
+1. Messages queue per conversation: one sentence at a time within a
+   conversation, and conversations do not wait for each other.
+2. The order in [Who gets a message](#who-gets-a-message) says whether it was
+   decided who does this. If so, a card is opened, the work goes to the
+   background, and the sentence has been dealt with.
+3. Otherwise the agent that speaks as Xiaoyou takes it. For Claude Code that is
+   `claude -p --output-format json --append-system-prompt <persona + helpers +
+   the things at the moment> --json-schema <reply, brief, mood, card, action>
+   --tools "" --permission-mode dontAsk [--model ...] [--resume <session>]`.
+   The owner's text is sent on standard input, never as a command-line
+   argument. The runtime does what the `action` in her reply says; see
+   [One thing, one card](#one-thing-one-card).
+4. A thing in the background: for Claude Code that is `claude -p
+   --output-format json [--append-system-prompt <persona> --json-schema <reply,
+   brief, mood>] --permission-mode <mode> [--allowedTools ...] [--model ...]
+   [--resume <the session of this thing>]`, in a process group of its own that
+   is ended as a whole when the thing is cancelled or its request changes.
+5. Session identifiers are stored in `state/sessions.json`: per conversation
+   and agent for Xiaoyou's own line, per conversation/card and agent for things
+   in the background.
+6. Every sentence and every result from the background is added to Xiaoyou's
+   own transcript, `state/transcript.json`, together with whether the agent
+   that speaks for her witnessed it. What it did not witness (results from the
+   background, sentences that went straight to another agent, turns the phone
+   carried over) it is told first, once, when it next takes a sentence.
 
 The transcript is Xiaoyou's, not any agent's: when a different agent takes the
 next message, Xiaoyou still knows what was just said. Each agent's own session
@@ -438,18 +495,39 @@ holds only the part it took part in.
 Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
 --static`): configuration checks and the old configuration shape; the exact
 command line and standard input given to fake `claude` and `codex` executables,
-result and error parsing, session continuation; naming an agent and the order
-of routing decisions, a command as the router; Xiaoyou handing work over, a
-helper that fails or does not exist, the limit on hand-overs, reporting back
-after a named work-only agent, catching an agent up on turns it missed; the
-`remote` agent between two real runtimes (with `echo`), including two that list
-each other; queueing per conversation, retry by `client_id`, token checks, the
-HTTP interface; and voice messages with a fake recognition command (format
-checks, transcription, empty and failed recognition, clean-up of recordings).
+result and error parsing, session continuation; naming an agent, the order of
+routing rules and a command as the router; storing cards, their sequence numbers, writing them to
+disk and marking unfinished ones as failed after a restart; Xiaoyou answering
+directly, being free for the next sentence right after handing work out,
+several things in progress at once, adding to a thing, changing its request
+(including really stopping a process and running it again), cancelling, the
+limit on parallel things, a helper that fails or does not exist, putting what
+cannot be done to her once more, reporting back after a work-only helper,
+telling her what she did not witness; the `remote` agent between two real
+runtimes (with `echo`), including two that list each other; queueing per
+conversation, retry by `client_id`, token checks, the HTTP interface
+(including the long poll on the feed); and voice messages with a fake
+recognition command (format checks, transcription, empty and failed
+recognition, clean-up of recordings).
 
-Checked by hand on 2026-10-09 with Claude Code 2.1.295 on Linux, in a cloud
-workspace rather than on the intended computer, with one `claude_code` agent
-and a stand-in helper of type `command`:
+Version 0.5 was checked by hand on 2026-10-09 with Claude Code 2.1.295 on
+Linux, in a cloud workspace rather than on the intended computer, with one
+`claude_code` agent that had `Bash` allowed, through the HTTP interface:
+
+- First sentence, "run sleep 20 and then count the .conf files under /etc":
+  it had been dealt with after 7.6 seconds; Xiaoyou said she had handed it to
+  Claude Code, and the card was `working`.
+- Second sentence right after, "how many eggs are in a dozen": answered after
+  13.7 seconds ("12", with a remark that the other thing was still running),
+  on a card of its own. The first thing was still in progress.
+- After 37 seconds the feed delivered the first card as `done`, with the count.
+- Xiaoyou takes about 6 to 7 seconds over a sentence, most of it Claude Code
+  starting up and answering.
+
+Earlier the same day version 0.4 was checked by hand with Claude Code 2.1.295
+on Linux, also in a cloud workspace, with one `claude_code` agent and a
+stand-in helper of type `command`. In that version a helper finished within
+the same turn, so the timings below do not apply to the current one:
 
 - A direct answer took about 5 seconds, and a second turn continued the first.
 - Xiaoyou deciding to hand over: asked to "find someone who reviews code",
@@ -505,10 +583,19 @@ Not verified:
 - A local model: a `command` agent answering as Xiaoyou has only been
   exercised with a script in the tests.
 - A virtual machine, and a long-running service over days.
-- Version 0.4 on macOS and together with the phone app. The owner reports that
-  version 0.2 ran the path "phone app → runtime → device" on macOS; this
-  version changes the internal structure and has not run there. The phone app
-  does not show `stage` or `agent` yet and cannot name an agent.
+- Version 0.5 on macOS and together with the phone app and the device. Phone
+  app 0.5.0 and the current firmware do not know about cards: they can send
+  and receive, but never see a result from the background. The matching app
+  and firmware do not exist yet.
+- Adding to, changing and cancelling a thing with the real Claude Code: the
+  tests use stand-in agents and one real child process. In particular, when
+  Claude Code is stopped before it has returned a session identifier, the
+  runtime gives it the original task again together with the new request, and
+  it does not remember what it had done so far.
+- Whether the model always picks the right `card` and `action`: only the two
+  sentences above were tried by hand.
+- Whether this computer and the account's usage limits cope with many things
+  in progress at once.
 - How the model behaves when a helper is slow or returns a large output.
 
 Known risks:
@@ -518,10 +605,18 @@ Known risks:
   it is intended to become the default for `-p`; if that happens the
   `claude_code` agent needs another way to authenticate. Check the current Claude Code terms before
   offering this to anyone other than yourself.
-- Turns count against the usage limits of the logged-in account. Each
-  hand-over costs one more call to the agent that speaks, for the summary.
-- A long task is not a background task: the conversation waits for as long as
-  the helper runs, and it cannot be cancelled meanwhile.
+- Every call counts against the usage limits of the logged-in account. Each
+  sentence nobody was named for costs one call to the agent that speaks, and a
+  work-only helper's result costs one more for the report. Parallel things are
+  not limited by default; the owner keeps an eye on usage himself.
+- Things in the background currently run with the permission mode from the
+  configuration, and an operation that needs confirmation is not put to the
+  owner (the approval prompt comes in the next version). The default
+  configuration is read-only.
+- Two things changing the same folder at the same time are not protected from
+  each other.
+- Starting a conversation over (reset) neither stops things in progress nor
+  removes cards.
 - One shared token, no per-device identity, no rate limiting.
 
 ## Tests
