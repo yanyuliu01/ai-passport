@@ -174,7 +174,7 @@ Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设�
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`：小幽在这台 Runtime 上能用的代理。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
-| `GET /v1/messages/<id>?wait=<秒>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。 |
+| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，这一轮一结束就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回；客户端靠它一步一步跟着这一轮走。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
 
@@ -189,6 +189,9 @@ Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设�
 - `agent`：处理中是现在在做这件事的代理；做完后是这一轮先接话的那个。
 - `stage`：处理中给人看的一句话，比如小幽转交时说的“我让 codex 看看”；没有转交或已经
   结束时是 `null`。
+- `helper`：小幽把活儿交出去、正在等的那个 agent 的名字；其他时候是 `null`。和 `agent`
+  不同，它只在转交时才有值。
+- `rev`：一个计数，记录每变一次就加一。
 - `events`：这一轮走过的步骤，每项是 `{"at", "kind", "agent", "text"}`。`kind` 为 `route`
   （交给了谁，`text` 是原因：`asked`、`mention`、`router`、`default`）、`handoff`（转交给
   帮手）、`result`（帮手做完或没做成）、`note`。

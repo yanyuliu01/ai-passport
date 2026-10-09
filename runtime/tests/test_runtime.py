@@ -907,12 +907,24 @@ class ServiceTests(TempDirCase):
             waiting = self.service.get(message["id"], wait=0.05)
             if waiting["agent"] == "codex":
                 break
-        self.assertEqual((waiting["status"], waiting["agent"], waiting["stage"]),
-                         ("running", "codex", "我去问 codex"))
+        self.assertEqual((waiting["status"], waiting["agent"], waiting["stage"], waiting["helper"]),
+                         ("running", "codex", "我去问 codex", "codex"))
+        # With the revision it last saw, a caller is told as soon as anything changes,
+        # instead of only when the turn is over.
+        self.assertEqual(self.service.get(message["id"], wait=0.05, rev=waiting["rev"])["rev"],
+                         waiting["rev"])
+        early = self.service.get(message["id"], wait=5, rev=message["rev"])
+        self.assertEqual((early["status"], early["rev"] > message["rev"]), ("running", True))
+        waiter = {}
+        thread = threading.Thread(target=lambda: waiter.update(
+            self.service.get(message["id"], wait=5, rev=waiting["rev"])))
+        thread.start()
         self.codex.gate.set()
+        thread.join(5)
+        self.assertGreater(waiter["rev"], waiting["rev"])
         done = self.finish(message)
-        self.assertEqual((done["status"], done["reply"], done["agent"], done["stage"]),
-                         ("done", "好了", "claude", None))
+        self.assertEqual((done["status"], done["reply"], done["agent"], done["stage"], done["helper"]),
+                         ("done", "好了", "claude", None, None))
         self.assertEqual([(event["kind"], event["agent"]) for event in done["events"]],
                          [("route", "claude"), ("handoff", "codex"), ("result", "codex")])
         # A caller may name the agent; one that does not exist is refused up front.
@@ -1079,6 +1091,10 @@ class HttpTests(TempDirCase):
         status, done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])
         self.assertEqual((status, done["status"], done["reply"]), (200, "done", "（回声）你好"))
         self.assertEqual((done["mood"], done["agent"]), ("happy", "echo"))
+        # Nothing changes after the end, so asking with the last revision returns at once.
+        self.assertEqual(
+            self.call("GET", "/v1/messages/%s?wait=5&rev=%d" % (message["id"], done["rev"]))[1]["rev"],
+            done["rev"])
         # Same client_id: the same message comes back, already done.
         self.assertEqual(self.call("POST", "/v1/messages", {"text": "你好", "client_id": "c1"})[1]["id"],
                          message["id"])
@@ -1124,6 +1140,7 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("GET", "/v1/messages/unknown")[0], 404)
         self.assertEqual(self.call("GET", "/v1/messages/unknown?wait=999")[0], 400)
         self.assertEqual(self.call("GET", "/v1/messages/unknown?wait=nan")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/messages/unknown?rev=x")[0], 400)
         self.assertEqual(self.call("GET", "/v1/other")[0], 404)
         self.assertEqual(self.call("POST", "/v1/other", {})[0], 404)
 

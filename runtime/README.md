@@ -201,7 +201,7 @@ responses are JSON.
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`: the agents Xiaoyou can use on this runtime. |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
-| `GET /v1/messages/<id>?wait=<seconds>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. |
+| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes, which is how a client follows a turn step by step. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
 
@@ -219,6 +219,9 @@ The record also says who the turn went to:
 - `stage`: while running, one sentence for a person to read, such as what
   Xiaoyou said when handing over; `null` when nothing was handed over or the
   turn is finished.
+- `helper`: while Xiaoyou waits for an agent she handed the work to, that
+  agent's name; otherwise `null`. Unlike `agent`, it is only set for a handoff.
+- `rev`: a counter that goes up every time the record changes.
 - `events`: the steps of the turn, each `{"at", "kind", "agent", "text"}`.
   `kind` is `route` (who got it; `text` is the reason: `asked`, `mention`,
   `router`, `default`), `handoff` (handed to a helper), `result` (the helper

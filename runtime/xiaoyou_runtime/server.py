@@ -4,7 +4,8 @@
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
   POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?} → 202 + 消息
   POST /v1/voice?conversation=&client_id=&agent=   请求体是 16 位单声道 WAV → 202 + 消息
-  GET  /v1/messages/<id>?wait=<秒>      查结果；wait 最多 60 秒，处理完会提前返回
+  GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
+                                        带 rev 时记录一有变化就返回
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
 
@@ -91,15 +92,23 @@ def make_server(config: Config, service: Service) -> ThreadingHTTPServer:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
             if len(parts) == 3 and parts[:2] == ["v1", "messages"]:
+                query = parse_qs(url.query)
                 try:
-                    wait = float(parse_qs(url.query).get("wait", ["0"])[0])
+                    wait = float(query.get("wait", ["0"])[0])
                 except ValueError:
                     self._fail(400, "wait 应该是秒数")
                     return
                 if not 0 <= wait <= MAX_WAIT_SECONDS:  # 同时挡掉 NaN
                     self._fail(400, "wait 应该在 0 到 %d 之间" % MAX_WAIT_SECONDS)
                     return
-                message = service.get(parts[2], wait)
+                rev = None
+                if "rev" in query:
+                    try:
+                        rev = int(query["rev"][0])
+                    except ValueError:
+                        self._fail(400, "rev 应该是整数")
+                        return
+                message = service.get(parts[2], wait, rev)
                 if message is None:
                     self._fail(404, "没有这条消息（Runtime 重启后旧消息查不到）")
                 else:

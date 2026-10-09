@@ -134,9 +134,13 @@ class Service:
                 "asked": agent,
                 # 现在在做这件事的代理；做完后是这一轮先接话的那个
                 "agent": None,
+                # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
+                "helper": None,
                 # 给人看的一句话：现在走到哪一步了
                 "stage": None,
                 "events": [],
+                # 这条记录每变一次加一：调用方带着上次看到的值来等，有变化就能立刻知道
+                "rev": 0,
                 "hop": hop,
                 "created_at": time.time(),
                 "finished_at": None,
@@ -162,8 +166,13 @@ class Service:
         snapshot["events"] = [dict(event) for event in message["events"]]
         return snapshot
 
-    def get(self, message_id: str, wait: float = 0.0) -> Optional[Dict[str, Any]]:
-        """查一条消息；wait 大于 0 时最多等这么多秒，直到它处理完。"""
+    def get(self, message_id: str, wait: float = 0.0,
+            rev: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """查一条消息；wait 大于 0 时最多等这么多秒，直到它处理完。
+
+        带上 rev（上次看到的那条记录里的 rev）时，记录一有变化就返回，不必等到处理完：
+        这样调用方能及时看到“交给了谁”。
+        """
         deadline = time.monotonic() + max(0.0, wait)
         with self._changed:
             while True:
@@ -172,6 +181,8 @@ class Service:
                     return None
                 remaining = deadline - time.monotonic()
                 if message["status"] in ("done", "failed") or remaining <= 0:
+                    return self._snapshot(message)
+                if rev is not None and message["rev"] != rev:
                     return self._snapshot(message)
                 self._changed.wait(remaining)
 
@@ -227,6 +238,7 @@ class Service:
             message = self._messages.get(message_id)
             if message is not None:
                 message.update(fields)
+                message["rev"] += 1
             self._changed.notify_all()
 
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
@@ -244,6 +256,8 @@ class Service:
                 message["agent"] = agent
             if kind in ("handoff", "result"):
                 message["stage"] = text[:MAX_EVENT_CHARS]
+                message["helper"] = agent if kind == "handoff" else None
+            message["rev"] += 1
             self._changed.notify_all()
 
     def _drain(self, conversation: str) -> None:
@@ -299,15 +313,17 @@ class Service:
             )
             self._update(
                 message_id, status="done", reply=turn.reply, brief=turn.brief,
-                mood=turn.mood, agent=turn.agent, stage=None, finished_at=time.time(),
+                mood=turn.mood, agent=turn.agent, stage=None, helper=None,
+                finished_at=time.time(),
             )
         except AgentError as error:
             self._update(
                 message_id, status="failed", error=str(error), mood="oops", stage=None,
-                finished_at=time.time(),
+                helper=None, finished_at=time.time(),
             )
         except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
             self._update(
-                message_id, status="failed", mood="oops", stage=None, finished_at=time.time(),
+                message_id, status="failed", mood="oops", stage=None, helper=None,
+                finished_at=time.time(),
                 error="Runtime 内部出错：%s: %s" % (type(error).__name__, error),
             )
