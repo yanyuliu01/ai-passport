@@ -299,6 +299,22 @@ static void test_only_encrypted_cccd_gets_encrypted_read_policy(void)
     assert(!buddy_ble_should_protect_cccd_read(0x2901, true));
 }
 
+static void test_binary_frames_are_told_apart_by_their_first_byte(void)
+{
+    static const uint8_t frame[] = {BUDDY_BLE_RX_FRAME_MAGIC, 0, 0, 0, 0, 0xE9};
+    static const uint8_t text[] = "{\"cmd\":\"hub\"}\n";
+    /* The tail of a line whose first half went in an earlier write. */
+    static const uint8_t tail[] = "\xe5\xb0\x8f\xe5\xb9\xbd\"}\n";
+
+    assert(BUDDY_BLE_RX_FRAME_MAGIC == 0xFEU);
+    assert(buddy_ble_rx_is_frame(frame, sizeof(frame)));
+    assert(buddy_ble_rx_is_frame(frame, 1));
+    assert(!buddy_ble_rx_is_frame(text, sizeof(text) - 1U));
+    assert(!buddy_ble_rx_is_frame(tail, sizeof(tail) - 1U));
+    assert(!buddy_ble_rx_is_frame(frame, 0));
+    assert(!buddy_ble_rx_is_frame(NULL, 4));
+}
+
 static void test_advertising_requires_open_desired_state(void)
 {
     assert(buddy_ble_should_advertise(true, true, false, false));
@@ -505,5 +521,6 @@ int main(void)
     test_host_deinit_failure_blocks_reinitialization();
     test_host_init_failure_blocks_reinitialization();
     test_exhausted_delete_retry_preserves_transaction_snapshot();
+    test_binary_frames_are_told_apart_by_their_first_byte();
     return 0;
 }

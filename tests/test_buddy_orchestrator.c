@@ -12,6 +12,8 @@ typedef struct {
     bool secure;
     unsigned permissions_recorded;
     bool ble_enabled;
+    pocket_update_command_t firmware;
+    uint32_t firmware_generation;
 } fake_runtime_t;
 
 static void record(fake_runtime_t *fake, char operation)
@@ -109,6 +111,16 @@ static esp_err_t fake_persist_level(void *context, uint64_t level)
     return ESP_OK;
 }
 
+static void fake_firmware(void *context, const pocket_update_command_t *command,
+                          uint32_t generation)
+{
+    fake_runtime_t *fake = context;
+
+    record(fake, 'W');
+    fake->firmware = *command;
+    fake->firmware_generation = generation;
+}
+
 static buddy_orchestrator_ops_t fake_ops(fake_runtime_t *fake)
 {
     const buddy_orchestrator_ops_t ops = {
@@ -123,6 +135,7 @@ static buddy_orchestrator_ops_t fake_ops(fake_runtime_t *fake)
         .factory_reset = fake_factory_reset,
         .set_ble_enabled = fake_set_ble,
         .persist_level = fake_persist_level,
+        .firmware = fake_firmware,
     };
     return ops;
 }
@@ -215,6 +228,49 @@ static void test_hub_hello_is_acknowledged_and_enables_voice(void)
     assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
 }
 
+static void test_firmware_commands_go_to_the_updater(void)
+{
+    static const char begin[] =
+        "{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":70001,\"sha256\":"
+        "\"e50a237c00112233445566778899aabbccddeeff00112233445566778899aa7e\"}";
+    static const char info[] = "{\"cmd\":\"fw\",\"op\":\"info\"}";
+    static const char bad[] = "{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":70001}";
+    fake_runtime_t fake = {.commit_result = ESP_OK, .secure = true};
+    buddy_orchestrator_ops_t ops = fake_ops(&fake);
+    buddy_state_t state;
+    buddy_state_t before;
+    buddy_action_t action = {0};
+
+    buddy_state_init(&state, NULL);
+    before = state;
+    /* The updater gets the command and answers the host itself: nothing is
+     * sent from here and the state machine does not hear about it. */
+    assert(!buddy_orchestrator_process_rx(&state, &ops, begin, strlen(begin), 7, 1000,
+                                          &action));
+    assert(strcmp(fake.order, "W") == 0 && fake.sent[0] == '\0');
+    assert(fake.firmware.op == POCKET_UPDATE_OP_BEGIN && fake.firmware.size == 70001U);
+    assert(fake.firmware.sha256[0] == 0xe5 && fake.firmware_generation == 7U);
+    assert(memcmp(&state, &before, sizeof(state)) == 0);
+    assert(action.type == BUDDY_ACTION_NONE);
+
+    /* One that does not parse never reaches the updater and is refused by name. */
+    fake.order[0] = '\0';
+    assert(!buddy_orchestrator_process_rx(&state, &ops, bad, strlen(bad), 7, 1001, &action));
+    assert(strcmp(fake.order, "S") == 0);
+    assert(strcmp(fake.sent, "{\"ack\":\"fw\",\"ok\":false,\"error\":\"invalid request\"}\n") ==
+           0);
+
+    /* From a connection that is not the live, secure one: ignored. */
+    fake.order[0] = '\0';
+    assert(!buddy_orchestrator_process_rx(&state, &ops, info, strlen(info), 8, 1002, &action));
+    assert(fake.order[0] == '\0');
+
+    /* A build without an updater says so instead of staying silent. */
+    ops.firmware = NULL;
+    assert(!buddy_orchestrator_process_rx(&state, &ops, info, strlen(info), 7, 1003, &action));
+    assert(strcmp(fake.sent, "{\"ack\":\"fw\",\"ok\":false,\"error\":\"unsupported\"}\n") == 0);
+}
+
 static void test_failed_setting_commit_sends_error_ack_without_state_change(void)
 {
     fake_runtime_t fake = {.commit_result = ESP_ERR_INVALID_STATE, .secure = true};
@@ -269,6 +325,7 @@ int main(void)
 {
     test_official_rx_fixtures_reach_state_and_responses();
     test_hub_hello_is_acknowledged_and_enables_voice();
+    test_firmware_commands_go_to_the_updater();
     test_failed_setting_commit_sends_error_ack_without_state_change();
     test_executor_orders_sensitive_side_effects();
     puts("buddy orchestrator tests passed");

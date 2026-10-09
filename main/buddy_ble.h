@@ -21,6 +21,11 @@
         0x40, 0x6e
 
 #define BUDDY_BLE_TX_CHUNK_MAX 244U
+/* A write to RX whose first byte is this is one binary frame, not text: the
+ * byte never occurs in UTF-8, so it cannot be part of a JSON line. The whole
+ * write is the frame; it does not disturb a line that is still being
+ * assembled from earlier writes. */
+#define BUDDY_BLE_RX_FRAME_MAGIC 0xFEU
 #define BUDDY_BLE_DELETE_MAX_ATTEMPTS 5U
 
 typedef enum {
@@ -30,6 +35,7 @@ typedef enum {
     BUDDY_BLE_EVENT_ENCRYPTION,
     BUDDY_BLE_EVENT_RX_LINE,
     BUDDY_BLE_EVENT_BOND_DELETE_RESULT,
+    BUDDY_BLE_EVENT_RX_FRAME,
 } buddy_ble_event_type_t;
 
 typedef struct {
@@ -63,11 +69,17 @@ typedef struct {
             int status;
             bool success;
         } bond_delete_result;
+        struct {
+            const uint8_t *data;
+            size_t length;
+            uint32_t connection_generation;
+        } rx_frame;
     } data;
 } buddy_ble_event_t;
 
-/* Callbacks run on the NimBLE host task. The event and RX line storage remain
- * valid only until the callback returns; consumers should copy or queue them. */
+/* Callbacks run on the NimBLE host task. The event and RX line or frame storage
+ * remain valid only until the callback returns; consumers should copy or queue
+ * them. */
 typedef void (*buddy_ble_event_cb_t)(const buddy_ble_event_t *event, void *context);
 
 typedef struct {
@@ -88,6 +100,8 @@ bool buddy_ble_termination_failure_matches(uint16_t failed_conn_handle,
                                            uint16_t stopping_conn_handle,
                                            bool delete_bonds_pending);
 bool buddy_ble_should_protect_cccd_read(uint16_t uuid16, bool write_encrypted);
+/* Whether one write to RX is a binary frame rather than text. */
+bool buddy_ble_rx_is_frame(const uint8_t *data, size_t length);
 bool buddy_ble_should_advertise(bool start_requested, bool host_synced,
                                 bool delete_bonds_pending, bool has_physical_link);
 uint32_t buddy_ble_retry_delay_ms(unsigned int attempt);

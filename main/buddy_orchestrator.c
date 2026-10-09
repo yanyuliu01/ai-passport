@@ -73,6 +73,17 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
     }
 
     event.ble.connection_generation = connection_generation;
+    if (event.type == BUDDY_EVENT_FIRMWARE) {
+        /* Not the state machine's business: the updater owns the transfer and
+         * every answer to it. */
+        if (ops->firmware == NULL) {
+            (void)buddy_orchestrator_send_ack(ops, "fw", false, "unsupported",
+                                              connection_generation);
+        } else {
+            ops->firmware(ops->context, &event.firmware, connection_generation);
+        }
+        return false;
+    }
     if (event.type == BUDDY_EVENT_NAME) {
         setting_command = true;
         err = event.command.value_truncated || ops->commit_name == NULL

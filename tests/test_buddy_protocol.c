@@ -585,6 +585,54 @@ static void test_helpers_lists_who_xiaoyou_can_ask(void)
     assert(event.helper_count == 0);
 }
 
+static void test_firmware_commands(void)
+{
+    static const char begin[] =
+        "{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":1694896,\"sha256\":"
+        "\"e50a237c00112233445566778899aabbccddeeff00112233445566778899aa7e\"}";
+    buddy_event_t event;
+
+    assert(parse(begin, &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_BEGIN);
+    assert(event.firmware.size == 1694896U);
+    assert(event.firmware.sha256[0] == 0xe5 && event.firmware.sha256[3] == 0x7c &&
+           event.firmware.sha256[31] == 0x7e);
+
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"info\"}", &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_INFO && event.firmware.size == 0U);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"end\"}", &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_END);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"abort\"}", &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_ABORT);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"confirm\"}", &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_CONFIRM);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"rollback\"}", &event) == BUDDY_EVENT_FIRMWARE);
+    assert(event.firmware.op == POCKET_UPDATE_OP_ROLLBACK);
+
+    /* No operation, an unknown one, or a "begin" without a usable size and
+     * hash: refused by name, so the host hears about it. */
+    assert(parse("{\"cmd\":\"fw\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "fw") == 0);
+    assert(event.firmware.op == POCKET_UPDATE_OP_NONE);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"erase\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":7}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":1694896}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":0,\"sha256\":"
+                 "\"e50a237c00112233445566778899aabbccddeeff00112233445566778899aa7e\"}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":4294967296,\"sha256\":"
+                 "\"e50a237c00112233445566778899aabbccddeeff00112233445566778899aa7e\"}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":1.5,\"sha256\":"
+                 "\"e50a237c00112233445566778899aabbccddeeff00112233445566778899aa7e\"}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":4096,\"sha256\":\"e50a\"}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(event.firmware.size == 0U);
+}
+
 int main(void)
 {
     test_official_heartbeat_maps_documented_fields();
@@ -596,6 +644,7 @@ int main(void)
     test_hub_hello_reports_voice_support();
     test_chat_reports_the_conversation();
     test_helpers_lists_who_xiaoyou_can_ask();
+    test_firmware_commands();
     test_file_transfer_commands_are_unsupported();
     test_unknown_command_is_rejected();
     test_malformed_or_nonobject_json_is_rejected();

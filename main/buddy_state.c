@@ -1000,6 +1000,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     case BUDDY_EVENT_TICK:
         buddy_set_ui_refresh(action);
         break;
+    case BUDDY_EVENT_FIRMWARE:
+        /* Handled by the orchestrator; nothing here depends on it. */
+        break;
     case BUDDY_EVENT_TURN:
         /* The Claude desktop app, and a phone app from before "chat", report a
          * reply this way. A hub that reports the whole conversation with "chat"

@@ -124,6 +124,16 @@
 #define PT_VOICE_FAILED_MIC  "麦克风没准备好，再试一次"
 #define PT_VOICE_FAILED_LINK "没发出去，连接不太稳"
 
+// ---- 经蓝牙换固件（小幽独占画面：标题、进度、一行说明）----
+#define PT_UPDATE_RECEIVING   "在换新样子"
+#define PT_UPDATE_CHECKING    "快好了"
+#define PT_UPDATE_RESTARTING  "换好啦"
+#define PT_UPDATE_SUB_RECEIVING  "别关机，马上就好"
+#define PT_UPDATE_SUB_CHECKING   "照照镜子，看合不合身"
+#define PT_UPDATE_SUB_RESTARTING "重启一下就来"
+// 没换成（显示在底部提示那一行；最多 13 个汉字一行）
+#define PT_UPDATE_FAILED      "新样子没换成，还是原来的"
+
 // ---- 按键提示：图标后面跟的字 ----
 #define PT_KEY_SEPARATOR   " · "
 #define PT_KEY_DOWN        "下键"

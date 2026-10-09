@@ -35,6 +35,10 @@ run_app_host_tests() {
         -o "${test_dir}/test_pocket_voice"
     "${test_dir}/test_pocket_voice"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pocket_update.c main/pocket_update_core.c \
+        -o "${test_dir}/test_pocket_update"
+    "${test_dir}/test_pocket_update"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_buddy_line.c main/buddy_line.c \
         -o "${test_dir}/test_buddy_line"
     "${test_dir}/test_buddy_line"
@@ -63,7 +67,7 @@ run_app_host_tests() {
     for name in protocol state orchestrator; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/test_shims -Imain -I"${cjson}" \
             "tests/test_buddy_${name}.c" main/buddy_protocol.c main/buddy_state.c \
-            main/buddy_orchestrator.c "${test_dir}/cJSON.o" -lm \
+            main/buddy_orchestrator.c main/pocket_update_core.c "${test_dir}/cJSON.o" -lm \
             -ffunction-sections -fdata-sections -Wl,--gc-sections \
             -o "${test_dir}/test_buddy_${name}"
         "${test_dir}/test_buddy_${name}"

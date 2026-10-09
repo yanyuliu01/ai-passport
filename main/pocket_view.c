@@ -7,10 +7,19 @@
 
 #define POCKET_NOTICE_MS 6000U
 
+bool pocket_update_shown(pocket_update_phase_t phase)
+{
+    return phase == POCKET_UPDATE_RECEIVING || phase == POCKET_UPDATE_CHECKING ||
+           phase == POCKET_UPDATE_RESTARTING;
+}
+
 pocket_view_t pocket_view_for(const buddy_ui_snapshot_t *snapshot)
 {
     if (snapshot == NULL) {
         return POCKET_VIEW_PAGE;
+    }
+    if (pocket_update_shown(snapshot->update_phase)) {
+        return POCKET_VIEW_UPDATE;
     }
     if (snapshot->confirmation != BUDDY_CONFIRM_NONE) {
         return POCKET_VIEW_CONFIRM;
@@ -126,6 +135,9 @@ static pocket_pet_mood_t pocket_pet_from_mood(buddy_mood_t mood)
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot)
 {
     switch (pocket_view_for(snapshot)) {
+    case POCKET_VIEW_UPDATE:
+        return snapshot->update_phase == POCKET_UPDATE_RESTARTING ? POCKET_PET_HAPPY
+                                                                  : POCKET_PET_BUSY;
     case POCKET_VIEW_CONFIRM:
         return POCKET_PET_ASK;
     case POCKET_VIEW_PAIRING:

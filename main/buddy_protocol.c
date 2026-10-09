@@ -512,6 +512,36 @@ static bool buddy_parse_helpers(const cJSON *object, buddy_event_t *event)
     return true;
 }
 
+/* {"cmd":"fw","op":"info|begin|end|abort|confirm|rollback","size":N,"sha256":"…"}
+ * A hub host replaces the firmware over this link; see pocket_update_core.h.
+ * size and sha256 are required for "begin" and ignored otherwise. */
+static bool buddy_parse_firmware(const cJSON *object, buddy_event_t *event)
+{
+    const char *op;
+    const char *sha256;
+    size_t length;
+    uint64_t size = 0;
+
+    if (!buddy_json_optional_string(object, "op", &op, &length) || op == NULL) {
+        return false;
+    }
+    event->firmware.op = pocket_update_op_from_name(op);
+    if (event->firmware.op == POCKET_UPDATE_OP_NONE) {
+        return false;
+    }
+    if (event->firmware.op == POCKET_UPDATE_OP_BEGIN) {
+        if (!buddy_json_required_u64(object, "size", &size) || size == 0U ||
+            size > UINT32_MAX ||
+            !buddy_json_optional_string(object, "sha256", &sha256, &length) ||
+            sha256 == NULL || !pocket_update_parse_sha256(sha256, event->firmware.sha256)) {
+            return false;
+        }
+        event->firmware.size = (uint32_t)size;
+    }
+    event->type = BUDDY_EVENT_FIRMWARE;
+    return true;
+}
+
 static bool buddy_is_unsupported_folder_command(const char *command)
 {
     return strcmp(command, "char_begin") == 0 || strcmp(command, "file") == 0 ||
@@ -671,6 +701,8 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
         result = buddy_parse_chat(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "helpers") == 0) {
         result = buddy_parse_helpers(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "fw") == 0) {
+        result = buddy_parse_firmware(root, event) ? (int)event->type : result;
     } else if (buddy_is_unsupported_folder_command(command)) {
         result = BUDDY_EVENT_UNSUPPORTED_COMMAND;
     } else {
