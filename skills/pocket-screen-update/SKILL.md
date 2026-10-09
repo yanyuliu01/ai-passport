@@ -29,6 +29,22 @@ python3 -m xiaoyou_runtime firmware restore previous  # the previous one; or a n
 While the previous version is still in the device's other slot, the device
 switches back in seconds. An older version is transferred again, a minute or two.
 
+Going back changes only the firmware on the device; the code in the repository
+stays as it is. So it matters why the owner goes back:
+
+- They do not want the last change ("looks worse", "undo it", "never mind"): take
+  it out of the code as well, or the next screen change will bring it back.
+  `firmware list` shows the commit each version was built from. For every commit
+  after that one that only changed the screen (it touches nothing outside
+  `main/`, `assets/fonts/` and `tools/ui_preview/`), run
+  `git revert --no-edit <commit>`, newest first, then push. Do not fetch and push
+  a new firmware for this revert: the device already runs the version they asked
+  for. If one of those commits also changed something else, do not revert it;
+  stop and say so in your answer.
+- They only want to look at an older one ("switch to version 5 for a moment"):
+  leave the code alone, and say in your answer that the code has not changed and
+  the next screen change still starts from the newest code.
+
 ## Changing the screen
 
 1. Read what you are about to change. Layout, colors and spacing are in
