@@ -8,6 +8,21 @@ usage() {
     echo "Usage: $0 [--all|--static|--firmware]" >&2
 }
 
+# On GitHub the log of a failed run is a download away; its last lines are also
+# repeated as annotations, which show at the top of the run's page and through
+# the API.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    validate_log="$(mktemp /tmp/ai-passport-validate.XXXXXX)"
+    exec > >(tee "${validate_log}") 2>&1
+    trap 'status=$?
+          if [[ ${status} -ne 0 ]]; then
+              sleep 1
+              tail -n 12 "${validate_log}" | while IFS= read -r line; do
+                  echo "::error title=validate.sh (exit ${status})::${line}"
+              done
+          fi' EXIT
+fi
+
 # Claude Pocket application logic. The protocol, state-machine and orchestrator
 # tests parse real JSON and need cJSON, which ships with ESP-IDF; without
 # IDF_PATH they are reported as skipped instead of silently passing.
