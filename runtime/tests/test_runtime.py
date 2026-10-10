@@ -34,6 +34,7 @@ from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import router as router_module  # noqa: E402
 from xiaoyou_runtime import stt as stt_module  # noqa: E402
 from xiaoyou_runtime import tasks as tasks_module  # noqa: E402
+from xiaoyou_runtime import workspace as workspace_module  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
 from xiaoyou_runtime.agents import AgentError, Job, Outcome  # noqa: E402
@@ -304,13 +305,13 @@ class Scripted(agents_module.Agent):
                        {"reply": "re:" + job.text, "brief": "b:" + job.text, "mood": "happy"})
 
 
-def make_xiaoyou(folder, agents, router=None, **settings):
+def make_xiaoyou(folder, agents, router=None, workspace=None, **settings):
     """Xiaoyou over stand-in agents; the first one is the default and the voice."""
     loaded = config_module.load(write_config(folder), {})
     loaded = dataclasses.replace(
         loaded, default_agent=agents[0].name, voice_agent=agents[0].name, **settings)
     store = Store(loaded.state_dir)
-    return Xiaoyou(loaded, agents, store, router), store
+    return Xiaoyou(loaded, agents, store, router, workspace), store
 
 
 class ConfigTests(TempDirCase):
@@ -1997,6 +1998,178 @@ class XiaoyouTests(TempDirCase):
         card = again.cards.get("c1")
         self.assertEqual((card["state"], card["entries"][-1]["text"]),
                          ("failed", "Runtime 重启了，这件事没做完"))
+
+
+class Recorder(workspace_module.Workspace):
+    """Remembers every write Xiaoyou asks the shared workspace for."""
+
+    def __init__(self):
+        self.rows = []
+
+    def task(self, card, agent, text):
+        self.rows.append(("task", card["id"], agent, text))
+
+    def note(self, card, agent, text, how):
+        self.rows.append(("note", card["id"], agent, text, how))
+
+    def result(self, card, agent, text, ok):
+        self.rows.append(("result", card["id"], agent, text, ok))
+
+    def cancelled(self, card):
+        self.rows.append(("cancelled", card["id"], card["agent"]))
+
+    def closed(self, card, state, brief, reply, mood):
+        self.rows.append(("closed", card["id"], state, reply))
+
+
+class FakeNotion:
+    """A local stand-in for api.notion.com: keeps what was posted, can fail on demand."""
+
+    def __init__(self, case, statuses=()):
+        import http.server
+        self.pages, self.headers, statuses = [], [], list(statuses)
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                status = statuses.pop(0) if statuses else 200
+                if status == 200:
+                    fake.headers.append(dict(self.headers))
+                    fake.pages.append(json.loads(body))
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(b'{"message":"nope"}')
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        case.addCleanup(self.server.server_close)
+        case.addCleanup(self.server.shutdown)
+        self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+
+
+def plain(page, name):
+    """One property of a posted Notion page, as plain text."""
+    value = page["properties"][name]
+    if "select" in value:
+        return value["select"]["name"]
+    return "".join(part["text"]["content"] for part in value.get("title", value.get("rich_text")))
+
+
+def body_of(page):
+    return "".join(part["text"]["content"] for block in page["children"]
+                   for part in block[block["type"]]["rich_text"])
+
+
+BUS, LOG = "54c7d34c80a3462f823ccbbc41fdec64", "ce0724f4-cfd1-40bd-a04d-3b2332a9e6a8"
+
+
+class WorkspaceTests(TempDirCase):
+    def notion(self, fake, **extra):
+        loaded = config_module.load(write_config(self.folder, workspace=dict(
+            type="notion", token="secret_" + "x" * 20, bus_database=BUS, log_database=LOG,
+            api_base=fake.url, **extra)), {})
+        workspace = workspace_module.create(loaded)
+        workspace.retry_seconds = 0.01
+        return workspace, loaded
+
+    def test_off_by_default_and_config_is_checked(self):
+        loaded = config_module.load(write_config(self.folder), {})
+        self.assertFalse(workspace_module.create(loaded).enabled)
+        for bad in (dict(type="notion", bus_database=BUS),
+                    dict(type="notion", token="t" * 20),
+                    dict(type="notion", token="t" * 20, bus_database="not-an-id"),
+                    dict(type="sheets")):
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load(write_config(self.folder, workspace=bad), {})
+        loaded = config_module.load(
+            write_config(self.folder, workspace=dict(type="notion", bus_database=BUS)),
+            {"XIAOYOU_NOTION_TOKEN": "from-env-" + "x" * 20})
+        self.assertEqual(loaded.workspace_token, "from-env-" + "x" * 20)
+
+    def test_every_handoff_and_result_is_written_by_code(self):
+        recorder = Recorder()
+        lead, worker = Scripted("claude"), Scripted("codex", speaks=False)
+        lead.script = [start("codex", "look at main.c", "看代码"), {"reply": "看完了", "brief": "看完了", "mood": "happy"}]
+        xiaoyou, _ = make_xiaoyou(self.folder, [lead, worker], workspace=recorder)
+        self.addCleanup(xiaoyou.close)
+        turn = xiaoyou.hear("帮我看看代码", "default", "t1")
+        xiaoyou.settle(turn.card, 5)
+        self.assertTrue(until(lambda: any(row[0] == "closed" for row in recorder.rows)))
+        self.assertEqual(recorder.rows, [
+            ("task", turn.card, "codex", "look at main.c"),
+            ("result", turn.card, "codex", "raw:look at main.c", True),
+            ("closed", turn.card, "done", "看完了"),
+        ])
+        # Named directly: no model in between, still written.
+        turn = xiaoyou.hear("@codex 再看一次", "default", "t2")
+        self.assertTrue(until(lambda: sum(row[0] == "task" for row in recorder.rows) == 2))
+        self.assertEqual(recorder.rows[3][:3], ("task", turn.card, "codex"))
+        self.assertIn("再看一次", recorder.rows[3][3])
+
+    def test_failure_amend_and_cancel_are_written(self):
+        recorder = Recorder()
+        lead, worker = Scripted("claude"), Scripted("codex", speaks=False)
+        release = worker.gate
+        release.clear()
+        worker.fail_on = "do it"
+        lead.script = [start("codex", "do it slow"), amend("c1", "also this", "after"),
+                       start("codex", "second slow"), {"reply": "不做了", "card": "c2", "action": {"type": "cancel"}}]
+        xiaoyou, _ = make_xiaoyou(self.folder, [lead, worker], workspace=recorder)
+        self.addCleanup(xiaoyou.close)
+        xiaoyou.hear("做一下", "default", "t1")
+        xiaoyou.hear("还有这个", "default", "t2", card="c1")
+        xiaoyou.hear("第二件", "default", "t3")
+        xiaoyou.hear("第二件不要了", "default", "t4", card="c2")
+        release.set()
+        xiaoyou.settle("c1", 5)
+        self.assertTrue(until(lambda: ("closed", "c1", "failed", "codex 没做成：boom") in recorder.rows))
+        self.assertIn(("note", "c1", "codex", "also this", "after"), recorder.rows)
+        self.assertIn(("result", "c1", "codex", "boom", False), recorder.rows)
+        self.assertIn(("cancelled", "c2", "codex"), recorder.rows)
+        # A cancelled task leaves no result row behind.
+        self.assertFalse([row for row in recorder.rows if row[0] == "result" and row[1] == "c2"])
+
+    def test_rows_reach_notion_in_the_agreed_shape(self):
+        fake = FakeNotion(self)
+        workspace, loaded = self.notion(fake)
+        card = {"id": "c7", "title": "看代码", "agent": "codex"}
+        workspace.task(card, "codex", "ls -la ~/x\n" + "y" * 4000)
+        workspace.result(card, "codex", "exit 1", False)
+        workspace.closed(card, "failed", "没看成", "codex 没做成：exit 1", "ask")
+        workspace.close()
+        task, result, log = fake.pages
+        self.assertEqual(task["parent"], {"database_id": BUS})
+        self.assertEqual([plain(task, name) for name in ("标题", "类型", "谁写的", "给谁", "状态", "谁接了", "关联")],
+                         ["看代码", "任务", "xiaoyou", "codex", "已接", "codex", loaded.name + "/c7"])
+        self.assertEqual(body_of(task), "ls -la ~/x\n" + "y" * 4000)
+        self.assertTrue(all(block["type"] == "code" for block in task["children"]))
+        self.assertEqual([plain(result, name) for name in ("类型", "谁写的", "给谁", "状态")],
+                         ["结果", "codex", "xiaoyou", "没成"])
+        self.assertEqual(log["parent"], {"database_id": LOG.replace("-", "")})
+        self.assertEqual([plain(log, name) for name in ("谁做的", "结果", "结论", "要你做的", "关联")],
+                         ["codex", "没成", "没看成", "没看成", loaded.name + "/c7"])
+        self.assertEqual(fake.headers[0]["Authorization"], "Bearer secret_" + "x" * 20)
+        self.assertNotIn("secret_", json.dumps(fake.pages))
+
+    def test_retries_then_keeps_what_could_not_be_written(self):
+        fake = FakeNotion(self, statuses=[503, 200, 401])
+        workspace, loaded = self.notion(fake)
+        card = {"id": "c1", "title": "t", "agent": "codex"}
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            workspace.task(card, "codex", "first")   # 503 then written
+            workspace.task(card, "codex", "second")  # 401: not retried, kept on disk
+            workspace.close()
+        self.assertEqual([body_of(page) for page in fake.pages], ["first"])
+        kept = [json.loads(line) for line in (
+            loaded.state_dir / "workspace-unsent.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([body_of(item["page"]) for item in kept], ["second"])
+        self.assertIn("401", kept[0]["problem"])
+        self.assertIn("没写进去", errors.getvalue())
+        self.assertNotIn("secret_", json.dumps(kept))
 
 
 class ServiceTests(TempDirCase):

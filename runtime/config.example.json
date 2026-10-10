@@ -84,6 +84,13 @@
     "language": "auto",
     "threads": 2
   },
+  "workspace": {
+    "type": "none",
+    "token": null,
+    "bus_database": null,
+    "log_database": null,
+    "author": "xiaoyou"
+  },
   "firmware": {
     "repo": null,
     "asset": "FoloToy-AI-Passport-full.bin",

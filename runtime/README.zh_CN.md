@@ -86,11 +86,16 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `firmware.source_dir` | 无 | 固件源码在这台电脑的哪里；`fetch --commit HEAD` 和 `build` 用。 |
 | `firmware.build_command` | `[]` | 这台电脑自己构建固件的命令，在 `source_dir` 里运行。空着表示不会自己构建。 |
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | 构建出的固件文件，相对于 `source_dir`。 |
+| `workspace.type` | `none` | `none` 或 `notion`。见[共享工作区](#共享工作区)。 |
+| `workspace.token` | 无 | Notion 集成的令牌；也可以用环境变量 `XIAOYOU_NOTION_TOKEN`。 |
+| `workspace.bus_database` | 无 | “总线”数据库的编号（链接里那 32 位）。`notion` 时必填。 |
+| `workspace.log_database` | 无 | “日志”数据库的编号。不填就只写总线。 |
+| `workspace.author` | `xiaoyou` | 小幽在共享工作区里署的名字。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
 `XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
-`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）。
+`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）、`XIAOYOU_NOTION_TOKEN`。
 
 设了 `XIAOYOU_DEBUG`（任意值）时，小幽每接一句话，标准错误里多一行：她把这句话归到了
 哪张卡、要 Runtime 做什么。
@@ -209,6 +214,39 @@ JSON 对象。
 卡的状态有 `working`（帮手在做）、`waiting`（等主人点头，见[授权](#授权)）、`done`、
 `failed`、`cancelled`；`talking` 是预留的。卡存在 `state/cards.json`，留最近 50 张。Runtime
 重启时还在做的事没法接着做，会被标成 `failed`，原因写“Runtime 重启了，这件事没做完”。
+
+### 共享工作区
+
+小幽和别的 agent（claude.ai 上的 Claude、Codex，以后还有别的）共用一份记录，放在 Notion
+里，一式两份：
+
+- **总线**：AI 之间互通，以它为准。一行一条，内容原样（命令、路径、报错不转述）。
+- **日志**：给人看的。一件事结束时写一条摘要，用“关联”对到总线里的行。
+
+小幽这边都是 Runtime 的代码在写，不靠模型记得写：
+
+| 什么时候 | 写到哪 | 写成什么 |
+| --- | --- | --- |
+| 把活交给一个代理（新开一件事、点名、对一件已经结束的事再做一轮） | 总线 | 类型“任务”，谁写的 `xiaoyou`，给谁和谁接了都是那个代理，状态“已接”，正文是交代给它的原话 |
+| 对正在做的事补充或改要求 | 总线 | 类型“留言”，正文第一行写实际怎么办的（中途追加、停下重做、做完接着做） |
+| 代理交回结果，或者没做成 | 总线 | 类型“结果”，谁写的是那个代理，状态“做完”或“没成”，正文是它的原始结果或没成的原因 |
+| 取消 | 总线、日志 | 总线一条状态是“取消”的留言；日志一条 |
+| 一件事结束 | 日志 | 标题、谁做的、结果、结论（小屏幕上那句简报）、正文是小幽最后说的话；她要你拿主意时，那句话也写进“要你做的” |
+
+“关联”写成 `Runtime 的名字/卡的编号`（例如 `mac/c12`），同一件事的行靠它对上。小幽自己
+接话的那一次（不给工具的那次）不算交给别人，不写。
+
+写 Notion 走网络，所以排进一条队列由单独的线程写，小幽说话和后台的事都不等它。遇到
+限流或服务器出错会重试三次；还是写不进去的（断网、令牌失效、数据库没有共享给集成）追加到
+`state/workspace-unsent.jsonl`，并在标准错误里说一声。令牌只放在请求头里，不会写进任何
+一行。交代给代理的话和它的结果是原样写的：里面如果带了密钥，也会被写进去，所以不要在
+交给帮手的话里贴密钥。
+
+要做的准备：在 Notion 里建一个内部集成，拿到令牌；把放着总线和日志的那个页面共享给这个
+集成；两个数据库的列名要和上表一致（总线：`标题`、`类型`、`谁写的`、`给谁`、`状态`、
+`谁接了`、`关联`；日志：`标题`、`谁做的`、`结果`、`结论`、`要你做的`、`关联`）。
+
+别的 agent 想读写同一份记录，各自接 Notion 就行（有 MCP 的配 Notion MCP），不经过 Runtime。
 
 ### 授权
 
@@ -651,6 +689,8 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
 - 手机 App 0.5.0 和现在的固件不会显示这些授权：在配套的 App 和固件出来之前，等授权的事
   只能用 HTTP 接口回答，或者一直等到超时。
 - 两件事同时改同一个文件夹时没有互相保护。
+- 共享工作区只对着本机的替身接口测过（行的内容、重试、写不进去时落盘）；没有对着真的
+  Notion 写过一行。只写不读：别的 agent 留在总线里的任务，Runtime 现在不会去取。
 - 对话重新开始（reset）不会停掉正在做的事，也不会清掉卡。
 - 只有一个共享令牌，没有按设备区分身份，也没有限流。
 

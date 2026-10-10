@@ -14,7 +14,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import __version__, agents as agent_module, firmware_cli, router as router_module, stt
+from . import (__version__, agents as agent_module, firmware_cli, router as router_module, stt,
+               workspace as workspace_module)
 from .agents import AgentError
 from .config import ConfigError, load
 from .firmware import FirmwareStore
@@ -143,7 +144,7 @@ def main(argv=None) -> int:
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 2
-    xiaoyou = Xiaoyou(config, agents, store, router)
+    xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config))
 
     if args.once is not None:
         if args.agent is not None and not xiaoyou.has(args.agent):

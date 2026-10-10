@@ -97,6 +97,14 @@ class Config:
     firmware_source_dir: Optional[Path] = None
     firmware_build_command: List[str] = field(default_factory=list)
     firmware_build_output: str = "build/FoloToy-AI-Passport.bin"
+    # 共享工作区：小幽和别的 agent 共用的记录（Notion）。none 时不写
+    workspace_type: str = "none"
+    workspace_token: Optional[str] = None
+    workspace_bus_database: Optional[str] = None
+    workspace_log_database: Optional[str] = None
+    # 小幽在共享工作区里署的名字
+    workspace_author: str = "xiaoyou"
+    workspace_api_base: str = "https://api.notion.com"
     # 配置文件所在的目录；相对路径、stt.command 和 router.command 都以它为准
     base_dir: Path = Path(".")
     # 读配置时发现的、不妨碍启动但值得让人知道的事
@@ -116,6 +124,8 @@ ROUTER_TYPES = ("mention", "command")
 CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 CODEX_MODES = ("app_server", "exec")
 CODEX_APPROVAL_POLICIES = ("untrusted", "on-request", "never")
+WORKSPACE_TYPES = ("none", "notion")
+NOTION_ID = re.compile(r"^[0-9a-fA-F]{32}$")
 STT_ENGINES = ("none", "sense_voice", "command")
 STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
 GITHUB_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
@@ -464,6 +474,36 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     if firmware_build_command and not firmware_build_output:
         raise ConfigError("设置了 firmware.build_command 就要同时设置 firmware.build_output（构建出的文件）")
 
+    workspace = _expect(raw.get("workspace", {}), dict, "workspace")
+    workspace_type = _expect(workspace.get("type", "none"), str, "workspace.type")
+    if workspace_type not in WORKSPACE_TYPES:
+        raise ConfigError("workspace.type 只能是 %s 之一" % "、".join(WORKSPACE_TYPES))
+    workspace_token = env.get("XIAOYOU_NOTION_TOKEN") or _optional_string(
+        workspace.get("token"), "workspace.token")
+    databases: Dict[str, Optional[str]] = {}
+    for key in ("bus_database", "log_database"):
+        value = _optional_string(workspace.get(key), "workspace." + key)
+        if value is not None:
+            value = value.replace("-", "")
+            if not NOTION_ID.match(value):
+                raise ConfigError(
+                    "workspace.%s 要写 Notion 数据库的编号（32 位十六进制，链接里那一串）" % key)
+        databases[key] = value
+    workspace_author = _expect(workspace.get("author", "xiaoyou"), str, "workspace.author").strip()
+    if not AGENT_NAME.match(workspace_author):
+        raise ConfigError("workspace.author 只能用字母、数字、下划线和连字符，最多 24 个字符")
+    workspace_api_base = _expect(
+        workspace.get("api_base", "https://api.notion.com"), str, "workspace.api_base")
+    if not workspace_api_base.startswith(("http://", "https://")):
+        raise ConfigError("workspace.api_base 要写成 http:// 或 https:// 开头的地址")
+    if workspace_type == "notion":
+        if workspace_token is None:
+            raise ConfigError(
+                "workspace.type 为 notion 时要有 Notion 集成的令牌：设置环境变量 "
+                "XIAOYOU_NOTION_TOKEN，或者写在 workspace.token 里")
+        if databases["bus_database"] is None:
+            raise ConfigError("workspace.type 为 notion 时要设置 workspace.bus_database（总线）")
+
     return Config(
         name=name,
         host=host,
@@ -493,6 +533,12 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         firmware_source_dir=_path(firmware_source_dir, base) if firmware_source_dir else None,
         firmware_build_command=firmware_build_command,
         firmware_build_output=firmware_build_output,
+        workspace_type=workspace_type,
+        workspace_token=workspace_token,
+        workspace_bus_database=databases["bus_database"],
+        workspace_log_database=databases["log_database"],
+        workspace_author=workspace_author,
+        workspace_api_base=workspace_api_base,
         base_dir=base,
         notices=notices,
     )

@@ -97,13 +97,18 @@ Relative paths are resolved against the directory of the configuration file.
 | `firmware.source_dir` | none | Where the firmware source is on this computer; used by `fetch --commit HEAD` and `build`. |
 | `firmware.build_command` | `[]` | The command that builds the firmware on this computer, run in `source_dir`. Empty means this computer does not build it. |
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | The firmware file a build produces, relative to `source_dir`. |
+| `workspace.type` | `none` | `none` or `notion`. See [Shared workspace](#shared-workspace). |
+| `workspace.token` | none | The Notion integration token; the environment variable `XIAOYOU_NOTION_TOKEN` also works. |
+| `workspace.bus_database` | none | The id of the "bus" database (the 32 characters in its link). Required for `notion`. |
+| `workspace.log_database` | none | The id of the "log" database. Leave it out to write the bus only. |
+| `workspace.author` | `xiaoyou` | The name Xiaoyou signs with in the shared workspace. |
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
 `XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`,
 `XIAOYOU_DEFAULT_AGENT`, `XIAOYOU_CODEX_CONFIG_DIR` (applied to every `codex`
-agent), and `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every
-`claude_code` agent).
+agent), `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent),
+and `XIAOYOU_NOTION_TOKEN`.
 
 With `XIAOYOU_DEBUG` set (to anything), every sentence Xiaoyou takes adds one
 line to standard error: which card she put it on and what she asked the
@@ -255,6 +260,48 @@ the owner's approval; see [Approvals](#approvals)),
 `state/cards.json`, the latest 50. Things that were in progress when the
 runtime restarts cannot be continued; they are marked `failed` with a note
 saying the runtime was restarted.
+
+### Shared workspace
+
+Xiaoyou and other agents (Claude on claude.ai, Codex, later others) share one
+record, kept in Notion as two databases:
+
+- **Bus**: for agents, and the source of truth. One row per entry, content
+  verbatim (commands, paths and errors are not paraphrased).
+- **Log**: for people. One summary when a thing ends, matched to its bus rows
+  by the link column.
+
+On Xiaoyou's side the runtime's code writes every row; nothing depends on a
+model remembering to.
+
+| When | Where | What |
+| --- | --- | --- |
+| Work is handed to an agent (a new thing, a named agent, another round on a finished thing) | Bus | Type task, written by `xiaoyou`, addressed to and taken by that agent, status taken, body is the exact text given to it |
+| An addition or a changed requirement for work in progress | Bus | Type note; the first body line says what was actually done (steered midway, stopped and redone, queued for after) |
+| An agent returns a result, or fails | Bus | Type result, written by that agent, status done or failed, body is its raw result or the reason |
+| A cancellation | Bus, log | A bus note with status cancelled; one log row |
+| A thing ends | Log | Title, who did it, outcome, conclusion (the small-screen brief), body is what Xiaoyou finally said; when she needs a decision from you, that sentence is also in the your-action column |
+
+The link column is `runtime name/card id` (for example `mac/c12`). The one call
+where Xiaoyou herself takes a sentence (the call without tools) is not a
+handoff and is not written.
+
+Writing to Notion goes over the network, so rows go through a queue and a
+separate thread; neither Xiaoyou's replies nor background work wait for it.
+Rate limits and server errors are retried three times. Rows that still cannot
+be written (no network, a revoked token, a database not shared with the
+integration) are appended to `state/workspace-unsent.jsonl` and reported on
+standard error. The token is only sent in the request header and is never
+written into a row. Task text and results are written verbatim: a secret
+pasted into a task is written too, so keep secrets out of tasks.
+
+Setup: create an internal integration in Notion and copy its token; share the
+page that holds the two databases with that integration. The column and
+option names in Notion are Chinese and must match exactly; they are listed in
+[README.zh_CN.md](README.zh_CN.md) and in `xiaoyou_runtime/workspace.py`.
+
+Other agents read and write the same record through Notion directly (Notion
+MCP where they support MCP); they do not go through the runtime.
 
 ### Approvals
 
@@ -849,6 +896,10 @@ Known risks:
   be answered through the HTTP interface, or waits until it times out.
 - Two things changing the same folder at the same time are not protected from
   each other.
+- The shared workspace has only been tested against a local stand-in (row
+  contents, retries, keeping what could not be written); not one row has been
+  written to the real Notion. It only writes: tasks other agents leave on the
+  bus are not picked up by the runtime yet.
 - Starting a conversation over (reset) neither stops things in progress nor
   removes cards.
 - One shared token, no per-device identity, no rate limiting.

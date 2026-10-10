@@ -32,6 +32,7 @@ from .cards import ACTIVE, Cards, title_from
 from .config import Config
 from .store import Store
 from .tasks import Task, Tasks
+from .workspace import Workspace
 
 MOODS = ("idle", "busy", "ask", "happy", "oops")
 
@@ -282,8 +283,11 @@ def retry_note(problem: str) -> str:
 
 class Xiaoyou:
     def __init__(self, config: Config, agents: List[Agent], store: Store,
-                 router: Optional[routing.Router] = None):
+                 router: Optional[routing.Router] = None,
+                 workspace: Optional[Workspace] = None):
         self._config = config
+        # 共享工作区：每次把活交给别的代理、每次有结果，都在那里留一条。
+        self._workspace = workspace if workspace is not None else Workspace()
         self._agents: Dict[str, Agent] = {agent.name: agent for agent in agents}
         self._order = [agent.name for agent in agents]
         self._store = store
@@ -318,6 +322,7 @@ class Xiaoyou:
     def close(self) -> None:
         self._tasks.close()
         self._gate.close()
+        self._workspace.close()
 
     def _available(self, hop: int) -> List[Agent]:
         # 已经是别的 Runtime 转过来的话，不再往外转：两台互相登记时不会来回踢。
@@ -437,6 +442,7 @@ class Xiaoyou:
                 self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop)
             else:
                 self._cards.update(target["id"], said=text, say=reply, edits=target["edits"] + 1)
+                self._workspace.note(target, worker, plan["task"], done)
             say("handoff", worker, reply)
             started = True
             turn = shape(reply, brief, "busy", self._config.brief_max_chars, worker,
@@ -542,8 +548,11 @@ class Xiaoyou:
 
     def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int) -> None:
         speaking = agent.speaks
-        self._cards.update(card_id, state="working", agent=agent.name, started_at=time.time(),
-                           queued=self._config.max_parallel > 0, fresh=True)
+        card = self._cards.update(card_id, state="working", agent=agent.name,
+                                  started_at=time.time(),
+                                  queued=self._config.max_parallel > 0, fresh=True)
+        if card is not None:
+            self._workspace.task(card, agent.name, task)
         self._tasks.start(Task(
             card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
             system=task_prompt(self._config.persona, self._config.brief_max_chars)
@@ -592,6 +601,11 @@ class Xiaoyou:
     def _finished(self, task: Task, outcome: Optional[Outcome], error: Optional[str]) -> None:
         """后台的事做完或没做成。在任务自己的线程里被调用。"""
         name = task.agent.name
+        card = self._cards.get(task.card)
+        if card is not None and card["state"] != "cancelled":
+            # 代理交回的原样记一条，不管之后小幽怎么转述。
+            self._workspace.result(card, name, outcome.text if outcome is not None else (
+                error or "没有说明"), outcome is not None)
         if outcome is None:
             self._close(task, "%s 没做成：%s" % (name, error or "没有说明"), None, "oops",
                         "failed", [])
@@ -634,6 +648,7 @@ class Xiaoyou:
         self._cards.update(task.card, say=turn.reply, brief=turn.brief, mood=turn.mood,
                            state=state, approval=None, queued=False)
         # 记进对话记录：说话的代理下次接话时会被告知这个结果。
+        self._workspace.closed(card, state, turn.brief, turn.reply, turn.mood)
         self._store.transcript.add(
             task.conversation, "%s-%d" % (task.card, int(time.time() * 1000)),
             "（后台的事「%s」有结果了）" % card["title"], turn.reply, task.agent.name, seen)
@@ -647,6 +662,8 @@ class Xiaoyou:
                            approval=None, queued=False)
         self._tasks.cancel(card_id)
         self._approvals.drop(card_id)
+        if card["agent"]:
+            self._workspace.cancelled(card)
         return True
 
     def settle(self, card_id: str, timeout: float) -> Optional[Dict[str, Any]]:
