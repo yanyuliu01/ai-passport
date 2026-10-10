@@ -763,8 +763,11 @@ class RemoteAgent(Agent):
 
 
 def create(spec: AgentSpec) -> Agent:
+    # XIAOYOU_DEEPSEEK_CLAUDE_GATEWAY
+    from .claude_gateway import create_claude_agent
+
     kinds = {
-        "claude_code": ClaudeCodeAgent,
+        "claude_code": create_claude_agent,
         "codex": CodexAgent,
         "command": CommandAgent,
         "remote": RemoteAgent,
