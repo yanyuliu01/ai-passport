@@ -3040,12 +3040,18 @@ class VoiceTests(TempDirCase):
         status, message = post("/v1/voice?client_id=p1&conversation=walk&card=c7", make_wav(2))
         self.assertEqual((status, message["kind"], message["conversation"], message["card"]),
                          (202, "voice", "walk", "c7"))
+        self.assertFalse(message["pin"])
         request = urllib.request.Request(base + "/v1/messages/%s?wait=10" % message["id"])
         request.add_header("Authorization", "Bearer " + TOKEN)
         with urllib.request.urlopen(request, timeout=15) as response:
             done = json.loads(response.read())
         self.assertEqual((done["status"], done["text"], done["reply"], done["card"]),
                          ("done", "你好小幽 2.0", "（回声）你好小幽 2.0", "c1"))
+        # Said inside a thing (the device's task screen): the recording is pinned to it.
+        status, message = post("/v1/voice?client_id=p2&card=c7&pin=1", make_wav(2))
+        self.assertEqual((status, message["card"], message["pin"]), (202, "c7", True))
+        # Without a card there is nothing to pin to.
+        self.assertFalse(post("/v1/voice?client_id=p3&pin=1", make_wav(2))[1]["pin"])
 
 
 class CommandLineTests(TempDirCase):

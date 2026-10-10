@@ -426,23 +426,25 @@ final class RuntimeClient {
 
     /** 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。 */
     static void send(Context context, String text) {
-        submit(context, text, null, null);
+        submit(context, text, null, null, false);
     }
 
     /** 在一件事里面说一句话（card 是它的编号）：这句话一定归到它，不混进主对话。 */
     static void send(Context context, String text, String card) {
-        submit(context, text, null, card);
+        submit(context, text, null, card, true);
     }
 
     /**
      * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
-     * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。
+     * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
+     * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
      */
-    static void sendVoice(Context context, byte[] wav, String card) {
-        submit(context, VOICE_PLACEHOLDER, wav, card);
+    static void sendVoice(Context context, byte[] wav, String card, boolean pin) {
+        submit(context, VOICE_PLACEHOLDER, wav, card, pin);
     }
 
-    private static void submit(Context context, String text, byte[] wav, String card) {
+    private static void submit(Context context, String text, byte[] wav, String card,
+                               boolean pin) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -471,7 +473,8 @@ final class RuntimeClient {
                 Map<String, String> message;
                 if (wav != null) {
                     message = request("POST", url + "/v1/voice?client_id=" + clientId
-                                    + (BuddyProtocol.cardId(card) ? "&card=" + card : ""), token,
+                                    + (BuddyProtocol.cardId(card) ? "&card=" + card + (pin ? "&pin=1" : "")
+                                    : ""), token,
                             wav, "audio/wav", 30);
                 } else {
                     message = request("POST", url + "/v1/messages", token,

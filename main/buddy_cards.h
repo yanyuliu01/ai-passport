@@ -38,6 +38,33 @@ static inline int buddy_cards_find(const buddy_cards_t *cards, const char *id)
     return -1;
 }
 
+/* A card is a task when it was handed to a helper; the rest is conversation,
+ * which Xiaoyou answered herself. The conversation screen pages through the
+ * conversation only; tasks have the task screen. */
+static inline bool buddy_cards_is_task(const buddy_cards_t *cards, int index)
+{
+    return cards != NULL && index >= 0 && index < (int)cards->count &&
+           cards->cards[index].agent[0] != '\0';
+}
+
+/* The nearest conversation card from index on, going in direction (1 or -1);
+ * -1 when there is none. */
+static inline int buddy_cards_talk_from(const buddy_cards_t *cards, int index, int direction)
+{
+    for (; cards != NULL && index >= 0 && index < (int)cards->count; index += direction) {
+        if (cards->cards[index].agent[0] == '\0') {
+            return index;
+        }
+    }
+    return -1;
+}
+
+static inline bool buddy_task_active(const buddy_task_t *task)
+{
+    return task->state == BUDDY_TASK_WORKING || task->state == BUDDY_TASK_WAITING ||
+           task->state == BUDDY_TASK_QUEUED;
+}
+
 /* Takes the NUL-terminated string at offset out of the pool and closes the gap.
  * Offsets that pointed behind it move down with their strings. */
 static inline void buddy_cards_release(buddy_cards_t *cards, uint16_t offset)

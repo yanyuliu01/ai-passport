@@ -192,12 +192,12 @@ public final class BuddyProtocol {
         return "{\"cmd\":\"card\",\"clear\":true}\n";
     }
 
-    /** 正在做的一件事，设备第三屏上的一行。 */
+    /** 交给帮手的一件事，设备第三屏上的一行。 */
     public static final class Task {
         public final String id;
         public final String agent;
         public final String title;
-        /** working、waiting、queued 之一。 */
+        /** working、waiting、queued；做完的是 done、failed、cancelled（只发给分开显示的固件）。 */
         public final String state;
         public final long seconds;
         /** 最近两步：p1 在前，p2 是最新的；只有一步时放在 p1。 */
@@ -316,6 +316,18 @@ public final class BuddyProtocol {
         }
         String card = fields.get("card");
         return cardId(card) ? card : null;
+    }
+
+    /** “录音开始”那一行说这句话是在那件事里面说的（设备第三屏选中的那件）：一定归到它。 */
+    public static boolean parseVoicePin(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return parseVoiceCard(line) != null && "true".equals(fields.get("pin"));
+    }
+
+    /** 设备声明它把对话和任务分开显示：任务单子里可以带做完的事。 */
+    public static boolean hubAckHasThreads(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return hubAckHasCards(line) && "true".equals(fields.get("threads"));
     }
 
     /** 设备对 hubHello 的应答里有没有声明它认识 card 和 tasks 这两条消息。 */

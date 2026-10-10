@@ -105,6 +105,59 @@ final class CardViews {
         return flat.substring(0, end) + "…";
     }
 
+    // ---- 设备（三屏的固件）：第二屏只翻对话，第三屏是任务 ----
+
+    /**
+     * 设备第三屏的单子：还在做的任务（按开始的先后，多了留最近的），ended 为 true 时后面
+     * 接着最近做完的（新的在前），一共最多 limit 件。
+     */
+    static List<Card> deviceTasks(List<Card> cards, int limit, boolean ended) {
+        List<Card> out = new ArrayList<>();
+        for (Card card : cards) {
+            if (isTask(card) && card.active()) {
+                out.add(card);
+            }
+        }
+        while (out.size() > limit) {
+            out.remove(0);
+        }
+        for (int index = cards.size() - 1; ended && index >= 0 && out.size() < limit; index--) {
+            Card card = cards.get(index);
+            if (isTask(card) && !card.active()) {
+                out.add(card);
+            }
+        }
+        return out;
+    }
+
+    /** 单子上的一行。做完的事：状态是它怎么结束的，p1 是结论（设备上没有它的卡时用）。 */
+    static BuddyProtocol.Task deviceTask(Card card, long nowSeconds) {
+        if (!card.active()) {
+            String state = card.state.equals("failed") || card.state.equals("cancelled")
+                    ? card.state : "done";
+            return new BuddyProtocol.Task(card.id, card.agent, card.title, state, 0L,
+                    oneLine(deviceReply(card, true), PREVIEW_CHARS), "");
+        }
+        int steps = card.progress.size();
+        double since = card.startedAt > 0 ? card.startedAt : card.createdAt;
+        return new BuddyProtocol.Task(card.id, card.agent, card.title,
+                card.state.equals("waiting") ? "waiting" : (card.queued ? "queued" : "working"),
+                since > 0 ? Math.max(0L, nowSeconds - (long) since) : 0L,
+                steps >= 2 ? card.progress.get(steps - 2) : (steps == 1 ? card.progress.get(0) : ""),
+                steps >= 2 ? card.progress.get(steps - 1) : "");
+    }
+
+    /**
+     * 发给设备的那张卡上“小幽最新的话”。对话：简报在前，完整的话跟在后面。任务在分开
+     * 显示的固件（threads）上只在第三屏露三行，所以只给简报，省下设备的地方。
+     */
+    static String deviceReply(Card card, boolean threads) {
+        if (threads && isTask(card)) {
+            return card.brief.isEmpty() ? card.lastSay() : card.brief;
+        }
+        return BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay());
+    }
+
     /** 发一句话的请求体。card 不为 null 表示是在那件事里面说的：一定归到它。 */
     static String messageJson(String text, String clientId, String card) {
         StringBuilder body = new StringBuilder("{\"text\":");

@@ -225,6 +225,7 @@ static struct {
     lv_obj_t *task_detail;
     lv_obj_t *task_title;
     lv_obj_t *task_lines[2];
+    lv_obj_t *task_result;
     lv_obj_t *tasks_empty;
     // 通知
     lv_obj_t *entry_rows[BUDDY_ENTRY_COUNT];
@@ -920,6 +921,9 @@ static void build_tasks(lv_obj_t *page)
                                       TASK_LINE_Y + LINE_16, INNER_W - 4, LINES_16(1));
     s.task_lines[1] = make_text_block(s.task_detail, &pocket_font_16, C_TEXT, SIDE + 2,
                                       TASK_LINE_Y + 2 * LINE_16, INNER_W - 4, LINES_16(2));
+    // 选中的是做完的事：这三行是它的结论。
+    s.task_result = make_text_block(s.task_detail, &pocket_font_16, C_TEXT, SIDE + 2,
+                                    TASK_LINE_Y + LINE_16, INNER_W - 4, LINES_16(3));
     {
         lv_obj_t *hint = make_label(s.task_detail, &pocket_font_14, C_DIM, PT_TASKS_HINT);
 
@@ -1500,6 +1504,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
 {
     static char text[BUDDY_REPLY_MAX + 64];
     static char note[BUDDY_AGENT_MAX + 32];
+    static char handed[BUDDY_AGENT_MAX + 48];
     static char meta[40];
     const buddy_cards_t *cards = snap->cards;
     bool live = snap->card_live;
@@ -1586,8 +1591,29 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         said = buddy_cards_said(cards, (unsigned)snap->card_index);
         reply = with_cut_note(text, sizeof(text),
                               buddy_cards_reply(cards, (unsigned)snap->card_index), card->cut);
-        (void)snprintf(meta, sizeof(meta), "%d / %u  %s", snap->card_index + 1,
-                       (unsigned)cards->count, card->at);
+        if (agent[0] != '\0') {
+            // 交给了帮手的事不在这一屏：只说它去了哪，内容在第三屏。
+            (void)snprintf(handed, sizeof(handed), PT_TALK_HANDED,
+                           agent_fits ? agent : PT_CARD_HELPER);
+            reply = handed;
+            reply_color = C_DIM;
+            (void)snprintf(meta, sizeof(meta), "%s", card->at);
+        } else {
+            // 第几句对话：只数小幽自己答的。
+            unsigned number = 0;
+            unsigned total = 0;
+            unsigned each;
+
+            for (each = 0; each < cards->count; ++each) {
+                if (cards->cards[each].agent[0] == '\0') {
+                    ++total;
+                    if ((int)each <= snap->card_index) {
+                        ++number;
+                    }
+                }
+            }
+            (void)snprintf(meta, sizeof(meta), "%u / %u  %s", number, total, card->at);
+        }
         switch ((buddy_card_state_t)card->state) {
         case BUDDY_CARD_TALKING:
             status = PT_HEAD_THINKING;
@@ -1712,7 +1738,21 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
             set_text(s.task_rights[index], elapsed);
             set_text_color(s.task_rights[index], color);
             break;
+        case BUDDY_TASK_DONE:
+            set_text(s.task_rights[index], PT_TASK_DONE);
+            set_text_color(s.task_rights[index], C_DIM);
+            break;
+        case BUDDY_TASK_FAILED:
+            set_text(s.task_rights[index], PT_CARD_FAILED);
+            set_text_color(s.task_rights[index], C_DANGER);
+            break;
+        case BUDDY_TASK_CANCELLED:
+            set_text(s.task_rights[index], PT_CARD_CANCELLED);
+            set_text_color(s.task_rights[index], C_DIM);
+            break;
         }
+        // 做完的事标题暗一些：一眼分得出哪些还在做。
+        set_text_color(s.task_titles[index], buddy_task_active(task) ? C_TEXT : C_DIM);
         lv_obj_update_layout(s.task_rights[index]);
         title_w = INNER_W - 4 - 6 - lv_obj_get_width(s.task_rights[index]) - 6 - title_x;
         if (title_w < 16) {
@@ -1737,8 +1777,22 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
     if (count > 0U) {
         const buddy_task_t *task = &snap->tasks[selected];
         bool any = task->line1[0] != '\0' || task->line2[0] != '\0';
+        bool ended = !buddy_task_active(task);
 
         set_block_text(s.task_title, task->title);
+        set_visible(s.task_lines[0], !ended);
+        set_visible(s.task_lines[1], !ended);
+        set_visible(s.task_result, ended);
+        if (ended) {
+            // 结论在它的卡上（中枢给做完的事只留简报）；卡不在了就用单子上那一行。
+            int card = buddy_cards_find(snap->cards, task->id);
+            const char *result = card >= 0 ? buddy_cards_reply(snap->cards, (unsigned)card) : "";
+
+            set_block_text(s.task_result, result[0] != '\0' ? result : task->line1);
+            set_text_color(s.task_result,
+                           task->state == BUDDY_TASK_FAILED ? C_DANGER : C_TEXT);
+            return;
+        }
         // 两步里靠后的那一步更亮；只有一步时它就是最新的。
         set_block_text(s.task_lines[0], any ? (task->line2[0] != '\0' ? task->line1 : "")
                                             : PT_TASK_NO_STEPS);

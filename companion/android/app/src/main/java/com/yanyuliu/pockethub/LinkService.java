@@ -42,6 +42,11 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private boolean deviceChat;
     /** 设备声明了它认识 card 和 tasks：三屏的固件。 */
     private boolean deviceCards;
+    /** 设备把对话和任务分开显示：第二屏只翻对话，第三屏的单子里有做完的任务。 */
+    private boolean deviceThreads;
+    private boolean recordingPin;
+    /** 单子上有还在做的事：只有这时才需要定时重发来对齐秒数。 */
+    private boolean tasksGoing;
     private long helpersSeen = -1;
     private int keepalives;
     /** 设备正在说话时不为 null。 */
@@ -144,6 +149,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         lastHelpers = "";
         deviceChat = false;
         deviceCards = false;
+        deviceThreads = false;
         sentCards.clear();
         cardsEpochSent = -1;
         lastTasks = "";
@@ -172,15 +178,18 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         String voice = BuddyProtocol.parseVoiceState(line);
         if (voice != null) {
-            onVoiceState(voice, BuddyProtocol.parseVoiceCard(line));
+            onVoiceState(voice, BuddyProtocol.parseVoiceCard(line),
+                    BuddyProtocol.parseVoicePin(line));
             return;
         }
         Boolean hub = BuddyProtocol.parseHubAck(line);
         if (hub != null) {
             deviceChat = BuddyProtocol.hubAckHasChat(line);
             deviceCards = deviceChat && BuddyProtocol.hubAckHasCards(line);
+            deviceThreads = deviceCards && BuddyProtocol.hubAckHasThreads(line);
             HubStore.get().log(!hub ? "设备固件较旧，不支持按住说话"
-                    : (deviceCards ? "设备支持按住说话，三屏：形象、对话、任务"
+                    : (deviceThreads ? "设备支持按住说话，三屏：形象、对话、任务（对话和任务分开）"
+                    : deviceCards ? "设备支持按住说话，三屏：形象、对话、任务"
                             : (deviceChat ? "设备支持按住说话（固件是上一版的对话首页，没有卡）"
                                     : "设备支持按住说话（固件还是旧界面）")));
             if (deviceChat) {
@@ -198,9 +207,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
     }
 
-    private void onVoiceState(String state, String card) {
+    private void onVoiceState(String state, String card, boolean pin) {
         if ("start".equals(state)) {
             recordingCard = card;
+            recordingPin = pin;
             recording = new VoiceRecording();
             link.setFast(true);
             return;
@@ -218,7 +228,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             store.chatFailed(RuntimeClient.VOICE_PLACEHOLDER, "没有收到声音，再说一次吧");
         } else {
             // 上一句还没答完也照发：Runtime 那边按顺序一条一条处理。
-            RuntimeClient.sendVoice(this, finished.toWav(), recordingCard);
+            RuntimeClient.sendVoice(this, finished.toWav(), recordingCard, recordingPin);
         }
     }
 
@@ -228,6 +238,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         recording = null;
         deviceChat = false;
         deviceCards = false;
+        deviceThreads = false;
         firmware.onClosed();
     }
 
@@ -257,7 +268,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         @Override
         public void run() {
             lastHeartbeat = "";
-            if (!lastTasks.isEmpty()) {
+            if (tasksGoing) {
                 lastTasks = "\u0000";  // 有事在做：重发一次任务单子，秒数跟上
             }
             // 对话那一行比心跳长得多，不用每次都重发；每半分钟补发一次，万一设备那边
@@ -279,12 +290,14 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             link.send(BuddyProtocol.cardClear());
         }
         List<Card> all = store.cards();
-        // 设备上只放最近的几张；还在做的不管多早都带上。
+        // 第三屏的单子：在做的任务，分开显示的固件上再接着最近做完的。
+        List<Card> listed = CardViews.deviceTasks(all, BuddyProtocol.TASK_COUNT, deviceThreads);
+        // 设备上只放最近的几张；还在做的、单子上的不管多早都带上。
         List<Card> shown = new ArrayList<>();
         int room = BuddyProtocol.CARD_KEPT;
         for (int index = all.size() - 1; index >= 0; index--) {
             Card card = all.get(index);
-            if (card.active() || room > 0) {
+            if (card.active() || room > 0 || listed.contains(card)) {
                 shown.add(0, card);
                 room--;
             }
@@ -295,11 +308,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         StringBuilder tasksKey = new StringBuilder();
         Map<String, String> kept = new HashMap<>();
         for (Card card : shown) {
-            // 小屏幕上先看结论：简报在前，完整的话跟在后面。
             String line = BuddyProtocol.card(card.id,
                     card.createdAt > 0 ? clock.format(new Date((long) (card.createdAt * 1000))) : "",
                     card.state, card.agent, card.edits, card.said(),
-                    BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay()));
+                    CardViews.deviceReply(card, deviceThreads));
             if (line == null) {
                 continue;
             }
@@ -307,28 +319,18 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
                 link.send(line);
             }
             kept.put(card.id, line);
-            if (card.active() && !card.agent.isEmpty()) {
-                int steps = card.progress.size();
-                double since = card.startedAt > 0 ? card.startedAt : card.createdAt;
-                BuddyProtocol.Task task = new BuddyProtocol.Task(card.id, card.agent, card.title,
-                        card.state.equals("waiting") ? "waiting"
-                                : (card.queued ? "queued" : "working"),
-                        since > 0 ? Math.max(0L, now - (long) since) : 0L,
-                        steps >= 2 ? card.progress.get(steps - 2)
-                                : (steps == 1 ? card.progress.get(0) : ""),
-                        steps >= 2 ? card.progress.get(steps - 1) : "");
-                tasks.add(task);
-                tasksKey.append(task.id).append('\u0001').append(task.agent).append('\u0001')
-                        .append(task.title).append('\u0001').append(task.state).append('\u0001')
-                        .append(task.p1).append('\u0001').append(task.p2).append('\u0002');
-            }
+        }
+        tasksGoing = false;
+        for (Card card : listed) {
+            BuddyProtocol.Task task = CardViews.deviceTask(card, now);
+            tasksGoing |= card.active();
+            tasks.add(task);
+            tasksKey.append(task.id).append('\u0001').append(task.agent).append('\u0001')
+                    .append(task.title).append('\u0001').append(task.state).append('\u0001')
+                    .append(task.p1).append('\u0001').append(task.p2).append('\u0002');
         }
         sentCards.clear();
         sentCards.putAll(kept);
-        // 设备只放得下几件：多了就留最近开始的。
-        while (tasks.size() > BuddyProtocol.TASK_COUNT) {
-            tasks.remove(0);
-        }
         // 做了多久由设备自己接着数，所以只在别的内容变了时才发；心跳那一拍会把它清空重发，
         // 顺便把秒数对齐。
         if (!tasksKey.toString().equals(lastTasks)) {

@@ -45,7 +45,9 @@ uint8_t pocket_voice_level(const int16_t *pcm, size_t samples);
 //   {"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}\n
 // card 是按下时屏幕上那件事的编号；为 NULL、空串，或者里面有字母、数字、下划线、
 // 连字符以外的字符时不带这一项。返回写入的字节数；放不下返回 0 并写入空串。
-size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card);
+// pin 为真时在 card 后面多一项 "pin":true：这句话是在那件事里面说的，一定归到它。
+size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card,
+                               bool pin);
 
 // 一帧能用的总字节数：通知载荷和 POCKET_VOICE_FRAME_MAX 取小；太小返回 0。
 size_t pocket_voice_frame_size(size_t notify_payload);

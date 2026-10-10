@@ -1594,11 +1594,12 @@ static void test_the_conversation_screen_shows_one_card_at_a_time(void)
     assert(snapshot.cards == &state.cards && snapshot.cards->count == 3);
     assert(snapshot.card_index == 2 && !snapshot.card_live && snapshot.cards->cards[2].cut);
 
-    /* Past the top of a card: the one before; the screen starts at its top. */
+    /* Past the top of a card: the one before in the conversation; the screen
+     * starts at its top. The thing handed to codex is a task and is skipped. */
     serial = state.card_serial;
     buddy_state_reduce(&state, &step_up, 200, &action);
     buddy_state_snapshot(&state, &snapshot);
-    assert(snapshot.card_index == 1 && snapshot.card_serial == serial + 1U);
+    assert(snapshot.card_index == 0 && snapshot.card_serial == serial + 1U);
     assert(action.type == BUDDY_ACTION_UI_REFRESH);
     buddy_state_reduce(&state, &step_up, 201, &action);
     buddy_state_reduce(&state, &step_up, 202, &action);
@@ -1613,13 +1614,13 @@ static void test_the_conversation_screen_shows_one_card_at_a_time(void)
     assert(snapshot.card_index == 0 && snapshot.cards->count == 4);
     buddy_state_reduce(&state, &step_down, 205, &action);
     buddy_state_snapshot(&state, &snapshot);
-    assert(snapshot.card_index == 1);
+    assert(snapshot.card_index == 2);
     assert(strcmp(buddy_cards_reply(snapshot.cards, 1), "codex is done") == 0);
     /* Steps only count on the conversation screen. */
     state.page = BUDDY_PAGE_HOME;
     buddy_state_reduce(&state, &step_down, 206, &action);
     buddy_state_snapshot(&state, &snapshot);
-    assert(snapshot.card_index == 1 && action.type == BUDDY_ACTION_NONE);
+    assert(snapshot.card_index == 2 && action.type == BUDDY_ACTION_NONE);
     state.page = BUDDY_PAGE_TALK;
 
     /* Something new is said: the screen goes with it. While it has no card the
@@ -1643,6 +1644,20 @@ static void test_the_conversation_screen_shows_one_card_at_a_time(void)
     buddy_state_reduce(&state, &event, 303, &action);
     buddy_state_snapshot(&state, &snapshot);
     assert(!snapshot.card_live && snapshot.card_index == 1);
+    /* That thing is a task: the screen only says where the sentence went.
+     * Paging from there goes through the conversation, and past its newest
+     * card comes back to the sentence. */
+    assert(buddy_cards_is_task(snapshot.cards, snapshot.card_index));
+    buddy_state_reduce(&state, &step_up, 310, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_index == 0);
+    buddy_state_reduce(&state, &step_down, 311, &action);
+    buddy_state_reduce(&state, &step_down, 312, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_index == 3);
+    buddy_state_reduce(&state, &step_down, 313, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_index == 1 && action.type == BUDDY_ACTION_UI_REFRESH);
     /* A new card for a new thing. */
     event = chat_event(BUDDY_CHAT_THINKING, "a new thing", "", "", 7);
     buddy_state_reduce(&state, &event, 304, &action);
@@ -1743,30 +1758,31 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     assert(state.task_selected == 0 && action.type == BUDDY_ACTION_NONE);
     buddy_state_reduce(&state, &down, 111, &action);
     assert(state.task_selected == 1 && action.type == BUDDY_ACTION_UI_REFRESH);
-    /* The conversation screen then opens on the card of the thing picked. */
+    /* The conversation screen stays on the conversation: tasks are not it. */
     buddy_state_snapshot(&state, &snapshot);
-    assert(snapshot.card_index == 1 && !snapshot.card_live);
+    assert(snapshot.card_index == 2 && !snapshot.card_live);
     buddy_state_reduce(&state, &down, 112, &action);
     buddy_state_reduce(&state, &down, 113, &action);
     assert(state.task_selected == 2 && action.type == BUDDY_ACTION_NONE);
-    /* A thing whose card this device does not hold: the newest card shows. */
     buddy_state_snapshot(&state, &snapshot);
     assert(snapshot.card_index == 2);
 
-    /* Holding OK here talks about the thing that is picked. */
+    /* Holding OK here talks inside the thing that is picked: it stays on it. */
     buddy_state_reduce(&state, &long_ok, 120, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c7") == 0);
+    assert(action.voice_pin);
     buddy_state_reduce(&state, &release, 121, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 122, &action);
-    /* On the conversation screen: about the card that is showing. */
+    /* On the conversation screen: about the card that is showing, as a hint. */
     state.page = BUDDY_PAGE_TALK;
     buddy_state_reduce(&state, &up, 123, &action);
     state.page = BUDDY_PAGE_TASKS;
     buddy_state_reduce(&state, &up, 124, &action);
     state.page = BUDDY_PAGE_TALK;
     buddy_state_reduce(&state, &long_ok, 125, &action);
-    assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c5") == 0);
+    assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c6") == 0);
+    assert(!action.voice_pin);
     buddy_state_reduce(&state, &release, 126, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 127, &action);
@@ -1811,6 +1827,26 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     assert(state.task_count == 0 && state.task_selected == 0);
     buddy_state_reduce(&state, &long_ok, 203, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && action.voice_card[0] == '\0');
+
+    /* Things that ended stay on the list but are not "in progress". */
+    event = tasks_event(3, 7);
+    event.tasks[1].state = BUDDY_TASK_DONE;
+    event.tasks[2].state = BUDDY_TASK_FAILED;
+    buddy_state_reduce(&state, &event, 250, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.task_count == 3 && snapshot.doing == 1U);
+    assert(buddy_task_active(&snapshot.tasks[0]) && !buddy_task_active(&snapshot.tasks[1]));
+    /* One of those can be picked and talked into as well. */
+    buddy_state_reduce(&state, &release, 251, &action);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 252, &action);
+    buddy_state_reduce(&state, &down, 253, &action);
+    buddy_state_reduce(&state, &long_ok, 254, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c5") == 0 &&
+           action.voice_pin);
+    buddy_state_reduce(&state, &release, 255, &action);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 256, &action);
 
     /* The link goes away: nobody is reporting them any more. */
     event = tasks_event(3, 7);

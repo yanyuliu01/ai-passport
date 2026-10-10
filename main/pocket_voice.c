@@ -46,6 +46,7 @@ static atomic_uint s_generation;
 static atomic_uint s_level;
 /* 这一轮是对哪件事说的；空串是没有。只在语音任务等通知时由应用任务写。 */
 static char s_card[BUDDY_CARD_ID_MAX];
+static bool s_pin;
 static bool s_audio_initialized;
 
 static uint32_t voice_now_ms(void)
@@ -163,7 +164,7 @@ static buddy_voice_status_t voice_run(uint32_t generation, uint8_t *storage)
         /* Released before the microphone was even ready: a tap, not a message. */
         return atomic_load(&s_cancel) ? BUDDY_VOICE_CANCELLED : BUDDY_VOICE_TOO_SHORT;
     }
-    pocket_voice_start_line(line, sizeof(line), POCKET_VOICE_SAMPLE_RATE, s_card);
+    pocket_voice_start_line(line, sizeof(line), POCKET_VOICE_SAMPLE_RATE, s_card, s_pin);
     if (!voice_send_line(line, generation)) {
         return BUDDY_VOICE_FAILED_LINK;
     }
@@ -269,7 +270,7 @@ esp_err_t pocket_voice_init(pocket_voice_event_cb_t callback, void *context)
     return ESP_OK;
 }
 
-esp_err_t pocket_voice_start(uint32_t connection_generation, const char *card)
+esp_err_t pocket_voice_start(uint32_t connection_generation, const char *card, bool pin)
 {
     bool idle = false;
 
@@ -281,6 +282,7 @@ esp_err_t pocket_voice_start(uint32_t connection_generation, const char *card)
     }
     /* 语音任务这时在等通知，还没开始读这个编号：先写好再叫醒它。 */
     (void)snprintf(s_card, sizeof(s_card), "%s", card != NULL ? card : "");
+    s_pin = pin;
     atomic_store(&s_stop, false);
     atomic_store(&s_cancel, false);
     atomic_store(&s_generation, connection_generation);

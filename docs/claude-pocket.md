@@ -27,8 +27,8 @@ middle of the top bar show which one you are on.
 | Screen | What it shows |
 | --- | --- |
 | 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
-| 2 Conversation | One thing per screen: every request you make is one thing with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
-| 3 Tasks | The things being worked on, at most four: who is doing it, the title, for how long (or that it waits for your consent, or is queued). Below are the two latest steps of the selected one, with tool names and commands shown verbatim |
+| 2 Conversation | Conversation only, that is what Xiaoyou answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
+| 3 Tasks | The things handed to helpers, at most four, those in progress first and then the latest that ended: who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). Below are the two latest steps of the selected one, with tool names and commands shown verbatim; when the selected one has ended, its conclusion is shown instead (the brief, three lines; the whole of it is on the phone) |
 
 | Capability | Behavior |
 | --- | --- |
@@ -109,8 +109,13 @@ Xiaoyou only phrases the question. Who is asking and what for come straight
 from the host and are never paraphrased; a name too long for the bubble is
 repeated in full at the top of the details card.
 
-The thing selected on screen 3 is the one screen 2 shows when it is opened
-next. After you say something new, screen 2 follows that sentence: while it
+Conversation and tasks are kept apart: the selection on screen 3 does not
+change screen 2, and paging on screen 2 skips the things handed to helpers.
+What you say while holding `OK` on screen 3 is said inside the selected thing
+(one that has ended too): it is always filed on that thing and continues its
+own session instead of becoming a new sentence in the conversation. What you
+say on screen 2 is ordinary conversation, and the card on screen is only a
+hint for Xiaoyou. After you say something new, screen 2 follows that sentence: while it
 has no card yet the screen shows the turn itself (what you said, that she is
 thinking), and once the card arrives it shows the card. After you page to
 another card yourself, it stays on that card until you speak again.
@@ -159,8 +164,8 @@ understand:
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true}`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), and `cards` says it understands `card` and `tasks` |
-| Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true}`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
+| Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it. Pressed on screen 3 it is followed by `"pin":true`: the sentence is said inside that thing and is always filed on it |
 | Device → host | voice frames | One notification per frame; see below |
 | Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
 | Device → host | `{"cmd":"voice","state":"cancel"}` | Discard what was received |
@@ -191,7 +196,7 @@ ack that the host ignores. A host sends `card` and `tasks` only after it saw
 | Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | What Xiaoyou is doing right now: this is what **screen 1** shows. Only `phase` is required |
 | Host → device | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | Adds or updates the card of one thing: **screen 2**. `id` and `state` are required |
 | Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
-| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things being worked on: **screen 3**. At most four are kept; an empty list means nothing is running |
+| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, used when the device does not hold that thing's card). At most four are kept; an empty list means there are none |
 | Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
 
 `chat`: `phase` is `idle` (nothing is being said), `thinking`, `helper` (she
@@ -499,7 +504,10 @@ version (three screens) has not run on hardware yet. Check:
    top bar.
 7. Screen 3: several things running at once are all listed, each with its own
    timer; `UP` and `DOWN` change the selection and the two steps below follow;
-   going back to screen 2 shows the card of the selected one.
+   things that ended stay on the list, and selecting one shows its conclusion
+   below. Screen 2 does not follow the selection on screen 3, and paging there
+   never shows a thing handed to a helper. Holding `OK` on a finished thing on
+   screen 3 continues that thing.
 8. Hold `OK` on screen 2 or 3 and ask for a change or tell it to stop: that
    thing is changed or cancelled, and no new one is opened.
 9. When an agent wants to do something that needs consent, the request appears

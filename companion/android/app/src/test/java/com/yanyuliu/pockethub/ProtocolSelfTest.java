@@ -408,6 +408,33 @@ public final class ProtocolSelfTest {
                 && CardViews.messageJson("你好", "k2", null).equals(
                 "{\"text\":\"你好\",\"client_id\":\"k2\"}"), "said inside a task: pinned to it");
 
+        // 设备：第三屏的单子是在做的任务，分开显示的固件上后面接着最近做完的。
+        List<Card> onDevice = CardViews.deviceTasks(all, 4, true);
+        check(onDevice.size() == 3 && onDevice.get(0) == parsed && onDevice.get(1) == finished
+                && onDevice.get(2) == older, "device list: going, then the latest that ended");
+        check(CardViews.deviceTasks(all, 4, false).size() == 1
+                && CardViews.deviceTasks(all, 2, true).size() == 2, "older firmware: going only");
+        BuddyProtocol.Task going = CardViews.deviceTask(parsed, 1760000061L);
+        check(going.state.equals("waiting") && going.seconds == 60 && going.p1.equals("Read a.log")
+                && going.p2.equals("Bash grep -c 错 a.log"), "a going task keeps its steps");
+        BuddyProtocol.Task ended = CardViews.deviceTask(finished, 1760000061L);
+        check(ended.state.equals("done") && ended.seconds == 0 && ended.p1.equals("写好了 在桌面")
+                && ended.p2.isEmpty() && CardViews.deviceTask(older, 0).state.equals("failed"),
+                "an ended task says how it ended");
+        check(CardViews.deviceReply(finished, true).equals("写好了\n在桌面")
+                && CardViews.deviceReply(finished, false).equals("写好了\n在桌面\n\n好了")
+                && CardViews.deviceReply(plain, true).isEmpty(), "tasks send only the brief");
+        String pinned = "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,\"card\":\"c12\",\"pin\":true}";
+        check(BuddyProtocol.parseVoicePin(pinned) && "c12".equals(BuddyProtocol.parseVoiceCard(pinned))
+                && !BuddyProtocol.parseVoicePin(
+                        "{\"cmd\":\"voice\",\"state\":\"start\",\"card\":\"c12\"}")
+                && !BuddyProtocol.parseVoicePin("{\"cmd\":\"voice\",\"state\":\"start\",\"pin\":true}"),
+                "voice said inside a task");
+        check(BuddyProtocol.hubAckHasThreads(
+                "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true}")
+                && !BuddyProtocol.hubAckHasThreads(
+                        "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}"), "threads ack");
+
         check(Json.parseObject("[1]") == null && Json.parseObject("{\"a\":") == null
                 && Json.parseObject("{\"a\":1} x") == null && Json.parseObject("") == null
                 && Json.parseObject(null) == null && Json.parseObject("{\"a\":tru}") == null,

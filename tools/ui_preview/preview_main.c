@@ -472,6 +472,24 @@ int main(int argc, char **argv)
     snap.doing = 6;
     snap.uptime_ms += 61000U;
     show("47_tasks_a_minute_later", &snap);
+    /* Things that ended stay on the list, after the ones in progress; the one
+     * picked shows how it ended (from its card, else from the list's own line). */
+    (void)snprintf(snap.tasks[2].id, sizeof(snap.tasks[2].id), "%s", "c4");
+    (void)snprintf(snap.tasks[2].agent, sizeof(snap.tasks[2].agent), "%s", "claude");
+    set_text_field(snap.tasks[2].title, sizeof(snap.tasks[2].title), "把周报改成三段");
+    snap.tasks[2].state = BUDDY_TASK_DONE;
+    (void)snprintf(snap.tasks[3].id, sizeof(snap.tasks[3].id), "%s", "c5");
+    set_text_field(snap.tasks[3].title, sizeof(snap.tasks[3].title), "跑一遍测试");
+    snap.tasks[3].state = BUDDY_TASK_FAILED;
+    snap.doing = 2;
+    snap.task_selected = 2;
+    show("48_tasks_ended_done", &snap);
+    snap.task_selected = 3;
+    show("49_tasks_ended_failed", &snap);
+    (void)snprintf(snap.tasks[3].id, sizeof(snap.tasks[3].id), "%s", "c99");
+    set_text_field(snap.tasks[3].line1, sizeof(snap.tasks[3].line1), "取消了");
+    snap.tasks[3].state = BUDDY_TASK_CANCELLED;
+    show("50_tasks_ended_cancelled_no_card", &snap);
     memset(&s_cards, 0, sizeof(s_cards));
     snap = hub_snapshot();
     pocket_ui_render(&snap);

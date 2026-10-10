@@ -892,7 +892,8 @@ static bool buddy_execute_action(buddy_state_t *state, const buddy_action_t *act
     }
     if (action->type == BUDDY_ACTION_VOICE_START) {
         memset(result_event, 0, sizeof(*result_event));
-        if (pocket_voice_start(action->connection_generation, action->voice_card) == ESP_OK) {
+        if (pocket_voice_start(action->connection_generation, action->voice_card,
+                               action->voice_pin) == ESP_OK) {
             return false;
         }
         /* 语音任务没起来或上一轮还没收尾：让状态机按“麦克风没准备好”收场。 */

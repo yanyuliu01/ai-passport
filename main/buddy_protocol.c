@@ -571,9 +571,11 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
 }
 
 /* {"cmd":"tasks","list":[{"id":"c12","agent":"codex","title":"...",
- *  "state":"working|waiting|queued","secs":42,"p1":"...","p2":"..."}, ...]}
- * The things in progress. Entries beyond BUDDY_TASK_COUNT and entries without
- * an id are left out; an empty list means nothing is in progress. */
+ *  "state":"working|waiting|queued|done|failed|cancelled","secs":42,
+ *  "p1":"...","p2":"..."}, ...]}
+ * The things handed to helpers: those in progress and, from a hub that saw
+ * "threads" in the ack, the latest that ended. Entries beyond BUDDY_TASK_COUNT
+ * and entries without an id are left out; an empty list means there are none. */
 static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
 {
     const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
@@ -614,6 +616,12 @@ static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
             task->state = BUDDY_TASK_WAITING;
         } else if (state != NULL && strcmp(state, "queued") == 0) {
             task->state = BUDDY_TASK_QUEUED;
+        } else if (state != NULL && strcmp(state, "done") == 0) {
+            task->state = BUDDY_TASK_DONE;
+        } else if (state != NULL && strcmp(state, "failed") == 0) {
+            task->state = BUDDY_TASK_FAILED;
+        } else if (state != NULL && strcmp(state, "cancelled") == 0) {
+            task->state = BUDDY_TASK_CANCELLED;
         }
         if (task->id[0] != '\0') {
             ++event->task_count;
@@ -1037,7 +1045,8 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
     buddy_json_writer_t writer;
 
     buddy_writer_init(&writer, json, size);
-    buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}\n");
+    buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
+                         "\"threads\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

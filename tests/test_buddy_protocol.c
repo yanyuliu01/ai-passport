@@ -595,8 +595,12 @@ static void test_chat_reports_the_conversation(void)
         assert(strlen(event.reply) == 600U && !event.reply_truncated);
     }
 
-    assert(buddy_protocol_hub_ack_json(output, sizeof(output)) > 0);
-    assert(strcmp(output, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true}\n") == 0);
+    {
+        char ack[96];
+
+        assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
+        assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true}\n") == 0);
+    }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }
 
@@ -704,6 +708,15 @@ static void test_tasks_lists_the_things_in_progress(void)
     assert(strcmp(event.tasks[2].id, "c14") == 0 && event.tasks[2].state == BUDDY_TASK_QUEUED);
     /* A state it does not know counts as working: the thing is in the list. */
     assert(strcmp(event.tasks[3].id, "c15") == 0 && event.tasks[3].state == BUDDY_TASK_WORKING);
+
+    /* Things that ended stay on the list, each with how it ended. */
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"c1\",\"state\":\"done\",\"p1\":\"ok\"},"
+                 "{\"id\":\"c2\",\"state\":\"failed\"},{\"id\":\"c3\",\"state\":\"cancelled\"}]}",
+                 &event) == BUDDY_EVENT_TASKS);
+    assert(event.task_count == 3 && event.tasks[0].state == BUDDY_TASK_DONE &&
+           strcmp(event.tasks[0].line1, "ok") == 0);
+    assert(event.tasks[1].state == BUDDY_TASK_FAILED &&
+           event.tasks[2].state == BUDDY_TASK_CANCELLED);
 
     assert(parse("{\"cmd\":\"tasks\",\"list\":[]}", &event) == BUDDY_EVENT_TASKS);
     assert(event.task_count == 0);

@@ -61,12 +61,16 @@
 // 回答比设备留得下的长
 #define PT_READER_CUT      "（太长了，后面的在手机上看）"
 
-// ---- 第三屏：任务，正在做的事 ----
-#define PT_TASKS_EMPTY     "现在没有在做的事"
+// 这一轮交给了帮手：对话屏只说它去了哪，内容在第三屏。%s 是帮手的名字。
+#define PT_TALK_HANDED     "这件事交给 %s 了\n在下一屏看"
+
+// ---- 第三屏：任务。在做的事在前，后面是最近做完的 ----
+#define PT_TASKS_EMPTY     "还没有交给帮手的事"
+#define PT_TASK_DONE       "好了"
 #define PT_TASK_WAITING    "等你点头"
 #define PT_TASK_QUEUED     "排队"
 #define PT_TASK_NO_STEPS   "（还没有进展）"
-#define PT_TASKS_HINT      "按住确认键 补充或改要求"
+#define PT_TASKS_HINT      "按住确认键 接着这件事说"
 
 // ---- 顶栏：后台在做几件事 ----
 #define PT_TOP_DOING       "在做 %u"

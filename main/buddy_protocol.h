@@ -31,7 +31,10 @@ int buddy_protocol_permission_json(char *json, size_t size, const char *id,
                                    buddy_permission_decision_t decision);
 int buddy_protocol_command_ack_json(char *json, size_t size, const char *command,
                                     bool ok, const char *error);
-/* {"ack":"hub","ok":true,"chat":true,"cards":true}: this firmware understands
+/* {"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true}: "threads"
+ * says conversation and tasks are kept apart here, so the task list may also
+ * carry things that ended. Before that:
+ * {"ack":"hub","ok":true,"chat":true,"cards":true}: this firmware understands
  * the hub extension, including the "chat" and "helpers" messages (chat) and the
  * "card" and "tasks" messages (cards). */
 int buddy_protocol_hub_ack_json(char *json, size_t size);

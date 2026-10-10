@@ -3,7 +3,7 @@
   GET  /healthz                         不需要令牌，只说明服务活着
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
   POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?} → 202 + 消息
-  POST /v1/voice?conversation=&client_id=&agent=&card=   请求体是 16 位单声道 WAV → 202 + 消息
+  POST /v1/voice?conversation=&client_id=&agent=&card=&pin=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
                                         带 rev 时记录一有变化就返回
   GET  /v1/feed?conversation=&after=<序号>&wait=<秒>   之后变过的卡；没有变化时最多等 wait 秒
@@ -255,6 +255,7 @@ def make_server(config: Config, service: Service,
                     audio, query.get("conversation", ["default"])[0],
                     query.get("client_id", [None])[0], query.get("agent", [None])[0],
                     query.get("card", [None])[0],
+                    query.get("pin", [""])[0] in ("1", "true"),
                 )
             except RequestError as error:
                 self._fail(400, str(error))

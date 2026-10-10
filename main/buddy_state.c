@@ -88,8 +88,10 @@ static void buddy_begin_turn(buddy_state_t *state)
     ++state->card_serial;
 }
 
-/* Which card the conversation screen shows: the one the owner picked, the one
- * the turn in progress went onto, otherwise the newest. -1 when there is none. */
+/* Which card the conversation screen shows: the one the owner paged to, the
+ * one the turn in progress went onto, otherwise the newest of the conversation.
+ * -1 when there is none. Only the followed turn can be a task (the screen then
+ * says where it went instead of showing it); paging never lands on one. */
 static int buddy_card_index(const buddy_state_t *state)
 {
     int index = buddy_cards_find(&state->cards, state->card_current);
@@ -97,7 +99,8 @@ static int buddy_card_index(const buddy_state_t *state)
     if (index < 0 && state->card_follow) {
         index = buddy_cards_find(&state->cards, state->chat.card);
     }
-    return index >= 0 ? index : (int)state->cards.count - 1;
+    return index >= 0 ? index
+                      : buddy_cards_talk_from(&state->cards, (int)state->cards.count - 1, -1);
 }
 
 /* Whether the conversation screen shows the turn in progress instead of a card:
@@ -306,8 +309,8 @@ static void buddy_menu_click(buddy_state_t *state, buddy_key_t key, buddy_action
     }
 }
 
-/* The third screen: UP and DOWN pick a thing. The conversation screen then
- * opens on the card of the one picked. */
+/* The third screen: UP and DOWN pick a thing. What is held and said there is
+ * said inside that thing. The conversation screen stays where it is. */
 static void buddy_tasks_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     unsigned selected = state->task_selected;
@@ -322,10 +325,6 @@ static void buddy_tasks_click(buddy_state_t *state, buddy_key_t key, buddy_actio
     }
     if (selected != state->task_selected) {
         state->task_selected = selected;
-        buddy_cards_copy(state->card_current, sizeof(state->card_current),
-                         state->tasks[selected].id);
-        state->card_follow = false;
-        ++state->card_serial;
         buddy_set_ui_refresh(action);
     }
 }
@@ -586,13 +585,16 @@ static void buddy_apply_permission_result(buddy_state_t *state,
 }
 
 /* The thing a recording started now is about: on the conversation screen the
- * card that is showing, on the third screen the thing that is selected. */
-static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size)
+ * card that is showing (a hint: Xiaoyou still decides), on the third screen the
+ * thing that is selected (*pin: it is said inside that thing and stays on it). */
+static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, bool *pin)
 {
     id[0] = '\0';
+    *pin = false;
     if (state->page == BUDDY_PAGE_TASKS) {
         if (state->task_selected < state->task_count) {
             buddy_cards_copy(id, size, state->tasks[state->task_selected].id);
+            *pin = id[0] != '\0';
         }
     } else if (state->page == BUDDY_PAGE_TALK && !buddy_card_live(state)) {
         int index = buddy_card_index(state);
@@ -645,7 +647,8 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     if (action != NULL) {
         action->type = BUDDY_ACTION_VOICE_START;
         action->connection_generation = state->ble_connection_generation;
-        buddy_voice_card(state, action->voice_card, sizeof(action->voice_card));
+        buddy_voice_card(state, action->voice_card, sizeof(action->voice_card),
+                         &action->voice_pin);
     }
 }
 
@@ -838,9 +841,11 @@ static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
 static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
     int index = buddy_card_index(state);
-    int next = index + (key == BUDDY_KEY_DOWN ? 1 : -1);
+    int direction = key == BUDDY_KEY_DOWN ? 1 : -1;
+    int next;
+    int turn;
 
-    if (state->page != BUDDY_PAGE_TALK || index < 0) {
+    if (state->page != BUDDY_PAGE_TALK) {
         return;
     }
     if (buddy_card_live(state)) {
@@ -848,17 +853,24 @@ static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_
         if (key != BUDDY_KEY_UP) {
             return;
         }
-        next = (int)state->cards.count - 1;
+        next = buddy_cards_talk_from(&state->cards, (int)state->cards.count - 1, -1);
+    } else if (index < 0) {
+        return;
+    } else {
+        /* Only through the conversation: things handed to helpers are skipped. */
+        next = buddy_cards_talk_from(&state->cards, index + direction, direction);
     }
-    if (next >= (int)state->cards.count && !state->card_follow &&
+    turn = buddy_cards_find(&state->cards, state->chat.card);
+    if (next < 0 && direction > 0 && !state->card_follow &&
         state->chat.phase != BUDDY_CHAT_NONE &&
-        buddy_cards_find(&state->cards, state->chat.card) < 0) {
-        /* Past the newest card there is a turn that has no card: back to it. */
+        (turn < 0 || turn > index || buddy_cards_is_task(&state->cards, turn))) {
+        /* Past the newest card there is the turn itself, which has no card or
+         * went to a helper: back to it. */
         buddy_begin_turn(state);
         buddy_set_ui_refresh(action);
         return;
     }
-    if (next < 0 || next >= (int)state->cards.count) {
+    if (next < 0) {
         return;
     }
     buddy_cards_copy(state->card_current, sizeof(state->card_current),
@@ -1182,6 +1194,8 @@ uint8_t buddy_state_backlight_percent(const buddy_state_t *state)
 
 void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snapshot)
 {
+    unsigned index;
+
     if (state == NULL || snapshot == NULL) {
         return;
     }
@@ -1215,8 +1229,15 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->tasks_since_ms = state->tasks_since_ms;
     /* The hub says how many things are in progress; the list shows at most a
      * few of them, so whichever says more is right. */
-    snapshot->doing = state->chat.doing > state->task_count ? state->chat.doing
-                                                             : state->task_count;
+    snapshot->doing = 0;
+    for (index = 0; index < state->task_count; ++index) {
+        if (buddy_task_active(&state->tasks[index])) {
+            ++snapshot->doing;
+        }
+    }
+    if (state->chat.doing > snapshot->doing) {
+        snapshot->doing = state->chat.doing;
+    }
     memcpy(snapshot->helpers, state->helpers, sizeof(snapshot->helpers));
     snapshot->helper_count = state->helper_count;
     snapshot->host_hub = state->host_hub;

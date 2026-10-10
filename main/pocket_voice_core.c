@@ -155,7 +155,8 @@ uint8_t pocket_voice_level(const int16_t *pcm, size_t samples)
     return (uint8_t)((scaled - FLOOR) * 100U / (CEILING - FLOOR));
 }
 
-size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card)
+size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const char *card,
+                               bool pin)
 {
     const char *cursor;
     bool plain = card != NULL && card[0] != '\0';
@@ -171,8 +172,8 @@ size_t pocket_voice_start_line(char *line, size_t size, unsigned rate, const cha
     if (plain) {
         written = snprintf(line, size,
                            "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":%u,"
-                           "\"codec\":\"ima-adpcm\",\"card\":\"%s\"}\n",
-                           rate, card);
+                           "\"codec\":\"ima-adpcm\",\"card\":\"%s\"%s}\n",
+                           rate, card, pin ? ",\"pin\":true" : "");
     } else {
         written = snprintf(line, size,
                            "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":%u,"

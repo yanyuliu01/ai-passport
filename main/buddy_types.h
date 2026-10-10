@@ -117,6 +117,10 @@ typedef enum {
     BUDDY_TASK_WORKING,
     BUDDY_TASK_WAITING, /* for the owner's approval */
     BUDDY_TASK_QUEUED,
+    /* Finished things the hub keeps on the list (see buddy_task_active). */
+    BUDDY_TASK_DONE,
+    BUDDY_TASK_FAILED,
+    BUDDY_TASK_CANCELLED,
 } buddy_task_state_t;
 
 typedef enum {
@@ -295,12 +299,13 @@ typedef struct {
     bool clear; /* forget every card (the hub is about to send them again) */
 } buddy_card_update_t;
 
-/* A thing in progress. */
+/* A thing handed to a helper: in progress, or one of the latest that ended. */
 typedef struct {
     char id[BUDDY_CARD_ID_MAX];
     char agent[BUDDY_AGENT_MAX];
     char title[BUDDY_TASK_TITLE_MAX];
-    char line1[BUDDY_TASK_LINE_MAX]; /* the latest two steps, as they are */
+    char line1[BUDDY_TASK_LINE_MAX]; /* the latest two steps, as they are; for a
+                                      * thing that ended, line1 is how it ended */
     char line2[BUDDY_TASK_LINE_MAX];
     buddy_task_state_t state;
     uint32_t seconds; /* how long it had been going when the hub said so */
@@ -390,6 +395,9 @@ typedef struct {
     bool voice_cancel;
     /* VOICE_START: the thing on screen when the key went down; empty for none. */
     char voice_card[BUDDY_CARD_ID_MAX];
+    /* VOICE_START: said from inside that thing (the task screen), so it belongs
+     * to it whatever the words are. */
+    bool voice_pin;
 } buddy_action_t;
 
 typedef struct {
@@ -435,7 +443,8 @@ typedef struct {
     /* Goes up whenever the conversation screen should start again from the top
      * of what it shows (another card, or a new turn). */
     uint32_t card_serial;
-    /* Things in progress; tasks_since_ms is when the list arrived. */
+    /* The task screen's list: things in progress first, then the latest that
+     * ended; tasks_since_ms is when the list arrived. */
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
     unsigned task_selected;

@@ -95,7 +95,7 @@ class Service:
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
-                     card: Any = None) -> Dict[str, Any]:
+                     card: Any = None, pin: Any = False) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
@@ -105,7 +105,8 @@ class Service:
             raise RequestError(
                 "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
             )
-        return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card)
+        return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card,
+                             pin is True)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
                  client_id: Any, agent: Any, hop: Any, card: Any = None,
