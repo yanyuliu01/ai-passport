@@ -136,7 +136,7 @@ final class CardViews {
             String state = card.state.equals("failed") || card.state.equals("cancelled")
                     ? card.state : "done";
             return new BuddyProtocol.Task(card.id, card.agent, card.title, state, 0L,
-                    oneLine(deviceReply(card, true), PREVIEW_CHARS), "");
+                    oneLine(card.brief.isEmpty() ? card.lastSay() : card.brief, PREVIEW_CHARS), "");
         }
         int steps = card.progress.size();
         double since = card.startedAt > 0 ? card.startedAt : card.createdAt;
@@ -147,13 +147,50 @@ final class CardViews {
                 steps >= 2 ? card.progress.get(steps - 1) : "");
     }
 
+    /** 设备上一件任务的来回最多这么多字节、每句最多这么多字：设备的地方是所有卡合用的。 */
+    static final int THREAD_BYTES = 480;
+    static final int THREAD_ENTRY_CHARS = 90;
+
     /**
-     * 发给设备的那张卡上“小幽最新的话”。对话：简报在前，完整的话跟在后面。任务在分开
-     * 显示的固件（threads）上只在第三屏露三行，所以只给简报，省下设备的地方。
+     * 一件任务在设备上的来回：第一句之后的每一句，“你：”“小幽：”各占一段，旧的在前；
+     * 放不下时丢掉旧的，留最新的。做完的事最后一句用简报（给小屏幕写的）。
+     */
+    static String deviceThread(Card card) {
+        List<String> lines = new ArrayList<>();
+        boolean first = true;
+        for (int index = 0; index < card.entries.size(); index++) {
+            Card.Entry entry = card.entries.get(index);
+            boolean mine = entry.role.equals("you");
+            if (mine && first) {
+                first = false;  // 第一句设备单独显示
+                continue;
+            }
+            boolean last = index == card.entries.size() - 1;
+            String text = !mine && last && !card.active() && !card.brief.isEmpty()
+                    ? card.brief : entry.text;
+            lines.add((mine ? "你：" : "小幽：") + oneLine(text, THREAD_ENTRY_CHARS));
+        }
+        StringBuilder out = new StringBuilder();
+        for (int index = lines.size() - 1; index >= 0; index--) {
+            String line = lines.get(index);
+            int size = line.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                    + (out.length() == 0 ? 0 : 2);
+            if (out.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length + size
+                    > THREAD_BYTES) {
+                break;
+            }
+            out.insert(0, out.length() == 0 ? line : line + "\n\n");
+        }
+        return out.toString();
+    }
+
+    /**
+     * 发给设备的那张卡上的话。对话：简报在前，完整的话跟在后面。任务在分开显示的固件
+     * （threads）上有自己的页面，给的是它最近的来回。
      */
     static String deviceReply(Card card, boolean threads) {
         if (threads && isTask(card)) {
-            return card.brief.isEmpty() ? card.lastSay() : card.brief;
+            return deviceThread(card);
         }
         return BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay());
     }

@@ -175,6 +175,8 @@
 #define PT_HINT_SCREEN     "下一屏"
 #define PT_HINT_SCREEN_TALK "下一屏 按住说话"
 #define PT_HINT_SCREEN_ADD "下一屏 按住补充"
+// 第三屏有选中的事：短按进到这件事自己的页面
+#define PT_HINT_OPEN_ADD   "进入 按住补充"
 #define PT_HINT_PREV       "上"
 #define PT_HINT_NEXT       "下"
 #define PT_HINT_ENTER      "进入"

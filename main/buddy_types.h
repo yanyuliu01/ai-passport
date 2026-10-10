@@ -440,6 +440,10 @@ typedef struct {
      * (chat and reply above), because it has no card yet or never gets one. */
     int card_index;
     bool card_live;
+    /* The talk page shows the selected task's own exchange (entered from the
+     * third screen), not the conversation: card_index is that task's card, or
+     * -1 when the device does not hold it. */
+    bool card_thread;
     /* Goes up whenever the conversation screen should start again from the top
      * of what it shows (another card, or a new turn). */
     uint32_t card_serial;

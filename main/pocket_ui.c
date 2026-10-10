@@ -1467,7 +1467,7 @@ static void format_task_elapsed(const buddy_ui_snapshot_t *snap, const buddy_tas
 
 // 把这件事的两段字摆好。内容换了（另一件事、新的一轮）从头看；只是多了几句就留在原处。
 static void talk_layout(const char *said, const char *reply, uint32_t reply_color,
-                        uint32_t serial, const char *identity)
+                        uint32_t serial, const char *identity, bool from_end)
 {
     uintptr_t shown = text_hash(text_hash(text_hash(2166136261u, identity), said), reply) | 1u;
     bool fresh = s.tl_serial != serial || s.tl_shown == 0U;
@@ -1491,7 +1491,8 @@ static void talk_layout(const char *said, const char *reply, uint32_t reply_colo
         y += lv_obj_get_height(s.tl_reply) + LINE_SPACE;
     }
     s.tl_content = y;
-    s.tl_y = fresh ? 0 : pocket_card_scroll(s.tl_y, 0, y, TL_H, TL_STEP, NULL);
+    // 一件任务的来回从最新的那头看起；对话从头看起。
+    s.tl_y = pocket_card_scroll(fresh ? (from_end ? y : 0) : s.tl_y, 0, y, TL_H, TL_STEP, NULL);
     s.tl_serial = serial;
     s.tl_shown = shown;
     // 位置是刚设的，先让 LVGL 算好，滚动的范围才是对的。
@@ -1508,6 +1509,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     static char meta[40];
     const buddy_cards_t *cards = snap->cards;
     bool live = snap->card_live;
+    bool thread = snap->card_thread && snap->task_selected < snap->task_count;
     bool hub = snap->chat.phase != BUDDY_CHAT_NONE;
     bool has_card = !live && cards != NULL && snap->card_index >= 0 &&
                     snap->card_index < (int)cards->count;
@@ -1526,6 +1528,25 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     bool timer = false;
     char elapsed[12] = "";
 
+    if (thread && !has_card) {
+        // 这件任务的卡不在设备上：单子上那几行还在，先看这些。
+        const buddy_task_t *picked = &snap->tasks[snap->task_selected];
+        const char *words = picked->line2[0] != '\0' ? picked->line2 : picked->line1;
+
+        pet_set(PET_TALK, POCKET_PET_IDLE);
+        set_visible(s.talk_empty, false);
+        set_visible(s.talk, true);
+        set_visible(s.head_link, false);
+        set_visible(s.head_tag.box, false);
+        set_visible(s.head_elapsed, false);
+        set_block_text(s.head_status, picked->agent);
+        set_text_color(s.head_status, C_DIM);
+        (void)snprintf(meta, sizeof(meta), "%u / %u", snap->task_selected + 1U, snap->task_count);
+        set_text(s.meta_left, meta);
+        set_text(s.meta_right, "");
+        talk_layout(picked->title, words, C_TEXT, snap->card_serial, picked->id, true);
+        return true;
+    }
     set_visible(s.talk_empty, !live && !has_card);
     set_visible(s.talk, live || has_card);
     if (!live && !has_card) {
@@ -1591,7 +1612,11 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         said = buddy_cards_said(cards, (unsigned)snap->card_index);
         reply = with_cut_note(text, sizeof(text),
                               buddy_cards_reply(cards, (unsigned)snap->card_index), card->cut);
-        if (agent[0] != '\0') {
+        if (thread) {
+            // 从第三屏进来的：这件任务自己的来回，第几件数的是单子上的。
+            (void)snprintf(meta, sizeof(meta), "%u / %u  %s", snap->task_selected + 1U,
+                           snap->task_count, card->at);
+        } else if (agent[0] != '\0') {
             // 交给了帮手的事不在这一屏：只说它去了哪，内容在第三屏。
             (void)snprintf(handed, sizeof(handed), PT_TALK_HANDED,
                            agent_fits ? agent : PT_CARD_HELPER);
@@ -1692,7 +1717,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     set_text(s.meta_left, meta);
     set_text(s.meta_right, note);
     set_text_color(s.meta_right, note_color);
-    talk_layout(said, reply, reply_color, snap->card_serial, identity);
+    talk_layout(said, reply, reply_color, snap->card_serial, identity, thread);
     return true;
 }
 
@@ -1784,11 +1809,8 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
         set_visible(s.task_lines[1], !ended);
         set_visible(s.task_result, ended);
         if (ended) {
-            // 结论在它的卡上（中枢给做完的事只留简报）；卡不在了就用单子上那一行。
-            int card = buddy_cards_find(snap->cards, task->id);
-            const char *result = card >= 0 ? buddy_cards_reply(snap->cards, (unsigned)card) : "";
-
-            set_block_text(s.task_result, result[0] != '\0' ? result : task->line1);
+            // 结论是单子上那一行（简报）；整件事的来回按确认键进去看。
+            set_block_text(s.task_result, task->line1);
             set_text_color(s.task_result,
                            task->state == BUDDY_TASK_FAILED ? C_DANGER : C_TEXT);
             return;
@@ -2082,7 +2104,11 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     s.view = view;
     s.page = page;
 
-    render_top_bar(snap, view == POCKET_VIEW_PAGE && page <= BUDDY_PAGE_TASKS ? (int)page : -1);
+    // 顶栏三个点：从第三屏进到一件任务里时，亮的还是第三个。
+    render_top_bar(snap, view != POCKET_VIEW_PAGE || page > BUDDY_PAGE_TASKS
+                             ? -1
+                             : (page == BUDDY_PAGE_TALK && snap->card_thread ? (int)BUDDY_PAGE_TASKS
+                                                                            : (int)page));
     switch (view) {
     case POCKET_VIEW_UPDATE:
         // 这时按键都不管用，所以底下不写提示。
@@ -2123,8 +2149,9 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
                 hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
             }
             notice = pocket_notice_visible(snap) && snap->host_hub;
-            hints[count++] =
-                (hint_item_t){KEY_OK, can_talk ? PT_HINT_SCREEN_TALK : PT_HINT_SCREEN};
+            hints[count++] = (hint_item_t){
+                KEY_OK, !can_talk ? PT_HINT_SCREEN
+                                  : (snap->card_thread ? PT_HINT_SCREEN_ADD : PT_HINT_SCREEN_TALK)};
             break;
         case BUDDY_PAGE_TASKS:
             render_tasks(snap);
@@ -2135,9 +2162,8 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
             notice = pocket_notice_visible(snap) && snap->host_hub;
             // 有选中的事时，按住说的话是对它的补充。
             hints[count++] = (hint_item_t){
-                KEY_OK, !can_talk ? PT_HINT_SCREEN
-                                  : (snap->task_count > 0U ? PT_HINT_SCREEN_ADD
-                                                           : PT_HINT_SCREEN_TALK)};
+                KEY_OK, snap->task_count > 0U ? (can_talk ? PT_HINT_OPEN_ADD : PT_HINT_ENTER)
+                                              : (can_talk ? PT_HINT_SCREEN_TALK : PT_HINT_SCREEN)};
             break;
         case BUDDY_PAGE_MENU:
             render_menu(snap);

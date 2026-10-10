@@ -92,9 +92,20 @@ static void buddy_begin_turn(buddy_state_t *state)
  * one the turn in progress went onto, otherwise the newest of the conversation.
  * -1 when there is none. Only the followed turn can be a task (the screen then
  * says where it went instead of showing it); paging never lands on one. */
+static bool buddy_in_thread(const buddy_state_t *state)
+{
+    return state->thread && state->page == BUDDY_PAGE_TALK &&
+           state->task_selected < state->task_count;
+}
+
 static int buddy_card_index(const buddy_state_t *state)
 {
-    int index = buddy_cards_find(&state->cards, state->card_current);
+    int index;
+
+    if (buddy_in_thread(state)) {
+        return buddy_cards_find(&state->cards, state->tasks[state->task_selected].id);
+    }
+    index = buddy_cards_find(&state->cards, state->card_current);
 
     if (index < 0 && state->card_follow) {
         index = buddy_cards_find(&state->cards, state->chat.card);
@@ -111,7 +122,7 @@ static bool buddy_card_live(const buddy_state_t *state)
 {
     bool turn = state->chat.phase != BUDDY_CHAT_NONE || state->reply[0] != '\0';
 
-    if (!turn) {
+    if (!turn || buddy_in_thread(state)) {
         return false;
     }
     if (state->cards.count == 0U) {
@@ -409,9 +420,22 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
     /* The three screens. A short press on OK goes to the next one, round and
      * round; UP and DOWN only act inside the screen that is showing. */
     if (key == BUDDY_KEY_OK) {
-        state->page = state->page == BUDDY_PAGE_HOME
-                          ? BUDDY_PAGE_TALK
-                          : (state->page == BUDDY_PAGE_TALK ? BUDDY_PAGE_TASKS : BUDDY_PAGE_HOME);
+        /* Home, conversation, tasks, and from the tasks the one that is picked
+         * (its own exchange: what is read and said there is about it alone),
+         * then home again. With no task to pick, tasks lead straight home. */
+        if (state->page == BUDDY_PAGE_HOME) {
+            state->page = BUDDY_PAGE_TALK;
+            state->thread = false;
+        } else if (state->page == BUDDY_PAGE_TALK) {
+            state->page = buddy_in_thread(state) ? BUDDY_PAGE_HOME : BUDDY_PAGE_TASKS;
+            state->thread = false;
+        } else if (state->task_selected < state->task_count) {
+            state->page = BUDDY_PAGE_TALK;
+            state->thread = true;
+        } else {
+            state->page = BUDDY_PAGE_HOME;
+        }
+        ++state->card_serial;
         buddy_set_ui_refresh(action);
     } else if (state->page == BUDDY_PAGE_TALK) {
         /* Within the thing on screen; at its end the interface asks for the
@@ -591,7 +615,7 @@ static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, 
 {
     id[0] = '\0';
     *pin = false;
-    if (state->page == BUDDY_PAGE_TASKS) {
+    if (state->page == BUDDY_PAGE_TASKS || buddy_in_thread(state)) {
         if (state->task_selected < state->task_count) {
             buddy_cards_copy(id, size, state->tasks[state->task_selected].id);
             *pin = id[0] != '\0';
@@ -812,6 +836,7 @@ static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
 {
     unsigned count = event->task_count < BUDDY_TASK_COUNT ? event->task_count : BUDDY_TASK_COUNT;
     char selected[BUDDY_CARD_ID_MAX] = "";
+    bool kept = false;
     unsigned index;
 
     if (event->ble.connection_generation != state->ble_connection_generation) {
@@ -832,7 +857,14 @@ static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
     for (index = 0; index < count; ++index) {
         if (selected[0] != '\0' && strcmp(state->tasks[index].id, selected) == 0) {
             state->task_selected = index;
+            kept = true;
         }
+    }
+    if (state->thread && state->page == BUDDY_PAGE_TALK && !kept) {
+        /* The task that was open is no longer on the list: back to the list,
+         * rather than showing (and talking into) another one in its place. */
+        state->thread = false;
+        state->page = BUDDY_PAGE_TASKS;
     }
     buddy_set_ui_refresh(action);
 }
@@ -846,6 +878,16 @@ static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_
     int turn;
 
     if (state->page != BUDDY_PAGE_TALK) {
+        return;
+    }
+    if (buddy_in_thread(state)) {
+        /* Inside a task: past its ends are the tasks before and after it. */
+        if (direction < 0 ? state->task_selected > 0U
+                          : state->task_selected + 1U < state->task_count) {
+            state->task_selected = (unsigned)((int)state->task_selected + direction);
+            ++state->card_serial;
+            buddy_set_ui_refresh(action);
+        }
         return;
     }
     if (buddy_card_live(state)) {
@@ -1222,6 +1264,7 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->cards = &state->cards;
     snapshot->card_index = buddy_card_index(state);
     snapshot->card_live = buddy_card_live(state);
+    snapshot->card_thread = buddy_in_thread(state);
     snapshot->card_serial = state->card_serial;
     memcpy(snapshot->tasks, state->tasks, sizeof(snapshot->tasks));
     snapshot->task_count = state->task_count;

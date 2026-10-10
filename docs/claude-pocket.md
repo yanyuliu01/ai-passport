@@ -28,7 +28,7 @@ middle of the top bar show which one you are on.
 | --- | --- |
 | 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
 | 2 Conversation | Conversation only, that is what Xiaoyou answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
-| 3 Tasks | The things handed to helpers, at most four, those in progress first and then the latest that ended: who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). Below are the two latest steps of the selected one, with tool names and commands shown verbatim; when the selected one has ended, its conclusion is shown instead (the brief, three lines; the whole of it is on the phone) |
+| 3 Tasks | The things handed to helpers, at most four, those in progress first and then the latest that ended: who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). Below are the two latest steps of the selected one, with tool names and commands shown verbatim; when the selected one has ended, its conclusion is shown instead (the brief). A short press on `OK` opens the selected thing's own page: its latest exchange (what you said later and what Xiaoyou answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
 
 | Capability | Behavior |
 | --- | --- |
@@ -111,7 +111,8 @@ repeated in full at the top of the details card.
 
 Conversation and tasks are kept apart: the selection on screen 3 does not
 change screen 2, and paging on screen 2 skips the things handed to helpers.
-What you say while holding `OK` on screen 3 is said inside the selected thing
+What you say while holding `OK` on screen 3, or on the page of a thing opened
+from there, is said inside the selected thing
 (one that has ended too): it is always filed on that thing and continues its
 own session instead of becoming a new sentence in the conversation. What you
 say on screen 2 is ordinary conversation, and the card on screen is only a
@@ -196,7 +197,7 @@ ack that the host ignores. A host sends `card` and `tasks` only after it saw
 | Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | What Xiaoyou is doing right now: this is what **screen 1** shows. Only `phase` is required |
 | Host → device | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | Adds or updates the card of one thing: **screen 2**. `id` and `state` are required |
 | Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
-| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, used when the device does not hold that thing's card). At most four are kept; an empty list means there are none |
+| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, and the `reply` of that thing's `card` is its latest exchange, one paragraph per sentence of the owner and of Xiaoyou, at most 480 bytes). At most four are kept; an empty list means there are none |
 | Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
 
 `chat`: `phase` is `idle` (nothing is being said), `thinking`, `helper` (she

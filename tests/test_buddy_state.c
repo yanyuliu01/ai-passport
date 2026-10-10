@@ -1848,6 +1848,60 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 256, &action);
 
+    /* OK on a picked thing opens that thing's own page: its card, not the
+     * conversation, and no turn in progress takes the screen from it. */
+    {
+        buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+        buddy_event_t step_up = {.type = BUDDY_EVENT_CARD_STEP, .key = BUDDY_KEY_UP};
+        buddy_event_t step_down = {.type = BUDDY_EVENT_CARD_STEP, .key = BUDDY_KEY_DOWN};
+        uint32_t serial = state.card_serial;
+
+        assert(state.page == BUDDY_PAGE_TASKS && state.task_selected == 1);
+        buddy_state_reduce(&state, &ok, 260, &action);
+        buddy_state_snapshot(&state, &snapshot);
+        assert(state.page == BUDDY_PAGE_TALK && snapshot.card_thread && !snapshot.card_live);
+        assert(snapshot.card_index == 1 && snapshot.card_serial == serial + 1U);
+        /* What is said there is said inside it. */
+        buddy_state_reduce(&state, &long_ok, 261, &action);
+        assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c5") == 0 &&
+               action.voice_pin);
+        buddy_state_reduce(&state, &release, 262, &action);
+        event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+        buddy_state_reduce(&state, &event, 263, &action);
+        /* Past its ends are the things before and after it on the list. */
+        buddy_state_reduce(&state, &step_up, 264, &action);
+        buddy_state_snapshot(&state, &snapshot);
+        assert(state.task_selected == 0 && snapshot.card_thread && snapshot.card_index == 0);
+        buddy_state_reduce(&state, &step_up, 265, &action);
+        assert(state.task_selected == 0 && action.type == BUDDY_ACTION_NONE);
+        buddy_state_reduce(&state, &step_down, 266, &action);
+        buddy_state_reduce(&state, &step_down, 267, &action);
+        buddy_state_snapshot(&state, &snapshot);
+        /* A thing whose card the device does not hold is still its own page. */
+        assert(state.task_selected == 2 && snapshot.card_thread && snapshot.card_index == -1);
+        /* The thing that is open leaves the list: back to the list. */
+        event = tasks_event(2, 7);
+        buddy_state_reduce(&state, &event, 268, &action);
+        assert(state.page == BUDDY_PAGE_TASKS && state.task_selected == 1);
+        /* OK from inside a thing goes on to the first screen; from there the
+         * second screen is the conversation again. */
+        buddy_state_reduce(&state, &ok, 269, &action);
+        assert(state.page == BUDDY_PAGE_TALK);
+        buddy_state_reduce(&state, &ok, 270, &action);
+        assert(state.page == BUDDY_PAGE_HOME);
+        buddy_state_reduce(&state, &ok, 271, &action);
+        buddy_state_snapshot(&state, &snapshot);
+        assert(state.page == BUDDY_PAGE_TALK && !snapshot.card_thread && snapshot.card_index == 2);
+        buddy_state_reduce(&state, &ok, 272, &action);
+        assert(state.page == BUDDY_PAGE_TASKS);
+        /* With nothing on the list, OK on the third screen leads straight home. */
+        event = tasks_event(0, 7);
+        buddy_state_reduce(&state, &event, 273, &action);
+        buddy_state_reduce(&state, &ok, 274, &action);
+        assert(state.page == BUDDY_PAGE_HOME);
+        state.page = BUDDY_PAGE_TASKS;
+    }
+
     /* The link goes away: nobody is reporting them any more. */
     event = tasks_event(3, 7);
     buddy_state_reduce(&state, &event, 300, &action);

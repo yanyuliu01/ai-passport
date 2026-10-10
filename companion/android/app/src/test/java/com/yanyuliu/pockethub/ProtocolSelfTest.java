@@ -421,9 +421,22 @@ public final class ProtocolSelfTest {
         check(ended.state.equals("done") && ended.seconds == 0 && ended.p1.equals("写好了 在桌面")
                 && ended.p2.isEmpty() && CardViews.deviceTask(older, 0).state.equals("failed"),
                 "an ended task says how it ended");
-        check(CardViews.deviceReply(finished, true).equals("写好了\n在桌面")
+        // 任务在设备上有自己的页面：第一句之后的来回，旧的在前，做完的最后一句是简报。
+        check(CardViews.deviceReply(finished, true).equals("小幽：写好了 在桌面")
                 && CardViews.deviceReply(finished, false).equals("写好了\n在桌面\n\n好了")
-                && CardViews.deviceReply(plain, true).isEmpty(), "tasks send only the brief");
+                && CardViews.deviceReply(plain, true).isEmpty(), "a task sends its exchange");
+        check(CardViews.deviceThread(parsed).equals("小幽：好，交给 codex\n\n你：只看今天的"),
+                "thread of a going task: " + CardViews.deviceThread(parsed));
+        StringBuilder many = new StringBuilder("{\"id\":\"c3\",\"state\":\"working\",\"agent\":\"codex\","
+                + "\"entries\":[{\"role\":\"you\",\"text\":\"开头\"}");
+        for (int index = 0; index < 20; index++) {
+            many.append(",{\"role\":\"xiaoyou\",\"text\":\"第").append(index)
+                    .append("句回答回答回答回答回答回答回答回答回答回答回答回答回答回答回答\"}");
+        }
+        String tail = CardViews.deviceThread(Card.from(Json.parseObject(many + "]}")));
+        check(tail.getBytes(StandardCharsets.UTF_8).length <= CardViews.THREAD_BYTES
+                && tail.startsWith("小幽：第") && tail.contains("第19句") && !tail.contains("第0句"),
+                "a long thread keeps its newest end");
         String pinned = "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,\"card\":\"c12\",\"pin\":true}";
         check(BuddyProtocol.parseVoicePin(pinned) && "c12".equals(BuddyProtocol.parseVoiceCard(pinned))
                 && !BuddyProtocol.parseVoicePin(

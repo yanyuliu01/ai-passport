@@ -65,6 +65,9 @@ typedef struct {
     unsigned task_count;
     unsigned task_selected;
     uint64_t tasks_since_ms;
+    /* The talk page is open on the thing selected on the third screen (entered
+     * from there with OK) instead of on the conversation. */
+    bool thread;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     bool host_hub;

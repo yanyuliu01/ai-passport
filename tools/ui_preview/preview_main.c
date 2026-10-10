@@ -490,6 +490,32 @@ int main(int argc, char **argv)
     set_text_field(snap.tasks[3].line1, sizeof(snap.tasks[3].line1), "取消了");
     snap.tasks[3].state = BUDDY_TASK_CANCELLED;
     show("50_tasks_ended_cancelled_no_card", &snap);
+    /* OK on a picked thing: that thing's own page, opened at its newest end. */
+    put_card("c4", "14:31", BUDDY_CARD_DONE, "claude", 2, "把周报改成三段",
+             "小幽：交给 claude 了\n\n你：每段不要超过一百字\n\n小幽：好，告诉 claude 了\n\n"
+             "你：标题也改一下，叫十月第一周\n\n"
+             "小幽：改好了：进展、风险、下周计划各一段，一共 280 字，标题是十月第一周。",
+             false);
+    snap.page = BUDDY_PAGE_TALK;
+    snap.card_thread = true;
+    snap.task_selected = 2;
+    snap.card_index = buddy_cards_find(&s_cards, "c4");
+    snap.card_serial = 20;
+    show("51_task_page_done", &snap);
+    printf("scroll up inside a task: edge %d\n", pocket_ui_scroll(-60));
+    show("52_task_page_scrolled_up", &snap);
+    snap.task_selected = 0;
+    snap.card_index = buddy_cards_find(&s_cards, "c2");
+    snap.card_serial = 21;
+    show("53_task_page_working", &snap);
+    snap.task_selected = 3;
+    snap.card_index = -1;
+    snap.card_serial = 22;
+    show("54_task_page_no_card", &snap);
+    snap.page = BUDDY_PAGE_TASKS;
+    snap.card_thread = false;
+    snap.task_selected = 2;
+    show("55_tasks_hint_open", &snap);
     memset(&s_cards, 0, sizeof(s_cards));
     snap = hub_snapshot();
     pocket_ui_render(&snap);
