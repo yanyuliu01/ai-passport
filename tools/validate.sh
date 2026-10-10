@@ -187,10 +187,16 @@ run_firmware_checks() (
         idf.py -B "${validation_build_dir}" \
         -D "SDKCONFIG=${validation_build_dir}/sdkconfig" build 2>&1 | tee "${build_log}"; then
         if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-            grep -E '(error:|undefined reference|static assertion failed|region .* overflowed)' \
-                "${build_log}" | head -n 12 | while IFS= read -r line; do
+            local found
+            found="$(grep -E -i '(error|undefined reference|overflowed|FAILED:)' "${build_log}" |
+                head -n 12 || true)"
+            if [[ -z "${found}" ]]; then
+                # Nothing that reads like an error: the end of the log, then.
+                found="$(tail -n 20 "${build_log}" || true)"
+            fi
+            while IFS= read -r line; do
                 echo "::error title=Firmware build::${line}"
-            done
+            done <<< "${found}"
         fi
         echo "Firmware build: FAIL" >&2
         return 1
