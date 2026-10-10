@@ -604,6 +604,83 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
  * The things handed to helpers: those in progress and, from a hub that saw
  * "threads" in the ack, the latest that ended. Entries beyond BUDDY_TASK_COUNT
  * and entries without an id are left out; an empty list means there are none. */
+static buddy_task_state_t buddy_task_state_named(const char *state,
+                                                 buddy_task_state_t fallback)
+{
+    static const struct {
+        const char *name;
+        buddy_task_state_t state;
+    } states[] = {
+        {"working", BUDDY_TASK_WORKING},   {"waiting", BUDDY_TASK_WAITING},
+        {"queued", BUDDY_TASK_QUEUED},     {"done", BUDDY_TASK_DONE},
+        {"failed", BUDDY_TASK_FAILED},     {"cancelled", BUDDY_TASK_CANCELLED},
+    };
+    size_t index;
+
+    for (index = 0; state != NULL && index < sizeof(states) / sizeof(states[0]); ++index) {
+        if (strcmp(state, states[index].name) == 0) {
+            return states[index].state;
+        }
+    }
+    return fallback;
+}
+
+/* {"cmd":"past","at":K,"n":N,"list":[{"id","agent","title","state","day","eff"}]}:
+ * a part of the things that ended, newest first. The part goes at K in a list
+ * that is N long; the hub sends the parts in order and at most BUDDY_PAST_CHUNK
+ * in each, so that a long history never makes a long line. Entries past the
+ * chunk or past the end of the list are ignored, as are ones without an id. */
+static bool buddy_parse_past(const cJSON *object, buddy_event_t *event)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
+    const cJSON *item;
+    unsigned at = 0;
+    unsigned total = 0;
+
+    if (list == NULL || !cJSON_IsArray(list) || !buddy_json_unsigned(object, "at", &at) ||
+        !buddy_json_unsigned(object, "n", &total)) {
+        return false;
+    }
+    if (total > BUDDY_PAST_COUNT) {
+        total = BUDDY_PAST_COUNT;
+    }
+    if (at > total) {
+        return false;
+    }
+    cJSON_ArrayForEach(item, list)
+    {
+        buddy_past_t *past;
+        const char *state;
+        size_t state_length;
+
+        if (event->past_count >= BUDDY_PAST_CHUNK || at + event->past_count >= total) {
+            break;
+        }
+        if (!cJSON_IsObject(item)) {
+            return false;
+        }
+        past = &event->past[event->past_count];
+        if (!buddy_copy_id(item, "id", past->id, sizeof(past->id)) ||
+            !buddy_copy_field(item, "agent", past->agent, sizeof(past->agent), NULL) ||
+            !buddy_copy_field(item, "title", past->title, sizeof(past->title), NULL) ||
+            !buddy_copy_field(item, "day", past->day, sizeof(past->day), NULL) ||
+            !buddy_json_optional_string(item, "state", &state, &state_length)) {
+            return false;
+        }
+        past->effort = buddy_parse_effort(item);
+        past->state = (uint8_t)buddy_task_state_named(state, BUDDY_TASK_DONE);
+        if (past->id[0] != '\0') {
+            ++event->past_count;
+        } else {
+            memset(past, 0, sizeof(*past));
+        }
+    }
+    event->past_at = (uint8_t)at;
+    event->past_total = (uint8_t)total;
+    event->type = BUDDY_EVENT_PAST;
+    return true;
+}
+
 static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
 {
     const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
@@ -640,18 +717,7 @@ static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
         }
         task->seconds = seconds;
         task->effort = buddy_parse_effort(item);
-        task->state = BUDDY_TASK_WORKING;
-        if (state != NULL && strcmp(state, "waiting") == 0) {
-            task->state = BUDDY_TASK_WAITING;
-        } else if (state != NULL && strcmp(state, "queued") == 0) {
-            task->state = BUDDY_TASK_QUEUED;
-        } else if (state != NULL && strcmp(state, "done") == 0) {
-            task->state = BUDDY_TASK_DONE;
-        } else if (state != NULL && strcmp(state, "failed") == 0) {
-            task->state = BUDDY_TASK_FAILED;
-        } else if (state != NULL && strcmp(state, "cancelled") == 0) {
-            task->state = BUDDY_TASK_CANCELLED;
-        }
+        task->state = buddy_task_state_named(state, BUDDY_TASK_WORKING);
         if (task->id[0] != '\0') {
             ++event->task_count;
         } else {
@@ -1013,6 +1079,8 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
         result = buddy_parse_card(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "tasks") == 0) {
         result = buddy_parse_tasks(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "past") == 0) {
+        result = buddy_parse_past(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "usage") == 0) {
         result = buddy_parse_usage(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "fw") == 0) {
@@ -1167,6 +1235,22 @@ int buddy_protocol_permission_json(char *json, size_t size, const char *id,
     return buddy_writer_finish(&writer);
 }
 
+int buddy_protocol_want_json(char *json, size_t size, const char *card)
+{
+    buddy_json_writer_t writer;
+    size_t length = buddy_bounded_length(card, BUDDY_CARD_ID_MAX);
+
+    if (card == NULL || length == 0 || length == BUDDY_CARD_ID_MAX ||
+        !buddy_utf8_valid(card, length)) {
+        return 0;
+    }
+    buddy_writer_init(&writer, json, size);
+    buddy_writer_literal(&writer, "{\"evt\":\"want\",\"card\":");
+    buddy_writer_json_string(&writer, card, length);
+    buddy_writer_literal(&writer, "}\n");
+    return buddy_writer_finish(&writer);
+}
+
 int buddy_protocol_command_ack_json(char *json, size_t size, const char *command,
                                     bool ok, const char *error)
 {
@@ -1199,7 +1283,7 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
 
     buddy_writer_init(&writer, json, size);
     buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                         "\"threads\":true,\"usage\":true}\n");
+                         "\"threads\":true,\"usage\":true,\"past\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

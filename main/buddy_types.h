@@ -36,6 +36,14 @@
 #define BUDDY_TASK_COUNT 4
 #define BUDDY_TASK_TITLE_MAX 48
 #define BUDDY_TASK_LINE_MAX 64
+/* Things that ended, kept under the ones in progress on the third screen and
+ * grouped by the day they ended on. Lean entries without steps: the board has
+ * no memory to spare, and the exchange itself is on the thing's own page. The
+ * hub sends them a few at a time so that no line and no parse grows with the
+ * length of the history. */
+#define BUDDY_PAST_COUNT 15
+#define BUDDY_PAST_CHUNK 5
+#define BUDDY_DAY_MAX 12 /* "今天", "昨天", "10-08": the hub words it */
 /* Usage, as the hub lists it for the fourth screen: one entry per subscription
  * login (what is left of its two windows) with the helpers that share it, and
  * one per helper that has no subscription behind it (only its model). */
@@ -198,6 +206,7 @@ typedef enum {
     BUDDY_EVENT_KEY_DOUBLE, /* two quick presses; only OK is reported this way */
     BUDDY_EVENT_CARD,
     BUDDY_EVENT_TASKS,
+    BUDDY_EVENT_PAST,
     /* The conversation screen was scrolled past the end of a card: go to the
      * previous (key UP) or next (key DOWN) one. Raised by the interface. */
     BUDDY_EVENT_CARD_STEP,
@@ -219,6 +228,7 @@ typedef enum {
     BUDDY_ACTION_SCREEN_OFF,
     BUDDY_ACTION_VOICE_START,
     BUDDY_ACTION_VOICE_STOP,
+    BUDDY_ACTION_CARD_WANT, /* ask the hub for the card of a thing that was opened */
 } buddy_action_type_t;
 
 /* Push-to-talk: what the device is doing with the microphone right now. */
@@ -345,6 +355,16 @@ typedef struct {
     uint8_t effort;   /* buddy_effort_t */
 } buddy_task_t;
 
+/* A thing that ended, as the third screen lists it. */
+typedef struct {
+    char id[BUDDY_CARD_ID_MAX];
+    char agent[BUDDY_AGENT_MAX];
+    char title[BUDDY_TASK_TITLE_MAX];
+    char day[BUDDY_DAY_MAX]; /* the day it ended on, in the hub's words */
+    uint8_t state;           /* buddy_task_state_t: done, failed or cancelled */
+    uint8_t effort;          /* buddy_effort_t */
+} buddy_past_t;
+
 /* A helper on the usage screen. */
 typedef struct {
     char name[BUDDY_AGENT_MAX];
@@ -426,6 +446,12 @@ typedef struct {
     char card_said[BUDDY_MESSAGE_MAX];
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
+    /* PAST: a few of the things that ended. They go at past_at in the list,
+     * which past_total says is that long once every part has come. */
+    buddy_past_t past[BUDDY_PAST_CHUNK];
+    uint8_t past_count;
+    uint8_t past_at;
+    uint8_t past_total;
     pocket_update_command_t firmware;
     buddy_usage_t usage[BUDDY_USAGE_COUNT];
     unsigned usage_count;
@@ -455,6 +481,8 @@ typedef struct {
     /* VOICE_START: said from inside that thing (the task screen), so it belongs
      * to it whatever the words are. */
     bool voice_pin;
+    /* CARD_WANT: the thing whose card the hub is asked for. */
+    char want_card[BUDDY_CARD_ID_MAX];
 } buddy_action_t;
 
 typedef struct {
@@ -508,8 +536,13 @@ typedef struct {
      * ended; tasks_since_ms is when the list arrived. */
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
+    /* Counts through tasks and then past: one list on the screen. */
     unsigned task_selected;
     uint64_t tasks_since_ms;
+    /* Things that ended, newest first, under the ones in tasks. Points into the
+     * state, like cards: a copy would be another kilobyte and a half of RAM. */
+    const buddy_past_t *past;
+    unsigned past_count;
     /* The usage screen: usage_known says the hub sends usage at all (the screen
      * is then in the round), usage_since_ms when the list arrived. */
     buddy_usage_t usage[BUDDY_USAGE_COUNT];

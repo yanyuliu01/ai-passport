@@ -1,5 +1,7 @@
 #include "pocket_view.h"
 
+#include <string.h>
+
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -116,6 +118,101 @@ uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_
         total += (now_ms - since_ms) / 1000U;
     }
     return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
+}
+
+unsigned pocket_task_lines(const buddy_ui_snapshot_t *snapshot, pocket_task_line_t *lines,
+                           unsigned max)
+{
+    unsigned tasks;
+    unsigned past;
+    unsigned count = 0;
+    unsigned index;
+
+    if (snapshot == NULL || lines == NULL) {
+        return 0;
+    }
+    tasks = snapshot->task_count < BUDDY_TASK_COUNT ? snapshot->task_count : BUDDY_TASK_COUNT;
+    past = snapshot->past_count < BUDDY_PAST_COUNT ? snapshot->past_count : BUDDY_PAST_COUNT;
+    if (snapshot->past == NULL) {
+        past = 0;
+    }
+    for (index = 0; index < tasks && count < max; ++index) {
+        lines[count].header = false;
+        lines[count].item = (uint8_t)index;
+        ++count;
+    }
+    for (index = 0; index < past; ++index) {
+        const char *day = snapshot->past[index].day;
+
+        // 没写哪天的不分组；和上一件同一天的接在它后面。
+        if (day[0] != '\0' && (index == 0 || strcmp(day, snapshot->past[index - 1U].day) != 0)) {
+            if (count + 2U > max) {
+                break;
+            }
+            lines[count].header = true;
+            lines[count].item = (uint8_t)(tasks + index);
+            ++count;
+        }
+        if (count >= max) {
+            break;
+        }
+        lines[count].header = false;
+        lines[count].item = (uint8_t)(tasks + index);
+        ++count;
+    }
+    return count;
+}
+
+unsigned pocket_task_window(const pocket_task_line_t *lines, unsigned count,
+                            unsigned selected, unsigned top, int row, int header,
+                            int window)
+{
+    unsigned line = count;
+    unsigned first;
+    unsigned index;
+    int height;
+
+    if (lines == NULL || count == 0U) {
+        return 0;
+    }
+    for (index = 0; index < count; ++index) {
+        if (!lines[index].header && lines[index].item == selected) {
+            line = index;
+            break;
+        }
+    }
+    if (top >= count) {
+        top = count - 1U;
+    }
+    if (line < count) {
+        first = line > 0U && lines[line - 1U].header ? line - 1U : line;
+        if (top > first) {
+            top = first;
+        }
+        // 选中的那行还在窗口下面：往下挪，直到它整行露出来。
+        for (;;) {
+            height = 0;
+            for (index = top; index <= line; ++index) {
+                height += lines[index].header ? header : row;
+            }
+            if (height <= window || top >= line) {
+                break;
+            }
+            ++top;
+        }
+    }
+    // 单子变短了：不在底下留空。
+    while (top > 0U) {
+        height = 0;
+        for (index = top - 1U; index < count; ++index) {
+            height += lines[index].header ? header : row;
+        }
+        if (height > window) {
+            break;
+        }
+        --top;
+    }
+    return top;
 }
 
 int pocket_screen_count(const buddy_ui_snapshot_t *snapshot)

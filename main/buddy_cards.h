@@ -65,6 +65,42 @@ static inline bool buddy_task_active(const buddy_task_t *task)
            task->state == BUDDY_TASK_QUEUED;
 }
 
+/* The third screen is one list: the things in tasks (in progress, with their
+ * steps), then the ones in past (ended, by day). An index counts through both. */
+static inline const char *buddy_thing_id(const buddy_task_t *tasks, unsigned task_count,
+                                         const buddy_past_t *past, unsigned past_count,
+                                         unsigned index)
+{
+    if (index < task_count) {
+        return tasks[index].id;
+    }
+    index -= task_count;
+    return index < past_count ? past[index].id : "";
+}
+
+/* Where the thing called id is in that list; -1 when it is not on it. */
+static inline int buddy_thing_find(const buddy_task_t *tasks, unsigned task_count,
+                                   const buddy_past_t *past, unsigned past_count,
+                                   const char *id)
+{
+    unsigned index;
+
+    if (id == NULL || id[0] == '\0') {
+        return -1;
+    }
+    for (index = 0; index < task_count; ++index) {
+        if (strcmp(tasks[index].id, id) == 0) {
+            return (int)index;
+        }
+    }
+    for (index = 0; index < past_count; ++index) {
+        if (strcmp(past[index].id, id) == 0) {
+            return (int)(task_count + index);
+        }
+    }
+    return -1;
+}
+
 /* Takes the NUL-terminated string at offset out of the pool and closes the gap.
  * Offsets that pointed behind it move down with their strings. */
 static inline void buddy_cards_release(buddy_cards_t *cards, uint16_t offset)

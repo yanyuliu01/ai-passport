@@ -171,6 +171,8 @@ static void test_replies(void)
         .slot = "ota_0",
         .pending = true,
         .max_size = 4128768,
+        .heap_free = 41232,
+        .heap_low = 28764,
     };
     int length;
 
@@ -179,7 +181,21 @@ static void test_replies(void)
     assert(strcmp(line,
                   "{\"ack\":\"fw\",\"ok\":true,\"op\":\"info\",\"build\":\"0123456789abcdef\","
                   "\"ver\":\"v1.2-3-g403725c\",\"state\":\"pending\",\"slot\":\"ota_0\","
-                  "\"prev\":\"fedcba9876543210\",\"max\":4128768}\n") == 0);
+                  "\"prev\":\"fedcba9876543210\",\"max\":4128768,\"heap\":41232,"
+                  "\"low\":28764}\n") == 0);
+    /* The longest answer there can be still fits a line. */
+    {
+        pocket_update_info_t longest = info;
+
+        snprintf(longest.version, sizeof(longest.version), "%s",
+                 "v12345678901234567890123456789");
+        snprintf(longest.slot, sizeof(longest.slot), "%s", "ota_0123456789ab");
+        longest.max_size = UINT32_MAX;
+        longest.heap_free = UINT32_MAX;
+        longest.heap_low = UINT32_MAX;
+        length = pocket_update_info_json(line, sizeof(line), &longest);
+        assert(length > 0 && (size_t)length < POCKET_UPDATE_LINE_MAX);
+    }
     /* Anything that would need escaping in JSON is replaced, never emitted. */
     snprintf(info.version, sizeof(info.version), "%s", "a\"b\\c d");
     info.prev[0] = '\0';

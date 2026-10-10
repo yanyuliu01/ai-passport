@@ -1998,6 +1998,198 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     assert(state.task_count == 0);
 }
 
+/* The board has no PSRAM, and these three are held all the time (main.c checks
+ * them together with its receive buffers). A list made longer shows up here
+ * before it shows up as a device that cannot start Bluetooth. */
+_Static_assert(sizeof(buddy_state_t) + sizeof(buddy_event_t) + sizeof(buddy_ui_snapshot_t) <=
+                       24U * 1024U,
+               "fixed memory over budget: see BUDDY_STATIC_BUDGET_BYTES in main.c");
+
+/* A part of the things that ended: count of them, to go at `at` in a list that
+ * is `total` long. They are called p<first>, p<first + 1>, ... newest first. */
+static buddy_event_t past_event(unsigned at, unsigned count, unsigned total, unsigned first,
+                                uint32_t generation)
+{
+    buddy_event_t event = {.type = BUDDY_EVENT_PAST};
+    unsigned index;
+
+    for (index = 0; index < count && index < BUDDY_PAST_CHUNK; ++index) {
+        snprintf(event.past[index].id, sizeof(event.past[index].id), "p%u", first + index);
+        snprintf(event.past[index].agent, sizeof(event.past[index].agent), "%s", "codex");
+        snprintf(event.past[index].title, sizeof(event.past[index].title), "ended %u",
+                 first + index);
+        snprintf(event.past[index].day, sizeof(event.past[index].day), "%s",
+                 first + index < 3U ? "today" : "before");
+        event.past[index].state = (uint8_t)BUDDY_TASK_DONE;
+    }
+    event.past_at = (uint8_t)at;
+    event.past_count = (uint8_t)count;
+    event.past_total = (uint8_t)total;
+    event.ble.connection_generation = generation;
+    return event;
+}
+
+static void test_the_third_screen_keeps_the_things_that_ended(void)
+{
+    static buddy_state_t state;
+    static buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t up = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_UP};
+    buddy_event_t down = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_DOWN};
+    buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t release = {.type = BUDDY_EVENT_KEY_RELEASE, .key = BUDDY_KEY_OK};
+    buddy_event_t step_down = {.type = BUDDY_EVENT_CARD_STEP, .key = BUDDY_KEY_DOWN};
+    buddy_event_t event;
+    unsigned index;
+
+    voice_ready_state(&state);
+    state.ble_connected = true;
+    event = tasks_event(2, 7); /* c2 and c5, in progress */
+    buddy_state_reduce(&state, &event, 100, &action);
+
+    /* Twelve that ended arrive in three parts. Parts from another connection
+     * are not taken. The screen is redrawn once, when the last part is in. */
+    event = past_event(0, 5, 12, 0, 6);
+    buddy_state_reduce(&state, &event, 101, &action);
+    assert(state.past_count == 0 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(0, 5, 12, 0, 7);
+    buddy_state_reduce(&state, &event, 101, &action);
+    assert(state.past_count == 5 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(5, 5, 12, 5, 7);
+    buddy_state_reduce(&state, &event, 102, &action);
+    assert(state.past_count == 10 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(10, 2, 12, 10, 7);
+    buddy_state_reduce(&state, &event, 103, &action);
+    assert(state.past_count == 12 && action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.task_count == 2 && snapshot.past_count == 12 && snapshot.task_selected == 0);
+    assert(strcmp(snapshot.past[0].id, "p0") == 0 && strcmp(snapshot.past[11].id, "p11") == 0);
+    assert(strcmp(snapshot.past[2].day, "today") == 0 && strcmp(snapshot.past[3].day, "before") == 0);
+    /* Things that ended are not "in progress". */
+    assert(snapshot.doing == 2U);
+
+    /* UP and DOWN go through both lists as one, without wrapping round. */
+    state.page = BUDDY_PAGE_TASKS;
+    for (index = 0; index < 3; ++index) {
+        buddy_state_reduce(&state, &down, 110 + index, &action);
+    }
+    assert(state.task_selected == 3 && strcmp(state.task_pick, "p1") == 0);
+    for (index = 0; index < 20; ++index) {
+        buddy_state_reduce(&state, &down, 120 + index, &action);
+    }
+    assert(state.task_selected == 13 && strcmp(state.task_pick, "p11") == 0);
+    assert(action.type == BUDDY_ACTION_NONE);
+    for (index = 0; index < 10; ++index) {
+        buddy_state_reduce(&state, &up, 140 + index, &action);
+    }
+    assert(state.task_selected == 3);
+    /* Holding OK on one that ended talks inside it. */
+    buddy_state_reduce(&state, &long_ok, 150, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "p1") == 0 &&
+           action.voice_pin);
+    buddy_state_reduce(&state, &release, 151, &action);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 152, &action);
+
+    /* The things in progress change: the selection stays on the same thing. */
+    event = tasks_event(3, 7);
+    buddy_state_reduce(&state, &event, 160, &action);
+    assert(state.task_count == 3 && state.task_selected == 4 && strcmp(state.task_pick, "p1") == 0);
+    event = tasks_event(0, 7);
+    buddy_state_reduce(&state, &event, 161, &action);
+    assert(state.task_selected == 1);
+    event = tasks_event(2, 7);
+    buddy_state_reduce(&state, &event, 162, &action);
+    assert(state.task_selected == 3);
+
+    /* One more thing ended: every part moves down by one. The selection is left
+     * alone while the parts come in and is on the same thing afterwards. */
+    event = past_event(0, 5, 13, 0, 7);
+    snprintf(event.past[0].id, sizeof(event.past[0].id), "%s", "c5");
+    for (index = 1; index < 5; ++index) {
+        snprintf(event.past[index].id, sizeof(event.past[index].id), "p%u", index - 1U);
+    }
+    buddy_state_reduce(&state, &event, 170, &action);
+    assert(state.past_count == 12 && state.task_selected == 3 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(5, 5, 13, 4, 7);
+    buddy_state_reduce(&state, &event, 171, &action);
+    event = past_event(10, 3, 13, 9, 7);
+    buddy_state_reduce(&state, &event, 172, &action);
+    assert(state.past_count == 13 && action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(strcmp(state.past[0].id, "c5") == 0 && strcmp(state.past[12].id, "p11") == 0);
+    assert(state.task_selected == 4 && strcmp(buddy_thing_id(state.tasks, state.task_count,
+                                                             state.past, state.past_count, 4),
+                                              "p1") == 0);
+
+    /* OK opens the thing's own page. Its card is not on the device: the hub is
+     * asked for it, and until it comes the page is still that thing's. */
+    buddy_state_reduce(&state, &ok, 180, &action);
+    assert(state.page == BUDDY_PAGE_TALK && state.thread && strcmp(state.thread_id, "p1") == 0);
+    assert(action.type == BUDDY_ACTION_CARD_WANT && strcmp(action.want_card, "p1") == 0);
+    assert(action.connection_generation == 7U);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_thread && snapshot.card_index == -1 && snapshot.task_selected == 4);
+    event = card_event("p1", BUDDY_CARD_DONE, "codex", "ended 1", "it went well", 7);
+    buddy_state_reduce(&state, &event, 181, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_thread && snapshot.card_index >= 0);
+    assert(strcmp(snapshot.cards->cards[snapshot.card_index].id, "p1") == 0);
+    /* What is said there is said inside it. */
+    buddy_state_reduce(&state, &long_ok, 182, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "p1") == 0 &&
+           action.voice_pin);
+    buddy_state_reduce(&state, &release, 183, &action);
+    event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
+    buddy_state_reduce(&state, &event, 184, &action);
+    /* Past its end is the next thing on the list; its card is asked for too. */
+    buddy_state_reduce(&state, &step_down, 185, &action);
+    assert(strcmp(state.thread_id, "p2") == 0 && state.task_selected == 5);
+    assert(action.type == BUDDY_ACTION_CARD_WANT && strcmp(action.want_card, "p2") == 0);
+
+    /* The history is sent again while that page is open. Until the last part is
+     * in the page stays; the thing is still listed, so it stays afterwards too. */
+    event = past_event(0, 5, 6, 0, 7);
+    buddy_state_reduce(&state, &event, 190, &action);
+    assert(state.page == BUDDY_PAGE_TALK && state.thread && state.past_count == 13);
+    event = past_event(5, 1, 6, 5, 7);
+    buddy_state_reduce(&state, &event, 191, &action);
+    assert(state.past_count == 6 && state.past[6].id[0] == '\0' && state.past[12].id[0] == '\0');
+    assert(state.page == BUDDY_PAGE_TALK && state.thread && strcmp(state.thread_id, "p2") == 0);
+    assert(state.task_selected == 4);
+    /* It leaves the history: back to the list rather than onto another thing. */
+    event = past_event(0, 2, 2, 0, 7);
+    buddy_state_reduce(&state, &event, 192, &action);
+    assert(state.past_count == 2 && state.page == BUDDY_PAGE_TASKS && !state.thread);
+    assert(state.task_selected == 3);
+
+    /* A thing in progress whose card is missing is not asked for: its steps are
+     * on the list, and an older hub would not know the question. */
+    state.task_selected = 0;
+    buddy_state_reduce(&state, &ok, 200, &action);
+    assert(state.page == BUDDY_PAGE_TALK && state.thread && strcmp(state.thread_id, "c2") == 0);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_reduce(&state, &ok, 201, &action);
+    assert(!state.thread);
+
+    /* An empty history clears it. A part that does not fit the list is ignored. */
+    event = past_event(3, 2, 2, 0, 7);
+    buddy_state_reduce(&state, &event, 210, &action);
+    assert(state.past_count == 2);
+    event = past_event(0, 0, 0, 0, 7);
+    buddy_state_reduce(&state, &event, 211, &action);
+    assert(state.past_count == 0 && state.past[0].id[0] == '\0');
+
+    /* The link goes away: nobody is reporting them any more. */
+    event = past_event(0, 3, 3, 0, 7);
+    buddy_state_reduce(&state, &event, 220, &action);
+    assert(state.past_count == 3);
+    event = (buddy_event_t){.type = BUDDY_EVENT_BLE_DISCONNECTED};
+    event.ble.connection_generation = 8;
+    buddy_state_reduce(&state, &event, 221, &action);
+    assert(state.past_count == 0 && state.task_pick[0] == '\0' && state.thread_id[0] == '\0');
+}
+
 static void test_a_host_without_cards_still_shows_its_latest_reply(void)
 {
     buddy_state_t state;
@@ -2219,6 +2411,7 @@ int main(void)
     test_cards_are_kept_in_order_and_updated_in_place();
     test_the_conversation_screen_shows_one_card_at_a_time();
     test_the_third_screen_lists_the_things_in_progress();
+    test_the_third_screen_keeps_the_things_that_ended();
     test_a_host_without_cards_still_shows_its_latest_reply();
     test_a_recording_on_its_way_is_not_wiped_by_an_idle_report();
     test_helpers_belong_to_the_connection();

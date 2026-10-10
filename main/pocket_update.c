@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "mbedtls/sha256.h"
 
@@ -181,6 +182,8 @@ static void update_handle_info(uint32_t generation)
         }
     }
     info.pending = s_pending_verify;
+    info.heap_free = esp_get_free_heap_size();
+    info.heap_low = esp_get_minimum_free_heap_size();
     update_send(line, pocket_update_info_json(line, sizeof(line), &info), generation);
 }
 
@@ -455,6 +458,21 @@ static void update_task(void *context)
             s_pending_verify = false;
         }
     }
+}
+
+void pocket_update_unusable(const char *why)
+{
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+
+    if (running == NULL || esp_ota_get_state_partition(running, &state) != ESP_OK ||
+        state != ESP_OTA_IMG_PENDING_VERIFY) {
+        return;
+    }
+    // 还在试用期的新固件连蓝牙都起不来：手机不可能连上来说“认可”，等满三分钟
+    // 没有意义，现在就退回上一版。
+    ESP_LOGE(TAG, "new firmware cannot work (%s); rolling back now", why != NULL ? why : "?");
+    (void)esp_ota_mark_app_invalid_rollback_and_reboot();
 }
 
 esp_err_t pocket_update_init(void)

@@ -357,6 +357,110 @@ static void test_task_clock(void)
     assert(pocket_task_seconds(UINT32_MAX, 0, 10000) == UINT32_MAX);
 }
 
+static void put_ended(buddy_ui_snapshot_t *snap, const char *id, const char *day)
+{
+    static buddy_past_t ended[BUDDY_PAST_COUNT];
+    buddy_past_t *past;
+
+    if (snap->past_count == 0U) {
+        memset(ended, 0, sizeof(ended));
+    }
+    snap->past = ended;
+    past = &ended[snap->past_count++];
+    (void)snprintf(past->id, sizeof(past->id), "%s", id);
+    (void)snprintf(past->day, sizeof(past->day), "%s", day);
+}
+
+static void test_the_task_list_as_lines(void)
+{
+    static buddy_ui_snapshot_t snap;
+    pocket_task_line_t lines[POCKET_TASK_LINES_MAX];
+    unsigned count;
+    unsigned index;
+    /* The firmware's sizes: a row 31 pixels, a day 24, a window of five rows. */
+    const int row = 31;
+    const int day = 24;
+    const int window = 155;
+
+    memset(&snap, 0, sizeof(snap));
+    assert(pocket_task_lines(&snap, lines, POCKET_TASK_LINES_MAX) == 0);
+    assert(pocket_task_lines(NULL, lines, POCKET_TASK_LINES_MAX) == 0);
+    assert(pocket_task_window(lines, 0, 0, 3, row, day, window) == 0);
+
+    /* Two things in progress, then five that ended on three days. */
+    snap.task_count = 2;
+    put_ended(&snap, "c9", "今天");
+    put_ended(&snap, "c8", "今天");
+    put_ended(&snap, "c7", "昨天");
+    put_ended(&snap, "c6", "10-08");
+    put_ended(&snap, "c5", "10-08");
+    count = pocket_task_lines(&snap, lines, POCKET_TASK_LINES_MAX);
+    /* row row | 今天 row row | 昨天 row | 10-08 row row */
+    assert(count == 10);
+    assert(!lines[0].header && lines[0].item == 0 && !lines[1].header && lines[1].item == 1);
+    assert(lines[2].header && lines[2].item == 2 && !lines[3].header && lines[3].item == 2);
+    assert(!lines[4].header && lines[4].item == 3);
+    assert(lines[5].header && lines[5].item == 4 && !lines[6].header && lines[6].item == 4);
+    assert(lines[7].header && lines[7].item == 5 && !lines[8].header && lines[8].item == 5);
+    assert(!lines[9].header && lines[9].item == 6);
+
+    /* The window stays where it is while the selection is inside it. */
+    assert(pocket_task_window(lines, count, 0, 0, row, day, window) == 0);
+    assert(pocket_task_window(lines, count, 2, 0, row, day, window) == 0);
+    /* 31 + 31 + 24 + 31 + 31 = 148 fits; the next thing (after its day) does not. */
+    assert(pocket_task_window(lines, count, 3, 0, row, day, window) == 0);
+    /* Going down moves it just far enough for the whole row to show. */
+    assert(pocket_task_window(lines, count, 4, 0, row, day, window) == 2);
+    assert(pocket_task_window(lines, count, 6, 2, row, day, window) == 5);
+    /* Going up: the first of a day brings the day's name along. */
+    assert(pocket_task_window(lines, count, 4, 7, row, day, window) == 5);
+    assert(pocket_task_window(lines, count, 3, 7, row, day, window) == 4);
+    assert(pocket_task_window(lines, count, 2, 7, row, day, window) == 2);
+    assert(pocket_task_window(lines, count, 0, 7, row, day, window) == 0);
+    /* Nothing is left empty at the bottom: 24 + 31 + 24 + 31 + 31 = 141 fits, so
+     * a window that was further down comes back up to there. */
+    assert(pocket_task_window(lines, count, 6, 9, row, day, window) == 5);
+    /* A selection that is not on the list leaves the window alone, but inside. */
+    assert(pocket_task_window(lines, count, 40, 3, row, day, window) == 3);
+    assert(pocket_task_window(lines, count, 40, 30, row, day, window) == 5);
+
+    /* Things without a day are not grouped; the same day again is a new group. */
+    memset(&snap, 0, sizeof(snap));
+    put_ended(&snap, "c3", "");
+    put_ended(&snap, "c2", "今天");
+    put_ended(&snap, "c1", "");
+    put_ended(&snap, "c0", "今天");
+    count = pocket_task_lines(&snap, lines, POCKET_TASK_LINES_MAX);
+    assert(count == 6 && !lines[0].header && lines[1].header && !lines[3].header &&
+           lines[4].header);
+
+    /* The longest list there can be fits the buffer, each thing on a day of its
+     * own; a smaller buffer never ends on a day's name without its thing. */
+    memset(&snap, 0, sizeof(snap));
+    snap.task_count = BUDDY_TASK_COUNT;
+    for (index = 0; index < BUDDY_PAST_COUNT; ++index) {
+        char id[BUDDY_CARD_ID_MAX];
+        char name[BUDDY_DAY_MAX];
+
+        (void)snprintf(id, sizeof(id), "c%u", index);
+        (void)snprintf(name, sizeof(name), "10-%02u", index + 1U);
+        put_ended(&snap, id, name);
+    }
+    count = pocket_task_lines(&snap, lines, POCKET_TASK_LINES_MAX);
+    assert(count == POCKET_TASK_LINES_MAX);
+    assert(!lines[count - 1U].header &&
+           lines[count - 1U].item == BUDDY_TASK_COUNT + BUDDY_PAST_COUNT - 1U);
+    count = pocket_task_lines(&snap, lines, 7);
+    assert(count == 6 && !lines[5].header);
+    /* The last one can always be reached. */
+    count = pocket_task_lines(&snap, lines, POCKET_TASK_LINES_MAX);
+    index = pocket_task_window(lines, count, BUDDY_TASK_COUNT + BUDDY_PAST_COUNT - 1U, 0, row,
+                               day, window);
+    /* Two days with their things are 110 pixels and a third would be 165; the
+     * thing above them still fits (141), so the window starts on it. */
+    assert(index == count - 5U);
+}
+
 static void test_which_screen(void)
 {
     buddy_ui_snapshot_t snapshot = connected_snapshot();
@@ -432,6 +536,7 @@ int main(void)
 {
     test_scrolling_inside_a_card();
     test_task_clock();
+    test_the_task_list_as_lines();
     test_which_screen();
     test_usage_times_and_bars();
     test_view_priority();

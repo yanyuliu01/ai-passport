@@ -220,6 +220,23 @@ static void put_task(buddy_ui_snapshot_t *snap, const char *id, const char *agen
     snap->tasks_since_ms = snap->uptime_ms;
 }
 
+/* A thing that ended, for the lower part of the third screen. */
+static void put_past(buddy_ui_snapshot_t *snap, const char *id, const char *agent,
+                     const char *title, buddy_task_state_t state, const char *day,
+                     buddy_effort_t effort)
+{
+    static buddy_past_t s_past[BUDDY_PAST_COUNT];
+    buddy_past_t *past = &s_past[snap->past_count++];
+
+    snap->past = s_past;
+    (void)snprintf(past->id, sizeof(past->id), "%s", id);
+    (void)snprintf(past->agent, sizeof(past->agent), "%s", agent);
+    (void)snprintf(past->title, sizeof(past->title), "%s", title);
+    (void)snprintf(past->day, sizeof(past->day), "%s", day);
+    past->state = (uint8_t)state;
+    past->effort = (uint8_t)effort;
+}
+
 /* One entry of the usage screen with one helper; add_who() adds a second one. */
 static buddy_usage_t *put_usage(buddy_ui_snapshot_t *snap, buddy_quota_t state, int left_short,
                                 int left_week, const char *name, const char *model,
@@ -556,6 +573,91 @@ int main(int argc, char **argv)
     snap.card_thread = false;
     snap.task_selected = 2;
     show("55_tasks_hint_open", &snap);
+    memset(&s_cards, 0, sizeof(s_cards));
+    /* The history: things that ended stay under the ones in progress, grouped by
+     * the day they ended on. The list is a window that follows the selection. */
+    snap = hub_snapshot();
+    snap.cards = &s_cards;
+    snap.page = BUDDY_PAGE_TASKS;
+    snap.doing = 2;
+    put_task(&snap, "c61", "codex", "看 retry 的重试次数", BUDDY_TASK_WORKING, 48, "git diff",
+             "pytest -q tests/test_retry.py");
+    snap.tasks[0].effort = (uint8_t)BUDDY_EFFORT_HIGH;
+    put_task(&snap, "c62", "claude", "整理上周的会议记录", BUDDY_TASK_WAITING, 300,
+             "Read notes.md", "");
+    {
+        static const struct {
+            const char *id;
+            const char *agent;
+            const char *title;
+            buddy_task_state_t state;
+            const char *day;
+            buddy_effort_t effort;
+        } ended[] = {
+            {"c60", "deepseek", "查一下明天的天气", BUDDY_TASK_DONE, "今天", BUDDY_EFFORT_NONE},
+            {"c59", "tailor", "把字调大一号", BUDDY_TASK_DONE, "今天", BUDDY_EFFORT_LOW},
+            {"c58", "codex", "跑一遍全部测试", BUDDY_TASK_FAILED, "今天", BUDDY_EFFORT_MEDIUM},
+            {"c57", "claude", "把周报改成三段", BUDDY_TASK_DONE, "昨天", BUDDY_EFFORT_MEDIUM},
+            {"c56", "codex", "看看登录为什么慢", BUDDY_TASK_CANCELLED, "昨天",
+             BUDDY_EFFORT_HIGH},
+            {"c55", "deepseek", "查 Notion 的登录接法", BUDDY_TASK_DONE, "昨天",
+             BUDDY_EFFORT_NONE},
+            {"c54", "claude", "把上个月的报销单据整理成一张表", BUDDY_TASK_DONE, "10-08",
+             BUDDY_EFFORT_MEDIUM},
+            {"c53", "codex", "给接口补测试", BUDDY_TASK_DONE, "10-08", BUDDY_EFFORT_LOW},
+            {"c52", "tailor", "待机文案改成待命中", BUDDY_TASK_DONE, "10-07",
+             BUDDY_EFFORT_NONE},
+            {"c51", "codex", "第一次试 app-server", BUDDY_TASK_FAILED, "10-06",
+             BUDDY_EFFORT_MEDIUM},
+            {"c50", "claude", "看一下蓝牙换固件的方案", BUDDY_TASK_DONE, "10-06",
+             BUDDY_EFFORT_HIGH},
+            {"c49", "claude", "语音识别用哪个引擎", BUDDY_TASK_DONE, "10-05",
+             BUDDY_EFFORT_MEDIUM},
+            {"c48", "codex", "把构建搬到本机", BUDDY_TASK_DONE, "10-05", BUDDY_EFFORT_MEDIUM},
+            {"c47", "deepseek", "查任务为什么串行", BUDDY_TASK_DONE, "10-04",
+             BUDDY_EFFORT_NONE},
+            {"c46", "claude", "最早的一件", BUDDY_TASK_CANCELLED, "10-03", BUDDY_EFFORT_LOW},
+        };
+        unsigned index;
+
+        for (index = 0; index < sizeof(ended) / sizeof(ended[0]); ++index) {
+            put_past(&snap, ended[index].id, ended[index].agent, ended[index].title,
+                     ended[index].state, ended[index].day, ended[index].effort);
+        }
+    }
+    snap.task_selected = 0;
+    show("56_history_top", &snap);
+    snap.task_selected = 2;
+    show("57_history_first_ended", &snap);
+    snap.task_selected = 4;
+    show("58_history_failed", &snap);
+    snap.task_selected = 5;
+    show("59_history_next_day", &snap);
+    snap.task_selected = 9;
+    show("60_history_scrolled", &snap);
+    snap.task_selected = 16;
+    show("61_history_last", &snap);
+    snap.task_selected = 6;
+    show("62_history_back_up", &snap);
+    /* Opened, and its card is not on the device: what the list knows, until the
+     * hub sends the card it was asked for. */
+    snap.page = BUDDY_PAGE_TALK;
+    snap.card_thread = true;
+    snap.card_index = -1;
+    snap.card_serial = 30;
+    show("63_history_page_waiting_for_card", &snap);
+    put_card("c56", "09:12", BUDDY_CARD_CANCELLED, "codex", 0, "看看登录为什么慢",
+             "小幽：交给 codex 了\n\n你：先不看了\n\n小幽：好，停掉了。", false);
+    snap.card_index = buddy_cards_find(&s_cards, "c56");
+    snap.card_serial = 31;
+    show("64_history_page_card", &snap);
+    /* No things in progress: the history starts at the top. */
+    snap.page = BUDDY_PAGE_TASKS;
+    snap.card_thread = false;
+    snap.task_count = 0;
+    snap.doing = 0;
+    snap.task_selected = 0;
+    show("65_history_only", &snap);
     memset(&s_cards, 0, sizeof(s_cards));
     snap = hub_snapshot();
     pocket_ui_render(&snap);

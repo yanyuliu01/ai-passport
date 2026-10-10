@@ -17,6 +17,10 @@
 // 启动换固件任务；如果这次是新固件第一次启动，开始等“认可”的倒计时。
 // 分区表里没有第二个槽位时也返回 ESP_OK：命令照常应答，只是 begin 会被拒绝。
 esp_err_t pocket_update_init(void);
+// 这一版固件有一样离不了的东西没起来（比如蓝牙，多半是内存不够）。如果它是还没被
+// 认可的新固件，立刻退回上一版并重启，不等“认可”的期限；已经定下来的固件什么都不做。
+// 可以在 pocket_update_init 之前调用。
+void pocket_update_unusable(const char *why);
 // 一条 {"cmd":"fw",…}。generation 是收到它的那条蓝牙连接的代号，回话发回同一条连接。
 void pocket_update_command(const pocket_update_command_t *command,
                            uint32_t connection_generation);

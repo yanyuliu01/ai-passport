@@ -257,9 +257,10 @@ int pocket_update_info_json(char *out, size_t size, const pocket_update_info_t *
     return finish(snprintf(out, size,
                            "{\"ack\":\"fw\",\"ok\":true,\"op\":\"info\",\"build\":\"%s\","
                            "\"ver\":\"%s\",\"state\":\"%s\",\"slot\":\"%s\",\"prev\":\"%s\","
-                           "\"max\":%" PRIu32 "}\n",
+                           "\"max\":%" PRIu32 ",\"heap\":%" PRIu32 ",\"low\":%" PRIu32
+                           "}\n",
                            build, version, info->pending ? "pending" : "valid", slot, prev,
-                           info->max_size),
+                           info->max_size, info->heap_free, info->heap_low),
                   size);
 }
 

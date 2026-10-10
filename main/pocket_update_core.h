@@ -6,7 +6,7 @@
 //
 //   {"cmd":"fw","op":"info"}
 //     ← {"ack":"fw","ok":true,"op":"info","build":"…","ver":"…","state":"valid",
-//        "slot":"ota_0","prev":"…","max":4128768}
+//        "slot":"ota_0","prev":"…","max":4128768,"heap":41232,"low":28764}
 //   {"cmd":"fw","op":"begin","size":N,"sha256":"<64 位十六进制>"}
 //     ← {"ack":"fw","ok":true,"op":"begin","offset":K,"chunk":C,"window":W}
 //   数据帧 ×N（见下）；设备每写入一段就报一次：
@@ -165,6 +165,10 @@ typedef struct {
     char slot[POCKET_UPDATE_SLOT_MAX];
     bool pending;                              // 新固件还没被认可
     uint32_t max_size;                         // 一个槽位放得下多大的镜像
+    // 内部内存现在还剩多少、开机以来最少剩过多少（字节）。这块板没有外接内存，
+    // 界面、蓝牙和任务栈共用一份：一版固件多占了多少，在这里看得出来。
+    uint32_t heap_free;
+    uint32_t heap_low;
 } pocket_update_info_t;
 
 int pocket_update_info_json(char *out, size_t size, const pocket_update_info_t *info);

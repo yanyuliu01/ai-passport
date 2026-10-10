@@ -596,11 +596,11 @@ static void test_chat_reports_the_conversation(void)
     }
 
     {
-        char ack[96];
+        char ack[112];
 
         assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
         assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                           "\"threads\":true,\"usage\":true}\n") == 0);
+                           "\"threads\":true,\"usage\":true,\"past\":true}\n") == 0);
     }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }
@@ -731,6 +731,68 @@ static void test_tasks_lists_the_things_in_progress(void)
     assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"a-card-id-that-is-too-long\"}]}",
                  &event) == BUDDY_EVENT_MALFORMED);
     assert(event.task_count == 0);
+}
+
+static void test_past_lists_the_things_that_ended_in_parts(void)
+{
+    buddy_event_t event;
+    char json[64];
+
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":7,\"list\":["
+                 "{\"id\":\"c41\",\"agent\":\"deepseek\",\"title\":\"history\",\"state\":\"done\","
+                 "\"day\":\"今天\",\"eff\":\"high\"},"
+                 "{\"id\":\"c40\",\"agent\":\"tailor\",\"title\":\"flash\",\"state\":\"failed\","
+                 "\"day\":\"今天\"},"
+                 "{\"id\":\"c38\",\"state\":\"cancelled\",\"day\":\"10-08\"}]}",
+                 &event) == BUDDY_EVENT_PAST);
+    assert(event.past_at == 0 && event.past_total == 7 && event.past_count == 3);
+    assert(strcmp(event.past[0].id, "c41") == 0 && strcmp(event.past[0].agent, "deepseek") == 0);
+    assert(strcmp(event.past[0].title, "history") == 0 && strcmp(event.past[0].day, "今天") == 0);
+    assert(event.past[0].state == BUDDY_TASK_DONE && event.past[0].effort == BUDDY_EFFORT_HIGH);
+    assert(event.past[1].state == BUDDY_TASK_FAILED && event.past[1].effort == BUDDY_EFFORT_NONE);
+    assert(event.past[2].state == BUDDY_TASK_CANCELLED && strcmp(event.past[2].day, "10-08") == 0);
+    assert(event.past[2].agent[0] == '\0' && event.past[2].title[0] == '\0');
+
+    /* A later part says where it goes. One part holds BUDDY_PAST_CHUNK at most,
+     * and nothing lands beyond the end of the list. */
+    assert(parse("{\"cmd\":\"past\",\"at\":5,\"n\":7,\"list\":["
+                 "{\"id\":\"c30\"},{\"id\":\"c29\"},{\"id\":\"c28\"}]}",
+                 &event) == BUDDY_EVENT_PAST);
+    assert(event.past_at == 5 && event.past_total == 7 && event.past_count == 2);
+    assert(strcmp(event.past[1].id, "c29") == 0);
+    /* A thing without a state ended well; one without an id is left out. */
+    assert(event.past[0].state == BUDDY_TASK_DONE);
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":9,\"list\":["
+                 "{\"id\":\"c1\"},{\"id\":\"c2\"},{\"title\":\"nameless\"},{\"id\":\"c4\"},"
+                 "{\"id\":\"c5\"},{\"id\":\"c6\"},{\"id\":\"c7\"}]}",
+                 &event) == BUDDY_EVENT_PAST);
+    assert(event.past_count == BUDDY_PAST_CHUNK && strcmp(event.past[2].id, "c4") == 0);
+    assert(strcmp(event.past[4].id, "c6") == 0);
+    /* The list is never longer than the device keeps. */
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":40,\"list\":[{\"id\":\"c1\"}]}", &event) ==
+           BUDDY_EVENT_PAST);
+    assert(event.past_total == BUDDY_PAST_COUNT && event.past_count == 1);
+    /* Nothing ended yet, or the history was cleared. */
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":0,\"list\":[]}", &event) == BUDDY_EVENT_PAST);
+    assert(event.past_total == 0 && event.past_count == 0);
+
+    assert(parse("{\"cmd\":\"past\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(strcmp(event.command.name, "past") == 0);
+    assert(parse("{\"cmd\":\"past\",\"at\":3,\"n\":2,\"list\":[]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"past\",\"at\":-1,\"n\":2,\"list\":[]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":2,\"list\":[\"c1\"]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":2,\"list\":[{\"id\":7}]}", &event) ==
+           BUDDY_EVENT_MALFORMED);
+
+    /* The device asks for the card of a thing it lists but does not hold. */
+    assert(buddy_protocol_want_json(json, sizeof(json), "c41") > 0);
+    assert(strcmp(json, "{\"evt\":\"want\",\"card\":\"c41\"}\n") == 0);
+    assert(buddy_protocol_want_json(json, sizeof(json), "") == 0);
+    assert(buddy_protocol_want_json(json, sizeof(json), NULL) == 0);
+    assert(buddy_protocol_want_json(json, 8, "c41") == 0);
 }
 
 static void test_usage_lists_what_is_left_and_who_runs_on_what(void)
@@ -895,6 +957,7 @@ int main(void)
     test_helpers_lists_who_xiaoyou_can_ask();
     test_card_carries_one_thing();
     test_tasks_lists_the_things_in_progress();
+    test_past_lists_the_things_that_ended_in_parts();
     test_usage_lists_what_is_left_and_who_runs_on_what();
     test_firmware_commands();
     test_file_transfer_commands_are_unsupported();

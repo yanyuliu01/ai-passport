@@ -198,7 +198,7 @@ static void test_hub_hello_is_acknowledged_and_enables_voice(void)
     assert(state.host_hub);
     /* The acknowledgement also says this firmware takes "chat" and "helpers". */
     assert(strcmp(fake.sent, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true,"
-                              "\"usage\":true}\n") == 0);
+                              "\"usage\":true,\"past\":true}\n") == 0);
 
     /* Those messages change what is on screen and are not acknowledged one by one. */
     fake.sent[0] = '\0';
@@ -227,6 +227,20 @@ static void test_hub_hello_is_acknowledged_and_enables_voice(void)
     assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
     action.type = BUDDY_ACTION_VOICE_STOP;
     assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
+
+    /* A thing that ended was opened and its card is not here: the hub is asked. */
+    fake.sent[0] = '\0';
+    memset(&action, 0, sizeof(action));
+    action.type = BUDDY_ACTION_CARD_WANT;
+    action.connection_generation = 7;
+    snprintf(action.want_card, sizeof(action.want_card), "%s", "c41");
+    assert(buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
+    assert(strcmp(fake.sent, "{\"evt\":\"want\",\"card\":\"c41\"}\n") == 0);
+    /* Without a thing to ask for nothing is sent. */
+    fake.sent[0] = '\0';
+    action.want_card[0] = '\0';
+    assert(!buddy_orchestrator_execute_action(&state, &ops, &action, NULL));
+    assert(fake.sent[0] == '\0');
 }
 
 static void test_firmware_commands_go_to_the_updater(void)

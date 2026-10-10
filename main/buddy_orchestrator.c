@@ -207,6 +207,10 @@ bool buddy_orchestrator_execute_action(buddy_state_t *state,
     case BUDDY_ACTION_BLE_TOGGLE:
         return ops->set_ble_enabled != NULL &&
                ops->set_ble_enabled(ops->context, action->ble_enabled) == ESP_OK;
+    case BUDDY_ACTION_CARD_WANT:
+        length = buddy_protocol_want_json(json, sizeof(json), action->want_card);
+        return buddy_orchestrator_send_json(ops, json, length,
+                                            action->connection_generation) == ESP_OK;
     case BUDDY_ACTION_NONE:
     case BUDDY_ACTION_UI_REFRESH:
     case BUDDY_ACTION_UI_SCROLL:

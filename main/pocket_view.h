@@ -47,6 +47,24 @@ int pocket_card_scroll(int y, int direction, int content, int view, int step, in
 // 第三屏（任务）里一件事已经做了多少秒：中枢说的秒数加上从那以后过去的时间。
 uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_ms);
 
+// 第三屏的单子在屏幕上是一行一行的：一件事一行；做完的事按天分组，每换一天
+// 前面多一行写着哪天的小标题。item 是这一行（小标题则是它下面那一行）在单子里
+// 的位置，先数还在做的（tasks），再数做完的（past）。
+typedef struct {
+    bool header;
+    uint8_t item;
+} pocket_task_line_t;
+#define POCKET_TASK_LINES_MAX (BUDDY_TASK_COUNT + 2 * BUDDY_PAST_COUNT)
+// 把单子排成行，写进 lines（最多 max 行），返回行数。
+unsigned pocket_task_lines(const buddy_ui_snapshot_t *snapshot, pocket_task_line_t *lines,
+                           unsigned max);
+// 窗口只有 window 像素高，放不下整张单子：返回该从第几行画起，选中的那件事才整行
+// 都在窗口里。top 是窗口原来从第几行画起，能不动就不动；选中的是它那一天的头一件
+// 时，把那天的小标题也带上。row 和 header 是一件事、一个小标题各占多高。
+unsigned pocket_task_window(const pocket_task_line_t *lines, unsigned count,
+                            unsigned selected, unsigned top, int row, int header,
+                            int window);
+
 // 一共几屏轮着切：中枢发过用量就是四屏（多一屏用量），否则三屏。
 int pocket_screen_count(const buddy_ui_snapshot_t *snapshot);
 // 现在在第几屏（0 起）；不在这几屏上（菜单之类）是 -1。从第三屏进到一件任务里时

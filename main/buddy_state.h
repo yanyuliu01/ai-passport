@@ -63,11 +63,19 @@ typedef struct {
     /* Things in progress, the one selected on the third screen, when the list came. */
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
+    /* Counts through tasks and then past: the third screen is one list. */
     unsigned task_selected;
     uint64_t tasks_since_ms;
-    /* The talk page is open on the thing selected on the third screen (entered
-     * from there with OK) instead of on the conversation. */
+    /* Things that ended, newest first; the hub sends them in parts. */
+    buddy_past_t past[BUDDY_PAST_COUNT];
+    unsigned past_count;
+    /* The thing the selection is on, by name: the lists are replaced while the
+     * owner looks at them, and the selection stays with the thing. */
+    char task_pick[BUDDY_CARD_ID_MAX];
+    /* The talk page is open on a thing from the third screen (entered from
+     * there with OK) instead of on the conversation; thread_id is that thing. */
     bool thread;
+    char thread_id[BUDDY_CARD_ID_MAX];
     /* Usage as the hub last listed it, and when. usage_known: this hub sends
      * usage, so the fourth screen is in the round. */
     buddy_usage_t usage[BUDDY_USAGE_COUNT];

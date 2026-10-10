@@ -123,9 +123,20 @@ enum {
 #define TASK_ROW_GAP    3
 #define TASK_ROW_Y      2
 #define TASK_TAG_TEXT_W 52
-#define TASK_RULE_Y     (TASK_ROW_Y + BUDDY_TASK_COUNT * (TASK_ROW_H + TASK_ROW_GAP) + 1)
+// 单子是一个五行高的窗口，里面的行是固定的几个控件轮着用（开机时就建好，
+// 不随单子变长再要内存）：一件事一行，做完的事每换一天多一行小标题。放不下
+// 整行的不画；单子有多长、现在在第几件，写在下面标题那一行的右边。
+#define TASK_STEP       (TASK_ROW_H + TASK_ROW_GAP)
+#define TASK_DAY_STEP   (LINE_16 + 1)
+#define TASK_LIST_ROWS  5
+#define TASK_LIST_H     (TASK_LIST_ROWS * TASK_STEP)
+// 窗口里最多同时有几行、几个小标题。
+#define TASK_POOL       TASK_LIST_ROWS
+#define TASK_DAY_POOL   3
+#define TASK_COUNT_W    44
+#define TASK_RULE_Y     (TASK_ROW_Y + TASK_LIST_H + 1)
 #define TASK_LINE_Y     (TASK_RULE_Y + 5)
-#define TASK_HINT_Y     (TASK_LINE_Y + 4 * LINE_16 + 1)
+#define TASK_HINT_Y     (TASK_LINE_Y + 3 * LINE_16 + 1)
 
 // 第四屏。一个账号一块：每个帮手一行（名牌，后面是模型名），下面两行是两个窗口各还剩
 // 多少（一条格子、一个数），再一行小字是什么时候重置。没有订阅的帮手只有名牌那一行。
@@ -252,10 +263,14 @@ static struct {
     int tl_content;        // 这件事的话总共多高
     int tl_y;              // 窗口现在在哪儿
     // 第三屏：任务
-    lv_obj_t *task_rows[BUDDY_TASK_COUNT];
-    tag_t task_tags[BUDDY_TASK_COUNT];
-    lv_obj_t *task_titles[BUDDY_TASK_COUNT];
-    lv_obj_t *task_rights[BUDDY_TASK_COUNT];
+    lv_obj_t *task_list;
+    lv_obj_t *task_rows[TASK_POOL];
+    tag_t task_tags[TASK_POOL];
+    lv_obj_t *task_titles[TASK_POOL];
+    lv_obj_t *task_rights[TASK_POOL];
+    lv_obj_t *task_days[TASK_DAY_POOL];
+    lv_obj_t *task_place;  // 第几件 / 一共几件
+    unsigned task_top;     // 窗口从单子的第几行画起
     lv_obj_t *task_detail;
     lv_obj_t *task_title;
     lv_obj_t *task_lines[2];
@@ -960,9 +975,10 @@ static void build_tasks(lv_obj_t *page)
 {
     int index;
 
-    for (index = 0; index < BUDDY_TASK_COUNT; ++index) {
-        lv_obj_t *row = make_box(page, SIDE, TASK_ROW_Y + index * (TASK_ROW_H + TASK_ROW_GAP),
-                                 INNER_W, TASK_ROW_H);
+    // 行都是这个窗口的孩子：露在窗口外面的那一截不画。
+    s.task_list = make_box(page, SIDE, TASK_ROW_Y, INNER_W, TASK_LIST_H);
+    for (index = 0; index < TASK_POOL; ++index) {
+        lv_obj_t *row = make_box(s.task_list, 0, index * TASK_STEP, INNER_W, TASK_ROW_H);
 
         fill(row, C_CARD, 9);
         lv_obj_set_style_border_color(row, lv_color_hex(C_XIAOYOU), 0);
@@ -977,18 +993,28 @@ static void build_tasks(lv_obj_t *page)
         lv_obj_align(s.task_rights[index], LV_ALIGN_RIGHT_MID, -6, 0);
         lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
     }
+    // 哪天做完的：对面发来的字（今天、昨天、10-08），用全字库的 16 号字。
+    for (index = 0; index < TASK_DAY_POOL; ++index) {
+        s.task_days[index] = make_label(s.task_list, &pocket_font_16, C_DIM, "");
+        lv_obj_set_x(s.task_days[index], 4);
+        lv_obj_add_flag(s.task_days[index], LV_OBJ_FLAG_HIDDEN);
+    }
     // 选中那件的最近两步：工具名和命令原样，不由小幽转述。
     s.task_detail = make_box(page, 0, 0, SCREEN_W, AREA_H);
     fill(make_box(s.task_detail, SIDE, TASK_RULE_Y, INNER_W, 1), C_LINE, 0);
     s.task_title = make_text_block(s.task_detail, &pocket_font_16, C_XIAOYOU, SIDE + 2,
-                                   TASK_LINE_Y, INNER_W - 4, LINES_16(1));
+                                   TASK_LINE_Y, INNER_W - 4 - TASK_COUNT_W, LINES_16(1));
+    s.task_place = make_label(s.task_detail, &pocket_font_14, C_DIM, "");
+    lv_obj_set_width(s.task_place, TASK_COUNT_W);
+    lv_obj_set_style_text_align(s.task_place, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s.task_place, SIDE + INNER_W - 2 - TASK_COUNT_W, TASK_LINE_Y + 3);
     s.task_lines[0] = make_text_block(s.task_detail, &pocket_font_16, C_DIM, SIDE + 2,
                                       TASK_LINE_Y + LINE_16, INNER_W - 4, LINES_16(1));
     s.task_lines[1] = make_text_block(s.task_detail, &pocket_font_16, C_TEXT, SIDE + 2,
-                                      TASK_LINE_Y + 2 * LINE_16, INNER_W - 4, LINES_16(2));
-    // 选中的是做完的事：这三行是它的结论。
+                                      TASK_LINE_Y + 2 * LINE_16, INNER_W - 4, LINES_16(1));
+    // 选中的是做完的事：这两行是它的结论，或者它是哪天、怎么结束的。
     s.task_result = make_text_block(s.task_detail, &pocket_font_16, C_TEXT, SIDE + 2,
-                                    TASK_LINE_Y + LINE_16, INNER_W - 4, LINES_16(3));
+                                    TASK_LINE_Y + LINE_16, INNER_W - 4, LINES_16(2));
     {
         lv_obj_t *hint = make_label(s.task_detail, &pocket_font_14, C_DIM, PT_TASKS_HINT);
 
@@ -1615,17 +1641,97 @@ static void render_home(const buddy_ui_snapshot_t *snap)
 
 // ---- 第二屏：对话，一屏一件事 ----
 
+// 第三屏那张单子上的一件事：还在做的（task，带最近两步）或者做完的（past）。
+typedef struct {
+    const char *id;
+    const char *agent;
+    const char *title;
+    const buddy_task_t *task;  // 还在做的那一类才有
+    const buddy_past_t *past;  // 做完的那一类才有
+    buddy_task_state_t state;
+    uint8_t effort;
+} thing_t;
+
+static unsigned past_count_of(const buddy_ui_snapshot_t *snap)
+{
+    if (snap->past == NULL) {
+        return 0;
+    }
+    return snap->past_count < BUDDY_PAST_COUNT ? snap->past_count : BUDDY_PAST_COUNT;
+}
+
+static unsigned thing_count(const buddy_ui_snapshot_t *snap)
+{
+    return (snap->task_count < BUDDY_TASK_COUNT ? snap->task_count : BUDDY_TASK_COUNT) +
+           past_count_of(snap);
+}
+
+static bool thing_at(const buddy_ui_snapshot_t *snap, unsigned index, thing_t *thing)
+{
+    unsigned tasks = snap->task_count < BUDDY_TASK_COUNT ? snap->task_count : BUDDY_TASK_COUNT;
+
+    memset(thing, 0, sizeof(*thing));
+    if (index < tasks) {
+        const buddy_task_t *task = &snap->tasks[index];
+
+        thing->id = task->id;
+        thing->agent = task->agent;
+        thing->title = task->title;
+        thing->task = task;
+        thing->state = task->state;
+        thing->effort = task->effort;
+        return true;
+    }
+    index -= tasks;
+    if (index < past_count_of(snap)) {
+        const buddy_past_t *past = &snap->past[index];
+
+        thing->id = past->id;
+        thing->agent = past->agent;
+        thing->title = past->title;
+        thing->past = past;
+        thing->state = (buddy_task_state_t)past->state;
+        thing->effort = past->effort;
+        return true;
+    }
+    thing->id = thing->agent = thing->title = "";
+    return false;
+}
+
 // 第三屏那张单子里有没有这件事；有就是它在单子里的位置。
 static int task_index_of(const buddy_ui_snapshot_t *snap, const char *id)
 {
-    unsigned index;
+    return buddy_thing_find(snap->tasks,
+                            snap->task_count < BUDDY_TASK_COUNT ? snap->task_count
+                                                                : BUDDY_TASK_COUNT,
+                            snap->past, past_count_of(snap), id);
+}
 
-    for (index = 0; index < snap->task_count && index < BUDDY_TASK_COUNT; ++index) {
-        if (strcmp(snap->tasks[index].id, id) == 0) {
-            return (int)index;
-        }
+static bool thing_active(const thing_t *thing)
+{
+    return thing->state == BUDDY_TASK_WORKING || thing->state == BUDDY_TASK_WAITING ||
+           thing->state == BUDDY_TASK_QUEUED;
+}
+
+// 做完的事怎么结束的；还在做的返回 NULL。
+static const char *thing_ended_text(const thing_t *thing, uint32_t *color)
+{
+    switch (thing->state) {
+    case BUDDY_TASK_DONE:
+        *color = C_DIM;
+        return PT_TASK_DONE;
+    case BUDDY_TASK_FAILED:
+        *color = C_DANGER;
+        return PT_CARD_FAILED;
+    case BUDDY_TASK_CANCELLED:
+        *color = C_DIM;
+        return PT_CARD_CANCELLED;
+    case BUDDY_TASK_WORKING:
+    case BUDDY_TASK_WAITING:
+    case BUDDY_TASK_QUEUED:
+        break;
     }
-    return -1;
+    return NULL;
 }
 
 static void format_task_elapsed(const buddy_ui_snapshot_t *snap, const buddy_task_t *task,
@@ -1680,7 +1786,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     static char meta[40];
     const buddy_cards_t *cards = snap->cards;
     bool live = snap->card_live;
-    bool thread = snap->card_thread && snap->task_selected < snap->task_count;
+    bool thread = snap->card_thread && snap->task_selected < thing_count(snap);
     bool hub = snap->chat.phase != BUDDY_CHAT_NONE;
     bool has_card = !live && cards != NULL && snap->card_index >= 0 &&
                     snap->card_index < (int)cards->count;
@@ -1701,9 +1807,20 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     char elapsed[12] = "";
 
     if (thread && !has_card) {
-        // 这件任务的卡不在设备上：单子上那几行还在，先看这些。
-        const buddy_task_t *picked = &snap->tasks[snap->task_selected];
-        const char *words = picked->line2[0] != '\0' ? picked->line2 : picked->line1;
+        // 这件任务的卡不在设备上：单子上那几行还在，先看这些。做完的事没有那几行，
+        // 写它是怎么结束的；卡已经向手机要了，来了就换成卡。
+        thing_t picked_thing;
+        const thing_t *picked = &picked_thing;
+        const char *words = "";
+        uint32_t ended_color = C_DIM;
+
+        (void)thing_at(snap, snap->task_selected, &picked_thing);
+        if (picked->task != NULL) {
+            words = picked->task->line2[0] != '\0' ? picked->task->line2 : picked->task->line1;
+        } else {
+            words = thing_ended_text(picked, &ended_color);
+            words = words != NULL ? words : "";
+        }
 
         pet_set(PET_TALK, POCKET_PET_IDLE);
         set_visible(s.talk_empty, false);
@@ -1713,10 +1830,12 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         set_visible(s.head_elapsed, false);
         set_block_text(s.head_status, picked->agent);
         set_text_color(s.head_status, C_DIM);
-        (void)snprintf(meta, sizeof(meta), "%u / %u", snap->task_selected + 1U, snap->task_count);
+        (void)snprintf(meta, sizeof(meta), "%u / %u", snap->task_selected + 1U,
+                       thing_count(snap));
         set_text(s.meta_left, meta);
         set_text(s.meta_right, "");
-        talk_layout(picked->title, words, C_TEXT, snap->card_serial, picked->id, true);
+        talk_layout(picked->title, words, picked->task != NULL ? C_TEXT : ended_color,
+                    snap->card_serial, picked->id, true);
         return true;
     }
     set_visible(s.talk_empty, !live && !has_card);
@@ -1789,7 +1908,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         if (thread) {
             // 从第三屏进来的：这件任务自己的来回，第几件数的是单子上的。
             (void)snprintf(meta, sizeof(meta), "%u / %u  %s", snap->task_selected + 1U,
-                           snap->task_count, card->at);
+                           thing_count(snap), card->at);
         } else if (agent[0] != '\0') {
             // 交给了帮手的事不在这一屏：只说它去了哪，内容在第三屏。
             (void)snprintf(handed, sizeof(handed), PT_TALK_HANDED,
@@ -1859,7 +1978,8 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             (void)snprintf(note, sizeof(note), "%s", PT_CARD_CANCELLED);
             break;
         }
-        if (working && task >= 0 && snap->tasks[task].state == BUDDY_TASK_WORKING) {
+        if (working && task >= 0 && task < (int)snap->task_count && task < BUDDY_TASK_COUNT &&
+            snap->tasks[task].state == BUDDY_TASK_WORKING) {
             // 做了多久，第三屏那张单子里有。
             format_task_elapsed(snap, &snap->tasks[task], elapsed, sizeof(elapsed));
             timer = true;
@@ -1897,100 +2017,159 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
 
 // ---- 第三屏：任务 ----
 
+static void set_y(lv_obj_t *obj, int y);
+
+// 窗口里的一行：把第 slot 个行控件摆到 y，写上这件事。
+static void render_task_row(const buddy_ui_snapshot_t *snap, unsigned slot, int y,
+                            const thing_t *thing, bool selected)
+{
+    uint32_t color = pocket_helper_color(thing->agent);
+    uint32_t right_color = C_DIM;
+    const char *right = thing_ended_text(thing, &right_color);
+    char elapsed[12];
+    int title_x = 6;
+    int title_w;
+
+    set_visible(s.task_rows[slot], true);
+    set_y(s.task_rows[slot], y);
+    set_visible(s.task_tags[slot].box, thing->agent[0] != '\0');
+    if (thing->agent[0] != '\0') {
+        // 带着档位时名牌宽一个字，标题让出来。
+        set_tag_tier(&s.task_tags[slot], thing->agent, thing->effort, color,
+                     TASK_TAG_TEXT_W + (thing->effort != BUDDY_EFFORT_NONE ? 22 : 0));
+        title_x = lv_obj_get_x(s.task_tags[slot].box) +
+                  lv_obj_get_width(s.task_tags[slot].box) + 6;
+    }
+    if (thing->state == BUDDY_TASK_WAITING) {
+        right = PT_TASK_WAITING;
+        right_color = C_WARN;
+    } else if (thing->state == BUDDY_TASK_QUEUED) {
+        right = PT_TASK_QUEUED;
+    } else if (right == NULL) {
+        elapsed[0] = '\0';
+        if (thing->task != NULL) {
+            format_task_elapsed(snap, thing->task, elapsed, sizeof(elapsed));
+        }
+        right = elapsed;
+        right_color = color;
+    }
+    set_text(s.task_rights[slot], right);
+    set_text_color(s.task_rights[slot], right_color);
+    // 做完的事标题暗一些：一眼分得出哪些还在做。
+    set_text_color(s.task_titles[slot], thing_active(thing) ? C_TEXT : C_DIM);
+    lv_obj_update_layout(s.task_rights[slot]);
+    title_w = INNER_W - 4 - 6 - lv_obj_get_width(s.task_rights[slot]) - 6 - title_x;
+    if (title_w < 16) {
+        title_w = 16;
+    }
+    if (lv_obj_get_x(s.task_titles[slot]) != title_x ||
+        lv_obj_get_width(s.task_titles[slot]) != title_w) {
+        lv_obj_set_x(s.task_titles[slot], title_x);
+        lv_obj_set_width(s.task_titles[slot], title_w);
+        lv_obj_set_user_data(s.task_titles[slot], NULL);
+    }
+    set_block_text(s.task_titles[slot], thing->title);
+    // 选中的那行有描边。
+    if (lv_obj_get_style_border_opa(s.task_rows[slot], LV_PART_MAIN) !=
+        (selected ? LV_OPA_COVER : LV_OPA_TRANSP)) {
+        lv_obj_set_style_border_opa(s.task_rows[slot], selected ? LV_OPA_COVER : LV_OPA_TRANSP,
+                                    0);
+    }
+}
+
 static void render_tasks(const buddy_ui_snapshot_t *snap)
 {
-    unsigned count = snap->task_count < BUDDY_TASK_COUNT ? snap->task_count : BUDDY_TASK_COUNT;
+    static pocket_task_line_t lines[POCKET_TASK_LINES_MAX];
+    static char ended[BUDDY_DAY_MAX + 24];
+    unsigned count = thing_count(snap);
     unsigned selected = snap->task_selected < count ? snap->task_selected : 0U;
+    unsigned line_count = pocket_task_lines(snap, lines, POCKET_TASK_LINES_MAX);
+    unsigned rows = 0;
+    unsigned days = 0;
     unsigned index;
-    char elapsed[12];
+    thing_t thing;
+    int y = 0;
 
-    for (index = 0; index < BUDDY_TASK_COUNT; ++index) {
-        const buddy_task_t *task = &snap->tasks[index];
-        bool present = index < count;
-        uint32_t color;
-        int title_x;
-        int title_w;
+    // 单子比窗口长时只画窗口里的那几行，选中的那件总在里面。
+    s.task_top = pocket_task_window(lines, line_count, selected, s.task_top, TASK_STEP,
+                                    TASK_DAY_STEP, TASK_LIST_H);
+    for (index = s.task_top; index < line_count; ++index) {
+        int height = lines[index].header ? TASK_DAY_STEP : TASK_STEP;
 
-        set_visible(s.task_rows[index], present);
-        if (!present) {
-            continue;
-        }
-        color = pocket_helper_color(task->agent);
-        set_visible(s.task_tags[index].box, task->agent[0] != '\0');
-        title_x = 6;
-        if (task->agent[0] != '\0') {
-            // 带着档位时名牌宽一个字，标题让出来。
-            set_tag_tier(&s.task_tags[index], task->agent, task->effort, color,
-                         TASK_TAG_TEXT_W + (task->effort != BUDDY_EFFORT_NONE ? 22 : 0));
-            title_x = lv_obj_get_x(s.task_tags[index].box) +
-                      lv_obj_get_width(s.task_tags[index].box) + 6;
-        }
-        switch (task->state) {
-        case BUDDY_TASK_WAITING:
-            set_text(s.task_rights[index], PT_TASK_WAITING);
-            set_text_color(s.task_rights[index], C_WARN);
-            break;
-        case BUDDY_TASK_QUEUED:
-            set_text(s.task_rights[index], PT_TASK_QUEUED);
-            set_text_color(s.task_rights[index], C_DIM);
-            break;
-        case BUDDY_TASK_WORKING:
-            format_task_elapsed(snap, task, elapsed, sizeof(elapsed));
-            set_text(s.task_rights[index], elapsed);
-            set_text_color(s.task_rights[index], color);
-            break;
-        case BUDDY_TASK_DONE:
-            set_text(s.task_rights[index], PT_TASK_DONE);
-            set_text_color(s.task_rights[index], C_DIM);
-            break;
-        case BUDDY_TASK_FAILED:
-            set_text(s.task_rights[index], PT_CARD_FAILED);
-            set_text_color(s.task_rights[index], C_DANGER);
-            break;
-        case BUDDY_TASK_CANCELLED:
-            set_text(s.task_rights[index], PT_CARD_CANCELLED);
-            set_text_color(s.task_rights[index], C_DIM);
+        // 一行的间隔在它下面：最后一行不用留。
+        if (y + height - (lines[index].header ? 1 : TASK_ROW_GAP) > TASK_LIST_H) {
             break;
         }
-        // 做完的事标题暗一些：一眼分得出哪些还在做。
-        set_text_color(s.task_titles[index], buddy_task_active(task) ? C_TEXT : C_DIM);
-        lv_obj_update_layout(s.task_rights[index]);
-        title_w = INNER_W - 4 - 6 - lv_obj_get_width(s.task_rights[index]) - 6 - title_x;
-        if (title_w < 16) {
-            title_w = 16;
+        if (lines[index].header && index + 1U < line_count &&
+            y + TASK_DAY_STEP + TASK_ROW_H > TASK_LIST_H) {
+            break; // 小标题下面那件事放不下：只剩一个标题不如不画
         }
-        if (lv_obj_get_x(s.task_titles[index]) != title_x ||
-            lv_obj_get_width(s.task_titles[index]) != title_w) {
-            lv_obj_set_x(s.task_titles[index], title_x);
-            lv_obj_set_width(s.task_titles[index], title_w);
-            lv_obj_set_user_data(s.task_titles[index], NULL);
+        (void)thing_at(snap, lines[index].item, &thing);
+        if (lines[index].header) {
+            if (days < TASK_DAY_POOL) {
+                set_visible(s.task_days[days], true);
+                set_y(s.task_days[days], y);
+                set_text(s.task_days[days], thing.past != NULL ? thing.past->day : "");
+                ++days;
+            }
+            y += TASK_DAY_STEP;
+        } else {
+            if (rows < TASK_POOL) {
+                render_task_row(snap, rows, y, &thing, lines[index].item == selected);
+                ++rows;
+            }
+            y += TASK_STEP;
         }
-        set_block_text(s.task_titles[index], task->title);
-        // 选中的那行有描边。
-        if (lv_obj_get_style_border_opa(s.task_rows[index], LV_PART_MAIN) !=
-            (index == selected ? LV_OPA_COVER : LV_OPA_TRANSP)) {
-            lv_obj_set_style_border_opa(s.task_rows[index],
-                                        index == selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-        }
+    }
+    for (; rows < TASK_POOL; ++rows) {
+        set_visible(s.task_rows[rows], false);
+    }
+    for (; days < TASK_DAY_POOL; ++days) {
+        set_visible(s.task_days[days], false);
     }
     set_visible(s.tasks_empty, count == 0U);
     set_visible(s.task_detail, count > 0U);
-    if (count > 0U) {
-        const buddy_task_t *task = &snap->tasks[selected];
-        bool any = task->line1[0] != '\0' || task->line2[0] != '\0';
-        bool ended = !buddy_task_active(task);
+    if (count == 0U) {
+        return;
+    }
+    (void)thing_at(snap, selected, &thing);
+    set_block_text(s.task_title, thing.title);
+    {
+        char place[16];
 
-        set_block_text(s.task_title, task->title);
-        set_visible(s.task_lines[0], !ended);
-        set_visible(s.task_lines[1], !ended);
-        set_visible(s.task_result, ended);
-        if (ended) {
-            // 结论是单子上那一行（简报）；整件事的来回按确认键进去看。
-            set_block_text(s.task_result, task->line1);
-            set_text_color(s.task_result,
-                           task->state == BUDDY_TASK_FAILED ? C_DANGER : C_TEXT);
-            return;
+        // 单子比窗口长才写：不然一眼就数得出来。
+        place[0] = '\0';
+        if (line_count > TASK_LIST_ROWS) {
+            (void)snprintf(place, sizeof(place), "%u/%u", selected + 1U, count);
         }
+        set_text(s.task_place, place);
+    }
+    set_visible(s.task_lines[0], thing_active(&thing));
+    set_visible(s.task_lines[1], thing_active(&thing));
+    set_visible(s.task_result, !thing_active(&thing));
+    if (!thing_active(&thing)) {
+        uint32_t color = C_DIM;
+        const char *how = thing_ended_text(&thing, &color);
+
+        if (thing.task != NULL && thing.task->line1[0] != '\0') {
+            // 结论是单子上那一行（简报）；整件事的来回按确认键进去看。
+            set_block_text(s.task_result, thing.task->line1);
+            set_text_color(s.task_result, thing.state == BUDDY_TASK_FAILED ? C_DANGER : C_TEXT);
+        } else {
+            // 做完的事在单子上只有标题：写它是哪天、怎么结束的，经过按确认键进去看。
+            (void)snprintf(ended, sizeof(ended), "%s%s%s",
+                           thing.past != NULL ? thing.past->day : "",
+                           thing.past != NULL && thing.past->day[0] != '\0' ? "  " : "",
+                           how != NULL ? how : "");
+            set_block_text(s.task_result, ended);
+            set_text_color(s.task_result, color);
+        }
+        return;
+    }
+    if (thing.task != NULL) {
+        const buddy_task_t *task = thing.task;
+        bool any = task->line1[0] != '\0' || task->line2[0] != '\0';
+
         // 两步里靠后的那一步更亮；只有一步时它就是最新的。
         set_block_text(s.task_lines[0], any ? (task->line2[0] != '\0' ? task->line1 : "")
                                             : PT_TASK_NO_STEPS);
@@ -2551,14 +2730,14 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
             break;
         case BUDDY_PAGE_TASKS:
             render_tasks(snap);
-            if (snap->task_count > 1U) {
+            if (thing_count(snap) > 1U) {
                 hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
                 hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
             }
             notice = pocket_notice_visible(snap) && snap->host_hub;
             // 有选中的事时，按住说的话是对它的补充。
             hints[count++] = (hint_item_t){
-                KEY_OK, snap->task_count > 0U ? (can_talk ? PT_HINT_OPEN_ADD : PT_HINT_ENTER)
+                KEY_OK, thing_count(snap) > 0U ? (can_talk ? PT_HINT_OPEN_ADD : PT_HINT_ENTER)
                                               : (can_talk ? PT_HINT_SCREEN_TALK : PT_HINT_SCREEN)};
             break;
         case BUDDY_PAGE_USAGE:

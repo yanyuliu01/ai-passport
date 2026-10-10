@@ -31,7 +31,14 @@ int buddy_protocol_permission_json(char *json, size_t size, const char *id,
                                    buddy_permission_decision_t decision);
 int buddy_protocol_command_ack_json(char *json, size_t size, const char *command,
                                     bool ok, const char *error);
-/* {"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true}:
+/* {"evt":"want","card":"c41"}: the owner opened a thing that ended and its card
+ * is not on the device; the hub answers with that "card". */
+int buddy_protocol_want_json(char *json, size_t size, const char *card);
+/* {"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,
+ *  "past":true}:
+ * "past" says the third screen keeps the things that ended in a list of their
+ * own ("past" messages, in parts) and asks for a card it lacks ("want"); the
+ * "tasks" message then carries the things in progress only.
  * "usage" says this firmware has the fourth screen and understands the "usage"
  * message, and "eff" on chat, card and tasks. "threads"
  * says conversation and tasks are kept apart here, so the task list may also

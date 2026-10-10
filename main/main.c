@@ -143,6 +143,16 @@ static QueueHandle_t s_rx_normal_queue;
 static QueueHandle_t s_rx_priority_queue;
 static TaskHandle_t s_app_task_handle;
 static buddy_rx_slot_t s_rx_slots[BUDDY_RX_SLOT_COUNT];
+
+/* 这块板没有外接内存：下面这几块固定占用的内存，和界面、蓝牙协议栈、各个任务的栈
+ * 抢的是同一份（开机后大约剩一百多 KB）。2026-10-10 有一版把任务单子从 4 件加到
+ * 20 件、一行的上限从 4096 加到 8192，这几块一共多了 31 KB，结果蓝牙起不来，新固件
+ * 等不到手机的认可被退回。所以这里卡一个上限：超了在编译时就报错，不要等到设备上。
+ * 真的需要加大时，先看设备报的内存余量（fw info 里的 heap / low），再改这个数。 */
+#define BUDDY_STATIC_BUDGET_BYTES (40U * 1024U)
+_Static_assert(sizeof(s_rx_slots) + sizeof(buddy_state_t) + sizeof(buddy_event_t) +
+                       sizeof(buddy_ui_snapshot_t) <= BUDDY_STATIC_BUDGET_BYTES,
+               "fixed memory over budget: the board has no PSRAM, see the comment above");
 static portMUX_TYPE s_rx_pool_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_view_lock = portMUX_INITIALIZER_UNLOCKED;
 static buddy_rendered_view_t s_rendered_view;
@@ -1153,6 +1163,10 @@ static void buddy_app_task(void *context)
                 event.type = BUDDY_EVENT_CARD_STEP;
                 event.key = edge > 0 ? BUDDY_KEY_DOWN : BUDDY_KEY_UP;
                 buddy_state_reduce(&state, &event, now_ms, &action);
+                if (action.type == BUDDY_ACTION_CARD_WANT) {
+                    /* 换到的那件事的卡不在设备上：向手机要。 */
+                    (void)buddy_execute_action(&state, &action, &event);
+                }
                 (void)buddy_render(&state, &action, now_ms);
             }
         }
@@ -1237,6 +1251,7 @@ void app_main(void)
         xTaskCreate(buddy_app_task, "pocket_app", BUDDY_APP_STACK_SIZE, NULL,
                     BUDDY_APP_PRIORITY, &s_app_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "application queue/task initialization failed");
+        pocket_update_unusable("application task did not start");
         return;
     }
     if (pocket_update_init() != ESP_OK) {
@@ -1254,9 +1269,15 @@ void app_main(void)
             err = buddy_ble_start();
         }
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "BLE initialization failed: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "BLE initialization failed: %s (heap free=%" PRIu32 ")",
+                     esp_err_to_name(err), esp_get_free_heap_size());
+            /* 新固件第一次启动就起不了蓝牙（多半是内存不够）：没人能来认可它，
+             * 马上退回上一版，不让设备白等三分钟。 */
+            pocket_update_unusable("bluetooth did not start");
         }
     }
+    ESP_LOGI(TAG, "started: heap free=%" PRIu32 " min=%" PRIu32, esp_get_free_heap_size(),
+             esp_get_minimum_free_heap_size());
     atomic_store_explicit(&s_app_ready, true, memory_order_release);
     xTaskNotifyGive(s_app_task_handle);
 }

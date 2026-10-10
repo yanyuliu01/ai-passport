@@ -94,8 +94,33 @@ static void buddy_begin_turn(buddy_state_t *state)
  * says where it went instead of showing it); paging never lands on one. */
 static bool buddy_in_thread(const buddy_state_t *state)
 {
-    return state->thread && state->page == BUDDY_PAGE_TALK &&
-           state->task_selected < state->task_count;
+    return state->thread && state->page == BUDDY_PAGE_TALK && state->thread_id[0] != '\0';
+}
+
+/* The third screen's list, tasks and then past, counted through as one. */
+static unsigned buddy_list_count(const buddy_state_t *state)
+{
+    return state->task_count + state->past_count;
+}
+
+static const char *buddy_list_id(const buddy_state_t *state, unsigned index)
+{
+    return buddy_thing_id(state->tasks, state->task_count, state->past, state->past_count,
+                          index);
+}
+
+static int buddy_list_find(const buddy_state_t *state, const char *id)
+{
+    return buddy_thing_find(state->tasks, state->task_count, state->past, state->past_count,
+                            id);
+}
+
+/* The selection moved: remember the thing it is on, so that it stays with that
+ * thing when the lists are replaced. */
+static void buddy_list_pick(buddy_state_t *state, unsigned index)
+{
+    state->task_selected = index;
+    buddy_cards_copy(state->task_pick, sizeof(state->task_pick), buddy_list_id(state, index));
 }
 
 static int buddy_card_index(const buddy_state_t *state)
@@ -103,7 +128,7 @@ static int buddy_card_index(const buddy_state_t *state)
     int index;
 
     if (buddy_in_thread(state)) {
-        return buddy_cards_find(&state->cards, state->tasks[state->task_selected].id);
+        return buddy_cards_find(&state->cards, state->thread_id);
     }
     index = buddy_cards_find(&state->cards, state->card_current);
 
@@ -156,6 +181,10 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     memset(state->tasks, 0, sizeof(state->tasks));
     state->task_count = 0;
     state->task_selected = 0;
+    memset(state->past, 0, sizeof(state->past));
+    state->past_count = 0;
+    state->task_pick[0] = '\0';
+    state->thread_id[0] = '\0';
     /* Usage too: the numbers go stale with nobody refreshing them. */
     memset(state->usage, 0, sizeof(state->usage));
     state->usage_count = 0;
@@ -327,22 +356,69 @@ static void buddy_menu_click(buddy_state_t *state, buddy_key_t key, buddy_action
     }
 }
 
+/* The lists were replaced. The selection stays on the same thing when the
+ * list is reordered or shortened; when that thing is gone it stays at the same
+ * place in the list. A thing that was open and is no longer listed is closed:
+ * back to the list, rather than showing (and talking into) another in its place. */
+static void buddy_list_settle(buddy_state_t *state)
+{
+    unsigned count = buddy_list_count(state);
+    int found = buddy_list_find(state, state->task_pick);
+
+    if (found >= 0) {
+        state->task_selected = (unsigned)found;
+    } else {
+        if (state->task_selected >= count) {
+            state->task_selected = count > 0U ? count - 1U : 0U;
+        }
+        buddy_cards_copy(state->task_pick, sizeof(state->task_pick),
+                         buddy_list_id(state, state->task_selected));
+    }
+    if (state->thread && state->page == BUDDY_PAGE_TALK) {
+        int open = buddy_list_find(state, state->thread_id);
+
+        if (open < 0) {
+            state->thread = false;
+            state->thread_id[0] = '\0';
+            state->page = BUDDY_PAGE_TASKS;
+        } else {
+            buddy_list_pick(state, (unsigned)open);
+        }
+    }
+}
+
+/* A thing that ended was opened and its card is not on the device (the device
+ * keeps a few cards only): ask the hub for it. Only for the things the hub
+ * listed as ended, which means it is a hub that answers. */
+static void buddy_want_card(buddy_state_t *state, buddy_action_t *action)
+{
+    if (action == NULL || !buddy_in_thread(state) || !state->ble_connected ||
+        buddy_list_find(state, state->thread_id) < (int)state->task_count ||
+        buddy_cards_find(&state->cards, state->thread_id) >= 0) {
+        return;
+    }
+    action->type = BUDDY_ACTION_CARD_WANT;
+    action->connection_generation = state->ble_connection_generation;
+    buddy_cards_copy(action->want_card, sizeof(action->want_card), state->thread_id);
+}
+
 /* The third screen: UP and DOWN pick a thing. What is held and said there is
  * said inside that thing. The conversation screen stays where it is. */
 static void buddy_tasks_click(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
+    unsigned count = buddy_list_count(state);
     unsigned selected = state->task_selected;
 
-    if (state->task_count == 0U) {
+    if (count == 0U) {
         return;
     }
     if (key == BUDDY_KEY_UP && selected > 0U) {
         --selected;
-    } else if (key == BUDDY_KEY_DOWN && selected + 1U < state->task_count) {
+    } else if (key == BUDDY_KEY_DOWN && selected + 1U < count) {
         ++selected;
     }
     if (selected != state->task_selected) {
-        state->task_selected = selected;
+        buddy_list_pick(state, selected);
         buddy_set_ui_refresh(action);
     }
 }
@@ -446,14 +522,17 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
         } else if (state->page == BUDDY_PAGE_TALK) {
             state->page = buddy_in_thread(state) ? buddy_after_tasks(state) : BUDDY_PAGE_TASKS;
             state->thread = false;
-        } else if (state->task_selected < state->task_count) {
+        } else if (state->task_selected < buddy_list_count(state)) {
             state->page = BUDDY_PAGE_TALK;
             state->thread = true;
+            buddy_list_pick(state, state->task_selected);
+            buddy_cards_copy(state->thread_id, sizeof(state->thread_id), state->task_pick);
         } else {
             state->page = buddy_after_tasks(state);
         }
         ++state->card_serial;
         buddy_set_ui_refresh(action);
+        buddy_want_card(state, action);
     } else if (state->page == BUDDY_PAGE_USAGE) {
         /* More helpers than fit: the screen scrolls. */
         buddy_scroll(key, action);
@@ -635,11 +714,12 @@ static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, 
 {
     id[0] = '\0';
     *pin = false;
-    if (state->page == BUDDY_PAGE_TASKS || buddy_in_thread(state)) {
-        if (state->task_selected < state->task_count) {
-            buddy_cards_copy(id, size, state->tasks[state->task_selected].id);
-            *pin = id[0] != '\0';
-        }
+    if (buddy_in_thread(state)) {
+        buddy_cards_copy(id, size, state->thread_id);
+        *pin = id[0] != '\0';
+    } else if (state->page == BUDDY_PAGE_TASKS) {
+        buddy_cards_copy(id, size, buddy_list_id(state, state->task_selected));
+        *pin = id[0] != '\0';
     } else if (state->page == BUDDY_PAGE_TALK && !buddy_card_live(state)) {
         int index = buddy_card_index(state);
 
@@ -855,37 +935,59 @@ static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
                               uint64_t now_ms, buddy_action_t *action)
 {
     unsigned count = event->task_count < BUDDY_TASK_COUNT ? event->task_count : BUDDY_TASK_COUNT;
-    char selected[BUDDY_CARD_ID_MAX] = "";
-    bool kept = false;
-    unsigned index;
 
     if (event->ble.connection_generation != state->ble_connection_generation) {
         return;
     }
-    if (state->task_selected < state->task_count) {
-        buddy_cards_copy(selected, sizeof(selected), state->tasks[state->task_selected].id);
+    if (state->task_pick[0] == '\0') {
+        /* The first list: the selection starts on whatever is first. */
+        buddy_cards_copy(state->task_pick, sizeof(state->task_pick),
+                         buddy_list_id(state, state->task_selected));
     }
     memset(state->tasks, 0, sizeof(state->tasks));
     memcpy(state->tasks, event->tasks, count * sizeof(state->tasks[0]));
     state->task_count = count;
     state->tasks_since_ms = now_ms;
-    /* The selection stays on the same thing when the list is reordered or
-     * shortened; when that thing is gone it stays at the same place in the list. */
-    if (state->task_selected >= count) {
-        state->task_selected = count > 0U ? count - 1U : 0U;
+    buddy_list_settle(state);
+    buddy_set_ui_refresh(action);
+}
+
+/* A part of the things that ended. Parts come in order, from the top of the
+ * list down; the list has its new length once the last of them is in. */
+static void buddy_apply_past(buddy_state_t *state, const buddy_event_t *event,
+                             buddy_action_t *action)
+{
+    unsigned total = event->past_total < BUDDY_PAST_COUNT ? event->past_total : BUDDY_PAST_COUNT;
+    unsigned at = event->past_at;
+    unsigned count = event->past_count < BUDDY_PAST_CHUNK ? event->past_count : BUDDY_PAST_CHUNK;
+
+    if (event->ble.connection_generation != state->ble_connection_generation) {
+        return;
     }
-    for (index = 0; index < count; ++index) {
-        if (selected[0] != '\0' && strcmp(state->tasks[index].id, selected) == 0) {
-            state->task_selected = index;
-            kept = true;
+    if (at > total) {
+        return;
+    }
+    if (count > total - at) {
+        count = total - at;
+    }
+    if (state->task_pick[0] == '\0') {
+        buddy_cards_copy(state->task_pick, sizeof(state->task_pick),
+                         buddy_list_id(state, state->task_selected));
+    }
+    memcpy(&state->past[at], event->past, count * sizeof(state->past[0]));
+    if (at + count < total) {
+        /* More parts follow. The list keeps its length until they are in, so
+         * that what is open or selected further down is not taken for gone. */
+        if (state->past_count < at + count) {
+            state->past_count = at + count;
         }
+        return;
     }
-    if (state->thread && state->page == BUDDY_PAGE_TALK && !kept) {
-        /* The task that was open is no longer on the list: back to the list,
-         * rather than showing (and talking into) another one in its place. */
-        state->thread = false;
-        state->page = BUDDY_PAGE_TASKS;
+    if (total < BUDDY_PAST_COUNT) {
+        memset(&state->past[total], 0, (BUDDY_PAST_COUNT - total) * sizeof(state->past[0]));
     }
+    state->past_count = total;
+    buddy_list_settle(state);
     buddy_set_ui_refresh(action);
 }
 
@@ -919,11 +1021,15 @@ static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_
     }
     if (buddy_in_thread(state)) {
         /* Inside a task: past its ends are the tasks before and after it. */
-        if (direction < 0 ? state->task_selected > 0U
-                          : state->task_selected + 1U < state->task_count) {
-            state->task_selected = (unsigned)((int)state->task_selected + direction);
+        int open = buddy_list_find(state, state->thread_id);
+
+        if (open >= 0 && (direction < 0 ? open > 0
+                                        : (unsigned)open + 1U < buddy_list_count(state))) {
+            buddy_list_pick(state, (unsigned)(open + direction));
+            buddy_cards_copy(state->thread_id, sizeof(state->thread_id), state->task_pick);
             ++state->card_serial;
             buddy_set_ui_refresh(action);
+            buddy_want_card(state, action);
         }
         return;
     }
@@ -1180,6 +1286,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     case BUDDY_EVENT_TASKS:
         buddy_apply_tasks(state, event, now_ms, action);
         break;
+    case BUDDY_EVENT_PAST:
+        buddy_apply_past(state, event, action);
+        break;
     case BUDDY_EVENT_USAGE:
         buddy_apply_usage(state, event, now_ms, action);
         break;
@@ -1310,6 +1419,8 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->task_count = state->task_count;
     snapshot->task_selected = state->task_selected;
     snapshot->tasks_since_ms = state->tasks_since_ms;
+    snapshot->past = state->past;
+    snapshot->past_count = state->past_count;
     memcpy(snapshot->usage, state->usage, sizeof(snapshot->usage));
     snapshot->usage_count = state->usage_count;
     snapshot->usage_since_ms = state->usage_since_ms;
