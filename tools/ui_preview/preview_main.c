@@ -598,25 +598,8 @@ int main(int argc, char **argv)
             {"c59", "tailor", "把字调大一号", BUDDY_TASK_DONE, "今天", BUDDY_EFFORT_LOW},
             {"c58", "codex", "跑一遍全部测试", BUDDY_TASK_FAILED, "今天", BUDDY_EFFORT_MEDIUM},
             {"c57", "claude", "把周报改成三段", BUDDY_TASK_DONE, "昨天", BUDDY_EFFORT_MEDIUM},
-            {"c56", "codex", "看看登录为什么慢", BUDDY_TASK_CANCELLED, "昨天",
+            {"c56", "codex", "看看登录为什么慢", BUDDY_TASK_CANCELLED, "10-08",
              BUDDY_EFFORT_HIGH},
-            {"c55", "deepseek", "查 Notion 的登录接法", BUDDY_TASK_DONE, "昨天",
-             BUDDY_EFFORT_NONE},
-            {"c54", "claude", "把上个月的报销单据整理成一张表", BUDDY_TASK_DONE, "10-08",
-             BUDDY_EFFORT_MEDIUM},
-            {"c53", "codex", "给接口补测试", BUDDY_TASK_DONE, "10-08", BUDDY_EFFORT_LOW},
-            {"c52", "tailor", "待机文案改成待命中", BUDDY_TASK_DONE, "10-07",
-             BUDDY_EFFORT_NONE},
-            {"c51", "codex", "第一次试 app-server", BUDDY_TASK_FAILED, "10-06",
-             BUDDY_EFFORT_MEDIUM},
-            {"c50", "claude", "看一下蓝牙换固件的方案", BUDDY_TASK_DONE, "10-06",
-             BUDDY_EFFORT_HIGH},
-            {"c49", "claude", "语音识别用哪个引擎", BUDDY_TASK_DONE, "10-05",
-             BUDDY_EFFORT_MEDIUM},
-            {"c48", "codex", "把构建搬到本机", BUDDY_TASK_DONE, "10-05", BUDDY_EFFORT_MEDIUM},
-            {"c47", "deepseek", "查任务为什么串行", BUDDY_TASK_DONE, "10-04",
-             BUDDY_EFFORT_NONE},
-            {"c46", "claude", "最早的一件", BUDDY_TASK_CANCELLED, "10-03", BUDDY_EFFORT_LOW},
         };
         unsigned index;
 
@@ -633,12 +616,11 @@ int main(int argc, char **argv)
     show("58_history_failed", &snap);
     snap.task_selected = 5;
     show("59_history_next_day", &snap);
-    snap.task_selected = 9;
-    show("60_history_scrolled", &snap);
-    snap.task_selected = 16;
-    show("61_history_last", &snap);
     snap.task_selected = 6;
-    show("62_history_back_up", &snap);
+    show("60_history_last", &snap);
+    snap.task_selected = 3;
+    show("61_history_back_up", &snap);
+    snap.task_selected = 6;
     /* Opened, and its card is not on the device: what the list knows, until the
      * hub sends the card it was asked for. */
     snap.page = BUDDY_PAGE_TALK;

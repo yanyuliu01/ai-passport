@@ -36,7 +36,7 @@ public final class BuddyProtocol {
     public static final int TASK_TITLE_MAX = 47;
     public static final int TASK_LINE_MAX = 63;
     /** 做完的事在设备第三屏最多留这么多件，一条消息里最多带这么多件。 */
-    public static final int PAST_COUNT = 15;
+    public static final int PAST_COUNT = 5;
     public static final int PAST_CHUNK = 5;
     public static final int DAY_MAX = 11;
     /** 用量：最多几条（一个账号一条），每条最多几个帮手，模型名最多多少字节。 */

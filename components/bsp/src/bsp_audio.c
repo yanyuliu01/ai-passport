@@ -303,7 +303,10 @@ static esp_err_t i2s_full_duplex_init(void) {
     i2s_chan_config_t chan = {
         .id = BSP_I2S_PORT,
         .role = I2S_ROLE_MASTER,
-        .dma_desc_num = 6,
+        // 收发各 4 块、每块 240 帧（16 kHz 下 15 毫秒）：一共约 7.7 KB，建好之后一直占着。
+        // 这块板没有外接内存，原来各 6 块（11.5 KB）时，按住说话在内存只剩三十来 KB 的
+        // 设备上申请不到。60 毫秒的余量对一直在读的录音任务是够的。
+        .dma_desc_num = 4,
         .dma_frame_num = 240,
         .auto_clear_after_cb = true,
         .auto_clear_before_cb = false,

@@ -41,7 +41,7 @@
  * no memory to spare, and the exchange itself is on the thing's own page. The
  * hub sends them a few at a time so that no line and no parse grows with the
  * length of the history. */
-#define BUDDY_PAST_COUNT 15
+#define BUDDY_PAST_COUNT 5
 #define BUDDY_PAST_CHUNK 5
 #define BUDDY_DAY_MAX 12 /* "今天", "昨天", "10-08": the hub words it */
 /* Usage, as the hub lists it for the fourth screen: one entry per subscription

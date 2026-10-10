@@ -2186,7 +2186,7 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
 // 第四屏的控件用到时才建，一块十几个控件、几 KB。这块板没有外接内存：剩得不多时
 // 就不建了（这一屏照没有数据那样显示，数在手机上看），好过建到一半要不到内存、
 // 整台设备卡死重启——那时固件已经被认可，不会自己退回上一版。
-#define UI_GROW_RESERVE_BYTES (20U * 1024U)
+#define UI_GROW_RESERVE_BYTES (26U * 1024U)
 
 static bool ui_room_to_grow(void)
 {

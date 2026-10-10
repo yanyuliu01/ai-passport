@@ -2048,23 +2048,23 @@ static void test_the_third_screen_keeps_the_things_that_ended(void)
     event = tasks_event(2, 7); /* c2 and c5, in progress */
     buddy_state_reduce(&state, &event, 100, &action);
 
-    /* Twelve that ended arrive in three parts. Parts from another connection
-     * are not taken. The screen is redrawn once, when the last part is in. */
-    event = past_event(0, 5, 12, 0, 6);
+    /* Five that ended arrive in three parts. Parts from another connection are
+     * not taken. The screen is redrawn once, when the last part is in. */
+    event = past_event(0, 2, 5, 0, 6);
     buddy_state_reduce(&state, &event, 101, &action);
     assert(state.past_count == 0 && action.type == BUDDY_ACTION_NONE);
-    event = past_event(0, 5, 12, 0, 7);
+    event = past_event(0, 2, 5, 0, 7);
     buddy_state_reduce(&state, &event, 101, &action);
-    assert(state.past_count == 5 && action.type == BUDDY_ACTION_NONE);
-    event = past_event(5, 5, 12, 5, 7);
+    assert(state.past_count == 2 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(2, 2, 5, 2, 7);
     buddy_state_reduce(&state, &event, 102, &action);
-    assert(state.past_count == 10 && action.type == BUDDY_ACTION_NONE);
-    event = past_event(10, 2, 12, 10, 7);
+    assert(state.past_count == 4 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(4, 1, 5, 4, 7);
     buddy_state_reduce(&state, &event, 103, &action);
-    assert(state.past_count == 12 && action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(state.past_count == 5 && action.type == BUDDY_ACTION_UI_REFRESH);
     buddy_state_snapshot(&state, &snapshot);
-    assert(snapshot.task_count == 2 && snapshot.past_count == 12 && snapshot.task_selected == 0);
-    assert(strcmp(snapshot.past[0].id, "p0") == 0 && strcmp(snapshot.past[11].id, "p11") == 0);
+    assert(snapshot.task_count == 2 && snapshot.past_count == 5 && snapshot.task_selected == 0);
+    assert(strcmp(snapshot.past[0].id, "p0") == 0 && strcmp(snapshot.past[4].id, "p4") == 0);
     assert(strcmp(snapshot.past[2].day, "today") == 0 && strcmp(snapshot.past[3].day, "before") == 0);
     /* Things that ended are not "in progress". */
     assert(snapshot.doing == 2U);
@@ -2078,9 +2078,9 @@ static void test_the_third_screen_keeps_the_things_that_ended(void)
     for (index = 0; index < 20; ++index) {
         buddy_state_reduce(&state, &down, 120 + index, &action);
     }
-    assert(state.task_selected == 13 && strcmp(state.task_pick, "p11") == 0);
+    assert(state.task_selected == 6 && strcmp(state.task_pick, "p4") == 0);
     assert(action.type == BUDDY_ACTION_NONE);
-    for (index = 0; index < 10; ++index) {
+    for (index = 0; index < 3; ++index) {
         buddy_state_reduce(&state, &up, 140 + index, &action);
     }
     assert(state.task_selected == 3);
@@ -2103,21 +2103,19 @@ static void test_the_third_screen_keeps_the_things_that_ended(void)
     buddy_state_reduce(&state, &event, 162, &action);
     assert(state.task_selected == 3);
 
-    /* One more thing ended: every part moves down by one. The selection is left
-     * alone while the parts come in and is on the same thing afterwards. */
-    event = past_event(0, 5, 13, 0, 7);
+    /* One more thing ended: the others move down by one and the oldest drops
+     * off. The selection is left alone while the parts come in and is on the
+     * same thing afterwards. */
+    event = past_event(0, 3, 5, 0, 7);
     snprintf(event.past[0].id, sizeof(event.past[0].id), "%s", "c5");
-    for (index = 1; index < 5; ++index) {
-        snprintf(event.past[index].id, sizeof(event.past[index].id), "p%u", index - 1U);
-    }
+    snprintf(event.past[1].id, sizeof(event.past[1].id), "%s", "p0");
+    snprintf(event.past[2].id, sizeof(event.past[2].id), "%s", "p1");
     buddy_state_reduce(&state, &event, 170, &action);
-    assert(state.past_count == 12 && state.task_selected == 3 && action.type == BUDDY_ACTION_NONE);
-    event = past_event(5, 5, 13, 4, 7);
-    buddy_state_reduce(&state, &event, 171, &action);
-    event = past_event(10, 3, 13, 9, 7);
+    assert(state.past_count == 5 && state.task_selected == 3 && action.type == BUDDY_ACTION_NONE);
+    event = past_event(3, 2, 5, 2, 7);
     buddy_state_reduce(&state, &event, 172, &action);
-    assert(state.past_count == 13 && action.type == BUDDY_ACTION_UI_REFRESH);
-    assert(strcmp(state.past[0].id, "c5") == 0 && strcmp(state.past[12].id, "p11") == 0);
+    assert(state.past_count == 5 && action.type == BUDDY_ACTION_UI_REFRESH);
+    assert(strcmp(state.past[0].id, "c5") == 0 && strcmp(state.past[4].id, "p3") == 0);
     assert(state.task_selected == 4 && strcmp(buddy_thing_id(state.tasks, state.task_count,
                                                              state.past, state.past_count, 4),
                                               "p1") == 0);
@@ -2147,14 +2145,15 @@ static void test_the_third_screen_keeps_the_things_that_ended(void)
     assert(strcmp(state.thread_id, "p2") == 0 && state.task_selected == 5);
     assert(action.type == BUDDY_ACTION_CARD_WANT && strcmp(action.want_card, "p2") == 0);
 
-    /* The history is sent again while that page is open. Until the last part is
-     * in the page stays; the thing is still listed, so it stays afterwards too. */
-    event = past_event(0, 5, 6, 0, 7);
+    /* The history is sent again while that page is open, shorter. Until the
+     * last part is in the page stays and the list keeps its length; the thing
+     * is still listed, so the page stays afterwards too. */
+    event = past_event(0, 2, 4, 0, 7);
     buddy_state_reduce(&state, &event, 190, &action);
-    assert(state.page == BUDDY_PAGE_TALK && state.thread && state.past_count == 13);
-    event = past_event(5, 1, 6, 5, 7);
+    assert(state.page == BUDDY_PAGE_TALK && state.thread && state.past_count == 5);
+    event = past_event(2, 2, 4, 2, 7);
     buddy_state_reduce(&state, &event, 191, &action);
-    assert(state.past_count == 6 && state.past[6].id[0] == '\0' && state.past[12].id[0] == '\0');
+    assert(state.past_count == 4 && state.past[4].id[0] == '\0');
     assert(state.page == BUDDY_PAGE_TALK && state.thread && strcmp(state.thread_id, "p2") == 0);
     assert(state.task_selected == 4);
     /* It leaves the history: back to the list rather than onto another thing. */

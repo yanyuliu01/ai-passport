@@ -53,8 +53,8 @@ _Static_assert(POCKET_UPDATE_FRAME_MAX == BUDDY_BLE_TX_CHUNK_MAX,
 #define BUDDY_VOICE_QUEUE_DEPTH 4U
 #define BUDDY_RX_NORMAL_QUEUE_DEPTH 1U
 /* 每个槽位能放一整行 JSON（4 KB）。电脑约每 2 秒才发一两条，应用任务处理一条
- * 只要几毫秒，4 个槽位足够；多出来的内存留给蓝牙和界面。 */
-#define BUDDY_RX_SLOT_COUNT 4U
+ * 只要几毫秒，3 个槽位足够（原来是 4 个；少一个省 4 KB，留给按住说话时的录音）。 */
+#define BUDDY_RX_SLOT_COUNT 3U
 /* Priority may consume the entire shared pool after evicting the normal slot. */
 #define BUDDY_RX_PRIORITY_QUEUE_DEPTH BUDDY_RX_SLOT_COUNT
 #define BUDDY_APP_STACK_SIZE 12288U
@@ -149,7 +149,7 @@ static buddy_rx_slot_t s_rx_slots[BUDDY_RX_SLOT_COUNT];
  * 20 件、一行的上限从 4096 加到 8192，这几块一共多了 31 KB，结果蓝牙起不来，新固件
  * 等不到手机的认可被退回。所以这里卡一个上限：超了在编译时就报错，不要等到设备上。
  * 真的需要加大时，先看设备报的内存余量（fw info 里的 heap / low），再改这个数。 */
-#define BUDDY_STATIC_BUDGET_BYTES (40U * 1024U)
+#define BUDDY_STATIC_BUDGET_BYTES (34U * 1024U)
 _Static_assert(sizeof(s_rx_slots) + sizeof(buddy_state_t) + sizeof(buddy_event_t) +
                        sizeof(buddy_ui_snapshot_t) <= BUDDY_STATIC_BUDGET_BYTES,
                "fixed memory over budget: the board has no PSRAM, see the comment above");

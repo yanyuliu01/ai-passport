@@ -738,14 +738,14 @@ static void test_past_lists_the_things_that_ended_in_parts(void)
     buddy_event_t event;
     char json[64];
 
-    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":7,\"list\":["
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":4,\"list\":["
                  "{\"id\":\"c41\",\"agent\":\"deepseek\",\"title\":\"history\",\"state\":\"done\","
                  "\"day\":\"今天\",\"eff\":\"high\"},"
                  "{\"id\":\"c40\",\"agent\":\"tailor\",\"title\":\"flash\",\"state\":\"failed\","
                  "\"day\":\"今天\"},"
                  "{\"id\":\"c38\",\"state\":\"cancelled\",\"day\":\"10-08\"}]}",
                  &event) == BUDDY_EVENT_PAST);
-    assert(event.past_at == 0 && event.past_total == 7 && event.past_count == 3);
+    assert(event.past_at == 0 && event.past_total == 4 && event.past_count == 3);
     assert(strcmp(event.past[0].id, "c41") == 0 && strcmp(event.past[0].agent, "deepseek") == 0);
     assert(strcmp(event.past[0].title, "history") == 0 && strcmp(event.past[0].day, "今天") == 0);
     assert(event.past[0].state == BUDDY_TASK_DONE && event.past[0].effort == BUDDY_EFFORT_HIGH);
@@ -755,14 +755,14 @@ static void test_past_lists_the_things_that_ended_in_parts(void)
 
     /* A later part says where it goes. One part holds BUDDY_PAST_CHUNK at most,
      * and nothing lands beyond the end of the list. */
-    assert(parse("{\"cmd\":\"past\",\"at\":5,\"n\":7,\"list\":["
+    assert(parse("{\"cmd\":\"past\",\"at\":3,\"n\":5,\"list\":["
                  "{\"id\":\"c30\"},{\"id\":\"c29\"},{\"id\":\"c28\"}]}",
                  &event) == BUDDY_EVENT_PAST);
-    assert(event.past_at == 5 && event.past_total == 7 && event.past_count == 2);
+    assert(event.past_at == 3 && event.past_total == 5 && event.past_count == 2);
     assert(strcmp(event.past[1].id, "c29") == 0);
     /* A thing without a state ended well; one without an id is left out. */
     assert(event.past[0].state == BUDDY_TASK_DONE);
-    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":9,\"list\":["
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":5,\"list\":["
                  "{\"id\":\"c1\"},{\"id\":\"c2\"},{\"title\":\"nameless\"},{\"id\":\"c4\"},"
                  "{\"id\":\"c5\"},{\"id\":\"c6\"},{\"id\":\"c7\"}]}",
                  &event) == BUDDY_EVENT_PAST);

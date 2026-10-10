@@ -29,7 +29,7 @@ show which one you are on.
 | --- | --- |
 | 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
 | 2 Conversation | Conversation only, that is what Xiaoyou answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
-| 3 Tasks | The things handed to helpers, as one list: those in progress first (at most four), then the latest that ended (at most fifteen), grouped by the day they ended on, each group under a line that says today, yesterday (in the host's words) or a date. Every line says who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). The list is a window five lines high that follows the selection; when the list is longer than the window, the right end of the title line below says which one of how many. Under that is the selected thing: for one in progress its two latest steps, with tool names and commands shown verbatim; for one that ended, on which day and how. A short press on `OK` opens the selected thing's own page (when the card of a thing that ended is not on the device, the device asks the phone for it and shows how the thing ended until it arrives): its latest exchange (what you said later and what Xiaoyou answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
+| 3 Tasks | The things handed to helpers, as one list: those in progress first (at most four), then the latest that ended (at most five), grouped by the day they ended on, each group under a line that says today, yesterday (in the host's words) or a date. Every line says who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). The list is a window five lines high that follows the selection; when the list is longer than the window, the right end of the title line below says which one of how many. Under that is the selected thing: for one in progress its two latest steps, with tool names and commands shown verbatim; for one that ended, on which day and how. A short press on `OK` opens the selected thing's own page (when the card of a thing that ended is not on the device, the device asks the phone for it and shows how the thing ended until it arrives): its latest exchange (what you said later and what Xiaoyou answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
 | 4 Usage | Shown only after the host sent `usage`. One block per subscription account: the name tags of the helpers that run on it (filled while that helper is working, with the effort tier inside the tag) and the model each one last ran, then how much of the 5-hour and of the weekly allowance is left (a bar and a percentage; amber below 20 %, red when used up) and when each resets. Helpers billed per call come after, marked as such. The last line says how old the numbers are |
 
 | Capability | Behavior |
@@ -201,7 +201,7 @@ ack that the host ignores. A host sends `card` and `tasks` only after it saw
 | Host → device | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | Adds or updates the card of one thing: **screen 2**. `id` and `state` are required |
 | Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
 | Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, and the `reply` of that thing's `card` is its latest exchange, one paragraph per sentence of the owner and of Xiaoyou, at most 480 bytes). At most four are kept; an empty list means there are none. To firmware that announced `past` only the things in progress are sent here; the ones that ended go in the next message |
-| Host → device | `{"cmd":"past","at":0,"n":12,"list":[{"id":"c41","agent":"…","title":"…","state":"done","day":"10-08","eff":"high"}]}` | The things that ended: the lower part of the list on **screen 3**, the latest to end first. Sent only to firmware that announced `past`, and in parts: at most five in one message, `at` says where in the list these go and `n` how long the list is (fifteen at most); the parts come in order from the top, and the device takes the new list once the last part is in. `state` is `done`, `failed` or `cancelled`; `day` is the day it ended on (at most 11 bytes, shown as it is, with the things of one day under one heading). No steps and no conclusion: the device has no memory to spare, so it keeps the title only. `n` of 0 clears the list |
+| Host → device | `{"cmd":"past","at":0,"n":12,"list":[{"id":"c41","agent":"…","title":"…","state":"done","day":"10-08","eff":"high"}]}` | The things that ended: the lower part of the list on **screen 3**, the latest to end first. Sent only to firmware that announced `past`, and in parts: at most five in one message, `at` says where in the list these go and `n` how long the list is (five at most); the parts come in order from the top, and the device takes the new list once the last part is in. `state` is `done`, `failed` or `cancelled`; `day` is the day it ended on (at most 11 bytes, shown as it is, with the things of one day under one heading). No steps and no conclusion: the device has no memory to spare, so it keeps the title only. `n` of 0 clears the list |
 | Device → host | `{"evt":"want","card":"c41"}` | The owner opened a thing that ended and its card is not on the device (which keeps twelve): the host is asked to send it. The host answers with that `card` and keeps sending it with the others from then on |
 | Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
 | Host → device | `{"cmd":"usage","list":[{"st":"ok","w5":58,"r5":1760000000,"w7":81,"r7":1760400000,"age":40,"who":[{"n":"codex","m":"gpt-6.1-sol","eff":"medium","run":1}]}]}` | Subscription allowance and who runs on it: **screen 4**. Sent only to firmware that announced `usage`. `st` is `ok`, `warn` (under 20 % left), `out`, `unknown`, or `na` (billed per call, no allowance); `w5` / `w7` are the percentages left of the 5-hour and weekly windows (omitted when unknown), `r5` / `r7` when they reset (Unix seconds), `age` how many seconds old the numbers are. `who` lists at most two helpers: name, model (at most 19 bytes), effort tier, and whether it is working right now. At most four entries are kept; an empty list keeps the screen and says there is no data yet |
@@ -393,8 +393,8 @@ a host that never does costs no heap. With that screen built the host renderer
 peaks at about 92 KB; the difference has not been measured on a device, so
 watch the `heap:` log line with the fourth screen open.
 
-The task history (the lower part of the list on screen 3, fifteen entries at
-most) adds about 2 KB of static memory: 98 bytes an entry, kept once in the
+The task history (the lower part of the list on screen 3, five entries at
+most) adds about 1 KB of static memory: 98 bytes an entry, kept once in the
 state, which the interface reads directly; the event structure holds the five
 entries of one message. The list is drawn by five row widgets used in turn,
 created at start, so a longer history asks for no more memory; the host
@@ -402,7 +402,7 @@ renderer peaks at about 95 KB.
 
 **Fixed memory has a budget.** `main.c` has a compile-time check: the receive
 buffers, the state, the event and the interface snapshot together must stay
-under 40 KB, or the build fails. On 2026-10-10 a version raised the task list
+under 34 KB, or the build fails. On 2026-10-10 a version raised the task list
 from 4 entries to 20 and the line limit from 4096 to 8192 bytes, 31 KB more
 for these together; it started, but Bluetooth did not come up, the phone
 could not connect to confirm it, and it was rolled back after three minutes.
@@ -411,6 +411,17 @@ answer to `fw info` carries `heap` and `low`, and `python3 -m xiaoyou_runtime
 firmware status` on the computer prints them. A new firmware that cannot
 start Bluetooth on its first start now rolls back at once instead of waiting
 three minutes.
+
+**Push-to-talk needs some twenty KB.** A recording takes a contiguous block of
+12 KB while it lasts, and the first one also creates the audio buffers, four
+blocks each way (about 7.7 KB, kept from then on). Measured on a device on
+2026-10-10: 31 KB free after the phone connected, 26 KB at the lowest, and
+with that version (six audio blocks each way, four receive slots, a history
+of fifteen) the audio buffers could not be allocated and the device said the
+microphone was not ready. Since then the audio buffers are four blocks each
+way, the receive slots three and the history five, about 9 KB together; the
+widgets of the fourth screen are not built below 26 KB free, which leaves the
+room to the recording.
 
 Replacing the firmware over Bluetooth keeps one task (a 5 KB stack) and two
 small queues at all times; the buffer for incoming image data (2.3 KB) is
@@ -552,7 +563,7 @@ version (three screens plus the usage screen) has not run on hardware yet. Check
    never shows a thing handed to a helper. Holding `OK` on a finished thing on
    screen 3 continues that thing.
    From phone companion 0.9.0: things that ended are grouped by day (today,
-   yesterday, a date), fifteen at most; holding `DOWN` reaches the last one,
+   yesterday, a date), five at most; holding `DOWN` reaches the last one,
    the window follows, and "which one of how many" on the right is correct;
    pressing `OK` on one that ended earlier first shows how it ended and within
    a second or two its card.

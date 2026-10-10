@@ -563,29 +563,23 @@ public final class ProtocolSelfTest {
         check(item.id.equals("c40") && item.state.equals("failed") && item.day.equals("昨天")
                 && item.effort.isEmpty(), "without a finish time the day it was started");
 
-        // ---- past：一条最多五件，带着从第几件起、一共几件 ----
+        // ---- past：最多五件，带着从第几件起、一共几件 ----
         List<BuddyProtocol.Past> many = new java.util.ArrayList<>();
-        for (int index = 0; index < 13; index++) {
+        for (int index = 0; index < 4; index++) {
             many.add(new BuddyProtocol.Past("c" + (60 - index), "codex", "事 " + index,
                     index == 1 ? "failed" : (index == 2 ? "cancelled" : "done"),
                     index < 3 ? "今天" : "10-08", index == 0 ? "high" : null));
         }
-        many.add(4, new BuddyProtocol.Past("an-id-that-is-too-long", "x", "y", "done", "今天", null));
+        many.add(2, new BuddyProtocol.Past("an-id-that-is-too-long", "x", "y", "done", "今天", null));
         many.add(null);
         List<String> parts = BuddyProtocol.past(many);
-        check(parts.size() == 3, "thirteen in three parts: " + parts.size());
-        check(parts.get(0).startsWith("{\"cmd\":\"past\",\"at\":0,\"n\":13,\"list\":[{\"id\":\"c60\","
+        check(parts.size() == 1, "four fit one message: " + parts.size());
+        check(parts.get(0).startsWith("{\"cmd\":\"past\",\"at\":0,\"n\":4,\"list\":[{\"id\":\"c60\","
                 + "\"agent\":\"codex\",\"title\":\"事 0\",\"state\":\"done\",\"day\":\"今天\","
                 + "\"eff\":\"high\"},{\"id\":\"c59\",") && parts.get(0).contains("\"state\":\"failed\"")
-                && parts.get(0).contains("\"state\":\"cancelled\""), "first part: " + parts.get(0));
-        check(parts.get(1).startsWith("{\"cmd\":\"past\",\"at\":5,\"n\":13,\"list\":[{\"id\":\"c55\",")
-                && parts.get(2).startsWith("{\"cmd\":\"past\",\"at\":10,\"n\":13,\"list\":[{\"id\":\"c50\",")
-                && parts.get(2).endsWith("\"day\":\"10-08\"}]}\n"), "later parts say where they go");
-        for (String part : parts) {
-            check(count(part, "{\"id\"") <= BuddyProtocol.PAST_CHUNK
-                    && BuddyProtocol.utf8Length(part) < 1024, "a part stays small");
-        }
-        // 空单子也要说一声，设备才会把旧的清掉；超过十五件的不发。
+                && parts.get(0).contains("\"state\":\"cancelled\"")
+                && parts.get(0).endsWith("\"day\":\"10-08\"}]}\n"), "the list: " + parts.get(0));
+        // 空单子也要说一声，设备才会把旧的清掉；超过五件的不发。
         check(BuddyProtocol.past(null).equals(Arrays.asList(
                         "{\"cmd\":\"past\",\"at\":0,\"n\":0,\"list\":[]}\n"))
                 && BuddyProtocol.past(new java.util.ArrayList<BuddyProtocol.Past>()).size() == 1,
@@ -594,9 +588,9 @@ public final class ProtocolSelfTest {
             many.add(new BuddyProtocol.Past("d" + index, "", "", "done", "", null));
         }
         parts = BuddyProtocol.past(many);
-        check(parts.size() == 3 && parts.get(0).contains("\"n\":15")
-                && parts.get(2).contains("\"id\":\"d1\"") && !parts.get(2).contains("\"id\":\"d2\""),
-                "fifteen at most");
+        check(parts.size() == 1 && parts.get(0).contains("\"n\":5")
+                && parts.get(0).contains("\"id\":\"d0\"") && !parts.get(0).contains("\"id\":\"d1\"")
+                && count(parts.get(0), "{\"id\"") == BuddyProtocol.PAST_COUNT, "five at most");
         // 最长的一件：标题、名字和日子都顶到上限，一条也远不到一行的上限。
         StringBuilder wide = new StringBuilder();
         for (int index = 0; index < 40; index++) {
@@ -608,7 +602,7 @@ public final class ProtocolSelfTest {
                     "cancelled", wide.toString(), "medium"));
         }
         check(BuddyProtocol.utf8Length(BuddyProtocol.past(widest).get(0)) < 1024,
-                "the longest part there can be");
+                "the longest list there can be");
 
         // ---- want：设备来要一张卡 ----
         check("c41".equals(BuddyProtocol.parseWant("{\"evt\":\"want\",\"card\":\"c41\"}"))
