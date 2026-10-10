@@ -12,6 +12,7 @@ import dataclasses
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,7 @@ from xiaoyou_runtime import router as router_module  # noqa: E402
 from xiaoyou_runtime import stt as stt_module  # noqa: E402
 from xiaoyou_runtime import tasks as tasks_module  # noqa: E402
 from xiaoyou_runtime import workspace as workspace_module  # noqa: E402
+from xiaoyou_runtime import usage as usage_module  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
 from xiaoyou_runtime.agents import AgentError, Job, Outcome  # noqa: E402
@@ -763,6 +765,53 @@ class ClaudeCodeAgentTests(TempDirCase):
         for bad in ({"A-B": "1"}, {"A": 1}, {"CLAUDE_CONFIG_DIR": "/x"}):
             with self.assertRaises(config_module.ConfigError):
                 config_module.load(write_config(self.folder, agents=agents(bad)), {})
+
+    def test_key_can_be_read_from_a_file_outside_the_config(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        def agents(env_files, env=None):
+            return {"claude": {"type": "claude_code", "command": [sys.executable],
+                               "env": env or {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic"},
+                               "env_files": env_files}}
+
+        key = self.folder / "example.key"
+        loaded = config_module.load(write_config(
+            self.folder, agents=agents({"ANTHROPIC_AUTH_TOKEN": "example.key"})), {})
+        spec = loaded.agents[0]
+        self.assertEqual(spec.env_files, {"ANTHROPIC_AUTH_TOKEN": key.resolve()})
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", spec.env)
+
+        agent = agents_module.ClaudeCodeAgent(spec, run=fake_run)
+        self.assertIn("读不到", agent.check())
+        with self.assertRaises(agents_module.AgentError):
+            agent.run(Job("x"))
+        self.assertEqual(seen, [])
+
+        key.write_text("\n", encoding="utf-8")
+        os.chmod(key, 0o600)
+        self.assertIn("是空的", agent.check())
+
+        key.write_text("sk-fake-for-tests\n", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(key, 0o644)
+            self.assertIn("chmod 600", agent.check())
+            os.chmod(key, 0o600)
+        self.assertIsNone(agent.check())
+        agent.run(Job("x"))
+        self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-for-tests")
+        # 换了密钥，下一次启动就用新的。
+        key.write_text("sk-fake-rotated", encoding="utf-8")
+        agent.run(Job("x"))
+        self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
+
+        for bad in (agents({"A-B": "x"}), agents({"A": ""}), agents({"CLAUDE_CONFIG_DIR": "x"}),
+                    agents({"ANTHROPIC_AUTH_TOKEN": "x"}, env={"ANTHROPIC_AUTH_TOKEN": ""})):
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load(write_config(self.folder, agents=bad), {})
 
 
 class CodexAgentTests(TempDirCase):
@@ -2606,6 +2655,38 @@ class ServiceTests(TempDirCase):
             self.service.cards("a/b")
 
 
+class UsageTests(TempDirCase):
+    def test_codex_thread_tokens_are_read_from_its_home(self):
+        home = self.folder / "codex-home"
+        home.mkdir()
+        database = sqlite3.connect(home / "state_5.sqlite")
+        try:
+            database.execute("create table threads (tokens_used integer, updated_at_ms integer)")
+            database.executemany("insert into threads values (?, ?)", [(100, 10), (25, 20)])
+            database.commit()
+        finally:
+            database.close()
+        loaded = config_module.load(write_config(self.folder, agents={
+            "codex": {"type": "codex", "config_dir": str(home), "mode": "exec"},
+        }))
+        snapshot = usage_module.UsageMonitor(loaded).snapshot()
+        self.assertEqual(snapshot["codex"][0]["tokens"]["threads"], 2)
+        self.assertEqual(snapshot["codex"][0]["tokens"]["total_tokens"], 125)
+
+    def test_rate_limit_payload_is_normalized(self):
+        parsed = usage_module._rate_limits_response({"ordinaryUsageAllowed": True, "rateLimits": {
+            "limitId": "codex",
+            "planType": "pro",
+            "primary": {"usedPercent": 37, "resetsAt": 1791619200, "windowDurationMins": 300},
+            "credits": {"balance": "12.50", "hasCredits": True, "unlimited": False},
+        }})
+        bucket = parsed["buckets"]["codex"]
+        self.assertTrue(parsed["available"])
+        self.assertEqual(parsed["ordinary_usage_allowed"], True)
+        self.assertEqual(bucket["primary"]["remaining_percent"], 63)
+        self.assertEqual(bucket["credits"]["balance"], "12.50")
+
+
 class SharedHistoryTests(TempDirCase):
     """Turns that happened on another runtime are carried over by the phone."""
 
@@ -2733,6 +2814,7 @@ class HttpTests(TempDirCase):
             self.assertEqual(self.call("POST", "/v1/messages", {"text": "hi"}, token=token)[0], 401)
             self.assertEqual(self.call("GET", "/v1/messages/abc", token=token)[0], 401)
             self.assertEqual(self.call("GET", "/v1/agents", token=token)[0], 401)
+            self.assertEqual(self.call("GET", "/v1/usage", token=token)[0], 401)
             self.assertEqual(self.call("POST", "/v1/conversations/default/reset", {}, token=token)[0], 401)
 
     def test_send_then_long_poll_and_continue(self):
@@ -2765,6 +2847,10 @@ class HttpTests(TempDirCase):
             "name": "echo", "type": "echo", "description": "原样复述，用来测试链路",
             "speaks": True, "default": True,
         }])
+        status, usage = self.call("GET", "/v1/usage")
+        self.assertEqual(status, 200)
+        self.assertEqual((usage["codex"], usage["claude"]), ([], []))
+        self.assertIn("updated_at", usage)
         message = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo", "card": "c9"})[1]
         done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])[1]
         self.assertEqual((done["asked"], done["events"][0]["text"]), ("echo", "asked"))

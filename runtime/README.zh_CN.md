@@ -126,7 +126,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
-| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env` |
+| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files` |
 | `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
@@ -150,16 +150,30 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
   "config_dir": "~/.claude-xiaoyou-deepseek",
   "model": "deepseek-v4-pro",
   "env": {
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_AUTH_TOKEN": "你的 DeepSeek 密钥"
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+  },
+  "env_files": {
+    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
   }
 }
 ```
 
-把 `"enabled"` 改成 `true`，填上密钥，再把 `xiaoyou.default_agent`（和 `voice_agent`，
+`env_files` 里的变量取自文件的内容（去掉前后空白），密钥就不用写进 `config.json`。
+每次启动 Claude Code 时现读这个文件，换了密钥不用重启。文件不存在、是空的，或者别的用户
+也能读（要 `chmod 600`），`--check` 都会指出来。下面这样放密钥，密钥不会进 shell 历史：
+
+```bash
+mkdir -p ~/.config/xiaoyou && chmod 700 ~/.config/xiaoyou
+read -rs "key?DeepSeek 密钥：" && printf '%s\n' "$key" > ~/.config/xiaoyou/deepseek.key; unset key
+chmod 600 ~/.config/xiaoyou/deepseek.key
+```
+
+（这是 zsh 的写法；bash 里写 `read -rsp "DeepSeek 密钥：" key`。）
+
+把 `"enabled"` 改成 `true`，放好密钥，再把 `xiaoyou.default_agent`（和 `voice_agent`，
 如果写了）指向它，小幽自己就由这个模型来回话；原来的 `claude` 留着当帮手，改回去只要
 把这两项指回 `claude`。给它一个单独的 `config_dir`，这样它的会话不和订阅登录的那一套
-混在一起；这个目录不用登录。密钥只写在 `config.json` 里（这个文件不进仓库）。
+混在一起；这个目录不用登录。密钥也可以直接写进 `env`，只是那样它就留在 `config.json` 里。
 
 没有实测过：这一段是照 DeepSeek 的接口文档和 Claude Code 实际发出的请求写的，没有用
 真实的密钥跑过一轮。Claude Code 的网页搜索是 Anthropic 那边的服务端工具，换了服务后
@@ -346,6 +360,7 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`：小幽在这台 Runtime 上能用的代理。 |
+| `GET /v1/usage` | `{"updated_at", "codex": [...], "claude": [...]}`：本机可见的 Codex / Claude Code 用量和额度状态。Codex 优先读 app-server 的 `account/rateLimits/read`，拿不到时仍给出本地 `state_5.sqlite` 的线程 token 统计；Claude Code 只报告当前配置是否能代表 claude.ai 订阅额度，以及项目历史里缓存到的最近 quota 错误。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |

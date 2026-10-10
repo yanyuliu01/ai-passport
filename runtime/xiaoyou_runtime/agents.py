@@ -547,12 +547,26 @@ class ClaudeCodeAgent(Agent):
         command += spec.extra_args
         return command
 
+    def _file_env(self) -> Dict[str, str]:
+        """env_files 里的变量：每次现读，换了密钥不用重启。"""
+        values = {}
+        for key, path in self.spec.env_files.items():
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError as error:
+                raise AgentError("读不到 %s 用的文件 %s：%s" % (key, path, error.strerror or error))
+            if not value:
+                raise AgentError("%s 用的文件 %s 是空的" % (key, path))
+            values[key] = value
+        return values
+
     def _env(self) -> Optional[Dict[str, str]]:
-        if self.spec.config_dir is None and not self.spec.env:
+        if self.spec.config_dir is None and not self.spec.env and not self.spec.env_files:
             return None
         env = dict(os.environ)
         # 配置里写的环境变量：换接口地址、密钥、模型之类。
         env.update(self.spec.env)
+        env.update(self._file_env())
         if self.spec.config_dir is not None:
             # 让这台机器上的 Claude Code 用一套单独的登录和设置，
             # 不受（也不影响）使用者平时那套 ~/.claude 配置。
@@ -669,10 +683,20 @@ class ClaudeCodeAgent(Agent):
 
     def check(self) -> Optional[str]:
         problem = self._command_problem()
+        if problem is None:
+            try:
+                self._file_env()
+            except AgentError as error:
+                return str(error)
+            for key, path in self.spec.env_files.items():
+                if os.name == "posix" and path.stat().st_mode & 0o077:
+                    return "%s 用的文件 %s 别人也能读：chmod 600 %s" % (key, path, path)
         if problem is None and self.spec.env.get("ANTHROPIC_BASE_URL"):
             keys = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
-            if not any(self.spec.env.get(key) or os.environ.get(key) for key in keys):
-                return "env 里设了 ANTHROPIC_BASE_URL，但没有 ANTHROPIC_AUTH_TOKEN：填上那个服务的密钥"
+            if not any(self.spec.env.get(key) or key in self.spec.env_files or os.environ.get(key)
+                       for key in keys):
+                return ("env 里设了 ANTHROPIC_BASE_URL，但没有 ANTHROPIC_AUTH_TOKEN："
+                        "在 env_files 里指向放密钥的文件，或者填进 env")
         return problem
 
 
@@ -875,8 +899,11 @@ class RemoteAgent(Agent):
 
 
 def create(spec: AgentSpec) -> Agent:
+    # XIAOYOU_DEEPSEEK_CLAUDE_GATEWAY
+    from .claude_gateway import create_claude_agent
+
     kinds = {
-        "claude_code": ClaudeCodeAgent,
+        "claude_code": create_claude_agent,
         "codex": CodexAgent,
         "command": CommandAgent,
         "remote": RemoteAgent,

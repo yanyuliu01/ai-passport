@@ -11,3 +11,7 @@ managed_components/
 /.agents/skills/passport-build
 /.agents/skills/passport-device-test
 /.agents/skills/passport-debug
+
+# Backups that helpers leave next to the runtime sources on the owner computer
+runtime/**/*.bak-*
+runtime/backup-*/
