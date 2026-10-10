@@ -75,6 +75,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String taskKey = null;
     private TextView firmwareStatus;
     private LinearLayout firmwareList;
+    private TextView usageView;
+    /** 这句话让帮手用哪一档做；null 是不指定（按帮手平时的档）。发出去之后回到不指定。 */
+    private String effortChoice = null;
+    private Button effortButton;
     /** 上次从电脑问到的版本清单，以及画列表时用的记号（清单或记号变了才重画）。 */
     private List<Map<String, String>> firmwareVersions = new ArrayList<>();
     private String firmwareKey = null;
@@ -112,6 +116,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         status = text("", 15, false);
         status.setPadding(0, dp(12), 0, dp(8));
         root.addView(status);
+
+        root.addView(heading("用量"));
+        usageView = text("", 14, false);
+        usageView.setTextIsSelectable(true);
+        root.addView(usageView);
 
         root.addView(heading("由哪台电脑回答"));
         runtimeList = new LinearLayout(this);
@@ -195,6 +204,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         chatInput.setMaxLines(4);
         chatInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         row.addView(half(chatInput));
+        // 这句话交给帮手时用哪一档：点一下换一档，发出去之后回到“默认档”。
+        effortButton = button("默认档", view -> nextEffort());
+        effortButton.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(effortButton);
         Button send = button("发送", view -> sendChat());
         send.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -281,6 +295,17 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         chatView.setText(talk.toString().trim());
         chatView.setVisibility(talk.length() == 0 ? View.GONE : View.VISIBLE);
+        Usage usage = store.usage();
+        if (usage == null || usage.empty()) {
+            usageView.setText("（这台电脑还没有报用量；Runtime 0.6.0 起才有）");
+        } else {
+            StringBuilder said = new StringBuilder();
+            for (String part : usage.describe(System.currentTimeMillis() / 1000L,
+                    store.usageAgeSeconds(), java.util.TimeZone.getDefault())) {
+                said.append(said.length() == 0 ? "" : "\n\n").append(part);
+            }
+            usageView.setText(said.toString());
+        }
         refreshRuntimes();
         firmwareStatus.setText(store.firmwareLine());
         refreshFirmware();
@@ -298,12 +323,28 @@ public class MainActivity extends Activity implements HubStore.Listener {
             return;
         }
         chatInput.setText("");
+        String effort = effortChoice;
+        setEffort(null);
         if (tab == TAB_TASKS && openTask != null) {
-            RuntimeClient.send(this, message, openTask);
+            RuntimeClient.send(this, message, openTask, effort);
+        } else if (effort != null) {
+            RuntimeClient.send(this, message, null, effort);
         } else {
             RuntimeClient.send(this, message);
         }
         scrollDown();
+    }
+
+    /** 默认 → 低 → 中 → 高 → 默认。 */
+    private void nextEffort() {
+        setEffort(effortChoice == null ? "low" : effortChoice.equals("low") ? "medium"
+                : effortChoice.equals("medium") ? "high" : null);
+    }
+
+    private void setEffort(String effort) {
+        effortChoice = effort;
+        effortButton.setText(effort == null ? "默认档" : Card.effortLabel(effort));
+        effortButton.setTypeface(effort == null ? Typeface.DEFAULT : Typeface.DEFAULT_BOLD);
     }
 
     // ---- 三页 ----
@@ -503,6 +544,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         TextView title = text(CardViews.status(opened) + when + "\n" + opened.title, 14, true);
         title.setPadding(0, dp(8), 0, dp(4));
         taskPane.addView(title);
+        if (!opened.spentLine().isEmpty()) {
+            // 谁、用哪个模型、哪一档做的，花了多少。
+            taskPane.addView(text(opened.spentLine(), 12, false));
+        }
         StringBuilder words = new StringBuilder(CardViews.thread(opened));
         if (opened.active()) {
             // 帮手最近的几步：工具名和命令原样显示。

@@ -177,6 +177,9 @@ public final class HubStore {
     private final Set<String> answered = new HashSet<>();
     /** 回答没送到的次数：重新问的时候换一个请求编号，设备才会当成新的请求。 */
     private final Map<String, Integer> attempts = new HashMap<>();
+    /** Runtime 最近报的用量，和它是什么时候到手的；旧版 Runtime 不报，是 null。 */
+    private Usage usage;
+    private long usageAtMs;
     /** 设备固件这件事现在怎么样了，一句话。 */
     private String firmwareLine = "还不知道设备上是哪一版固件";
     /** 设备现在跑的固件、Runtime 要推给它的那一版；不知道就是空串。 */
@@ -276,6 +279,7 @@ public final class HubStore {
             attempts.clear();
             feedSeq = 0;
             turnCard = null;
+            usage = null;
             ++cardsEpoch;
         }
         notifyChanged();
@@ -668,6 +672,39 @@ public final class HubStore {
 
     public synchronized String linkState() {
         return linkState;
+    }
+
+    // ---- 用量 ----
+
+    /** Runtime 报的用量；没报过是 null。 */
+    public synchronized Usage usage() {
+        return usage;
+    }
+
+    /** 这份用量到手之后过了多少秒。 */
+    public synchronized long usageAgeSeconds() {
+        return usage == null ? 0L : Math.max(0L, (System.currentTimeMillis() - usageAtMs) / 1000L);
+    }
+
+    /** Runtime 给这份用量编的号；没有用量是 -1。 */
+    public synchronized long usageRev() {
+        return usage == null ? -1L : usage.rev;
+    }
+
+    /** feed 里带来的用量。和手里的是同一份（编号没变）就不算变化。 */
+    public void setUsage(Usage next) {
+        synchronized (this) {
+            if (next == null || (usage != null && usage.rev == next.rev && usage.at == next.at)) {
+                return;
+            }
+            boolean same = usage != null && usage.rev == next.rev;
+            usage = next;
+            usageAtMs = System.currentTimeMillis();
+            if (same) {
+                return;  // 只是钟走了，数没变：不用惊动谁
+            }
+        }
+        notifyChanged();
     }
 
     // ---- 设备固件 ----

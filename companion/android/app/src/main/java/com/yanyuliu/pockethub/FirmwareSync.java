@@ -53,6 +53,9 @@ final class FirmwareSync {
     private String state = "";
     private String version = "";
     private int maxSize;
+    /** 设备的内部内存还剩多少、开机以来最少剩过多少（字节）；老固件不报，是 0。 */
+    private int heapFree;
+    private int heapLow;
     private boolean infoRequested;
     /** 这一次连接里说过几次“认可”：设备一直不认就不再说了，免得来回空转。 */
     private int confirmTries;
@@ -198,6 +201,8 @@ final class FirmwareSync {
         state = reply.text("state");
         version = reply.text("ver");
         maxSize = reply.number("max", 0);
+        heapFree = reply.number("heap", 0);
+        heapLow = reply.number("low", 0);
         HubStore.get().setFirmwareVersions(build, targetId);
         if ("pending".equals(state) && confirmTries < 2) {
             // 新固件第一次启动：能连上、能说话，就算它过关。不说这一句，它三分钟后会自己退回上一版。
@@ -224,7 +229,9 @@ final class FirmwareSync {
     }
 
     private String describe() {
-        return (version.isEmpty() ? "" : version + " ") + "(" + build + ")";
+        return (version.isEmpty() ? "" : version + " ") + "(" + build + ")"
+                + (heapFree > 0 ? "，内存还剩 " + heapFree / 1024 + " KB（最少剩过 "
+                        + heapLow / 1024 + " KB）" : "");
     }
 
     // ---- Runtime 说该推哪一版 ----
@@ -554,6 +561,10 @@ final class FirmwareSync {
         body.append(",\"ver\":");
         BuddyProtocol.quote(body, version);
         body.append(",\"max\":").append(Math.max(0, maxSize));
+        if (heapFree > 0) {
+            body.append(",\"heap\":").append(heapFree).append(",\"low\":")
+                    .append(Math.max(0, heapLow));
+        }
         body.append(",\"id\":");
         BuddyProtocol.quote(body, id);
         body.append(",\"detail\":");

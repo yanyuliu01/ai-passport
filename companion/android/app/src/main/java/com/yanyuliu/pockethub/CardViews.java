@@ -1,7 +1,12 @@
 package com.yanyuliu.pockethub;
 
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * 卡在手机上怎么分、怎么写成字。纯 Java，不依赖安卓。
@@ -68,11 +73,14 @@ final class CardViews {
         return out.toString();
     }
 
-    /** “c3 · codex · 在做（改过 1 次）”。 */
+    /** “c3 · codex 高档 · 在做（改过 1 次）”。 */
     static String status(Card card) {
         StringBuilder out = new StringBuilder(card.id);
         if (!card.agent.isEmpty()) {
             out.append(" · ").append(card.agent);
+            if (!card.effort.isEmpty()) {
+                out.append(' ').append(Card.effortLabel(card.effort));
+            }
         }
         out.append(" · ").append(card.stateLabel());
         if (card.edits > 0) {
@@ -130,13 +138,76 @@ final class CardViews {
         return out;
     }
 
+    /** 一件做完的任务算哪个时候做完的：Runtime 记了就用它记的，旧版没记就用开卡的时间。 */
+    static double endedAt(Card card) {
+        return card.finishedAt > 0 ? card.finishedAt
+                : (card.startedAt > 0 ? card.startedAt : card.createdAt);
+    }
+
+    /**
+     * 设备第三屏下半张单子：做完的任务，最近做完的在前，最多 limit 件。只给把做完的事
+     * 另列一张单子的固件（past）；这时上半张单子（deviceTasks，ended 为 false）只有在做的。
+     */
+    static List<Card> devicePast(List<Card> cards, int limit) {
+        List<Card> out = new ArrayList<>();
+        for (Card card : cards) {
+            if (isTask(card) && !card.active()) {
+                out.add(card);
+            }
+        }
+        // 做完的时间一样（或者都没记）时，后开的卡在前。
+        Collections.sort(out, new Comparator<Card>() {
+            @Override
+            public int compare(Card left, Card right) {
+                int byTime = Double.compare(endedAt(right), endedAt(left));
+                return byTime != 0 ? byTime : Long.compare(right.order(), left.order());
+            }
+        });
+        while (out.size() > limit) {
+            out.remove(out.size() - 1);
+        }
+        return out;
+    }
+
+    /** 哪天做完的，写给设备分组用：今天、昨天，更早的写月和日（10-08）；不知道是空串。 */
+    static String dayLabel(double endedAt, long nowSeconds, TimeZone zone) {
+        if (endedAt <= 0) {
+            return "";
+        }
+        Calendar then = Calendar.getInstance(zone, Locale.US);
+        then.setTimeInMillis((long) (endedAt * 1000));
+        Calendar now = Calendar.getInstance(zone, Locale.US);
+        now.setTimeInMillis(nowSeconds * 1000L);
+        if (sameDay(then, now)) {
+            return "今天";
+        }
+        now.add(Calendar.DAY_OF_YEAR, -1);
+        if (sameDay(then, now)) {
+            return "昨天";
+        }
+        return String.format(Locale.US, "%02d-%02d", then.get(Calendar.MONTH) + 1,
+                then.get(Calendar.DAY_OF_MONTH));
+    }
+
+    private static boolean sameDay(Calendar left, Calendar right) {
+        return left.get(Calendar.YEAR) == right.get(Calendar.YEAR)
+                && left.get(Calendar.DAY_OF_YEAR) == right.get(Calendar.DAY_OF_YEAR);
+    }
+
+    /** 下半张单子上的一行。 */
+    static BuddyProtocol.Past devicePastItem(Card card, long nowSeconds, TimeZone zone) {
+        return new BuddyProtocol.Past(card.id, card.agent, card.title, card.state,
+                dayLabel(endedAt(card), nowSeconds, zone), card.effort);
+    }
+
     /** 单子上的一行。做完的事：状态是它怎么结束的，p1 是结论（设备上没有它的卡时用）。 */
     static BuddyProtocol.Task deviceTask(Card card, long nowSeconds) {
         if (!card.active()) {
             String state = card.state.equals("failed") || card.state.equals("cancelled")
                     ? card.state : "done";
             return new BuddyProtocol.Task(card.id, card.agent, card.title, state, 0L,
-                    oneLine(card.brief.isEmpty() ? card.lastSay() : card.brief, PREVIEW_CHARS), "");
+                    oneLine(card.brief.isEmpty() ? card.lastSay() : card.brief, PREVIEW_CHARS), "",
+                    card.effort);
         }
         int steps = card.progress.size();
         double since = card.startedAt > 0 ? card.startedAt : card.createdAt;
@@ -144,7 +215,7 @@ final class CardViews {
                 card.state.equals("waiting") ? "waiting" : (card.queued ? "queued" : "working"),
                 since > 0 ? Math.max(0L, nowSeconds - (long) since) : 0L,
                 steps >= 2 ? card.progress.get(steps - 2) : (steps == 1 ? card.progress.get(0) : ""),
-                steps >= 2 ? card.progress.get(steps - 1) : "");
+                steps >= 2 ? card.progress.get(steps - 1) : "", card.effort);
     }
 
     /** 设备上一件任务的来回最多这么多字节、每句最多这么多字：设备的地方是所有卡合用的。 */
@@ -197,11 +268,19 @@ final class CardViews {
 
     /** 发一句话的请求体。card 不为 null 表示是在那件事里面说的：一定归到它。 */
     static String messageJson(String text, String clientId, String card) {
+        return messageJson(text, clientId, card, null);
+    }
+
+    /** 同上；effort 不为空表示这句话让帮手用这一档做（Runtime 0.6.0 起认识）。 */
+    static String messageJson(String text, String clientId, String card, String effort) {
         StringBuilder body = new StringBuilder("{\"text\":");
         BuddyProtocol.quote(body, text);
         body.append(",\"client_id\":\"").append(clientId).append('"');
         if (BuddyProtocol.cardId(card)) {
             body.append(",\"card\":\"").append(card).append("\",\"pin\":true");
+        }
+        if (BuddyProtocol.effort(effort)) {
+            body.append(",\"effort\":\"").append(effort).append('"');
         }
         return body.append('}').toString();
     }

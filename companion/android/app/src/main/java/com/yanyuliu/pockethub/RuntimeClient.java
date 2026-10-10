@@ -197,7 +197,11 @@ final class RuntimeClient {
         HubStore store = HubStore.get();
         long after = store.feedSeq();
         long epoch = store.cardsEpoch();
-        String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait,
+        // 带上手里那份用量的编号：用量变了 Runtime 也会提前返回（0.6.0 起；旧版不认识这个
+        // 参数，照常等卡的变化）。
+        long usageRev = store.usageRev();
+        String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait
+                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
                 target.token, null, null, wait + 15, interruptible);
         Map<String, Object> feed = Json.parseObject(body);
         if (feed == null) {
@@ -227,6 +231,7 @@ final class RuntimeClient {
             }
         }
         store.applyFeed(seq, cards, approvals);
+        store.setUsage(Usage.from(feed.get("usage")));
     }
 
     /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
@@ -426,12 +431,20 @@ final class RuntimeClient {
 
     /** 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。 */
     static void send(Context context, String text) {
-        submit(context, text, null, null, false);
+        submit(context, text, null, null, false, null);
     }
 
     /** 在一件事里面说一句话（card 是它的编号）：这句话一定归到它，不混进主对话。 */
     static void send(Context context, String text, String card) {
-        submit(context, text, null, card, true);
+        submit(context, text, null, card, true, null);
+    }
+
+    /**
+     * 发一句话，并说明这件事让帮手用哪一档做（low、medium、high）。card 为 null 是对小幽
+     * 说的，否则是在那件事里面说的。
+     */
+    static void send(Context context, String text, String card, String effort) {
+        submit(context, text, null, card, card != null, effort);
     }
 
     /**
@@ -440,11 +453,11 @@ final class RuntimeClient {
      * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
      */
     static void sendVoice(Context context, byte[] wav, String card, boolean pin) {
-        submit(context, VOICE_PLACEHOLDER, wav, card, pin);
+        submit(context, VOICE_PLACEHOLDER, wav, card, pin, null);
     }
 
     private static void submit(Context context, String text, byte[] wav, String card,
-                               boolean pin) {
+                               boolean pin, String effort) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -478,7 +491,7 @@ final class RuntimeClient {
                             wav, "audio/wav", 30);
                 } else {
                     message = request("POST", url + "/v1/messages", token,
-                            CardViews.messageJson(text, clientId, card)
+                            CardViews.messageJson(text, clientId, card, effort)
                                     .getBytes(StandardCharsets.UTF_8),
                             "application/json; charset=utf-8", 20);
                 }

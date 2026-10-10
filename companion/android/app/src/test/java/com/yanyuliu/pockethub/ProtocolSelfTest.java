@@ -458,6 +458,250 @@ public final class ProtocolSelfTest {
         }
         check(Json.parseObject(deep.toString()) == null, "deep nesting is refused, not a crash");
         check(Json.parseObject("{}").isEmpty(), "empty object");
+        historyAndUsage();
+    }
+
+    private static Card card(String json) {
+        return Card.from(Json.parseObject(json));
+    }
+
+    /** 做完的任务另列一张单子、用量和档位：发给设备的每一行，和它们是从卡里怎么算出来的。 */
+    private static void historyAndUsage() {
+        java.util.TimeZone zone = java.util.TimeZone.getTimeZone("Asia/Shanghai");
+        // 2026-10-10 15:00 +08:00
+        long now = 1791615600L;
+
+        // ---- 握手：新固件多声明两样 ----
+        String ack = "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true,"
+                + "\"usage\":true,\"past\":true}";
+        String older = "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true}";
+        check(BuddyProtocol.hubAckHasUsage(ack) && BuddyProtocol.hubAckHasPast(ack)
+                && !BuddyProtocol.hubAckHasUsage(older) && !BuddyProtocol.hubAckHasPast(older)
+                && !BuddyProtocol.hubAckHasPast(
+                        "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"past\":true}"),
+                "usage and past in the ack");
+
+        // ---- 卡上多出来的几项 ----
+        Card done = card("{\"id\":\"c41\",\"state\":\"done\",\"agent\":\"codex\",\"title\":\"任务历史\","
+                + "\"created_at\":1791600000,\"finished_at\":1791612000,\"effort\":\"high\","
+                + "\"model\":\"gpt-6.1-sol\",\"cost\":{\"in\":9000,\"out\":3000,\"cached\":500,"
+                + "\"d5\":3,\"d7\":1}}");
+        check(done.finishedAt == 1791612000d && done.effort.equals("high")
+                && done.model.equals("gpt-6.1-sol") && done.tokens == 12500L && done.spent5h == 3
+                && done.spent7d == 1, "what a card says about its tier and cost");
+        check(done.spentLine().equals("codex · gpt-6.1-sol · 高档 · 约用了 5 小时额度的 3%"),
+                "spent: " + done.spentLine());
+        check(CardViews.status(done).equals("c41 · codex 高档 · 好了"), "status with the tier");
+        Card bare = card("{\"id\":\"c40\",\"state\":\"failed\",\"agent\":\"tailor\",\"title\":\"推固件\","
+                + "\"created_at\":1791530000,\"cost\":null}");
+        check(bare.finishedAt == 0 && bare.effort.isEmpty() && bare.tokens == -1
+                && bare.spent5h == -1 && bare.spentLine().isEmpty(), "an older runtime says none of it");
+        Card tokensOnly = card("{\"id\":\"c39\",\"state\":\"done\",\"agent\":\"deepseek\","
+                + "\"model\":\"deepseek-v4-pro\",\"cost\":{\"in\":40000,\"out\":2000,\"cached\":0}}");
+        check(tokensOnly.spentLine().equals("deepseek · deepseek-v4-pro · 42k token"),
+                "spent, pay as you go: " + tokensOnly.spentLine());
+        check(card("{\"id\":\"c1\",\"state\":\"done\",\"model\":\"x\"}").spentLine().isEmpty(),
+                "Xiaoyou's own answers have no helper line");
+        check(Card.effortLabel("xhigh").equals("特高档") && Card.effortLabel("odd").equals("odd")
+                && Card.effortLabel(null).isEmpty(), "tier words");
+
+        // ---- 档位跟着 chat、card、tasks 走；不认识的词不发 ----
+        check(BuddyProtocol.chat("helper", "看看", "", "codex", "交给 codex 了", "busy", "c41", 1, "high")
+                .endsWith(",\"card\":\"c41\",\"doing\":1,\"eff\":\"high\"}\n"), "chat with a tier");
+        check(!BuddyProtocol.chat("helper", "", "", "codex", "", "busy", "c41", 1, "turbo")
+                .contains("eff") && !BuddyProtocol.chat("idle", "", "", "", "", "idle").contains("eff"),
+                "no tier, no field");
+        check(BuddyProtocol.card("c41", "14:00", "done", "codex", 0, "任务历史", "好了", "medium")
+                .endsWith(",\"reply\":\"好了\",\"eff\":\"medium\"}\n"), "card with a tier");
+        check(BuddyProtocol.card("c41", "14:00", "done", "codex", 0, "任务历史", "好了")
+                .endsWith(",\"reply\":\"好了\"}\n"), "card without");
+        String listed = BuddyProtocol.tasks(Arrays.asList(
+                new BuddyProtocol.Task("c41", "codex", "t", "working", 5, "a", "b", "low"),
+                new BuddyProtocol.Task("c42", "claude", "u", "waiting", 6, "", "")));
+        check(listed.contains("\"p2\":\"b\",\"eff\":\"low\"},{\"id\":\"c42\"")
+                && listed.endsWith("\"p1\":\"\",\"p2\":\"\"}]}\n"), "tasks with a tier: " + listed);
+        check(CardViews.deviceTask(done, now).effort.equals("high"), "the list line carries it");
+        check(CardViews.messageJson("仔细看", "abc", null, "high")
+                        .equals("{\"text\":\"仔细看\",\"client_id\":\"abc\",\"effort\":\"high\"}")
+                && CardViews.messageJson("x", "abc", "c3", "low")
+                        .equals("{\"text\":\"x\",\"client_id\":\"abc\",\"card\":\"c3\",\"pin\":true,"
+                                + "\"effort\":\"low\"}")
+                && CardViews.messageJson("x", "abc", null, "turbo")
+                        .equals(CardViews.messageJson("x", "abc", null)), "a message that picks a tier");
+
+        // ---- 做完的事：哪天做完的 ----
+        check(CardViews.dayLabel(1791612000d, now, zone).equals("今天")
+                && CardViews.dayLabel(1791561600d, now, zone).equals("今天")      // 今天 00:00
+                && CardViews.dayLabel(1791561599d, now, zone).equals("昨天")
+                && CardViews.dayLabel(1791475200d, now, zone).equals("昨天")      // 昨天 00:00
+                && CardViews.dayLabel(1791475199d, now, zone).equals("10-08")
+                && CardViews.dayLabel(1790000000d, now, zone).equals("09-21")
+                && CardViews.dayLabel(0, now, zone).isEmpty(), "which day a thing ended on");
+        // 时区不同，同一刻可以是不同的一天。
+        check(CardViews.dayLabel(1791565200d, now, zone).equals("今天")
+                && CardViews.dayLabel(1791565200d, now, java.util.TimeZone.getTimeZone("UTC"))
+                        .equals("昨天"), "the day is the phone's day");
+
+        // ---- 做完的事：另一张单子，最近做完的在前 ----
+        List<Card> cards = new java.util.ArrayList<>();
+        cards.add(card("{\"id\":\"c1\",\"state\":\"done\",\"agent\":\"\",\"title\":\"闲聊\"}"));
+        cards.add(bare);                                         // c40，没记完成时间
+        cards.add(done);                                         // c41，今天
+        cards.add(card("{\"id\":\"c42\",\"state\":\"working\",\"agent\":\"codex\",\"title\":\"在做\","
+                + "\"created_at\":1791614000,\"started_at\":1791614000}"));
+        cards.add(card("{\"id\":\"c43\",\"state\":\"cancelled\",\"agent\":\"claude\",\"title\":\"不要了\","
+                + "\"created_at\":1791500000,\"finished_at\":1791615000}"));
+        List<Card> past = CardViews.devicePast(cards, BuddyProtocol.PAST_COUNT);
+        check(past.size() == 3 && past.get(0).id.equals("c43") && past.get(1).id.equals("c41")
+                && past.get(2).id.equals("c40"), "ended tasks, the latest to end first");
+        check(CardViews.devicePast(cards, 2).size() == 2
+                && CardViews.devicePast(cards, 2).get(1).id.equals("c41"), "the oldest go first");
+        // 上半张单子这时只有在做的。
+        List<Card> going = CardViews.deviceTasks(cards, BuddyProtocol.TASK_COUNT, false);
+        check(going.size() == 1 && going.get(0).id.equals("c42"), "in progress only");
+        BuddyProtocol.Past item = CardViews.devicePastItem(past.get(2), now, zone);
+        check(item.id.equals("c40") && item.state.equals("failed") && item.day.equals("昨天")
+                && item.effort.isEmpty(), "without a finish time the day it was started");
+
+        // ---- past：一条最多五件，带着从第几件起、一共几件 ----
+        List<BuddyProtocol.Past> many = new java.util.ArrayList<>();
+        for (int index = 0; index < 13; index++) {
+            many.add(new BuddyProtocol.Past("c" + (60 - index), "codex", "事 " + index,
+                    index == 1 ? "failed" : (index == 2 ? "cancelled" : "done"),
+                    index < 3 ? "今天" : "10-08", index == 0 ? "high" : null));
+        }
+        many.add(4, new BuddyProtocol.Past("an-id-that-is-too-long", "x", "y", "done", "今天", null));
+        many.add(null);
+        List<String> parts = BuddyProtocol.past(many);
+        check(parts.size() == 3, "thirteen in three parts: " + parts.size());
+        check(parts.get(0).startsWith("{\"cmd\":\"past\",\"at\":0,\"n\":13,\"list\":[{\"id\":\"c60\","
+                + "\"agent\":\"codex\",\"title\":\"事 0\",\"state\":\"done\",\"day\":\"今天\","
+                + "\"eff\":\"high\"},{\"id\":\"c59\",") && parts.get(0).contains("\"state\":\"failed\"")
+                && parts.get(0).contains("\"state\":\"cancelled\""), "first part: " + parts.get(0));
+        check(parts.get(1).startsWith("{\"cmd\":\"past\",\"at\":5,\"n\":13,\"list\":[{\"id\":\"c55\",")
+                && parts.get(2).startsWith("{\"cmd\":\"past\",\"at\":10,\"n\":13,\"list\":[{\"id\":\"c50\",")
+                && parts.get(2).endsWith("\"day\":\"10-08\"}]}\n"), "later parts say where they go");
+        for (String part : parts) {
+            check(count(part, "{\"id\"") <= BuddyProtocol.PAST_CHUNK
+                    && BuddyProtocol.utf8Length(part) < 1024, "a part stays small");
+        }
+        // 空单子也要说一声，设备才会把旧的清掉；超过十五件的不发。
+        check(BuddyProtocol.past(null).equals(Arrays.asList(
+                        "{\"cmd\":\"past\",\"at\":0,\"n\":0,\"list\":[]}\n"))
+                && BuddyProtocol.past(new java.util.ArrayList<BuddyProtocol.Past>()).size() == 1,
+                "an empty history is still said");
+        for (int index = 0; index < 10; index++) {
+            many.add(new BuddyProtocol.Past("d" + index, "", "", "done", "", null));
+        }
+        parts = BuddyProtocol.past(many);
+        check(parts.size() == 3 && parts.get(0).contains("\"n\":15")
+                && parts.get(2).contains("\"id\":\"d1\"") && !parts.get(2).contains("\"id\":\"d2\""),
+                "fifteen at most");
+        // 最长的一件：标题、名字和日子都顶到上限，一条也远不到一行的上限。
+        StringBuilder wide = new StringBuilder();
+        for (int index = 0; index < 40; index++) {
+            wide.append('中');
+        }
+        List<BuddyProtocol.Past> widest = new java.util.ArrayList<>();
+        for (int index = 0; index < 5; index++) {
+            widest.add(new BuddyProtocol.Past("c1234567890", wide.toString(), wide.toString(),
+                    "cancelled", wide.toString(), "medium"));
+        }
+        check(BuddyProtocol.utf8Length(BuddyProtocol.past(widest).get(0)) < 1024,
+                "the longest part there can be");
+
+        // ---- want：设备来要一张卡 ----
+        check("c41".equals(BuddyProtocol.parseWant("{\"evt\":\"want\",\"card\":\"c41\"}"))
+                && BuddyProtocol.parseWant("{\"evt\":\"want\"}") == null
+                && BuddyProtocol.parseWant("{\"evt\":\"fw\",\"card\":\"c41\"}") == null
+                && BuddyProtocol.parseWant("{\"evt\":\"want\",\"card\":\"an-id-that-is-too-long\"}") == null
+                && BuddyProtocol.parseWant("not json") == null, "the device asks for a card");
+
+        // ---- 用量：Runtime 给的那份 ----
+        String feed = "{\"usage\":{\"rev\":7,\"at\":1791615000,\"accounts\":["
+                + "{\"id\":\"codex:/home/u/.codex-xiaoyou\",\"kind\":\"codex\",\"agents\":[\"codex\"],"
+                + "\"state\":\"ok\",\"windows\":[{\"kind\":\"5h\",\"left\":58,\"resets_at\":1791620400},"
+                + "{\"kind\":\"7d\",\"left\":81.4,\"resets_at\":1791939600}],\"plan\":\"pro\","
+                + "\"source\":\"app_server\",\"updated_at\":1791614880,\"note\":\"\"},"
+                + "{\"id\":\"claude:/home/u/.claude-xiaoyou\",\"kind\":\"claude\","
+                + "\"agents\":[\"claude\",\"tailor\",\"third\"],\"state\":\"warn\","
+                + "\"windows\":[{\"kind\":\"5h\",\"left\":12,\"resets_at\":null},"
+                + "{\"kind\":\"7d\",\"left\":null,\"resets_at\":1791939600},{\"kind\":\"opus\",\"left\":3}],"
+                + "\"plan\":null,\"source\":\"events\",\"updated_at\":null,\"note\":\"精确的数取不到\"}],"
+                + "\"agents\":["
+                + "{\"name\":\"claude\",\"type\":\"claude_code\",\"model\":\"claude-sonnet-5-5-20260301\","
+                + "\"effort\":\"medium\",\"efforts\":[\"low\",\"medium\",\"high\"],\"models\":[],"
+                + "\"account\":\"claude:/home/u/.claude-xiaoyou\",\"running\":0,\"now\":null},"
+                + "{\"name\":\"tailor\",\"type\":\"claude_code\",\"model\":null,\"effort\":\"high\","
+                + "\"efforts\":[\"high\"],\"models\":[],\"account\":\"claude:/home/u/.claude-xiaoyou\","
+                + "\"running\":0,\"now\":null},"
+                + "{\"name\":\"codex\",\"type\":\"codex\",\"model\":\"gpt-6.1-sol\",\"effort\":\"medium\","
+                + "\"efforts\":[\"low\",\"medium\",\"high\"],\"models\":[\"gpt-6.1-mini\"],"
+                + "\"account\":\"codex:/home/u/.codex-xiaoyou\",\"running\":2,\"now\":\"gpt-6.1-mini\"},"
+                + "{\"name\":\"deepseek\",\"type\":\"claude_code\",\"model\":\"deepseek-v4-pro\","
+                + "\"effort\":null,\"efforts\":[],\"models\":[],\"account\":null,\"running\":1,\"now\":null},"
+                + "{\"name\":\"echo\",\"type\":\"echo\",\"model\":null,\"effort\":null,\"efforts\":[],"
+                + "\"models\":[],\"account\":null,\"running\":0,\"now\":null}]}}";
+        Usage usage = Usage.from(Json.parseObject(feed).get("usage"));
+        check(usage != null && usage.rev == 7 && usage.accounts.size() == 2
+                && usage.agents.size() == 5 && !usage.empty(), "usage as the runtime reports it");
+        check(usage.accounts.get(0).left5h == 58 && usage.accounts.get(0).left7d == 81
+                && usage.accounts.get(0).reset5h == 1791620400L
+                && usage.accounts.get(1).left7d == -1 && usage.accounts.get(1).reset5h == 0
+                && usage.accounts.get(1).updatedAt == 0, "what is unknown stays unknown");
+        check(usage.agent("codex").model.equals("gpt-6.1-mini") && usage.agent("codex").running == 2
+                && usage.agent("tailor").model.isEmpty() && usage.agent("deepseek").account.isEmpty()
+                && usage.agent("nobody") == null, "a helper: the model of the round in progress");
+        check(Usage.from(null) == null && Usage.from("x") == null
+                && Usage.from(Json.parseObject("{}")).empty(), "an older runtime sends no usage");
+
+        check(Usage.shortModel("claude-sonnet-5-5-20260301", 19).equals("sonnet-5-5")
+                && Usage.shortModel("claude-opus-5-5", 19).equals("opus-5-5")
+                && Usage.shortModel("gpt-6.1-sol", 19).equals("gpt-6.1-sol")
+                && Usage.shortModel("deepseek-v4-pro", 19).equals("deepseek-v4-pro")
+                && Usage.shortModel("a-model-with-a-very-long-name", 19).equals("a-model-with-a-very")
+                && Usage.shortModel("model-12345678", 19).equals("model")
+                && Usage.shortModel("model-1234567x", 19).equals("model-1234567x")
+                && Usage.shortModel(null, 19).isEmpty(), "model names made short");
+
+        // ---- 用量：发给设备的那一行（和固件测试里的写法一致：run 是数字） ----
+        String line = BuddyProtocol.usage(usage.deviceEntries(40));
+        check(line.equals("{\"cmd\":\"usage\",\"list\":["
+                + "{\"st\":\"ok\",\"w5\":58,\"r5\":1791620400,\"w7\":81,\"r7\":1791939600,\"age\":160,"
+                + "\"who\":[{\"n\":\"codex\",\"m\":\"gpt-6.1-mini\",\"eff\":\"medium\",\"run\":2}]},"
+                + "{\"st\":\"warn\",\"w5\":12,\"r7\":1791939600,"
+                + "\"who\":[{\"n\":\"claude\",\"m\":\"sonnet-5-5\",\"eff\":\"medium\"},"
+                + "{\"n\":\"tailor\",\"eff\":\"high\"}]},"
+                + "{\"st\":\"na\",\"who\":[{\"n\":\"deepseek\",\"m\":\"deepseek-v4-pro\",\"run\":1}]}"
+                + "]}\n"), "usage for the device: " + line);
+        check(!BuddyProtocol.usage(usage.deviceEntries(-1)).contains("\"age\""),
+                "without the age, to tell whether anything changed");
+        check(BuddyProtocol.usage(null).equals("{\"cmd\":\"usage\",\"list\":[]}\n")
+                && BuddyProtocol.usage(Usage.from(Json.parseObject("{}")).deviceEntries(0))
+                        .equals("{\"cmd\":\"usage\",\"list\":[]}\n"), "nothing to show is an empty list");
+        check(BuddyProtocol.utf8Length(line) < BuddyProtocol.LINE_MAX, "fits a line");
+
+        // ---- 用量：给人看的几段 ----
+        List<String> said = usage.describe(now, 40, zone);
+        check(said.size() == 3, "one paragraph per account, then pay as you go");
+        check(said.get(0).equals("codex（gpt-6.1-mini · 中档） 正在做 2 件 — 正常\n"
+                + "5 小时 剩 58%，16:20 重置\n本周 剩 81%，周三 09:00 重置\n2 分钟前更新"),
+                "account: " + said.get(0));
+        check(said.get(1).equals("claude（claude-sonnet-5-5-20260301 · 中档）\ntailor（还没跑过 · 高档）"
+                + " — 快用完了\n5 小时 剩 12%\n本周：还不知道剩多少，周三 09:00 重置\n精确的数取不到"),
+                "account without numbers: " + said.get(1));
+        check(said.get(2).equals("deepseek（deepseek-v4-pro） 正在做 1 件 — 按量计费"),
+                "pay as you go: " + said.get(2));
+        check(Usage.resetText(0, now, zone).isEmpty() && Usage.resetText(now - 1, now, zone).isEmpty()
+                && Usage.resetText(now + 60, now, zone).equals("15:01 重置"), "when a window resets");
+    }
+
+    private static int count(String text, String piece) {
+        int found = 0;
+        for (int at = text.indexOf(piece); at >= 0; at = text.indexOf(piece, at + 1)) {
+            found++;
+        }
+        return found;
     }
 
     public static void main(String[] args) {

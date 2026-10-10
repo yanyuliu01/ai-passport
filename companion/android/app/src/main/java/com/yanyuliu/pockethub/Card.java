@@ -70,10 +70,27 @@ final class Card {
     final int edits;
     final boolean queued;
     final long seq;
+    /** 交给过帮手的事是什么时候结束的（Unix 秒）；还在做、或者 Runtime 没记，是 0。 */
+    final double finishedAt;
+    /** 这件事让帮手用的档位（low、medium、high……）；没有就是空串。 */
+    final String effort;
+    /** 这件事实际用的模型；还不知道就是空串。 */
+    final String model;
+    /** 这件事花了多少：token，和订阅额度两个窗口各少了几个百分点。没记就都是 -1。 */
+    final long tokens;
+    final int spent5h;
+    final int spent7d;
 
     private Card(String id, String title, String state, String agent, String brief, String mood,
                  List<Entry> entries, List<String> progress, double createdAt, double startedAt,
-                 int edits, boolean queued, long seq) {
+                 int edits, boolean queued, long seq, double finishedAt, String effort,
+                 String model, long tokens, int spent5h, int spent7d) {
+        this.finishedAt = finishedAt;
+        this.effort = effort;
+        this.model = model;
+        this.tokens = tokens;
+        this.spent5h = spent5h;
+        this.spent7d = spent7d;
         this.id = id;
         this.title = title;
         this.state = state;
@@ -111,11 +128,67 @@ final class Card {
         }
         String state = Json.string(raw, "state");
         String mood = Json.string(raw, "mood");
+        Map<String, Object> cost = raw.get("cost") instanceof Map ? Json.object(raw.get("cost"))
+                : null;
         return new Card(id, Json.string(raw, "title"), state.isEmpty() ? "done" : state,
                 Json.string(raw, "agent"), Json.string(raw, "brief"), mood.isEmpty() ? "idle" : mood,
                 entries, progress, Json.number(raw, "created_at"), Json.number(raw, "started_at"),
                 (int) Json.number(raw, "edits"), Json.flag(raw, "queued"),
-                (long) Json.number(raw, "seq"));
+                (long) Json.number(raw, "seq"), Json.number(raw, "finished_at"),
+                Json.string(raw, "effort"), Json.string(raw, "model"),
+                cost == null ? -1 : (long) (Json.number(cost, "in") + Json.number(cost, "out")
+                        + Json.number(cost, "cached")),
+                cost != null && cost.get("d5") instanceof Double ? (int) Json.number(cost, "d5") : -1,
+                cost != null && cost.get("d7") instanceof Double ? (int) Json.number(cost, "d7") : -1);
+    }
+
+    /** 档位给人看的说法：低档、中档、高档……不认识的原样，没有就是空串。 */
+    static String effortLabel(String effort) {
+        if (effort == null || effort.isEmpty()) {
+            return "";
+        }
+        switch (effort) {
+            case "minimal":
+                return "最低档";
+            case "low":
+                return "低档";
+            case "medium":
+                return "中档";
+            case "high":
+                return "高档";
+            case "xhigh":
+                return "特高档";
+            case "max":
+                return "最高档";
+            default:
+                return effort;
+        }
+    }
+
+    /**
+     * “codex · gpt-6.1-sol · 高档 · 约用了 5 小时额度的 3%”：谁、用哪个模型、哪一档做的，
+     * 花了多少。小幽自己答的、什么都没记的，是空串。
+     */
+    String spentLine() {
+        if (agent.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(agent);
+        if (!model.isEmpty()) {
+            out.append(" · ").append(model);
+        }
+        if (!effort.isEmpty()) {
+            out.append(" · ").append(effortLabel(effort));
+        }
+        if (spent5h > 0) {
+            out.append(" · 约用了 5 小时额度的 ").append(spent5h).append('%');
+        } else if (spent7d > 0) {
+            out.append(" · 约用了本周额度的 ").append(spent7d).append('%');
+        } else if (tokens > 0) {
+            out.append(" · ").append(tokens >= 10000 ? (tokens / 1000) + "k" : String.valueOf(tokens))
+                    .append(" token");
+        }
+        return out.length() == agent.length() ? "" : out.toString();
     }
 
     /** 还没结束：有人在做，或者在等主人点头。 */

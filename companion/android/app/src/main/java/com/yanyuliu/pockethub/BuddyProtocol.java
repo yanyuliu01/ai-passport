@@ -35,6 +35,14 @@ public final class BuddyProtocol {
     public static final int TASK_COUNT = 4;
     public static final int TASK_TITLE_MAX = 47;
     public static final int TASK_LINE_MAX = 63;
+    /** 做完的事在设备第三屏最多留这么多件，一条消息里最多带这么多件。 */
+    public static final int PAST_COUNT = 15;
+    public static final int PAST_CHUNK = 5;
+    public static final int DAY_MAX = 11;
+    /** 用量：最多几条（一个账号一条），每条最多几个帮手，模型名最多多少字节。 */
+    public static final int USAGE_COUNT = 4;
+    public static final int USAGE_WHO = 2;
+    public static final int MODEL_MAX = 19;
 
     private BuddyProtocol() {
     }
@@ -130,6 +138,24 @@ public final class BuddyProtocol {
      */
     public static String chat(String phase, String said, String reply, String agent,
                               String stage, String mood, String card, int doing) {
+        return chat(phase, said, reply, agent, stage, mood, card, doing, null);
+    }
+
+    /** 固件认识的档位名；别的不发。 */
+    public static boolean effort(String effort) {
+        return "minimal".equals(effort) || "low".equals(effort) || "medium".equals(effort)
+                || "high".equals(effort) || "xhigh".equals(effort) || "max".equals(effort);
+    }
+
+    private static void appendEffort(StringBuilder out, String effort) {
+        if (effort(effort)) {
+            out.append(",\"eff\":\"").append(effort).append('"');
+        }
+    }
+
+    /** 同上，再带上帮手干这件事用的档位（eff）；只发给声明了 usage 的固件。 */
+    public static String chat(String phase, String said, String reply, String agent,
+                              String stage, String mood, String card, int doing, String effort) {
         StringBuilder out = new StringBuilder(256);
         out.append("{\"cmd\":\"chat\",\"phase\":");
         quote(out, phase == null ? "idle" : phase);
@@ -150,6 +176,7 @@ public final class BuddyProtocol {
         if (doing >= 0) {
             out.append(",\"doing\":").append(doing);
         }
+        appendEffort(out, effort);
         out.append("}\n");
         return out.toString();
     }
@@ -166,6 +193,12 @@ public final class BuddyProtocol {
      */
     public static String card(String id, String at, String state, String agent, int edits,
                               String said, String reply) {
+        return card(id, at, state, agent, edits, said, reply, null);
+    }
+
+    /** 同上，再带上这件事用的档位；只发给声明了 usage 的固件。 */
+    public static String card(String id, String at, String state, String agent, int edits,
+                              String said, String reply, String effort) {
         if (!cardId(id)) {
             return null;
         }
@@ -183,6 +216,7 @@ public final class BuddyProtocol {
         quote(out, clip(said, MESSAGE_MAX));
         out.append(",\"reply\":");
         quote(out, clip(reply, REPLY_MAX));
+        appendEffort(out, effort);
         out.append("}\n");
         return out.toString();
     }
@@ -203,9 +237,17 @@ public final class BuddyProtocol {
         /** 最近两步：p1 在前，p2 是最新的；只有一步时放在 p1。 */
         public final String p1;
         public final String p2;
+        /** 这件事用的档位；没有是 null。 */
+        public final String effort;
 
         public Task(String id, String agent, String title, String state, long seconds,
                     String p1, String p2) {
+            this(id, agent, title, state, seconds, p1, p2, null);
+        }
+
+        public Task(String id, String agent, String title, String state, long seconds,
+                    String p1, String p2, String effort) {
+            this.effort = effort;
             this.id = id;
             this.agent = agent;
             this.title = title;
@@ -245,7 +287,193 @@ public final class BuddyProtocol {
                 quote(out, clip(task.p1, TASK_LINE_MAX));
                 out.append(",\"p2\":");
                 quote(out, clip(task.p2, TASK_LINE_MAX));
+                appendEffort(out, task.effort);
                 out.append('}');
+            }
+        }
+        out.append("]}\n");
+        return out.toString();
+    }
+
+    /** 做完的一件事，设备第三屏下半张单子上的一行：没有进展，多一个“哪天做完的”。 */
+    public static final class Past {
+        public final String id;
+        public final String agent;
+        public final String title;
+        /** done、failed、cancelled。 */
+        public final String state;
+        /** 今天、昨天、10-08：设备原样显示，同一天的排在一个小标题下面。 */
+        public final String day;
+        public final String effort;
+
+        public Past(String id, String agent, String title, String state, String day,
+                    String effort) {
+            this.id = id;
+            this.agent = agent;
+            this.title = title;
+            this.state = state;
+            this.day = day;
+            this.effort = effort;
+        }
+    }
+
+    /**
+     * 做完的事分几条发：每条最多 PAST_CHUNK 件，带着它们从单子的第几件起（at）、单子一共
+     * 多长（n）。设备没有多余的内存，一条消息不能随历史变长。单子最多 PAST_COUNT 件，编号
+     * 太长的不算在里面；空单子也发一条，让设备把旧的清掉。只发给声明了 past 的固件。
+     */
+    public static List<String> past(List<Past> items) {
+        List<Past> kept = new ArrayList<>();
+        if (items != null) {
+            for (Past item : items) {
+                if (item != null && cardId(item.id) && kept.size() < PAST_COUNT) {
+                    kept.add(item);
+                }
+            }
+        }
+        List<String> lines = new ArrayList<>();
+        int at = 0;
+        do {
+            StringBuilder out = new StringBuilder(256);
+            out.append("{\"cmd\":\"past\",\"at\":").append(at).append(",\"n\":")
+                    .append(kept.size()).append(",\"list\":[");
+            for (int index = at; index < kept.size() && index < at + PAST_CHUNK; index++) {
+                Past item = kept.get(index);
+                if (index > at) {
+                    out.append(',');
+                }
+                out.append("{\"id\":");
+                quote(out, item.id);
+                out.append(",\"agent\":");
+                quote(out, clip(item.agent, AGENT_MAX));
+                out.append(",\"title\":");
+                quote(out, clip(item.title, TASK_TITLE_MAX));
+                out.append(",\"state\":");
+                quote(out, "failed".equals(item.state) || "cancelled".equals(item.state)
+                        ? item.state : "done");
+                out.append(",\"day\":");
+                quote(out, clip(item.day, DAY_MAX));
+                appendEffort(out, item.effort);
+                out.append('}');
+            }
+            out.append("]}\n");
+            lines.add(out.toString());
+            at += PAST_CHUNK;
+        } while (at < kept.size());
+        return lines;
+    }
+
+    /** 设备想要的那张卡（它单子上有这件事、手里没有它的卡）；这一行不是这个意思时返回 null。 */
+    public static String parseWant(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null || !"want".equals(fields.get("evt"))) {
+            return null;
+        }
+        String card = fields.get("card");
+        return cardId(card) ? card : null;
+    }
+
+    /** 用量屏上的一个帮手：名字、模型、平时的档位、此刻在做几件事。 */
+    public static final class UsageWho {
+        public final String name;
+        public final String model;
+        public final String effort;
+        public final int running;
+
+        public UsageWho(String name, String model, String effort, int running) {
+            this.name = name;
+            this.model = model;
+            this.effort = effort;
+            this.running = running;
+        }
+    }
+
+    /**
+     * 用量屏上的一条：一个订阅账号还剩多少，和跑在它上面的帮手；或者一个按量计费的帮手
+     * （state 是 na，没有额度）。left 是剩下的百分比，不知道是 -1；reset 是重置的时间
+     * （Unix 秒），不知道是 0；age 是这些数是多少秒之前的，不知道是 -1。
+     */
+    public static final class UsageEntry {
+        public final String state;
+        public final int left5h;
+        public final long reset5h;
+        public final int left7d;
+        public final long reset7d;
+        public final long age;
+        public final List<UsageWho> who;
+
+        public UsageEntry(String state, int left5h, long reset5h, int left7d, long reset7d,
+                          long age, List<UsageWho> who) {
+            this.state = state;
+            this.left5h = left5h;
+            this.reset5h = reset5h;
+            this.left7d = left7d;
+            this.reset7d = reset7d;
+            this.age = age;
+            this.who = who;
+        }
+    }
+
+    /** 第四屏的内容。最多 USAGE_COUNT 条，每条最多 USAGE_WHO 个帮手；没有帮手的条不发。 */
+    public static String usage(List<UsageEntry> entries) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"usage\",\"list\":[");
+        int count = 0;
+        if (entries != null) {
+            for (UsageEntry entry : entries) {
+                if (count >= USAGE_COUNT) {
+                    break;
+                }
+                if (entry == null || entry.who == null) {
+                    continue;
+                }
+                StringBuilder who = new StringBuilder();
+                int helpers = 0;
+                for (UsageWho one : entry.who) {
+                    if (one == null || one.name == null || one.name.isEmpty()
+                            || helpers >= USAGE_WHO) {
+                        continue;
+                    }
+                    if (helpers++ > 0) {
+                        who.append(',');
+                    }
+                    who.append("{\"n\":");
+                    quote(who, clip(one.name, AGENT_MAX));
+                    if (one.model != null && !one.model.isEmpty()) {
+                        who.append(",\"m\":");
+                        quote(who, clip(one.model, MODEL_MAX));
+                    }
+                    appendEffort(who, one.effort);
+                    if (one.running > 0) {
+                        who.append(",\"run\":").append(Math.min(one.running, 255));
+                    }
+                    who.append('}');
+                }
+                if (helpers == 0) {
+                    continue;
+                }
+                if (count++ > 0) {
+                    out.append(',');
+                }
+                String state = entry.state;
+                out.append("{\"st\":\"").append("ok".equals(state) || "warn".equals(state)
+                        || "out".equals(state) || "na".equals(state) ? state : "unknown").append('"');
+                if (entry.left5h >= 0 && entry.left5h <= 100) {
+                    out.append(",\"w5\":").append(entry.left5h);
+                }
+                if (entry.reset5h > 0) {
+                    out.append(",\"r5\":").append(entry.reset5h);
+                }
+                if (entry.left7d >= 0 && entry.left7d <= 100) {
+                    out.append(",\"w7\":").append(entry.left7d);
+                }
+                if (entry.reset7d > 0) {
+                    out.append(",\"r7\":").append(entry.reset7d);
+                }
+                if (entry.age >= 0) {
+                    out.append(",\"age\":").append(entry.age);
+                }
+                out.append(",\"who\":[").append(who).append("]}");
             }
         }
         out.append("]}\n");
@@ -322,6 +550,18 @@ public final class BuddyProtocol {
     public static boolean parseVoicePin(String line) {
         Map<String, String> fields = parseFlatObject(line);
         return parseVoiceCard(line) != null && "true".equals(fields.get("pin"));
+    }
+
+    /** 设备声明它有第四屏：认识 usage，也认识 chat、card、tasks 里的 eff。 */
+    public static boolean hubAckHasUsage(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return hubAckHasCards(line) && "true".equals(fields.get("usage"));
+    }
+
+    /** 设备声明它把做完的事另列一张单子（past），手里没有的卡会来要（want）。 */
+    public static boolean hubAckHasPast(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return hubAckHasThreads(line) && "true".equals(fields.get("past"));
     }
 
     /** 设备声明它把对话和任务分开显示：任务单子里可以带做完的事。 */

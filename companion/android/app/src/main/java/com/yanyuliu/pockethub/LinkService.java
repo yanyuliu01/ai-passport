@@ -17,6 +17,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -31,6 +32,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private static final String CHANNEL = "link";
     private static final int NOTIFICATION_ID = 1;
     private static final long KEEPALIVE_MS = 10000;
+    /** 用量没变也隔这么久重发一次，设备上“多久之前更新的”才对得上。 */
+    private static final long USAGE_RESEND_MS = 60000;
+    /** 设备来要过的卡留这么几张接着发：它翻回去看时还在。 */
+    private static final int WANTED_KEPT = 3;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private BleLink link;
@@ -44,6 +49,15 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private boolean deviceCards;
     /** 设备把对话和任务分开显示：第二屏只翻对话，第三屏的单子里有做完的任务。 */
     private boolean deviceThreads;
+    /** 设备有第四屏：认识 usage，和 chat、card、tasks 里的档位。 */
+    private boolean deviceUsage;
+    /** 设备把做完的事另列一张单子（past），手里没有的卡会来要（want）。 */
+    private boolean devicePast;
+    private String lastPast = "";
+    private String lastUsage = "";
+    private long usageSentMs;
+    /** 设备打开过、手里没有卡的那几件事：它们的卡跟着别的卡一起发。 */
+    private final LinkedHashSet<String> wanted = new LinkedHashSet<>();
     private boolean recordingPin;
     /** 单子上有还在做的事：只有这时才需要定时重发来对齐秒数。 */
     private boolean tasksGoing;
@@ -150,6 +164,12 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         deviceChat = false;
         deviceCards = false;
         deviceThreads = false;
+        deviceUsage = false;
+        devicePast = false;
+        lastPast = "";
+        lastUsage = "";
+        usageSentMs = 0;
+        wanted.clear();
         sentCards.clear();
         cardsEpochSent = -1;
         lastTasks = "";
@@ -182,13 +202,30 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
                     BuddyProtocol.parseVoicePin(line));
             return;
         }
+        String want = BuddyProtocol.parseWant(line);
+        if (want != null) {
+            // 设备打开了一件它没有卡的事：把那张卡发过去，之后也接着带上。
+            wanted.remove(want);
+            wanted.add(want);
+            // 它说手里没有：就算之前发过（被别的卡挤掉了），也再发一次。
+            sentCards.remove(want);
+            while (wanted.size() > WANTED_KEPT) {
+                wanted.remove(wanted.iterator().next());
+            }
+            pushState();
+            return;
+        }
         Boolean hub = BuddyProtocol.parseHubAck(line);
         if (hub != null) {
             deviceChat = BuddyProtocol.hubAckHasChat(line);
             deviceCards = deviceChat && BuddyProtocol.hubAckHasCards(line);
             deviceThreads = deviceCards && BuddyProtocol.hubAckHasThreads(line);
+            deviceUsage = deviceCards && BuddyProtocol.hubAckHasUsage(line);
+            devicePast = deviceThreads && BuddyProtocol.hubAckHasPast(line);
             HubStore.get().log(!hub ? "设备固件较旧，不支持按住说话"
-                    : (deviceThreads ? "设备支持按住说话，三屏：形象、对话、任务（对话和任务分开）"
+                    : (devicePast ? "设备支持按住说话，四屏：形象、对话、任务（带做完的历史）、用量"
+                    : deviceUsage ? "设备支持按住说话，四屏：形象、对话、任务、用量"
+                    : deviceThreads ? "设备支持按住说话，三屏：形象、对话、任务（对话和任务分开）"
                     : deviceCards ? "设备支持按住说话，三屏：形象、对话、任务"
                             : (deviceChat ? "设备支持按住说话（固件是上一版的对话首页，没有卡）"
                                     : "设备支持按住说话（固件还是旧界面）")));
@@ -239,6 +276,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         deviceChat = false;
         deviceCards = false;
         deviceThreads = false;
+        deviceUsage = false;
+        devicePast = false;
         firmware.onClosed();
     }
 
@@ -290,14 +329,17 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             link.send(BuddyProtocol.cardClear());
         }
         List<Card> all = store.cards();
-        // 第三屏的单子：在做的任务，分开显示的固件上再接着最近做完的。
-        List<Card> listed = CardViews.deviceTasks(all, BuddyProtocol.TASK_COUNT, deviceThreads);
-        // 设备上只放最近的几张；还在做的、单子上的不管多早都带上。
+        // 第三屏的单子：在做的任务，分开显示的固件上再接着最近做完的。把做完的事另列
+        // 一张单子的固件（past），这张单子上只有在做的，做完的走下面那张。
+        List<Card> listed = CardViews.deviceTasks(all, BuddyProtocol.TASK_COUNT,
+                deviceThreads && !devicePast);
+        // 设备上只放最近的几张；还在做的、单子上的、设备来要过的不管多早都带上。做完的
+        // 历史有十几件，它们的卡不预先发：设备的地方是所有卡合用的，打开哪件它会来要。
         List<Card> shown = new ArrayList<>();
         int room = BuddyProtocol.CARD_KEPT;
         for (int index = all.size() - 1; index >= 0; index--) {
             Card card = all.get(index);
-            if (card.active() || room > 0 || listed.contains(card)) {
+            if (card.active() || room > 0 || listed.contains(card) || wanted.contains(card.id)) {
                 shown.add(0, card);
                 room--;
             }
@@ -311,7 +353,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             String line = BuddyProtocol.card(card.id,
                     card.createdAt > 0 ? clock.format(new Date((long) (card.createdAt * 1000))) : "",
                     card.state, card.agent, card.edits, card.said(),
-                    CardViews.deviceReply(card, deviceThreads));
+                    CardViews.deviceReply(card, deviceThreads), deviceUsage ? card.effort : null);
             if (line == null) {
                 continue;
             }
@@ -327,7 +369,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             tasks.add(task);
             tasksKey.append(task.id).append('\u0001').append(task.agent).append('\u0001')
                     .append(task.title).append('\u0001').append(task.state).append('\u0001')
-                    .append(task.p1).append('\u0001').append(task.p2).append('\u0002');
+                    .append(task.p1).append('\u0001').append(task.p2).append('\u0001')
+                    .append(task.effort).append('\u0002');
         }
         sentCards.clear();
         sentCards.putAll(kept);
@@ -337,6 +380,41 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             lastTasks = tasksKey.toString();
             link.send(BuddyProtocol.tasks(tasks));
         }
+        if (devicePast) {
+            // 做完的事：最近的十五件，按哪天做完的分组，几条消息发完。内容没变不重发；
+            // 过了半夜“今天”变成“昨天”，内容就变了。
+            List<BuddyProtocol.Past> ended = new ArrayList<>();
+            for (Card card : CardViews.devicePast(all, BuddyProtocol.PAST_COUNT)) {
+                ended.add(CardViews.devicePastItem(card, now, TimeZone.getDefault()));
+            }
+            List<String> parts = BuddyProtocol.past(ended);
+            StringBuilder pastKey = new StringBuilder();
+            for (String part : parts) {
+                pastKey.append(part);
+            }
+            if (!pastKey.toString().equals(lastPast)) {
+                lastPast = pastKey.toString();
+                for (String part : parts) {
+                    link.send(part);
+                }
+            }
+        }
+    }
+
+    /** 把用量告诉设备的第四屏：数变了就发，没变也隔一阵发一次（“多久之前更新的”要跟上）。 */
+    private void pushUsage(HubStore store) {
+        Usage usage = store.usage();
+        if (!deviceUsage || usage == null) {
+            return;
+        }
+        String key = BuddyProtocol.usage(usage.deviceEntries(-1));
+        long nowMs = System.currentTimeMillis();
+        if (key.equals(lastUsage) && nowMs - usageSentMs < USAGE_RESEND_MS) {
+            return;
+        }
+        lastUsage = key;
+        usageSentMs = nowMs;
+        link.send(BuddyProtocol.usage(usage.deviceEntries(store.usageAgeSeconds())));
     }
 
     private void pushState() {
@@ -369,9 +447,12 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         if (deviceChat) {
             HubStore.Turn turn = store.turn();
+            // 交给帮手的那一轮：帮手用哪一档做的，写在卡上。
+            Card turnCard = deviceUsage ? CardViews.find(store.cards(), turn.card) : null;
             String chat = deviceCards
                     ? BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
-                            turn.stage, turn.mood, turn.card, turn.doing)
+                            turn.stage, turn.mood, turn.card, turn.doing,
+                            turnCard != null && !turn.agent.isEmpty() ? turnCard.effort : null)
                     : BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
                             turn.stage, turn.mood);
             if (!chat.equals(lastChat)) {
@@ -380,6 +461,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             }
             if (deviceCards) {
                 pushCards(store);
+                pushUsage(store);
             }
             if (helpersSeen != store.helpersVersion()) {
                 helpersSeen = store.helpersVersion();
