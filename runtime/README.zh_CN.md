@@ -57,7 +57,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 | 配置项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `server.host` | `127.0.0.1` | 监听地址。 |
+| `server.host` | `127.0.0.1` | 监听地址。写 `tailscale`（0.5.6 起）表示只在这台机器的 Tailscale 地址（100.x.y.z）上监听：启动时自己找，地址变了不用改配置，`--pair` 打印的连接串也用它；Tailscale 没开时启动会报错。这时局域网地址和 `127.0.0.1` 都连不上这台 Runtime。 |
 | `server.port` | `8765` | 监听端口。 |
 | `server.name` | 这台机器的主机名 | 手机 App 里怎么称呼这台 Runtime，最多 40 个字符。 |
 | `server.token` | 无 | 共享令牌，至少 16 个字符；示例里的占位值会被拒绝。 |

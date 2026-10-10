@@ -8,6 +8,7 @@
 claude_code、tools）仍然能读，会被换算成只有一个代理的 agents。
 """
 
+import ipaddress
 import json
 import os
 import re
@@ -334,6 +335,35 @@ def _legacy_agents(raw: Dict[str, Any], env: Mapping[str, str], notices: List[st
     return {"claude": claude}
 
 
+# Tailscale 给每台机器的地址都在这一段里（100.64.0.0/10）。
+TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+# Tailscale 自己的服务地址：只用来问系统“去那里走哪个本机地址”，不会真的发包。
+TAILSCALE_PROBE = "100.100.100.100"
+
+
+def _route_source(target: str) -> str:
+    """去 target 时系统会用的本机地址。UDP 的 connect 只查路由，不发任何东西。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((target, 9))
+        return probe.getsockname()[0]
+
+
+def tailscale_address(source: Any = None) -> str:
+    """这台机器在 Tailscale 里的地址（100.x.y.z）。server.host 写 tailscale 时用它来监听，
+    地址变了也不用改配置。Tailscale 没开时照实报错，不悄悄退回别的地址。"""
+    address = ""
+    try:
+        address = (source or _route_source)(TAILSCALE_PROBE)
+        inside = ipaddress.ip_address(address) in TAILSCALE_NET
+    except (OSError, ValueError):
+        inside = False
+    if not inside:
+        raise ConfigError(
+            "server.host 是 tailscale，但没找到这台机器的 Tailscale 地址（100.x.y.z）："
+            "先确认 Tailscale 已经打开并登录；或者把 server.host 直接写成要监听的地址")
+    return address
+
+
 def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     """读取配置文件。相对路径都相对于配置文件所在的目录。"""
     env = os.environ if env is None else env
@@ -351,6 +381,8 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
 
     server = _expect(raw.get("server", {}), dict, "server")
     host = env.get("XIAOYOU_HOST") or _expect(server.get("host", "127.0.0.1"), str, "server.host")
+    if host.strip().lower() == "tailscale":
+        host = tailscale_address()
     port_text = env.get("XIAOYOU_PORT")
     try:
         port = int(port_text) if port_text else _expect(server.get("port", 8765), int, "server.port")
