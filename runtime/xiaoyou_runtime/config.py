@@ -14,7 +14,7 @@ import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 class ConfigError(Exception):
@@ -33,7 +33,12 @@ class AgentSpec:
     aliases: List[str]
     # 能不能直接以小幽的身份回话。不能的只干活，结果由小幽转述
     speaks: bool
+    # 一轮从头到尾最长多久；0 是不限（看得见事件流的代理靠下面两项判断卡没卡住）
     timeout_seconds: int
+    # 连续这么久一行事件都没有，就当它可能卡住了，去问主人还等不等；0 是不管
+    idle_seconds: int = 600
+    # 最后一步是一条还没跑完的命令（编译、跑测试时事件流本来就是安静的）时，放宽到这么久
+    idle_command_seconds: int = 1800
     # claude_code / codex / command：要运行的命令
     command: List[str] = field(default_factory=list)
     workdir: Optional[Path] = None
@@ -80,6 +85,8 @@ class Config:
     max_parallel: int = 0
     # 小幽这条线上一次调用最长多久：她只负责听懂、马上答、把活派出去
     voice_timeout_seconds: int = 60
+    # 问了主人“还等不等”之后，这么久没人答就停掉；0 是一直等
+    idle_answer_seconds: int = 1800
     router_type: str = "mention"
     router_command: List[str] = field(default_factory=list)
     router_timeout_seconds: int = 10
@@ -180,15 +187,33 @@ def _path(value: str, base: Path) -> Path:
     return path if path.is_absolute() else (base / path).resolve()
 
 
-def _timeout(value: Any, where: str) -> int:
+MAX_TIMEOUT_SECONDS = 86400
+
+
+def _timeout(value: Any, where: str, least: int = 10) -> int:
+    """一个时限：0 是不限，否则在 least 到一天之间。"""
     _expect(value, int, where)
-    if not 10 <= value <= 7200:
-        raise ConfigError("%s 应该在 10 到 7200 之间" % where)
+    if value != 0 and not least <= value <= MAX_TIMEOUT_SECONDS:
+        raise ConfigError("%s 应该是 0（不限），或者在 %d 到 %d 之间" % (
+            where, least, MAX_TIMEOUT_SECONDS))
     return value
 
 
+def _idle(raw: Dict[str, Any], where: str, default: Tuple[int, int]) -> Tuple[int, int]:
+    """没动静多久算卡住：（平时，命令在跑时）。"""
+    prefix = where + "." if where else ""
+    idle = _timeout(raw.get("idle_timeout_seconds", default[0]),
+                    prefix + "idle_timeout_seconds", 30)
+    command = _timeout(raw.get("idle_timeout_command_seconds", default[1]),
+                       prefix + "idle_timeout_command_seconds", 30)
+    if idle and command and command < idle:
+        raise ConfigError("%sidle_timeout_command_seconds 不能比 %sidle_timeout_seconds 小：命令在跑时"
+                          "事件流本来就安静，应该等得更久" % (prefix, prefix))
+    return idle, command
+
+
 def _agent(name: str, raw: Any, base: Path, default_timeout: int,
-           env: Mapping[str, str]) -> Optional[AgentSpec]:
+           env: Mapping[str, str], default_idle: Tuple[int, int] = (600, 1800)) -> Optional[AgentSpec]:
     """读一个代理；enabled 为 false 时返回 None。"""
     where = "agents.%s" % name
     if not AGENT_NAME.match(name):
@@ -208,7 +233,10 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             raise ConfigError(
                 "%s.aliases 里的叫法不能超过 %d 个字符，前后不能有空白" % (where, MAX_ALIAS_CHARS)
             )
+    idle, idle_command = _idle(raw, where, default_idle)
     common = dict(
+        idle_seconds=idle,
+        idle_command_seconds=idle_command,
         name=name,
         type=kind,
         description=_expect(raw.get("description", ""), str, where + ".description").strip(),
@@ -359,8 +387,11 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     brief = _expect(raw.get("brief_max_chars", 120), int, "brief_max_chars")
     if not 20 <= brief <= 400:
         raise ConfigError("brief_max_chars 应该在 20 到 400 之间")
-    # 一件后台的事最长做多久（各代理可以用自己的 timeout_seconds 改）。
-    timeout = _timeout(raw.get("turn_timeout_seconds", 3600), "turn_timeout_seconds")
+    # 一件后台的事从头到尾最长做多久（各代理可以用自己的 timeout_seconds 改）。默认不限：
+    # 长任务按总时长一刀切不合理，卡没卡住看的是多久没动静。
+    timeout = _timeout(raw.get("turn_timeout_seconds", 0), "turn_timeout_seconds")
+    idle = _idle(raw, "", (600, 1800))
+    idle_answer = _timeout(raw.get("idle_answer_seconds", 1800), "idle_answer_seconds", 30)
 
     if "agents" in raw:
         for old in ("backend", "claude_code", "tools"):
@@ -379,7 +410,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         raise ConfigError("agents 最多登记 %d 个" % MAX_AGENTS)
     agents: List[AgentSpec] = []
     for agent_name, agent_raw in raw_agents.items():
-        spec = _agent(agent_name, agent_raw, base, timeout, env)
+        spec = _agent(agent_name, agent_raw, base, timeout, env, idle)
         if spec is not None:
             agents.append(spec)
     if not agents:
@@ -518,6 +549,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         max_handoffs=max_handoffs,
         max_parallel=max_parallel,
         voice_timeout_seconds=voice_timeout,
+        idle_answer_seconds=idle_answer,
         router_type=router_type,
         router_command=router_command,
         router_timeout_seconds=router_timeout,

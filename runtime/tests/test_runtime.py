@@ -67,7 +67,11 @@ if "stream-json" in args:
     emit({"type": "stream_event", "event": {}})
     emit({"type": "assistant", "message": {"content": [
         {"type": "text", "text": "let me look"},
-        {"type": "tool_use", "name": "Bash", "input": {"command": "ls  -la\n/tmp"}}]}})
+        {"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": "ls  -la\n/tmp"}}]}})
+    if mode == "hang-in-command":
+        time.sleep(60)
+    emit({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "tu-1", "content": "ok"}]}})
     verdict = "nobody to ask"
     if "--mcp-config" in args and mode == "ask":
         # Do what Claude Code does: start the permission tool and ask it before writing.
@@ -329,7 +333,11 @@ class ConfigTests(TempDirCase):
         # Any number of things may run at once; her own line is kept short.
         self.assertEqual((loaded.max_parallel, loaded.voice_timeout_seconds), (0, 60))
         # A thing in the background may take an hour unless the agent says otherwise.
-        self.assertEqual(loaded.agents[0].timeout_seconds, 3600)
+        # No cap on the whole run: what is watched is how long it has been silent.
+        spec = loaded.agents[0]
+        self.assertEqual((spec.timeout_seconds, spec.idle_seconds, spec.idle_command_seconds),
+                         (0, 600, 1800))
+        self.assertEqual(loaded.idle_answer_seconds, 1800)
         tuned = self.load(xiaoyou={"max_parallel": 3, "voice_timeout_seconds": 20})
         self.assertEqual((tuned.max_parallel, tuned.voice_timeout_seconds), (3, 20))
 
@@ -361,6 +369,20 @@ class ConfigTests(TempDirCase):
         with self.assertRaisesRegex(config_module.ConfigError, "默认代理"):
             self.load(env={"XIAOYOU_DEFAULT_AGENT": "nobody"}, agents=agents)
 
+    def test_how_long_silence_may_last_can_be_set_for_all_and_per_agent(self):
+        loaded = self.load(
+            turn_timeout_seconds=7200, idle_timeout_seconds=300, idle_timeout_command_seconds=0,
+            idle_answer_seconds=0,
+            agents={"claude": {"type": "claude_code"},
+                    "codex": {"type": "codex", "timeout_seconds": 0, "idle_timeout_seconds": 0,
+                              "idle_timeout_command_seconds": 900}})
+        by_name = {spec.name: spec for spec in loaded.agents}
+        self.assertEqual(loaded.idle_answer_seconds, 0)
+        self.assertEqual((by_name["claude"].timeout_seconds, by_name["claude"].idle_seconds,
+                          by_name["claude"].idle_command_seconds), (7200, 300, 0))
+        self.assertEqual((by_name["codex"].timeout_seconds, by_name["codex"].idle_seconds,
+                          by_name["codex"].idle_command_seconds), (0, 0, 900))
+
     def test_placeholder_and_short_tokens_are_rejected(self):
         for token in (config_module.PLACEHOLDER_TOKEN, "short", ""):
             with self.assertRaises(config_module.ConfigError):
@@ -374,6 +396,11 @@ class ConfigTests(TempDirCase):
             {"server": {"token": TOKEN, "port": True}},
             {"brief_max_chars": 5},
             {"turn_timeout_seconds": 1},
+            {"turn_timeout_seconds": 90000},
+            {"idle_timeout_seconds": 5},
+            {"idle_answer_seconds": 5},
+            {"idle_timeout_seconds": 600, "idle_timeout_command_seconds": 300},
+            {"agents": {"claude": dict(claude, idle_timeout_seconds=True)}},
             {"backend": "claude_code", "claude_code": {"command": []}},
             {"backend": "claude_code", "claude_code": {"allowed_tools": "Read"}},
             {"backend": "claude_code", "claude_code": {"add_dirs": "~"}},
@@ -959,6 +986,11 @@ class CodexAppServerTests(TempDirCase):
         os.environ["FAKE_CODEX_MODE"] = "hang"
         with self.assertRaisesRegex(AgentError, "超过 1 秒"):
             slow.run(Job("q", control=self.control()))
+        # Not capped, but silent in the middle of a command for too long, and nobody to ask.
+        quiet = agents_module.create(dataclasses.replace(
+            self.config.agents[0], idle_seconds=30, idle_command_seconds=1))
+        with self.assertRaisesRegex(AgentError, "Codex 已经 1 秒没有动静"):
+            quiet.run(Job("q", control=self.control()))
 
     def test_the_check_at_start_shakes_hands_without_asking_a_model(self):
         os.environ["FAKE_CODEX_MODE"] = "check-only"
@@ -1400,7 +1432,9 @@ class ApprovalTests(TempDirCase):
         self.assertEqual([item["id"] for item in approvals.pending()], ["a1", "a2", "a3"])
         self.assertEqual([item["id"] for item in approvals.pending("work")], ["a3"])
         self.assertEqual(sorted(approvals.pending("work")[0]),
-                         ["agent", "card", "conversation", "created_at", "detail", "id", "tool"])
+                         ["agent", "card", "conversation", "created_at", "detail", "id", "kind",
+                      "tool"])
+        self.assertEqual(approvals.pending("work")[0]["kind"], "tool")
         got = {}
         thread = threading.Thread(target=lambda: got.update(decision=approvals.wait(first)))
         thread.start()
@@ -1528,6 +1562,225 @@ class ApprovalTests(TempDirCase):
             stdout=subprocess.PIPE, cwd=str(RUNTIME), env=environment, timeout=20)
         replies = [json.loads(line) for line in done.stdout.decode().splitlines()]
         self.assertEqual((done.returncode, [reply["id"] for reply in replies]), (0, [1, 2]))
+
+
+class ApprovalWaitTests(unittest.TestCase):
+    def test_a_wait_can_give_up_and_take_the_question_back(self):
+        seen = []
+        approvals = approvals_module.Approvals(lambda card, approval: seen.append((card, approval)))
+        first = approvals.ask("c1", "work", "codex", "codex · 没动静", "还等吗", kind="stall")
+        self.assertTrue(approvals.waiting("c1"))
+        self.assertIsNone(approvals.wait(first, seconds=0.1))
+        self.assertIsNone(approvals.wait(first, moot=lambda: True))
+        self.assertEqual(approvals.pending()[0]["kind"], "stall")
+        approvals.withdraw(first)
+        self.assertFalse(approvals.waiting("c1"))
+        self.assertEqual((approvals.pending(), seen[-1]), ([], ("c1", None)))
+        # Too late to answer, and taking it back twice changes nothing.
+        self.assertIs(approvals.answer(first, "allow"), False)
+        approvals.withdraw(first)
+        self.assertEqual(approvals.wait(first, seconds=0.1), "deny")
+        second = approvals.ask("c1", "work", "codex", "codex · 命令", "ls")
+        approvals.answer(second, "allow")
+        self.assertEqual(approvals.wait(second, seconds=5), "allow")
+
+
+class QuickWatchdog:
+    """Mixin: the watchdog looks every 50 ms instead of every second."""
+
+    def setUp(self):
+        super().setUp()
+        kept = agents_module.Watchdog.TICK
+        agents_module.Watchdog.TICK = 0.05
+        self.addCleanup(setattr, agents_module.Watchdog, "TICK", kept)
+
+
+class WatchdogTests(QuickWatchdog, unittest.TestCase):
+    """A long run is not cut by the clock; a silent one is, after the owner was asked."""
+
+    def watch(self, control, **limits):
+        self.killed = []
+        dog = agents_module.Watchdog(control, "codex", lambda: self.killed.append(1), **limits)
+        self.addCleanup(dog.stop)
+        return dog.start()
+
+    def test_activity_keeps_a_long_run_alive_and_silence_ends_it(self):
+        control = agents_module.Control()
+        dog = self.watch(control, idle=0.3, idle_command=5)
+        for _ in range(12):
+            control.touch()
+            threading.Event().wait(0.05)
+        self.assertEqual((self.killed, dog.reason), ([], None))
+        self.assertTrue(until(lambda: self.killed, 3))
+        self.assertRegex(dog.reason, "codex 已经 0 秒没有动静，已经停止。.*接着做")
+
+    def test_no_limits_means_nobody_watches(self):
+        control = agents_module.Control()
+        dog = self.watch(control)
+        threading.Event().wait(0.3)
+        self.assertEqual((self.killed, dog.reason), ([], None))
+
+    def test_a_running_command_is_given_longer(self):
+        control = agents_module.Control()
+        dog = self.watch(control, idle=0.2, idle_command=30)
+        control.touch(began="tu-1", step="Bash make")
+        threading.Event().wait(0.6)
+        self.assertEqual(self.killed, [])
+        self.assertEqual(control.quiet()[1:], (True, 2, "Bash make"))
+        control.touch(ended="tu-1")
+        self.assertTrue(until(lambda: self.killed, 3))
+        self.assertIn("没有动静", dog.reason)
+
+    def test_time_spent_waiting_for_the_owner_does_not_count(self):
+        control = agents_module.Control()
+        waiting = [True]
+        control.paused = lambda: waiting[0]
+        dog = self.watch(control, total=0.3, idle=0.3)
+        threading.Event().wait(0.8)
+        self.assertEqual(self.killed, [])
+        waiting[0] = False
+        self.assertTrue(until(lambda: self.killed, 3))
+        self.assertIsNotNone(dog.reason)
+
+    def test_the_whole_run_can_still_be_capped(self):
+        control = agents_module.Control()
+        dog = self.watch(control, total=0.3)
+        deadline = threading.Event()
+        while not self.killed and not deadline.wait(0.02):
+            control.touch()
+        self.assertEqual(dog.reason, "codex 超过 0 秒还没结束，已经停止")
+
+    def test_the_owner_is_asked_before_it_is_stopped(self):
+        control = agents_module.Control()
+        asked, answers = [], [agents_module.WAIT, agents_module.MOVED, agents_module.STOP]
+
+        def stalled(idle, step, moot):
+            asked.append((step, control.patience, moot()))
+            return answers.pop(0)
+
+        control.stalled = stalled
+        control.touch(step="Bash make")
+        dog = self.watch(control, idle=0.2)
+        self.assertTrue(until(lambda: self.killed, 5))
+        # Told to keep waiting: the next question comes after twice as long.
+        self.assertEqual(asked, [("Bash make", 1, False), ("Bash make", 2, False),
+                                 ("Bash make", 2, False)])
+        self.assertRegex(dog.reason, "codex 有 0 秒没动静，主人说停掉。.*接着做")
+
+    def test_nobody_answering_stops_it_too(self):
+        control = agents_module.Control()
+        control.stalled = lambda idle, step, moot: agents_module.SILENT
+        dog = self.watch(control, idle=0.2)
+        self.assertTrue(until(lambda: self.killed, 3))
+        self.assertIn("问了主人没人答，已经停掉", dog.reason)
+
+    def test_a_run_that_ended_meanwhile_is_not_reported_as_stopped(self):
+        control = agents_module.Control()
+        release = threading.Event()
+
+        def stalled(idle, step, moot):
+            release.wait(5)
+            return agents_module.STOP
+
+        control.stalled = stalled
+        dog = self.watch(control, idle=0.2)
+        threading.Event().wait(0.5)
+        dog.stop()
+        release.set()
+        threading.Event().wait(0.2)
+        self.assertEqual((self.killed, dog.reason), ([], None))
+
+
+class StallQuestionTests(QuickWatchdog, TempDirCase):
+    """A helper that has gone silent: the owner is asked on the same popup as an approval."""
+
+    def setUp(self):
+        super().setUp()
+        fake = self.folder / "fake_claude.py"
+        fake.write_text(FAKE_CLAUDE, encoding="utf-8")
+        for name, value in (("FAKE_CLAUDE_LOG", str(self.folder / "calls.jsonl")),
+                            ("FAKE_CLAUDE_MODE", "hang")):
+            os.environ[name] = value
+            self.addCleanup(os.environ.pop, name, None)
+
+    def build(self, idle=1, idle_command=30, answer=30):
+        loaded = config_module.load(write_config(self.folder, agents={"claude": {
+            "type": "claude_code", "command": [sys.executable, str(self.folder / "fake_claude.py")],
+        }}), {})
+        loaded = dataclasses.replace(loaded, idle_answer_seconds=answer, agents=[
+            dataclasses.replace(loaded.agents[0], idle_seconds=idle,
+                                idle_command_seconds=idle_command)])
+        self.store = Store(loaded.state_dir)
+        self.xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents],
+                               self.store)
+        self.service = Service(self.xiaoyou, self.store)
+        self.addCleanup(self.service.close)
+
+    def asked(self, seconds=10):
+        self.assertTrue(until(lambda: self.service.feed("default")["approvals"], seconds))
+        return self.service.feed("default")["approvals"][0]
+
+    def test_keep_waiting_then_stop_and_pick_it_up_again(self):
+        self.build()
+        card_id = self.service.get(self.service.submit("慢慢做", agent="claude")["id"], wait=5)["card"]
+        asked = self.asked()
+        self.assertEqual((asked["kind"], asked["tool"], asked["card"]),
+                         ("stall", "claude · 没动静", card_id))
+        self.assertRegex(asked["detail"], r"claude 已经 1 秒没有动静了，接着等吗？\n最后一步：Bash ls -la /tmp\n")
+        self.assertEqual(self.xiaoyou.cards.get(card_id)["state"], "waiting")
+        # Yes: it goes on, and is asked about again only after twice as long.
+        self.assertIs(self.service.approve(asked["id"], "allow"), True)
+        self.assertTrue(until(lambda: self.xiaoyou.cards.get(card_id)["state"] == "working"))
+        again = self.asked()
+        self.assertNotEqual(again["id"], asked["id"])
+        self.assertIn("已经 2 秒没有动静", again["detail"])
+        # No: stopped, and the card says why and how to go on.
+        self.assertIs(self.service.approve(again["id"], "deny"), True)
+        card = self.xiaoyou.settle(card_id, 10)
+        self.assertEqual((card["state"], card["approval"]), ("failed", None))
+        self.assertRegex(card["entries"][-1]["text"], "claude 没做成：Claude Code 有 2 秒没动静，主人说停掉。.*接着做")
+        self.assertEqual(self.service.feed("default")["approvals"], [])
+        # Nothing is lost: the next round continues the session it had.
+        os.environ["FAKE_CLAUDE_MODE"] = "ok"
+        self.service.get(self.service.submit("@claude 接着做", card=card_id, pin=True)["id"], wait=5)
+        self.assertEqual(self.xiaoyou.settle(card_id, 10)["state"], "done")
+        calls = [json.loads(line) for line in (self.folder / "calls.jsonl").read_text("utf-8").splitlines()]
+        self.assertEqual(calls[-1]["args"][calls[-1]["args"].index("--resume") + 1], "s-stream")
+
+    def test_a_question_nobody_answers_is_taken_back_and_the_thing_stopped(self):
+        self.build(answer=1)
+        card_id = self.service.get(self.service.submit("慢慢做", agent="claude")["id"], wait=5)["card"]
+        asked = self.asked()
+        card = self.xiaoyou.settle(card_id, 10)
+        self.assertEqual(card["state"], "failed")
+        self.assertIn("问了主人没人答，已经停掉", card["entries"][-1]["text"])
+        self.assertEqual(self.service.feed("default")["approvals"], [])
+        self.assertIs(self.service.approve(asked["id"], "allow"), False)
+
+    def test_a_command_still_running_is_not_asked_about_so_soon(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "hang-in-command"
+        self.build(idle=1, idle_command=3)
+        card_id = self.service.get(self.service.submit("编译", agent="claude")["id"], wait=5)["card"]
+        self.assertTrue(until(lambda: self.xiaoyou.cards.get(card_id)["progress"], 10))
+        threading.Event().wait(2)
+        self.assertEqual(self.service.feed("default")["approvals"], [])
+        self.assertIn("已经 3 秒没有动静", self.asked()["detail"])
+        self.service.cancel(card_id)
+
+    def test_waiting_for_a_yes_is_not_silence(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "ask"
+        os.environ["FAKE_CLAUDE_TARGET"] = str(self.folder / "note.txt")
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_TARGET", None)
+        self.build(idle=1, idle_command=1)
+        card_id = self.service.get(self.service.submit("写个文件", agent="claude")["id"], wait=5)["card"]
+        asked = self.asked()
+        self.assertEqual(asked["kind"], "tool")
+        threading.Event().wait(2.5)
+        # Still the same question, and nothing was stopped while the owner took his time.
+        self.assertEqual([item["id"] for item in self.service.feed("default")["approvals"]],
+                         [asked["id"]])
+        self.service.approve(asked["id"], "allow")
+        self.assertEqual(self.xiaoyou.settle(card_id, 10)["state"], "done")
 
 
 class WorkWithApprovalTests(TempDirCase):

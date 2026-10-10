@@ -27,12 +27,18 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .approvals import progress_line
 from .config import AgentSpec
 
 MAX_OUTPUT_CHARS = 200000
+# 看不到事件流的跑法（任意命令、codex exec、只说话的那一次）没法判断卡没卡住，只能按
+# 总时长：配置里写了“不限”时用这个。
+UNWATCHED_SECONDS = 3600
+# 没动静超过时限、去问主人“还等不等”之后的几种结果。
+WAIT, STOP, SILENT, MOVED = "wait", "stop", "silent", "moved"
+RESUME_HINT = "对这件事说“接着做”可以从停下的地方继续"
 
 
 class AgentError(Exception):
@@ -68,6 +74,35 @@ class Control:
         # 代理自己能收到“可以吗”的询问时（Codex 的 app-server），用它问主人：
         # (谁要用什么, 内容原文) → 可以不可以。None 表示这一次没有人可问
         self.ask: Optional[Callable[[str, str], bool]] = None
+        # 这件事是不是正停着等主人点头。等主人的时间不算在任何时限里
+        self.paused: Callable[[], bool] = lambda: False
+        # 没动静超过时限时用它问主人还等不等：(没动静了多少秒, 最后一步, 不用再问了吗)
+        # → WAIT、STOP、SILENT（没人答）、MOVED（问的时候它自己又动了）。None 表示没有人可问
+        self.stalled: Optional[Callable[[float, str, Callable[[], bool]], str]] = None
+        # 代理每读到一行事件就 touch 一下；看门狗（Watchdog）靠这几样判断卡没卡住
+        self._seen = time.monotonic()
+        self._moves = 0
+        self._busy: Set[str] = set()  # 已经开始、还没结束的操作
+        self._step = ""  # 最后开始的那一步，原样
+        self.patience = 1  # 主人每说一次“接着等”翻一倍
+
+    def touch(self, began: Optional[str] = None, ended: Optional[str] = None,
+              step: Optional[str] = None) -> None:
+        """有动静了。began / ended 是开始、结束的那一步操作的编号，step 是它的进展行。"""
+        with self._lock:
+            self._seen = time.monotonic()
+            self._moves += 1
+            if began:
+                self._busy.add(began)
+            if ended:
+                self._busy.discard(ended)
+            if step:
+                self._step = step
+
+    def quiet(self) -> Tuple[float, bool, int, str]:
+        """（没动静了多少秒, 是不是有操作还没跑完, 到现在一共动了几次, 最后一步）。"""
+        with self._lock:
+            return time.monotonic() - self._seen, bool(self._busy), self._moves, self._step
 
     def attach(self, process: Optional[subprocess.Popen]) -> None:
         with self._lock:
@@ -161,6 +196,93 @@ def kill_tree(process: subprocess.Popen) -> None:
             pass
 
 
+def span(seconds: float) -> str:
+    seconds = int(seconds)
+    return "%d 秒" % seconds if seconds < 120 else "%d 分钟" % (seconds // 60)
+
+
+class Watchdog:
+    """看着后台的一轮有没有卡住。
+
+    不按总时长一刀切（total 为 0 时根本不看总时长）：看的是多久没动静。平时连续 idle
+    秒没有一行事件、或者有操作在跑时连续 idle_command 秒没有，就去问主人还等不等；主人
+    说接着等就把耐心翻倍，说停、或者没人答，才结束进程，原因留在 reason 里。停着等主人
+    点头的时间不算。
+    """
+
+    TICK = 1.0
+
+    def __init__(self, control: Control, what: str, kill: Callable[[], None], total: int = 0,
+                 idle: int = 0, idle_command: int = 0):
+        self._control = control
+        self._what = what
+        self._kill = kill
+        self._total = total
+        self._idle = idle
+        self._idle_command = idle_command
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self.reason: Optional[str] = None
+
+    def start(self) -> "Watchdog":
+        self._control.touch()
+        if self._total or self._idle or self._idle_command:
+            threading.Thread(target=self._watch, daemon=True, name="xiaoyou-watchdog").start()
+        return self
+
+    def stop(self) -> None:
+        with self._lock:
+            self._done.set()
+
+    def _expire(self, reason: str) -> None:
+        with self._lock:
+            if self._done.is_set():
+                return  # 这一轮已经自己结束了
+            self._done.set()
+            self.reason = reason
+        self._kill()
+
+    def _watch(self) -> None:
+        control = self._control
+        last = time.monotonic()
+        spent = 0.0  # 不算等主人的时间
+        while not self._done.wait(self.TICK):
+            now = time.monotonic()
+            if control.paused():
+                control.touch()  # 主人答完之后从头计
+                last = now
+                continue
+            spent += now - last
+            last = now
+            if self._total and spent > self._total:
+                self._expire("%s 超过 %d 秒还没结束，已经停止" % (self._what, self._total))
+                return
+            idle, busy, moves, step = control.quiet()
+            limit = (self._idle_command if busy else self._idle) * control.patience
+            if not limit or idle < limit:
+                continue
+            verdict = STOP
+            if control.stalled is not None:
+                try:
+                    verdict = control.stalled(
+                        idle, step, lambda: self._done.is_set() or control.quiet()[2] != moves)
+                except Exception:
+                    verdict = SILENT
+                last = time.monotonic()
+                if verdict == MOVED:
+                    continue  # 问的时候它自己又动了
+                if verdict == WAIT:
+                    control.patience *= 2
+                    control.touch()
+                    continue
+                how = "问了主人没人答，已经停掉" if verdict == SILENT else "主人说停掉"
+                self._expire("%s 有 %s没动静，%s。%s" % (self._what, span(idle), how, RESUME_HINT))
+            else:
+                self._expire("%s 已经 %s没有动静，已经停止。%s" % (
+                    self._what, span(idle), RESUME_HINT))
+            return
+
+
 @dataclass(frozen=True)
 class Job:
     """交给代理的一件事。"""
@@ -244,8 +366,12 @@ def _run_controlled(command: List[str], control: Control, timeout: int, **extra:
 
 def stream_command(command: List[str], text: str, cwd: Optional[Path], timeout: int, what: str,
                    env: Optional[Dict[str, str]], control: Control,
-                   on_line: Callable[[str], None]) -> "subprocess.CompletedProcess[str]":
-    """运行一条命令，标准输出来一行处理一行。失败的说法和 run_command 一样。"""
+                   on_line: Callable[[str], None], idle: int = 0,
+                   idle_command: int = 0) -> "subprocess.CompletedProcess[str]":
+    """运行一条命令，标准输出来一行处理一行。失败的说法和 run_command 一样。
+
+    timeout 是总时长，0 是不限；idle / idle_command 是多久没有一行输出算卡住（见 Watchdog）。
+    """
     command = list(command)
     command[0] = shutil.which(command[0]) or command[0]
     extra: Dict[str, Any] = {}
@@ -268,15 +394,7 @@ def stream_command(command: List[str], text: str, cwd: Optional[Path], timeout: 
     except OSError as error:
         raise AgentError("启动 %s 失败：%s" % (what, error))
     control.attach(process)
-    timed_out = threading.Event()
-
-    def expire() -> None:
-        timed_out.set()
-        kill_tree(process)
-
-    timer = threading.Timer(timeout, expire)
-    timer.daemon = True
-    timer.start()
+    watch = Watchdog(control, what, lambda: kill_tree(process), timeout, idle, idle_command).start()
     errors: List[str] = []
     reader = threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True)
     reader.start()
@@ -287,10 +405,11 @@ def stream_command(command: List[str], text: str, cwd: Optional[Path], timeout: 
         except OSError:
             pass  # 它没读完就退出了；原因在退出码和标准错误里
         for line in process.stdout:
+            control.touch()
             on_line(line)
         process.wait()
     finally:
-        timer.cancel()
+        watch.stop()
         kill_tree(process)
         control.attach(None)
         reader.join(timeout=5)
@@ -301,8 +420,8 @@ def stream_command(command: List[str], text: str, cwd: Optional[Path], timeout: 
                 pass
     if control.cancelled:
         raise Cancelled("%s 被叫停了" % what)
-    if timed_out.is_set():
-        raise AgentError("%s 超过 %d 秒还没结束，已经停止" % (what, timeout))
+    if watch.reason is not None:
+        raise AgentError(watch.reason)
     return subprocess.CompletedProcess(command, process.returncode, "", "".join(errors))
 
 
@@ -445,7 +564,8 @@ class ClaudeCodeAgent(Agent):
             return self._work(job, job.control)
         done = run_command(
             self.command(job), job.text, self.spec.workdir,
-            job.timeout or self.spec.timeout_seconds, "Claude Code", env=self._env(),
+            job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Claude Code",
+            env=self._env(),
             run=self._run, control=job.control,
         )
         payload: Any = None
@@ -500,7 +620,18 @@ class ClaudeCodeAgent(Agent):
                             and isinstance(block.get("name"), str)
                             # 这是它交结构化回复用的，不是一步操作。
                             and block["name"] != "StructuredOutput"):
-                        control.progress(progress_line(block["name"], block.get("input")))
+                        step = progress_line(block["name"], block.get("input"))
+                        # 从这里到它的结果回来，事件流是安静的：按“有操作在跑”的时限等。
+                        control.touch(began=block.get("id") if isinstance(
+                            block.get("id"), str) else None, step=step)
+                        control.progress(step)
+            elif kind == "user":
+                message = event.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                for block in content if isinstance(content, list) else []:
+                    if (isinstance(block, dict) and block.get("type") == "tool_result"
+                            and isinstance(block.get("tool_use_id"), str)):
+                        control.touch(ended=block["tool_use_id"])
             elif kind == "result":
                 final.update(event)
 
@@ -508,7 +639,8 @@ class ClaudeCodeAgent(Agent):
             done = stream_command(
                 self.command(job, stream=True, mcp_config=config_file), job.text,
                 self.spec.workdir, job.timeout or self.spec.timeout_seconds, "Claude Code",
-                self._env(), control, on_line,
+                self._env(), control, on_line, self.spec.idle_seconds,
+                self.spec.idle_command_seconds,
             )
         finally:
             if config_file is not None:
@@ -591,7 +723,8 @@ class CodexAgent(Agent):
             last_message = Path(folder) / "last.txt"
             done = run_command(
                 self.command(job, last_message), text, self.spec.workdir,
-                job.timeout or self.spec.timeout_seconds, "Codex", env=env, run=self._run,
+                job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Codex", env=env,
+                run=self._run,
                 control=job.control,
             )
             try:
@@ -664,7 +797,8 @@ class CommandAgent(Agent):
         else:
             stdin = text
         done = run_command(command, stdin, self.spec.workdir,
-                           job.timeout or self.spec.timeout_seconds, self.name, run=self._run,
+                           job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS,
+                           self.name, run=self._run,
                            control=job.control)
         output = done.stdout.strip()
         if done.returncode != 0 or not output:
@@ -712,7 +846,9 @@ class RemoteAgent(Agent):
         return payload
 
     def run(self, job: Job) -> Outcome:
-        deadline = time.monotonic() + (job.timeout or self.spec.timeout_seconds)
+        # 0 是不限：那一台自己看着它的帮手卡没卡住，这边只管等到它说结束。
+        limit = job.timeout or self.spec.timeout_seconds
+        began = time.monotonic()
         message = self._call("POST", "/v1/messages", {
             "text": job.text, "conversation": job.conversation,
             "client_id": uuid.uuid4().hex, "hop": job.hop + 1,
@@ -728,9 +864,9 @@ class RemoteAgent(Agent):
                 })
             if status == "failed":
                 raise AgentError("%s 那边没成功：%s" % (self.name, message.get("error") or "没有说明"))
-            remaining = deadline - time.monotonic()
+            remaining = limit - (time.monotonic() - began) if limit else self.POLL_SECONDS
             if remaining <= 0 or not isinstance(message.get("id"), str):
-                raise AgentError("%s 超过 %d 秒还没结束" % (self.name, self.spec.timeout_seconds))
+                raise AgentError("%s 超过 %d 秒还没结束" % (self.name, limit))
             wait = max(1, min(self.POLL_SECONDS, int(remaining)))
             message = self._call("GET", "/v1/messages/%s?wait=%d" % (message["id"], wait), None, wait + 15)
 

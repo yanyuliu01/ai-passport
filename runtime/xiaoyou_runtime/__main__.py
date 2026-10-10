@@ -163,8 +163,10 @@ def main(argv=None) -> int:
         if turn.started:
             # 这件事交到后台了：先把她的第一句打出来，再等结果。
             print("（%s：%s）" % (turn.card, turn.reply), file=sys.stderr)
-            limit = config.agent(turn.agent).timeout_seconds + config.voice_timeout_seconds + 30
-            deadline = time.monotonic() + limit
+            # 总时长不限（默认）时一直等：卡没卡住由 Runtime 自己看着，到时会来问。
+            limit = config.agent(turn.agent).timeout_seconds
+            deadline = (time.monotonic() + limit + config.voice_timeout_seconds + 30
+                        if limit else float("inf"))
             try:
                 while True:
                     card = xiaoyou.settle(turn.card, 0.5)
@@ -172,12 +174,14 @@ def main(argv=None) -> int:
                         break
                     for approval in xiaoyou.approvals.pending():
                         # 没有手机和设备在场：在终端里问。
-                        print("（%s 想做：%s）\n%s" % (
-                            approval["agent"], approval["tool"], approval["detail"]),
-                            file=sys.stderr)
+                        stalled = approval["kind"] == "stall"
+                        print("（%s%s）\n%s" % (
+                            "" if stalled else "%s 想做：" % approval["agent"], approval["tool"],
+                            approval["detail"]), file=sys.stderr)
                         allowed = False
                         if sys.stdin.isatty():
-                            allowed = input("可以吗？[y/N] ").strip().lower() in ("y", "yes")
+                            allowed = input("接着等吗？[y/N] " if stalled else "可以吗？[y/N] "
+                                            ).strip().lower() in ("y", "yes")
                         else:
                             print("（这里没法问你，当作不行）", file=sys.stderr)
                         xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny")

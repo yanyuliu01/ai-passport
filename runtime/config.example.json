@@ -8,7 +8,10 @@
   "state_dir": "state",
   "persona_file": "persona.txt",
   "brief_max_chars": 120,
-  "turn_timeout_seconds": 3600,
+  "turn_timeout_seconds": 0,
+  "idle_timeout_seconds": 600,
+  "idle_timeout_command_seconds": 1800,
+  "idle_answer_seconds": 1800,
   "xiaoyou": {
     "default_agent": "claude",
     "voice_agent": null,

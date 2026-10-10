@@ -23,6 +23,7 @@ MAX_TOOL_CHARS = 80
 MAX_DETAIL_CHARS = 20000
 MAX_GATE_BODY_BYTES = 1024 * 1024
 ALLOW, DENY = "allow", "deny"
+TOOL, STALL = "tool", "stall"
 DENIED = "主人说不行"
 GONE = "这件事已经停了"
 
@@ -71,15 +72,20 @@ class Approvals:
         self._next = 1
         self._notify: Changed = changed or (lambda card, approval: None)
 
-    def ask(self, card: str, conversation: str, agent: str, tool: str, detail: str) -> str:
-        """登记一个授权并返回它的编号。不等。"""
+    def ask(self, card: str, conversation: str, agent: str, tool: str, detail: str,
+            kind: str = TOOL) -> str:
+        """登记一个授权并返回它的编号。不等。
+
+        kind 是问的什么：tool 是“这一步操作可以吗”，stall 是“它很久没动静了，还等吗”
+        （可以 = 接着等，不行 = 停掉）。两种走同一个弹窗。
+        """
         with self._changed:
             approval_id = "a%d" % self._next
             self._next += 1
             self._items[approval_id] = {
                 "id": approval_id, "card": card, "conversation": conversation, "agent": agent,
                 "tool": tool[:MAX_TOOL_CHARS], "detail": detail[:MAX_DETAIL_CHARS],
-                "created_at": time.time(), "decision": None,
+                "created_at": time.time(), "decision": None, "kind": kind,
             }
             # 答过的只留最近一些，够回答“这个已经答过了”就行。
             answered = [key for key, item in self._items.items() if item["decision"] is not None]
@@ -88,8 +94,14 @@ class Approvals:
         self._notify(card, approval_id)
         return approval_id
 
-    def wait(self, approval_id: str) -> str:
-        """一直等到这个授权有答案（或者那件事停了）；返回 allow 或 deny。"""
+    def wait(self, approval_id: str, seconds: Optional[float] = None,
+             moot: Optional[Callable[[], bool]] = None) -> Optional[str]:
+        """一直等到这个授权有答案（或者那件事停了）；返回 allow 或 deny。
+
+        给了 seconds 就最多等这么久；给了 moot 就在它说“不用再问了”时不等了。这两种
+        情况返回 None，授权还挂着，由调用方用 withdraw 收回。
+        """
+        deadline = None if seconds is None else time.monotonic() + seconds
         with self._changed:
             while True:
                 item = self._items.get(approval_id)
@@ -97,7 +109,30 @@ class Approvals:
                     return DENY
                 if item["decision"] is not None:
                     return item["decision"]
-                self._changed.wait(1.0)
+                if moot is not None and moot():
+                    return None
+                if deadline is not None and time.monotonic() >= deadline:
+                    return None
+                self._changed.wait(1.0 if deadline is None else max(
+                    0.01, min(1.0, deadline - time.monotonic())))
+
+    def withdraw(self, approval_id: str) -> None:
+        """这个问题不用答了（没人答，或者已经不成问题）：收回弹窗。"""
+        with self._changed:
+            item = self._items.get(approval_id)
+            if item is None or item["decision"] is not None:
+                return
+            item["decision"] = DENY
+            item["gone"] = True
+            card = item["card"]
+            waiting = self._waiting(card)
+            self._changed.notify_all()
+        self._notify(card, waiting)
+
+    def waiting(self, card: str) -> bool:
+        """这件事是不是正停着等主人回答。"""
+        with self._changed:
+            return self._waiting(card) is not None
 
     def answer(self, approval_id: str, decision: str) -> Optional[bool]:
         """回答一个授权。没有这个编号返回 None；已经答过了返回 False。"""
@@ -143,7 +178,7 @@ class Approvals:
         with self._changed:
             return [
                 {key: item[key] for key in
-                 ("id", "card", "conversation", "agent", "tool", "detail", "created_at")}
+                 ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind")}
                 for item in self._items.values()
                 if item["decision"] is None
                 and (conversation is None or item["conversation"] == conversation)

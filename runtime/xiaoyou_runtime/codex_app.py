@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from .agents import AgentError, Cancelled, Control, Job, Outcome, clip, fields_from_text, kill_tree
+from .agents import (AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip,
+                     fields_from_text, kill_tree)
 from .config import AgentSpec
 
 MAX_OUTPUT_CHARS = 200000
@@ -183,6 +184,9 @@ class AppServer:
                 result = message.get("result")
                 return result if isinstance(result, dict) else {}
 
+    def kill(self) -> None:
+        kill_tree(self._process)
+
     def stderr_tail(self) -> str:
         # 进程刚退出时，它最后说的话可能还在路上。
         self._stderr_reader.join(timeout=2)
@@ -239,20 +243,22 @@ def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str
     """跑一轮：把这段话交给 Codex，直到它这一轮结束。"""
     if control.cancelled:
         raise Cancelled("Codex 被叫停了")
-    timeout = job.timeout or spec.timeout_seconds
-    deadline = time.monotonic() + timeout
     server = AppServer(spec, control, env)
+    # 总时长（0 是不限）和多久没动静都由它看着；到点了它结束进程，主循环读到进程没了。
+    watch = Watchdog(control, "Codex", server.kill, job.timeout or spec.timeout_seconds,
+                     spec.idle_seconds, spec.idle_command_seconds)
     try:
-        return _turn(server, spec, job, control, deadline, timeout)
+        return _turn(server, spec, job, control, watch)
     finally:
+        watch.stop()
         control.can_steer(None)
         control.can_stop(None)
         server.close()
 
 
-def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadline: float,
-          timeout: int) -> Outcome:
-    handshake(server, min(deadline, time.monotonic() + HANDSHAKE_SECONDS))
+def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
+          watch: Watchdog) -> Outcome:
+    handshake(server, time.monotonic() + HANDSHAKE_SECONDS)
     settings: Dict[str, Any] = {"cwd": str(spec.workdir) if spec.workdir else os.getcwd(),
                                 "approvalPolicy": spec.approval_policy}
     if spec.sandbox:
@@ -263,7 +269,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadli
         opened = server.request("thread/resume", dict(settings, threadId=job.session_id))
     else:
         opened = server.request("thread/start", settings)
-    thread = server.expect(opened, min(deadline, time.monotonic() + HANDSHAKE_SECONDS),
+    thread = server.expect(opened, time.monotonic() + HANDSHAKE_SECONDS,
                            "thread/resume" if job.session_id else "thread/start").get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     if not isinstance(thread_id, str):
@@ -275,8 +281,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadli
     if job.schema:
         start["outputSchema"] = job.schema
     begun = server.request("turn/start", start)
-    turn = server.expect(begun, min(deadline, time.monotonic() + HANDSHAKE_SECONDS),
-                         "turn/start").get("turn")
+    turn = server.expect(begun, time.monotonic() + HANDSHAKE_SECONDS, "turn/start").get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str):
         raise AgentError("Codex 没有给出这一轮的编号。可以先把这个代理的 mode 改成 exec")
@@ -302,24 +307,22 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadli
     problem = ""
     changes: Dict[str, Any] = {}  # 改文件的条目编号 → 改了什么（来问的时候只给编号）
     last_alive = time.monotonic()
+    watch.start()
     while True:
         now = time.monotonic()
-        limit = deadline
-        if stop_at:
-            limit = min(limit, stop_at[0])
-        message = server.next(min(limit - now, 1.0))
+        message = server.next(min(stop_at[0] - now, 1.0) if stop_at else 1.0)
         now = time.monotonic()
         if message is False:
             if stop_at and now >= stop_at[0]:
                 raise Cancelled("Codex 被叫停了")
-            if now >= deadline:
-                raise AgentError("Codex 超过 %d 秒还没结束，已经停止" % timeout)
             if problem and now - last_alive > STALL_SECONDS:
                 raise AgentError("Codex 一直连不上：%s" % clip(problem, 200))
             continue
         if message is None:
             if control.cancelled:
                 raise Cancelled("Codex 被叫停了")
+            if watch.reason is not None:
+                raise AgentError(watch.reason)
             raise AgentError("Codex 的 app-server 中途退出了：%s" % (problem or server.stderr_tail()))
         method = message.get("method")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
@@ -330,6 +333,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadli
             threading.Thread(target=_answer, args=(server, spec, control, message, changes),
                              daemon=True).start()
             last_alive = now
+            control.touch()
             continue
         if method == "error":
             error = params.get("error") if isinstance(params.get("error"), dict) else {}
@@ -339,16 +343,22 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control, deadli
             continue
         last_alive = now
         item = params.get("item") if isinstance(params.get("item"), dict) else {}
+        item_id = item.get("id") if isinstance(item.get("id"), str) else None
         if method == "item/started":
-            if item.get("type") == "fileChange" and isinstance(item.get("id"), str):
-                changes[item["id"]] = item.get("changes")
+            if item.get("type") == "fileChange" and item_id is not None:
+                changes[item_id] = item.get("changes")
             line = progress_of(item)
+            # 一步操作从开始到结束，中间可能很久没有消息：按“有操作在跑”的时限等。
+            control.touch(began=item_id if line else None, step=line)
             if line:
                 control.progress(line)
         elif method == "item/completed":
+            control.touch(ended=item_id)
             if item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                 said = item["text"]
-        elif method == "turn/completed":
+        else:
+            control.touch()
+        if method == "turn/completed":
             done = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             if done.get("id") not in (None, turn_id):
                 continue

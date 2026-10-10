@@ -64,7 +64,10 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `state_dir` | `state` | 存会话表、卡和小幽的对话记录的目录。 |
 | `persona_file` | `persona.txt` | 小幽的人设。只交给以小幽的身份回话的代理。 |
 | `brief_max_chars` | `120` | 小屏幕简报的字数上限（20 到 400）。 |
-| `turn_timeout_seconds` | `3600` | 一件后台的事最长做多久；代理没有自己设 `timeout_seconds` 时用它（10 到 7200）。 |
+| `turn_timeout_seconds` | `0` | 一件后台的事从头到尾最长做多久，`0` 是不限（0.5.4 起的默认；之前是 `3600`）。代理没有自己设 `timeout_seconds` 时用它（`0`，或 10 到 86400）。卡没卡住看的是多久没动静，见[长任务](#长任务看有没有动静不看总时长)。 |
+| `idle_timeout_seconds` | `600` | 后台的事连续这么久一行事件都没有，就去问主人还等不等（`0` 是不管，或 30 到 86400）。 |
+| `idle_timeout_command_seconds` | `1800` | 同上，但用在有操作还没跑完的时候（编译、跑测试时事件流本来就是安静的）。不能比上一项小。 |
+| `idle_answer_seconds` | `1800` | 问了“还等不等”之后这么久没人答，就停掉（`0` 是一直等，或 30 到 86400）。 |
 | `agents.<名字>` | 无 | 一个代理，见[代理](#代理)。至少要有一个启用的。 |
 | `xiaoyou.default_agent` | 第一个代理 | 没人点名、路由器也没有意见时，话交给谁。 |
 | `xiaoyou.voice_agent` | 默认代理；它只干活时取第一个能说话的 | 只干活的代理做完之后，由谁用小幽的口吻转述。 |
@@ -116,7 +119,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `description` | 空 | 一句话说明它擅长什么。小幽决定要不要把活交给它、路由器做判断，看的都是这句话。 |
 | `aliases` | `[]` | 点名时除了名字之外还认的叫法，比如语音识别常写成的中文名。 |
 | `speaks` | 随类型 | 能不能直接以小幽的身份回话。`claude_code`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
-| `timeout_seconds` | `turn_timeout_seconds` | 这个代理做一件事最多跑多久。 |
+| `timeout_seconds` | `turn_timeout_seconds` | 这个代理做一件事从头到尾最多跑多久，`0` 是不限。看不到事件流的跑法（`command`、`codex` 的 `exec` 模式）写了 `0` 时按 3600 秒算。 |
+| `idle_timeout_seconds`、`idle_timeout_command_seconds` | 顶层的同名项 | 这个代理多久没动静算可能卡住。只对看得到事件流的跑法有用：`claude_code`，和 `codex` 的 `app_server` 模式。 |
 
 各类型另外认的配置项：
 
@@ -283,6 +287,29 @@ JSON 对象。
 app-server 在 Codex 的帮助里标着“实验性”。`--check` 会对每个这种模式的 `codex` 代理做一次
 握手（不调用模型）；握手不成会说明原因，这时可以先把 `mode` 改成 `exec`。
 
+### 长任务：看有没有动静，不看总时长
+
+后台的事默认不设总时长（0.5.4 起）。按总时长一刀切，会把一件做了四十分钟、还在正常做
+的事杀掉。Runtime 看的是它多久没动静：
+
+- Claude Code 的事件流、Codex 的 app-server 消息，每来一行就算一次动静。
+- 平时连续 `idle_timeout_seconds`（默认 10 分钟）没有一行，算可能卡住。一步操作已经开始、
+  结果还没回来时（一条命令在编译、在跑测试），事件流本来就是安静的，这时按
+  `idle_timeout_command_seconds`（默认 30 分钟）算。
+- 停着等主人点头的时间不算，总时长（设了的话）也不算它：主人晚点回答，不会把事等没了。
+- 到点了不直接停，先问主人：这件事的卡变成 `waiting`，`/v1/feed` 的 `approvals` 里多一项，
+  `kind` 是 `stall`，`tool` 是“帮手名 · 没动静”，`detail` 里写着多久没动静和最后一步的原文。
+  它和授权走同一个弹窗，所以设备和手机不用改：**可以 = 接着等，不行 = 停掉**。
+- 回答“可以”：接着等，下一次要隔两倍的时间才再问。问的时候它自己又动了：问题自动收回，
+  当没问过。
+- 回答“不行”，或者 `idle_answer_seconds`（默认 30 分钟）没人答：停掉，卡变成 `failed`，
+  上面写明原因。
+- 停掉不丢进度：帮手的会话一开始就记下了，对这件事说“接着做”，会在同一个会话里续上。
+
+想要一个硬上限的，给 `turn_timeout_seconds` 或某个代理的 `timeout_seconds` 写一个数。
+`command` 类型和 `codex` 的 `exec` 模式没有事件流，看不出动静，仍然只按总时长（不限时按
+3600 秒）。小幽自己接话的那一次不受这些影响，还是 `voice_timeout_seconds`。
+
 ### 使用单独的 Claude 登录
 
 Claude Code 从 `~/.claude` 读取登录信息和设置。如果那个目录已经配成别的用途（比如
@@ -322,7 +349,7 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
-| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>` | `{"seq", "cards": [...], "approvals": [...]}`：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at"}`）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
+| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>` | `{"seq", "cards": [...], "approvals": [...]}`：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`；`kind` 是 `tool`——这一步可以吗，或 `stall`——它很久没动静了、还等吗，0.5.4 起）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 30 张卡。 |
 | `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`。 |
 | `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权。没有这个授权（或 Runtime 重启过）返回 `404`；已经回答过、或者那件事已经停了，返回 `409`。 |
@@ -673,6 +700,10 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
   固件还不认识卡：能发能收，但后台的结果看不到。配套的 App 和固件还没做。
 - 模型会不会总是选对 `card` 和 `action`：只手动试了上面这几句。
 - 主人很久不回答授权（上面最长试过 100 秒）。
+- “没动静就问”在真的长任务上：云端用真实的 Claude Code 试过一次（时限调到 30 秒，让它跑
+  `sleep 50`，30 秒时来问，答“不行”后停掉）。十分钟、三十分钟这两个默认值合不合适，
+  Claude Code 长时间思考时会不会被误问，Codex 的 app-server 在命令运行时发不发消息，都
+  没有在真实的长任务上看过。
 - 一件事里同时来几个授权：权限询问工具一次只送一个，后面的排着。
 - 很多件事同时做时，这台电脑和账号用量撑不撑得住。
 - 帮手很慢或输出很长时，模型的表现。

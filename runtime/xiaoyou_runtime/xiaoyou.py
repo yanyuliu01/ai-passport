@@ -26,8 +26,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from . import router as routing
-from .agents import Agent, AgentError, Control, Job, Outcome, clip
-from .approvals import Approvals, Gate
+from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Job,
+                     Outcome, clip, span)
+from .approvals import STALL, Approvals, Gate
 from .cards import ACTIVE, Cards, title_from
 from .config import Config
 from .store import Store
@@ -616,6 +617,25 @@ class Xiaoyou:
             return self._approvals.wait(approval) == "allow"
 
         control.ask = ask
+        # 等主人点头的时间不算在时限里。
+        control.paused = lambda card=task.card: self._approvals.waiting(card)
+
+        def stalled(idle: float, step: str, moot: Callable[[], bool], task: Task = task) -> str:
+            # 很久没动静了：不直接停（误杀一件做了很久的事代价大），先问主人还等不等。
+            name = task.agent.name
+            detail = "%s 已经 %s没有动静了，接着等吗？\n最后一步：%s\n可以 = 接着等\n不行 = 停掉。%s" % (
+                name, span(idle), clip(step, 200) if step else "（还没有做过操作）", RESUME_HINT)
+            approval = self._approvals.ask(
+                task.card, task.conversation, name, "%s · 没动静" % name, detail, kind=STALL)
+            decision = self._approvals.wait(
+                approval, self._config.idle_answer_seconds or None, moot)
+            if decision is None:
+                moved = moot()
+                self._approvals.withdraw(approval)
+                return MOVED if moved else SILENT
+            return WAIT if decision == "allow" else STOP
+
+        control.stalled = stalled
 
     def _release(self, task: Task, control: Control) -> None:
         """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了。"""

@@ -75,7 +75,10 @@ Relative paths are resolved against the directory of the configuration file.
 | `state_dir` | `state` | Where the session table, the cards and Xiaoyou's transcript are kept. |
 | `persona_file` | `persona.txt` | Xiaoyou's persona. Given only to an agent that answers as Xiaoyou. |
 | `brief_max_chars` | `120` | Upper bound for the small-screen brief (20 to 400). |
-| `turn_timeout_seconds` | `3600` | How long one thing in the background may take; used by agents that do not set their own `timeout_seconds` (10 to 7200). |
+| `turn_timeout_seconds` | `0` | How long one thing in the background may take from start to end; `0` means no limit (the default since 0.5.4; it was `3600`). Used by agents that do not set their own `timeout_seconds` (`0`, or 10 to 86400). Whether a thing is stuck is judged by how long it has been silent, see [Long tasks](#long-tasks-watched-for-silence-not-for-total-time). |
+| `idle_timeout_seconds` | `600` | When a thing in the background has produced no event for this long, the owner is asked whether to keep waiting (`0` turns this off, or 30 to 86400). |
+| `idle_timeout_command_seconds` | `1800` | The same, while an operation has started and not finished (the event stream is quiet during a build or a test run anyway). Must not be smaller than the previous one. |
+| `idle_answer_seconds` | `1800` | When nobody answers that question for this long, the thing is stopped (`0` waits forever, or 30 to 86400). |
 | `agents.<name>` | none | An agent; see [Agents](#agents). At least one must be enabled. |
 | `xiaoyou.default_agent` | the first agent | Who gets a message when nobody is named and the router has no opinion. |
 | `xiaoyou.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyou, after an agent that only does work. |
@@ -131,7 +134,8 @@ and hyphens, at most 24 characters). Every agent has:
 | `description` | empty | One sentence on what it is good at. Xiaoyou reads it to decide whether to hand work over, and so does the router. |
 | `aliases` | `[]` | Other names it answers to when named in a message, for example how speech recognition tends to spell it. |
 | `speaks` | by type | Whether it may answer as Xiaoyou. `claude_code`, `remote` and `echo` do by default; `codex` and `command` only do work. |
-| `timeout_seconds` | `turn_timeout_seconds` | How long one run of this agent may take. |
+| `timeout_seconds` | `turn_timeout_seconds` | How long one run of this agent may take from start to end; `0` means no limit. Ways of running that have no event stream (`command`, and `codex` in `exec` mode) use 3600 seconds when this is `0`. |
+| `idle_timeout_seconds`, `idle_timeout_command_seconds` | the top-level settings of the same name | How long this agent may be silent before it counts as possibly stuck. Only for ways of running that have an event stream: `claude_code`, and `codex` in `app_server` mode. |
 
 Keys by type:
 
@@ -360,6 +364,42 @@ Codex's help marks the app-server as experimental. `--check` shakes hands
 with every `codex` agent in this mode (without calling a model); when that
 fails it says why, and `mode` can be set to `exec` for the time being.
 
+### Long tasks: watched for silence, not for total time
+
+A thing in the background has no limit on its total time by default (since
+0.5.4). A cut by the clock kills a thing that has been working properly for
+forty minutes. What the runtime watches is how long it has been silent:
+
+- Every line of Claude Code's event stream and every message from Codex's
+  app-server counts as activity.
+- Normally, `idle_timeout_seconds` (10 minutes by default) without a single
+  line means it may be stuck. While an operation has started and its result
+  has not come back (a command that is building or running tests), the event
+  stream is quiet anyway, so `idle_timeout_command_seconds` (30 minutes by
+  default) applies instead.
+- Time spent waiting for the owner's yes does not count, and it does not count
+  towards the total time either (if one is set): an owner who answers late
+  does not lose the thing.
+- When the time is up the thing is not stopped; the owner is asked first. Its
+  card becomes `waiting` and an entry appears under `approvals` in `/v1/feed`
+  with `kind` `stall`, a `tool` that names the helper and says it has gone silent, and a `detail` that says how
+  long it has been silent and quotes its last step. It uses the same popup as
+  an approval, so the device and the phone need no change: **yes means keep
+  waiting, no means stop**.
+- Yes: it goes on, and is asked about again only after twice as long. If it
+  moves again by itself while the question is open, the question is taken
+  back as if it had not been asked.
+- No, or nobody answering for `idle_answer_seconds` (30 minutes by default):
+  it is stopped, the card becomes `failed`, and the card says why.
+- Stopping loses nothing: the helper's session was recorded at the start, so
+  saying "go on" to that thing continues in the same session.
+
+For a hard limit, give `turn_timeout_seconds` or an agent's `timeout_seconds`
+a number. The `command` type and `codex` in `exec` mode have no event stream,
+so nothing can be seen of them; they are still limited by total time only
+(3600 seconds when set to no limit). The one call in which Xiaoyou herself
+takes a sentence is not affected: that is still `voice_timeout_seconds`.
+
 ### Using a separate Claude login
 
 Claude Code reads its login and settings from `~/.claude`. If that directory is
@@ -402,7 +442,7 @@ responses are JSON.
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
-| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": [...]}`: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at"}`). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": [...]}`: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
 | `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
 | `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
@@ -870,6 +910,12 @@ Not verified:
   sentences above were tried by hand.
 - An owner who takes very long to answer an approval (100 seconds was the
   longest tried).
+- "Ask when it goes silent" on a really long task: tried once in the cloud with
+  a real Claude Code (limit set to 30 seconds, told to run `sleep 50`; asked at
+  30 seconds, stopped after the answer "no"). Whether the defaults of ten and
+  thirty minutes fit, whether Claude Code is asked about by mistake while it
+  thinks for long, and whether Codex's app-server sends messages while a
+  command runs, has not been seen on a real long task.
 - Several approvals at once within one thing: the permission tool passes them
   on one at a time, the rest queue.
 - Whether this computer and the account's usage limits cope with many things
