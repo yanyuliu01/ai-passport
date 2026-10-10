@@ -74,4 +74,5 @@ jobs:
             SHA-256: `${{ steps.image.outputs.sha256 }}`
           files: |
             build/FoloToy-AI-Passport-full.bin
+            build/FoloToy-AI-Passport.memory.txt
             ${{ runner.temp }}/FoloToy-AI-Passport-full.bin.sha256

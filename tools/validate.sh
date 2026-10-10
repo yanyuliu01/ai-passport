@@ -179,9 +179,22 @@ run_firmware_checks() (
     validation_build_dir="$(mktemp -d /tmp/ai-passport-firmware.XXXXXX)"
     trap 'case "${validation_build_dir}" in /tmp/ai-passport-firmware.*) rm -rf -- "${validation_build_dir}" ;; esac' EXIT
 
-    SDKCONFIG_DEFAULTS="${repo_root}/sdkconfig.defaults" \
+    # The build's output goes to a file as well: when it fails on GitHub the
+    # compiler's own words are repeated as annotations, which can be read
+    # without the log (through the API, or at the top of the run's page).
+    local build_log="${validation_build_dir}/build.log"
+    if ! SDKCONFIG_DEFAULTS="${repo_root}/sdkconfig.defaults" \
         idf.py -B "${validation_build_dir}" \
-        -D "SDKCONFIG=${validation_build_dir}/sdkconfig" build
+        -D "SDKCONFIG=${validation_build_dir}/sdkconfig" build 2>&1 | tee "${build_log}"; then
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            grep -E '(error:|undefined reference|static assertion failed|region .* overflowed)' \
+                "${build_log}" | head -n 12 | while IFS= read -r line; do
+                echo "::error title=Firmware build::${line}"
+            done
+        fi
+        echo "Firmware build: FAIL" >&2
+        return 1
+    fi
     idf.py -B "${validation_build_dir}" merge-bin \
         -o "${validation_build_dir}/FoloToy-AI-Passport-full.bin"
     python3 tools/verify_firmware.py "${validation_build_dir}"
@@ -191,6 +204,17 @@ run_firmware_checks() (
     install -m 0644 \
         "${validation_build_dir}/FoloToy-AI-Passport-full.bin" \
         "${repo_root}/build/FoloToy-AI-Passport-full.bin"
+    # How much memory this build takes, next to the image: the board has no
+    # PSRAM, and what the fixed data leaves is all the interface, Bluetooth and
+    # the task stacks have. Kept with every published build so that two builds
+    # can be compared without a device.
+    {
+        idf.py -B "${validation_build_dir}" size 2>/dev/null | sed -n '/Memory Type Usage Summary/,$p'
+        echo
+        echo "Largest fixed data of the application (bytes, section, symbol):"
+        python3 tools/firmware_memory.py "${validation_build_dir}/FoloToy-AI-Passport.map"
+    } > "${repo_root}/build/FoloToy-AI-Passport.memory.txt" || true
+    cat "${repo_root}/build/FoloToy-AI-Passport.memory.txt"
     echo "Firmware build: PASS"
 )
 
