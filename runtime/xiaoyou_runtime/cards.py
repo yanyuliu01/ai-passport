@@ -2,7 +2,8 @@
 
 主人提的每个需求是一件事。回答、进展、后来的补充都记在它自己那张卡上，客户端按卡
 显示，不按到达的先后混排。卡有编号（c1、c2……）、标题、状态、谁在做、主人说的话、
-小幽说的话、最近几行进展。
+小幽说的话、最近几行进展；交给帮手做的还有用的是哪一档努力程度（effort）、实际用的
+模型（model）、到现在花了多少（cost）。
 
 每次有卡变化，全局的序号加一并记在那张卡上：客户端记住看到的最大序号，带着它来
 等（/v1/feed），就只会拿到之后变过的卡。
@@ -29,6 +30,8 @@ MAX_TITLE_CHARS = 24
 MAX_PROGRESS_LINES = 5
 MAX_PROGRESS_CHARS = 200
 RESTART_NOTE = "Runtime 重启了，这件事没做完"
+# 一件事花了多少：token（新读的、写的、从缓存读的），和订阅额度两个窗口各少了几个百分点。
+COST_KEYS = ("in", "out", "cached", "d5", "d7")
 
 Listener = Callable[[Dict[str, Any]], None]
 
@@ -101,6 +104,14 @@ class Cards:
             "edits": int(number("edits")),
             "approval": None,
             "queued": False,
+            "effort": card.get("effort") if isinstance(card.get("effort"), str) else None,
+            "model": card.get("model") if isinstance(card.get("model"), str) else None,
+            "model_asked": card.get("model_asked")
+            if isinstance(card.get("model_asked"), str) else None,
+            "cost": {key: int(value) for key, value in card["cost"].items()
+                     if key in COST_KEYS and isinstance(value, (int, float))
+                     and not isinstance(value, bool)}
+            if isinstance(card.get("cost"), dict) else None,
             "seq": int(number("seq")),
         }
 
@@ -109,6 +120,7 @@ class Cards:
         copy = dict(card)
         copy["entries"] = [dict(entry) for entry in card["entries"]]
         copy["progress"] = list(card["progress"])
+        copy["cost"] = dict(card["cost"]) if card.get("cost") else None
         return copy
 
     def _save(self) -> None:
@@ -142,7 +154,8 @@ class Cards:
                 "title": title_from(title), "state": state, "agent": agent,
                 "created_at": now, "updated_at": now, "entries": [], "brief": "", "mood": "idle",
                 "progress": [], "started_at": None, "edits": 0, "approval": None,
-                "queued": False, "seq": 0,
+                "queued": False, "effort": None, "model": None, "model_asked": None,
+                "cost": None, "seq": 0,
             }
             self._next += 1
             self._cards[card["id"]] = card

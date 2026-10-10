@@ -94,6 +94,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `workspace.bus_database` | 无 | “总线”数据库的编号（链接里那 32 位）。`notion` 时必填。 |
 | `workspace.log_database` | 无 | “日志”数据库的编号。不填就只写总线。 |
 | `workspace.author` | `xiaoyou` | 小幽在共享工作区里署的名字。 |
+| `usage.enabled` | `true` | 要不要主动去问订阅额度（0.6.0 起）。`false` 时不为这件事另起进程，帮手干活时自己报上来的照记。见[用量](#用量订阅额度还剩多少)。 |
+| `usage.refresh_seconds` | `300` | 有客户端在看的时候，隔多久去问一次（60 到 86400）。 |
 
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
@@ -126,8 +128,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 | 类型 | 做什么 | 配置项 |
 | --- | --- | --- |
-| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files` |
-| `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args` |
+| `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts`（见[档位](#档位模型和努力程度)） |
+| `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args`、`models`、`effort`、`efforts` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -196,6 +198,11 @@ JSON 对象。
 3. 路由器有意见——听它的。
 4. 都没有——交给默认代理。
 
+点名时可以紧跟着说这一次用哪一档努力程度（0.6.0 起）：`@codex 高档 看看这个报错`、
+“让 codex 用高档看看这个报错”。认 `低档`、`中档`、`高档`、`特高档`、`最高档`、`最低档`
+和 `low`、`medium`、`high`、`xhigh`、`max`、`minimal`；只认紧跟在名字后面的，这个词会从
+交给帮手的话里去掉。那个帮手不能选这一档时，按它平时的。见[档位](#档位模型和努力程度)。
+
 前三条都算“指定了由谁做”：Runtime 不问模型，直接开一张卡，小幽说一句“交给 codex 了”，
 那个代理在后台做。消息记录里有一条 `handoff`，`agent` 是它。替小幽说话的那个代理也一样：
 `@claude ……` 是让 `claude` 带着工具、以小幽的身份在后台做这件事，Runtime 会告诉它被点名的
@@ -232,6 +239,94 @@ JSON 对象。
 卡的状态有 `working`（帮手在做）、`waiting`（等主人点头，见[授权](#授权)）、`done`、
 `failed`、`cancelled`；`talking` 是预留的。卡存在 `state/cards.json`，留最近 50 张。Runtime
 重启时还在做的事没法接着做，会被标成 `failed`，原因写“Runtime 重启了，这件事没做完”。
+
+交给帮手做的卡另有三项（0.6.0 起）：`effort` 是这件事用的努力程度，`model` 是实际用的
+模型，`cost` 是到现在花了多少，见下面两节。
+
+### 档位：模型和努力程度
+
+0.6.0 起，`claude_code` 和 `codex` 类型的帮手各有一档平时的努力程度，派活时可以换：
+
+| 配置项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `effort` | `medium` | 这个帮手平时用的努力程度。 |
+| `efforts` | `["low", "medium", "high"]` | 派活时可以选的几档。Claude Code 认 `low`、`medium`、`high`、`xhigh`、`max`，Codex 认 `minimal`、`low`、`medium`、`high`、`xhigh`；想放开更高的自己加。写成 `[]` 表示 Runtime 不传努力程度，用工具自己的默认。 |
+| `models` | `[]` | 派活时除了 `model` 之外还可以换成哪些模型。空着就是不能按次换。 |
+
+用 `env` 指到别的服务的 `claude_code` 帮手（比如 DeepSeek）是例外：`efforts` 不写就是
+`[]`，因为那边认不认努力程度不一定；确认它认之后自己写上。`command`、`remote`、`echo`
+没有这三项。`efforts` 不是空的时候，`extra_args` 里不要再写 `--effort` 或
+`model_reasoning_effort`。
+
+**注意：升到 0.6.0 之后，这两类帮手默认按中档做事**，不再是工具自己的默认（那个默认随
+工具的配置和版本不同，常常更高）。同样的事可能做得浅一些、也省一些；觉得不够时对那件事
+说“用高档重做”，或者把这个帮手的 `effort` 改高。
+
+传给工具的方式：Claude Code 是 `--effort <档>` 和 `--model <模型>`；Codex 的 `exec` 模式是
+`-c model_reasoning_effort="<档>"` 和 `--model`，`app_server` 模式是每一轮 `turn/start` 里的
+`effort` 和 `model`。小幽自己接话的那一次不带平时那一档：它求的是快。
+
+一件事用哪一档，按这个顺序定：
+
+1. 主人点名时紧跟着说的档（见[这句话交给谁](#这句话交给谁)）。
+2. 小幽在回复里选的：`start` 和 `amend` 的 `action` 里可以写 `effort` 和 `model`。提示里
+   告诉她：主人说了就按主人的；没说时，查一下、看一眼用低档，一般的事不写，明显难的才用
+   高档并说一声。
+3. 调用方选的：接口里的 `effort`、`model`。
+4. 都没有：这件事上一次就是这个帮手做的，沿用上一次的；否则用它平时的。
+
+选的档或模型那个帮手不认时，当作没选。对一件正在做的事改要求时换了档，这一轮会停掉、
+按新的档重做（不走中途追加）。
+
+帮手实际用的模型由它自己报：Claude Code 在事件流开头说，Codex 在开线程时说。配置里
+`model` 空着也能看到真正在干活的是哪个。跑过一次才知道；记在 `state/usage.json` 里。
+
+### 用量：订阅额度还剩多少
+
+0.6.0 起，Runtime 记着每个订阅账号的两个窗口各还剩多少：5 小时的和一周的。它给三处用：
+小幽派活时看、手机和设备上显示、算一件事花了多少。
+
+额度按**账号**记，不按帮手记：几个帮手用同一个配置目录（同一个登录）时，额度是一份。
+只算订阅登录的：没有用 `env` 指到别的服务、也没有在 `env` 里放密钥的 `claude_code`
+帮手，和 `codex` 帮手。别的帮手没有额度，只记它用的模型。
+
+数从三处来。Runtime 自己不读任何登录凭据，问的都是工具本身：
+
+| 来源 | 什么时候 | 给什么 |
+| --- | --- | --- |
+| Claude Code 干活时的事件流（`rate_limit_event`） | 每件交给它的事 | 两个窗口各用了多少、什么时候重置；数一变它就说一次 |
+| Claude Code 的 `get_usage`（`claude -p --input-format stream-json` 加一个控制请求，不调用模型） | 太久没问过时；一件事开始前；`usage` 命令 | 和 Claude Code 里 `/usage` 同一份数 |
+| Codex 的 app-server（`account/rateLimits/read`，和干活时的 `account/rateLimits/updated`） | 每一轮开始和结束；太久没问过时 | 两个窗口各用了多少、什么时候重置 |
+
+`get_usage` 在 Claude Code 里标着“实验性”，事件流里两个窗口的那部分标着“内部”：哪天
+对不上了，那个账号就显示成“还不知道”，原因在 `note` 里，别的不受影响。
+
+每个账号的状态：`ok`；`warn`（有窗口剩不到 20%）；`out`（有窗口用完了）；`unknown`
+（一个数都没有）。过了重置时间的数不再作数。
+
+小幽接话时，帮手清单里每个帮手后面多一段：
+
+```text
+- codex：看代码、改代码〔gpt-… · 平时中档，可选 低/中/高；5 小时剩 58%（14:20 重置），本周剩 81%（周三 09:00 重置）〕
+```
+
+提示里告诉她：几个帮手都能做时交给剩得多的；写着“快用完了”的，主人没指定档位就降一档
+并说一声；写着“用完了”的不派，除非主人点了名；“还不知道”不当成用完。指定了由谁做的
+那几条路（接口里指定、话里点名、路由器）不问模型，所以不受这些影响：Runtime 不替主人换
+帮手，也不替主人降档。
+
+每一轮做完，卡上的 `cost` 加上这一轮的：`in`、`out`、`cached` 是 token（新读的、写的、从
+缓存读的），`d5`、`d7` 是两个窗口各少了几个百分点。同一个账号同时在做几件事时，`d5`、`d7`
+是几件合起来的，只能当大概的数；额度的百分比是整数，小事常常是 0。
+
+不启动服务也能看：
+
+```bash
+python3 -m xiaoyou_runtime --config config.json usage
+```
+
+它现在就去问一次，打印每个账号还剩多少、查不到的原因、每个帮手的模型和档位。加
+`--json` 打印原始数据。
 
 ### 共享工作区
 
@@ -359,12 +454,12 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | 请求 | 结果 |
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
-| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`：小幽在这台 Runtime 上能用的代理。 |
-| `GET /v1/usage` | `{"updated_at", "codex": [...], "claude": [...]}`：本机可见的 Codex / Claude Code 用量和额度状态。Codex 优先读 app-server 的 `account/rateLimits/read`，拿不到时仍给出本地 `state_5.sqlite` 的线程 token 统计；Claude Code 只报告当前配置是否能代表 claude.ai 订阅额度，以及项目历史里缓存到的最近 quota 错误。 |
-| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
-| `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小幽在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
+| `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
+| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
+| `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
-| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>` | `{"seq", "cards": [...], "approvals": [...]}`：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`；`kind` 是 `tool`——这一步可以吗，或 `stall`——它很久没动静了、还等吗，0.5.4 起）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
+| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：`usage` 是现在的用量（和 `GET /v1/usage` 一样，0.6.0 起每次都带）；请求里带上手里那份用量的 `rev` 时，用量变了也会提前返回。其余的：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`；`kind` 是 `tool`——这一步可以吗，或 `stall`——它很久没动静了、还等吗，0.5.4 起）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 30 张卡。 |
 | `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`。 |
 | `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权。没有这个授权（或 Runtime 重启过）返回 `404`；已经回答过、或者那件事已经停了，返回 `409`。 |
@@ -583,12 +678,12 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 3. 没指定：替小幽说话的代理接这句话。对 Claude Code 是
    `claude -p --output-format json --append-system-prompt <人设 + 帮手清单 + 现在的事>
    --json-schema <reply、brief、mood、card、action> --tools "" --permission-mode dontAsk
-   [--model ...] [--resume <会话>]`。主人的话从标准输入送进去，不会出现在命令行参数里。
+   [--model ...] [--effort <主人或调用方点的档>] [--resume <会话>]`。主人的话从标准输入送进去，不会出现在命令行参数里。
    Runtime 照她回复里的 `action` 办，见[一件事一张卡](#一件事一张卡)。
 4. 后台的事：对 Claude Code 是 `claude -p --output-format stream-json --verbose
    [--append-system-prompt <人设> --json-schema <reply、brief、mood>] --permission-mode <模式>
    --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <state 里的临时文件>
-   --add-dir <目录> [--allowedTools ...] [--model ...] [--resume <这件事的会话>]`。启动目录
+   --add-dir <目录> [--allowedTools ...] [--model ...] [--effort <档>] [--resume <这件事的会话>]`。启动目录
    仍然是 `workdir`。Runtime 逐行读它的事件：一开始就记下会话编号，每一步操作记一行进展。
    取消或改要求时，它和它起的所有进程一起结束（Claude Code 跑命令时会另开会话，所以是按
    父子关系找出整棵树来结束的）。Runtime 自己被 `kill` 时也会先这样收尾。
@@ -624,6 +719,28 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 `remote` 代理（用 `echo`）以及互相登记时不会来回转；按对话排队、按 `client_id` 重试、
 令牌校验、HTTP 接口（包括 feed 的长轮询）；以及用一条假的识别命令跑的语音消息（格式
 检查、识别、识别为空和识别失败、录音的清理）。
+
+0.6.0 的档位和用量，测试验证了：配置里的档位和可换的模型怎么读、哪些写法被拒绝；交给
+假的 `claude`、`codex` 时命令行里的 `--effort`、`model_reasoning_effort` 和 app-server 的
+`effort`；点名之后的档位词；它们报出来的模型、额度和 token 怎么收；三种来源各自的换算；
+按账号记、过期清掉、落盘和重启；对着假的 Claude Code 和假的 app-server 真的问一次（包括
+不是订阅、版本太旧、没有登录这几种问不到的情况）；一轮开始和结束之间的差值；小幽的提示
+里有没有那几行；她选的档、调用方选的档、沿用上一次的档怎么到帮手手里和卡上；改要求时
+换档会重做；feed 里的用量和用量变了提前返回。
+
+2026-10-10 在云端工作区里对着真的 Claude Code 2.1.294 和 Codex 0.162.0 看过（都没有订阅
+登录）：`claude --help` 里有 `--effort <level>`（low、medium、high、xhigh、max）；一件带
+`--model sonnet --effort medium` 的事正常做完，事件流开头报了实际的模型，结果里的 token
+记到了卡上；`get_usage` 不发提示也有回答，1 秒之内，回的是“这个登录没有额度可看”；Codex
+的协议定义里 `turn/start` 有 `effort` 和 `model`，`thread/start` 的结果里有 `model`，没有
+登录时 `account/rateLimits/read` 回的是要先登录，带 `effort` 的一轮被它收下了（之后因为
+没有登录而失败）。
+
+**没有验证的**：订阅登录下 `get_usage` 和事件流里实际的数（形状是照 Claude Code 2.1.294
+自带的定义写的，没有见过真的回答）；Codex 订阅登录下的额度；它们和各自官方界面里的数
+对不对得上；`d5`、`d7` 在真实任务上有没有参考价值；替小幽说话的模型会不会照着提示选档、
+看着额度派活（这只能在真的对话里看）；在同一个会话里换模型或换档，Claude Code 和 Codex
+会不会不认。
 
 2026-10-09 用 Claude Code 2.1.295 在 Linux 上手动验证过 0.5 这一版（是在云端工作区里，
 不是在预期运行的那台电脑上），配置是一个放行了 `Bash` 的 `claude_code` 代理，通过 HTTP

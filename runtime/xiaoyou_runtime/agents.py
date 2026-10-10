@@ -79,12 +79,24 @@ class Control:
         # 没动静超过时限时用它问主人还等不等：(没动静了多少秒, 最后一步, 不用再问了吗)
         # → WAIT、STOP、SILENT（没人答）、MOVED（问的时候它自己又动了）。None 表示没有人可问
         self.stalled: Optional[Callable[[float, str, Callable[[], bool]], str]] = None
+        # 代理一知道这一轮实际用的是哪个模型就报（配置里没写模型时，只有它自己知道）
+        self.model: Callable[[str], None] = lambda name: None
+        # 代理看到订阅额度的消息时原样报上来：(哪一种, 内容)。哪一种见 usage.py
+        self.limits: Callable[[str, Any], None] = lambda kind, payload: None
+        # 这一轮花掉的 token：in（新读的）、out（写的）、cached（从缓存读的）
+        self.tokens: Dict[str, int] = {}
         # 代理每读到一行事件就 touch 一下；看门狗（Watchdog）靠这几样判断卡没卡住
         self._seen = time.monotonic()
         self._moves = 0
         self._busy: Set[str] = set()  # 已经开始、还没结束的操作
         self._step = ""  # 最后开始的那一步，原样
         self.patience = 1  # 主人每说一次“接着等”翻一倍
+
+    def spend(self, tokens: Optional[Dict[str, int]]) -> None:
+        """这一轮又花了这么多 token。"""
+        with self._lock:
+            for key, value in (tokens or {}).items():
+                self.tokens[key] = self.tokens.get(key, 0) + value
 
     def touch(self, began: Optional[str] = None, ended: Optional[str] = None,
               step: Optional[str] = None) -> None:
@@ -304,6 +316,9 @@ class Job:
     timeout: Optional[int] = None
     # 后台任务的遥控器；None 表示这一次不能中途叫停
     control: Optional[Control] = None
+    # 这一次用哪一档努力程度、哪个模型；None 用这个代理平时的。代理不认的会被忽略
+    effort: Optional[str] = None
+    model: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -322,6 +337,34 @@ def clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(1, limit - 1)].rstrip() + "…"
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def claude_tokens(usage: Any) -> Dict[str, int]:
+    """Claude Code 结果里的 usage → in / out / cached。"""
+    if not isinstance(usage, dict):
+        return {}
+    return {
+        "in": _count(usage.get("input_tokens")) + _count(usage.get("cache_creation_input_tokens")),
+        "out": _count(usage.get("output_tokens")),
+        "cached": _count(usage.get("cache_read_input_tokens")),
+    }
+
+
+def codex_tokens(usage: Any) -> Dict[str, int]:
+    """Codex 的一份 token 用量（app-server 的驼峰写法，或 exec 事件里的下划线写法）。"""
+    if not isinstance(usage, dict):
+        return {}
+    cached = _count(usage.get("cachedInputTokens", usage.get("cached_input_tokens")))
+    total = _count(usage.get("inputTokens", usage.get("input_tokens")))
+    return {
+        "in": max(0, total - cached),  # 它报的输入里含从缓存读的
+        "out": _count(usage.get("outputTokens", usage.get("output_tokens"))),
+        "cached": cached,
+    }
 
 
 def fields_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -473,6 +516,19 @@ class Agent:
     def run(self, job: Job) -> Outcome:
         raise NotImplementedError
 
+    def tier(self, job: Job) -> Tuple[Optional[str], Optional[str]]:
+        """这一次用的（模型，努力程度）；None 是不传，由工具自己定。
+
+        点的档不在这个代理能选的里面时当作没点。只说话的那一次（小幽接话）求的是快，
+        不带平时那一档，除非点了。
+        """
+        spec = self.spec
+        if job.effort in spec.efforts:
+            effort = job.effort
+        else:
+            effort = None if job.plain else spec.effort
+        return job.model or spec.model, effort
+
     def check(self) -> Optional[str]:
         """启动时的检查：有问题返回说明，没问题返回 None。不调用模型。"""
         return None
@@ -540,8 +596,11 @@ class ClaudeCodeAgent(Agent):
                 command += ["--add-dir", str(folder)]
             if spec.allowed_tools:
                 command += ["--allowedTools", ",".join(spec.allowed_tools)]
-        if spec.model:
-            command += ["--model", spec.model]
+        model, effort = self.tier(job)
+        if model:
+            command += ["--model", model]
+        if effort:
+            command += ["--effort", effort]
         if job.session_id:
             command += ["--resume", job.session_id]
         command += spec.extra_args
@@ -626,6 +685,11 @@ class ClaudeCodeAgent(Agent):
             if kind == "system" and event.get("subtype") == "init":
                 if isinstance(event.get("session_id"), str):
                     control.session(event["session_id"])
+                if isinstance(event.get("model"), str) and event["model"]:
+                    control.model(event["model"])
+            elif kind == "rate_limit_event":
+                # 订阅额度的状态：每次有变化它都会说一次，两个窗口各用了多少都在里面。
+                control.limits("claude_event", event.get("rate_limit_info"))
             elif kind == "assistant":
                 message = event.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
@@ -648,6 +712,7 @@ class ClaudeCodeAgent(Agent):
                         control.touch(ended=block["tool_use_id"])
             elif kind == "result":
                 final.update(event)
+                control.spend(claude_tokens(event.get("usage")))
 
         try:
             done = stream_command(
@@ -681,6 +746,19 @@ class ClaudeCodeAgent(Agent):
         # 没拿到结构化输出：整段文字就是结果。
         return Outcome(result, session_id, fields_from_text(result))
 
+    def _effort_problem(self) -> Optional[str]:
+        """这个版本的 Claude Code 认不认 --effort：看它的帮助。看不出来就当它认。"""
+        try:
+            done = run_command(list(self.spec.command) + ["--help"], None, None, 15,
+                               "Claude Code")
+        except AgentError:
+            return None
+        text = done.stdout or ""
+        if "--model" in text and "--effort" not in text:
+            return ("这个版本的 Claude Code 不认 --effort：升级它，或者把这个代理的 efforts 写成 []"
+                    "（不传努力程度）")
+        return None
+
     def check(self) -> Optional[str]:
         problem = self._command_problem()
         if problem is None:
@@ -691,6 +769,8 @@ class ClaudeCodeAgent(Agent):
             for key, path in self.spec.env_files.items():
                 if os.name == "posix" and path.stat().st_mode & 0o077:
                     return "%s 用的文件 %s 别人也能读：chmod 600 %s" % (key, path, path)
+        if problem is None and self.spec.effort and self._run is subprocess.run:
+            problem = self._effort_problem()
         if problem is None and self.spec.env.get("ANTHROPIC_BASE_URL"):
             keys = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
             if not any(self.spec.env.get(key) or key in self.spec.env_files or os.environ.get(key)
@@ -728,8 +808,11 @@ class CodexAgent(Agent):
         command += ["exec", "--json", "--skip-git-repo-check", "-o", str(last_message)]
         if spec.sandbox:
             command += ["--sandbox", spec.sandbox]
-        if spec.model:
-            command += ["--model", spec.model]
+        model, effort = self.tier(job)
+        if model:
+            command += ["--model", model]
+        if effort:
+            command += ["-c", 'model_reasoning_effort="%s"' % effort]
         command += spec.extra_args
         if job.session_id:
             command += ["resume", job.session_id]
@@ -740,7 +823,7 @@ class CodexAgent(Agent):
         if (self.spec.codex_mode == "app_server" and job.control is not None
                 and self._run is subprocess.run):
             from . import codex_app  # 放在这里：codex_app 要用这个模块里的东西
-            return codex_app.run(self.spec, job, job.control, self._env())
+            return codex_app.run(self.spec, job, job.control, self._env(), self.tier(job))
         text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
         env = self._env()
         with tempfile.TemporaryDirectory(prefix="xiaoyou-codex-") as folder:
@@ -755,7 +838,26 @@ class CodexAgent(Agent):
                 final = last_message.read_text(encoding="utf-8").strip()
             except OSError:
                 final = ""
+        if job.control is not None:
+            job.control.spend(self.spent(done.stdout))
         return self.parse(done.returncode, done.stdout, done.stderr, final, job.system is not None)
+
+    @staticmethod
+    def spent(stdout: str) -> Dict[str, int]:
+        """exec 的事件输出里每一轮结束时报的 token 用量，加起来。"""
+        total: Dict[str, int] = {}
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{") or "turn.completed" not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "turn.completed":
+                for key, value in codex_tokens(event.get("usage")).items():
+                    total[key] = total.get(key, 0) + value
+        return total
 
     def parse(self, returncode: int, stdout: str, stderr: str, final: str,
               speaking: bool = False) -> Outcome:

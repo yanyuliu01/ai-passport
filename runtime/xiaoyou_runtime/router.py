@@ -35,6 +35,8 @@ class Route:
     text: str
     # asked（调用方指定）、mention（话里点名）、router（路由器判断）、default
     reason: str
+    # 点名时紧跟着说的努力程度；没说就是 None
+    effort: Optional[str] = None
 
 
 def _labels(agents: List[Agent]) -> List[Tuple[str, str]]:
@@ -59,8 +61,8 @@ def _starts_with_label(text: str, label: str) -> bool:
     return not (rest and _ascii_word(rest[0]) and _ascii_word(label[-1]))
 
 
-def mention(text: str, agents: List[Agent]) -> Optional[Tuple[str, str]]:
-    """话里有没有在开头点名。有就返回（代理名，交给它的话）。"""
+def _named(text: str, agents: List[Agent]) -> Optional[Tuple[str, str, int]]:
+    """话里有没有在开头点名。有就返回（代理名，交给它的话，这段话里名字之后从哪开始）。"""
     body = text.strip()
     labels = _labels(agents)
     if body.startswith(("@", "＠")):
@@ -69,16 +71,62 @@ def mention(text: str, agents: List[Agent]) -> Optional[Tuple[str, str]]:
             if _starts_with_label(rest, label):
                 said = rest[len(label):].lstrip(MENTION_BREAK)
                 # 只点了名、没说事：把原话交过去，让代理自己问。
-                return name, said or body
+                return (name, said, 0) if said else (name, body, len(body))
         return None
     for word in sorted(ASK_WORDS, key=len, reverse=True):
         if body.startswith(word):
             rest = body[len(word):].lstrip()
             for label, name in labels:
                 if _starts_with_label(rest, label):
-                    return name, body
+                    return name, body, len(body) - len(rest) + len(label)
             return None
     return None
+
+
+def mention(text: str, agents: List[Agent]) -> Optional[Tuple[str, str]]:
+    """话里有没有在开头点名。有就返回（代理名，交给它的话）。"""
+    named = _named(text, agents)
+    return None if named is None else named[:2]
+
+
+# 点名之后紧跟着说的档位：“@codex 高档 看看这个”“让 codex 用高档看看这个”。
+EFFORT_WORDS = {
+    "最低档": "minimal", "低档": "low", "中档": "medium", "高档": "high", "特高档": "xhigh",
+    "最高档": "max", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high",
+    "xhigh": "xhigh", "max": "max",
+}
+
+
+def take_effort(text: str, start: int) -> Tuple[Optional[str], str]:
+    """text 里从 start 开始（名字之后）有没有紧跟着一个档位词。
+
+    有就返回（档，去掉这个词之后的话）。只认紧跟在名字后面的：前面带“用”字，或者后面
+    有空格、标点、或者话到此为止——“高档餐厅”不算。
+    """
+    head, tail = text[:start], text[start:]
+    body = tail.lstrip(MENTION_BREAK)
+    used = body.startswith("用")
+    lead = body[1:].lstrip() if used else body
+    for word in sorted(EFFORT_WORDS, key=len, reverse=True):
+        if not lead.lower().startswith(word):
+            continue
+        after = lead[len(word):]
+        if after and _ascii_word(after[0]) and word.isascii():
+            continue  # highlight 不是 high
+        if not used and after and after[0] not in MENTION_BREAK:
+            continue
+        if used and after.startswith("的"):
+            continue  # “用高档的……”说的是别的东西
+        after = after.lstrip(MENTION_BREAK)
+        for filler in ("来", "去"):
+            if used and after.startswith(filler):
+                after = after[1:].lstrip()
+                break
+        if not after:
+            return None, text  # 只说了档位、没说事：原话交过去
+        gap = " " if head and after and _ascii_word(head[-1]) and _ascii_word(after[0]) else ""
+        return EFFORT_WORDS[word], head + gap + after
+    return None, text
 
 
 class Router:
@@ -159,9 +207,10 @@ def decide(text: str, asked: Optional[str], agents: List[Agent], default: str,
     names = [agent.name for agent in agents]
     if asked is not None and asked in names:
         return Route(asked, text, "asked")
-    named = mention(text, agents)
+    named = _named(text, agents)
     if named is not None:
-        return Route(named[0], named[1], "mention")
+        effort, said = take_effort(named[1], named[2])
+        return Route(named[0], said, "mention", effort)
     choice = router.pick(text, agents, default)
     if choice is not None and choice in names:
         return Route(choice, text, "router")

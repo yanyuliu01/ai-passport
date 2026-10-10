@@ -29,6 +29,9 @@
       "workdir": "workdir",
       "config_dir": null,
       "model": null,
+      "models": [],
+      "effort": "medium",
+      "efforts": ["low", "medium", "high"],
       "permission_mode": "manual",
       "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
       "add_dirs": ["~"],
@@ -62,7 +65,10 @@
       "mode": "app_server",
       "approval_policy": "on-request",
       "sandbox": "read-only",
-      "model": null
+      "model": null,
+      "models": [],
+      "effort": "medium",
+      "efforts": ["low", "medium", "high"]
     },
     "tailor": {
       "type": "claude_code",
@@ -88,6 +94,10 @@
     "model_dir": "stt-models/sense-voice",
     "language": "auto",
     "threads": 2
+  },
+  "usage": {
+    "enabled": true,
+    "refresh_seconds": 300
   },
   "workspace": {
     "type": "none",

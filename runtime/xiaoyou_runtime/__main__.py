@@ -1,11 +1,12 @@
 """命令行入口：python3 -m xiaoyou_runtime --config config.json
 
 不带子命令就是启动服务。子命令 firmware 管这台电脑上留着的设备固件，
-见 python3 -m xiaoyou_runtime firmware --help。
+见 python3 -m xiaoyou_runtime firmware --help；子命令 usage 现在去问一次订阅额度。
 """
 
 import argparse
 import ipaddress
+import json
 import os
 import signal
 import socket
@@ -22,6 +23,7 @@ from .firmware import FirmwareStore
 from .server import make_server
 from .service import Service
 from .store import Store
+from .usage import EFFORT_NAMES, Usage
 from .xiaoyou import Xiaoyou
 
 
@@ -70,7 +72,13 @@ def main(argv=None) -> int:
         "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
     )
     parser.add_argument("--version", action="version", version=__version__)
-    firmware_cli.add_arguments(parser.add_subparsers(dest="command", metavar="子命令"))
+    commands = parser.add_subparsers(dest="command", metavar="子命令")
+    firmware_cli.add_arguments(commands)
+    usage_parser = commands.add_parser(
+        "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
+        description="现在去问一次 Claude Code 和 Codex 的订阅额度并打印。不调用模型，不用先启动服务。")
+    usage_parser.add_argument("--detail", action="store_true", help="多打印账号对应的配置目录")
+    usage_parser.add_argument("--json", action="store_true", help="打印原始数据（JSON）")
     arguments = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(arguments)
 
@@ -85,11 +93,21 @@ def main(argv=None) -> int:
         # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
         return firmware_cli.run(config, Path(args.config), args,
                                 arguments[arguments.index("firmware") + 1:])
+    if args.command == "usage":
+        meter = Usage(config, enabled=True)
+        meter.refresh()
+        if args.json:
+            print(json.dumps(meter.snapshot(), ensure_ascii=False, indent=1))
+        else:
+            print(meter.report(args.detail))
+        return 0
     agents = [agent_module.create(spec) for spec in config.agents]
     router = router_module.create(
         config, lambda message: print(message, file=sys.stderr))
     roster = "、".join(
-        "%s（%s%s）" % (agent.name, agent.type, "" if agent.speaks else "，只干活")
+        "%s（%s%s%s）" % (
+            agent.name, agent.type, "" if agent.speaks else "，只干活",
+            "，%s" % EFFORT_NAMES[agent.spec.effort] if agent.spec.effort else "")
         for agent in agents
     )
     if args.check:
@@ -144,7 +162,9 @@ def main(argv=None) -> int:
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 2
-    xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config))
+    # 只说一句就走（--once）时不主动去问额度：那要多起一个进程，而这句话多半用不上。
+    xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config),
+                      Usage(config, enabled=config.usage_enabled and args.once is None))
 
     if args.once is not None:
         if args.agent is not None and not xiaoyou.has(args.agent):

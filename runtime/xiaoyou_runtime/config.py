@@ -44,6 +44,12 @@ class AgentSpec:
     workdir: Optional[Path] = None
     model: Optional[str] = None
     extra_args: List[str] = field(default_factory=list)
+    # claude_code / codex：派活时除了 model 之外还可以换成哪些模型；空的就是不能按次换
+    models: List[str] = field(default_factory=list)
+    # claude_code / codex：这个帮手平时用的努力程度；None 表示 Runtime 不传（用工具自己的默认）
+    effort: Optional[str] = None
+    # 派活时可以选的努力程度；空的就是不能选，也不传
+    efforts: List[str] = field(default_factory=list)
     # claude_code
     config_dir: Optional[Path] = None
     # 后台做事时的权限模式。manual：该问的都问，问到主人那里
@@ -114,6 +120,9 @@ class Config:
     # 小幽在共享工作区里署的名字
     workspace_author: str = "xiaoyou"
     workspace_api_base: str = "https://api.notion.com"
+    # 用量：要不要主动去查订阅额度（不查时仍然记下帮手干活时自己报出来的），多久查一次
+    usage_enabled: bool = True
+    usage_refresh_seconds: int = 300
     # 配置文件所在的目录；相对路径、stt.command 和 router.command 都以它为准
     base_dir: Path = Path(".")
     # 读配置时发现的、不妨碍启动但值得让人知道的事
@@ -134,6 +143,16 @@ CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 CODEX_MODES = ("app_server", "exec")
 CODEX_APPROVAL_POLICIES = ("untrusted", "on-request", "never")
 WORKSPACE_TYPES = ("none", "notion")
+# 努力程度，从省到费。各工具认的不一样：Claude Code 没有 minimal，Codex 没有 max。
+EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+EFFORTS_BY_TYPE = {
+    "claude_code": ("low", "medium", "high", "xhigh", "max"),
+    "codex": ("minimal", "low", "medium", "high", "xhigh"),
+}
+DEFAULT_EFFORTS = ["low", "medium", "high"]
+DEFAULT_EFFORT = "medium"
+MAX_MODELS = 8
+MAX_MODEL_CHARS = 64
 NOTION_ID = re.compile(r"^[0-9a-fA-F]{32}$")
 STT_ENGINES = ("none", "sense_voice", "command")
 STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
@@ -262,6 +281,10 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             raw.get("timeout_seconds", default_timeout), where + ".timeout_seconds"
         ),
     )
+    if kind in ("echo", "remote"):
+        for key in ("effort", "efforts", "models"):
+            if key in raw:
+                raise ConfigError("%s 是 %s 类型：没有 %s 这一项" % (where, kind, key))
     if kind == "echo":
         return AgentSpec(**common)
     if kind == "remote":
@@ -289,6 +312,9 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
     if kind == "command":
         if shared["model"] is not None or shared["extra_args"]:
             raise ConfigError("%s 是 command 类型：参数直接写进 command，不用 model 和 extra_args" % where)
+        for key in ("effort", "efforts", "models"):
+            if key in raw:
+                raise ConfigError("%s 是 command 类型：没有 %s，参数直接写进 command" % (where, key))
         return AgentSpec(**common, **shared)
     if kind == "codex":
         sandbox = _optional_string(raw.get("sandbox", "read-only"), where + ".sandbox")
@@ -305,11 +331,14 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         codex_home = env.get("XIAOYOU_CODEX_CONFIG_DIR") or codex_home
         return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
                          config_dir=_path(codex_home, base) if codex_home else None,
+                         **_tiers(raw, kind, where, shared["model"], shared["extra_args"], False),
                          **common, **shared)
 
     config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
     config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
     extra_env = _env(raw.get("env", {}), where + ".env")
+    env_files = _env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files")
+    elsewhere = "ANTHROPIC_BASE_URL" in extra_env or "ANTHROPIC_BASE_URL" in env_files
     return AgentSpec(
         config_dir=_path(config_dir, base) if config_dir else None,
         permission_mode=_expect(
@@ -319,10 +348,58 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
                   for folder in _strings(raw.get("add_dirs", ["~"]), where + ".add_dirs")],
         allowed_tools=_strings(raw.get("allowed_tools", []), where + ".allowed_tools"),
         env=extra_env,
-        env_files=_env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files"),
+        env_files=env_files,
+        **_tiers(raw, kind, where, shared["model"], shared["extra_args"], elsewhere),
         **common,
         **shared,
     )
+
+
+def _tiers(raw: Dict[str, Any], kind: str, where: str, model: Optional[str],
+           extra_args: List[str], elsewhere: bool) -> Dict[str, Any]:
+    """读一个帮手的档位：平时的努力程度、派活时可以选的几档、可以换的模型。
+
+    elsewhere 表示这个 Claude Code 帮手指到了别的服务（比如 DeepSeek）：那边认不认努力程度
+    不一定，所以不写就不传；自己写了 efforts 才传。
+    """
+    allowed = EFFORTS_BY_TYPE[kind]
+    if "efforts" in raw:
+        efforts = _strings(raw["efforts"], where + ".efforts")
+    else:
+        efforts = [] if elsewhere else list(DEFAULT_EFFORTS)
+    for level in efforts:
+        if level not in allowed:
+            raise ConfigError("%s.efforts 里的 %s 不行：%s 类型只能是 %s" % (
+                where, level, kind, "、".join(allowed)))
+    if len(set(efforts)) != len(efforts):
+        raise ConfigError("%s.efforts 里有重复的" % where)
+    # 按从省到费排好：提示和界面里都是这个顺序。
+    efforts = [level for level in EFFORT_LEVELS if level in efforts]
+    effort = _optional_string(raw.get("effort"), where + ".effort")
+    if not efforts:
+        if effort is not None:
+            raise ConfigError("%s.efforts 是空的（不传努力程度），就不要再写 effort" % where)
+    else:
+        if effort is None:
+            effort = DEFAULT_EFFORT if DEFAULT_EFFORT in efforts else efforts[0]
+        if effort not in efforts:
+            raise ConfigError("%s.effort 是 %s，但它不在 efforts（%s）里" % (
+                where, effort, "、".join(efforts)))
+        for argument in extra_args:
+            if argument.split("=", 1)[0] == "--effort" or "model_reasoning_effort" in argument:
+                raise ConfigError(
+                    "%s.extra_args 里不要再写努力程度（%s）：用这个帮手的 effort；"
+                    "不想让 Runtime 传就把 efforts 写成 []" % (where, argument))
+    models = _strings(raw.get("models", []), where + ".models")
+    if len(models) > MAX_MODELS:
+        raise ConfigError("%s.models 最多写 %d 个" % (where, MAX_MODELS))
+    for name in models:
+        if name != name.strip() or len(name) > MAX_MODEL_CHARS or any(ch.isspace() for ch in name):
+            raise ConfigError("%s.models 里的模型名不能有空白，最多 %d 个字符" % (
+                where, MAX_MODEL_CHARS))
+    if len(set(models)) != len(models):
+        raise ConfigError("%s.models 里有重复的" % where)
+    return dict(effort=effort, efforts=efforts, models=[name for name in models if name != model])
 
 
 def _legacy_agents(raw: Dict[str, Any], env: Mapping[str, str], notices: List[str]) -> Dict[str, Any]:
@@ -545,6 +622,11 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         workspace.get("api_base", "https://api.notion.com"), str, "workspace.api_base")
     if not workspace_api_base.startswith(("http://", "https://")):
         raise ConfigError("workspace.api_base 要写成 http:// 或 https:// 开头的地址")
+    usage = _expect(raw.get("usage", {}), dict, "usage")
+    usage_enabled = _expect(usage.get("enabled", True), bool, "usage.enabled")
+    usage_refresh = _expect(usage.get("refresh_seconds", 300), int, "usage.refresh_seconds")
+    if not 60 <= usage_refresh <= 86400:
+        raise ConfigError("usage.refresh_seconds 应该在 60 到 86400 之间")
     if workspace_type == "notion":
         if workspace_token is None:
             raise ConfigError(
@@ -589,6 +671,8 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         workspace_log_database=databases["log_database"],
         workspace_author=workspace_author,
         workspace_api_base=workspace_api_base,
+        usage_enabled=usage_enabled,
+        usage_refresh_seconds=usage_refresh,
         base_dir=base,
         notices=notices,
     )

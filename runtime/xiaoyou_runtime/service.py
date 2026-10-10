@@ -20,6 +20,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 
 from .agents import AgentError
 from .cards import ACTIVE
+from .config import EFFORT_LEVELS
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -36,6 +37,8 @@ MAX_EVENT_CHARS = 200
 MAX_HOP = 3
 # 同时在处理的对话数上限；超过的对话等前面的让出位置。
 MAX_BUSY_CONVERSATIONS = 4
+# 等卡的时候隔这么久看一眼用量变没变。
+FEED_USAGE_SECONDS = 5.0
 
 
 class RequestError(Exception):
@@ -71,31 +74,48 @@ class Service:
         xiaoyou.cards.subscribe(self._card_changed)
 
     def agents(self) -> List[Dict[str, Any]]:
-        """这台 Runtime 上小幽能用的代理，给客户端显示和点名用。"""
+        """这台 Runtime 上小幽能用的代理，给客户端显示和点名用。
+
+        model 是它实际用的模型（跑过才知道，没跑过是配置里写的，都没有是 None）；effort 是
+        平时的努力程度，efforts / models 是派活时可以选的。"""
+        tiers = {entry["name"]: entry for entry in self._xiaoyou.usage.snapshot()["agents"]}
         return [
             {
                 "name": agent.name, "type": agent.type, "description": agent.description,
                 "speaks": agent.speaks, "default": agent.name == self._xiaoyou.default_agent,
+                "model": tiers[agent.name]["model"] if agent.name in tiers else agent.spec.model,
+                "effort": agent.spec.effort, "efforts": list(agent.spec.efforts),
+                "models": list(agent.spec.models),
             }
             for agent in self._xiaoyou.agents()
         ]
 
+    def usage(self, refresh: bool = False) -> Dict[str, Any]:
+        """订阅额度和每个帮手的模型、档位。refresh 为 True 时现在就去问一次再答（慢）。"""
+        if refresh:
+            self._xiaoyou.usage.refresh()
+        else:
+            self._xiaoyou.usage.poke()
+        return self._xiaoyou.usage.snapshot()
+
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
                agent: Any = None, hop: Any = 0, card: Any = None,
-               pin: Any = False) -> Dict[str, Any]:
+               pin: Any = False, effort: Any = None, model: Any = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
-        pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。"""
+        pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
+        effort / model 是给这句话选的努力程度和模型，交给帮手时用。"""
         if not isinstance(text, str) or not text.strip():
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
         return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
-                             pin is True)
+                             pin is True, effort, model)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
-                     card: Any = None, pin: Any = False) -> Dict[str, Any]:
+                     card: Any = None, pin: Any = False, effort: Any = None,
+                     model: Any = None) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
@@ -106,11 +126,11 @@ class Service:
                 "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
             )
         return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card,
-                             pin is True)
+                             pin is True, effort, model)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
                  client_id: Any, agent: Any, hop: Any, card: Any = None,
-                 pin: bool = False) -> Dict[str, Any]:
+                 pin: bool = False, effort: Any = None, model: Any = None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         if card is not None:
             # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
@@ -124,6 +144,7 @@ class Service:
                     agent, "、".join(item["name"] for item in self.agents())))
         if isinstance(hop, bool) or not isinstance(hop, int) or not 0 <= hop <= MAX_HOP:
             raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
+        effort, model = self._tier(agent, effort, model)
         with self._changed:
             if self._closed:
                 raise RequestError("Runtime 正在关闭")
@@ -157,6 +178,9 @@ class Service:
                 "card": card,
                 # 主人是在那件事里面说的：这句话一定归到它
                 "pin": pin and card is not None,
+                # 给这句话选的努力程度和模型；没选就是 None
+                "effort": effort,
+                "model": model,
                 # 接这句话的代理；交给了帮手时是那个帮手
                 "agent": None,
                 # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
@@ -178,6 +202,22 @@ class Service:
             self._line_up(conversation, message_id)
         return snapshot
 
+    def _tier(self, agent: Optional[str], effort: Any, model: Any) -> Any:
+        """检查调用方选的努力程度和模型。点了帮手时必须是那个帮手能选的。"""
+        specs = {item.name: item.spec for item in self._xiaoyou.agents()}
+        if effort is not None:
+            if effort not in EFFORT_LEVELS:
+                raise RequestError("effort 只能是 %s 之一" % "、".join(EFFORT_LEVELS))
+            if agent is not None and effort not in specs[agent].efforts:
+                raise RequestError("%s 不能选 %s 这一档（它可选的：%s）" % (
+                    agent, effort, "、".join(specs[agent].efforts) or "没有"))
+        if model is not None:
+            model = _name(model, "model")
+            if agent is not None and model != specs[agent].model and model not in specs[agent].models:
+                raise RequestError("%s 不能换成 %s（它可换的：%s）" % (
+                    agent, model, "、".join(specs[agent].models) or "没有"))
+        return effort, model
+
     def _line_up(self, conversation: str, item: Union[str, Callable[[], None]]) -> None:
         """调用时已经拿着锁：排到这个对话的线上，线上没人在处理就起一个。"""
         self._lanes.setdefault(conversation, deque()).append(item)
@@ -197,14 +237,30 @@ class Service:
 
     # ---- 卡 ----
 
-    def feed(self, conversation: Any, after: Any = 0, wait: float = 0.0) -> Dict[str, Any]:
-        """这个对话里序号比 after 大的卡，和还在等回答的授权；没有变化时最多等 wait 秒。"""
+    def feed(self, conversation: Any, after: Any = 0, wait: float = 0.0,
+             usage: Any = None) -> Dict[str, Any]:
+        """这个对话里序号比 after 大的卡，和还在等回答的授权；没有变化时最多等 wait 秒。
+
+        每次都带上现在的用量。usage 是调用方手里那份用量的 rev：带了它，用量变了也会提前返回。"""
         conversation = _name(conversation, "conversation")
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
-        result = self._xiaoyou.cards.changed(conversation, after, wait)
+        if usage is not None and (isinstance(usage, bool) or not isinstance(usage, int)):
+            raise RequestError("usage 应该是整数")
+        meter = self._xiaoyou.usage
+        meter.poke()  # 有人在看：太久没问过额度就在后台问一次
+        deadline = time.monotonic() + max(0.0, wait)
+        while True:
+            remaining = deadline - time.monotonic()
+            # 等卡的同时隔一会儿看一眼用量变没变。
+            pause = remaining if usage is None else min(remaining, FEED_USAGE_SECONDS)
+            result = self._xiaoyou.cards.changed(conversation, after, pause)
+            if (result["cards"] or deadline - time.monotonic() <= 0
+                    or (usage is not None and meter.rev != usage)):
+                break
         # 授权出现和有了答案都会让那张卡变一次，所以等卡就等到了授权。
         result["approvals"] = self._xiaoyou.approvals.pending(conversation)
+        result["usage"] = meter.snapshot()
         return result
 
     def approve(self, approval_id: str, decision: Any) -> Optional[bool]:
@@ -371,6 +427,7 @@ class Service:
             text, conversation = message["text"], message["conversation"]
             asked, hop, card = message["asked"], message["hop"], message["card"]
             pin = bool(message.get("pin"))
+            effort, model = message.get("effort"), message.get("model")
             audio = self._audio.pop(message_id, None)
         if audio is not None:
             self._update(message_id, status="transcribing")
@@ -400,6 +457,7 @@ class Service:
         try:
             turn = self._xiaoyou.hear(
                 text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
+                effort=effort, model=model,
                 report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
             )
         except AgentError as error:

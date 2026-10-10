@@ -49,6 +49,9 @@ class Task:
     after: Deque[str] = field(default_factory=deque)
     cancelled: bool = False
     queued: bool = False
+    # 这件事用哪一档努力程度、哪个模型；None 用帮手平时的
+    effort: Optional[str] = None
+    model: Optional[str] = None
 
     @property
     def session_key(self) -> str:
@@ -93,19 +96,30 @@ class Tasks:
         thread.start()
         return True
 
-    def amend(self, card: str, mode: str, text: str) -> Optional[str]:
-        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；没在做返回 None。"""
+    def amend(self, card: str, mode: str, text: str, effort: Optional[str] = None,
+              model: Optional[str] = None) -> Optional[str]:
+        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；没在做返回 None。
+
+        effort / model 不是 None 时，之后的几轮换成这一档、这个模型。正在跑的那一轮换不了：
+        改要求（redo）时为了换档会停掉重做，不走中途追加。
+        """
         with self._lock:
             task = self._active.get(card)
             if task is None:
                 return None
+            switched = ((effort is not None and effort != task.effort)
+                        or (model is not None and model != task.model))
+            if effort is not None:
+                task.effort = effort
+            if model is not None:
+                task.model = model
             if mode == "after":
                 if len(task.after) < MAX_PENDING:
                     task.after.append(text)
                 return "after"
             control = task.control
         # 中途追加要和帮手通信，不拿着锁做。
-        if control.steer(text):
+        if not switched and control.steer(text):
             return "steer"
         with self._lock:
             if self._active.get(card) is not task:
@@ -173,6 +187,7 @@ class Tasks:
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
                     system=task.system, schema=task.schema, hop=task.hop, control=control,
+                    effort=task.effort, model=task.model,
                 ))
             except AgentError as failure:
                 error = str(failure)

@@ -2,12 +2,15 @@
 
   GET  /healthz                         不需要令牌，只说明服务活着
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
-  GET  /v1/usage                        Codex / Claude Code 本机用量和可见额度状态
-  POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?} → 202 + 消息
-  POST /v1/voice?conversation=&client_id=&agent=&card=&pin=   请求体是 16 位单声道 WAV → 202 + 消息
+  GET  /v1/usage?refresh=1              订阅额度还剩多少，每个帮手用的模型和档位；refresh 现问一次
+  POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?,
+                                         "effort"?, "model"?} → 202 + 消息
+  POST /v1/voice?conversation=&client_id=&agent=&card=&pin=&effort=&model=
+                                        请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
                                         带 rev 时记录一有变化就返回
-  GET  /v1/feed?conversation=&after=<序号>&wait=<秒>   之后变过的卡；没有变化时最多等 wait 秒
+  GET  /v1/feed?conversation=&after=<序号>&wait=<秒>&usage=<rev>
+                                        之后变过的卡，和现在的用量；没有变化时最多等 wait 秒
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
@@ -38,7 +41,6 @@ from . import __version__
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from .service import MAX_AUDIO_BYTES, RequestError, Service
-from .usage import UsageMonitor
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_HISTORY_BODY_BYTES = 1024 * 1024
@@ -50,7 +52,6 @@ def make_server(config: Config, service: Service,
     expected = ("Bearer " + config.token).encode("utf-8")
     if firmware is None:
         firmware = FirmwareStore(config.state_dir)
-    usage = UsageMonitor(config)
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -199,10 +200,10 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
-            if parts == ["v1", "usage"]:
-                self._send(200, usage.snapshot())
-                return
             query = parse_qs(url.query)
+            if parts == ["v1", "usage"]:
+                self._send(200, service.usage(query.get("refresh", [""])[0] in ("1", "true")))
+                return
             if parts == ["v1", "cards"]:
                 try:
                     cards = service.cards(query.get("conversation", ["default"])[0])
@@ -221,7 +222,13 @@ def make_server(config: Config, service: Service,
                     self._fail(400, "after 应该是整数")
                     return
                 try:
-                    feed = service.feed(query.get("conversation", ["default"])[0], after, asked[0])
+                    seen = int(query["usage"][0]) if "usage" in query else None
+                except ValueError:
+                    self._fail(400, "usage 应该是整数")
+                    return
+                try:
+                    feed = service.feed(query.get("conversation", ["default"])[0], after, asked[0],
+                                        seen)
                 except RequestError as error:
                     self._fail(400, str(error))
                     return
@@ -262,6 +269,7 @@ def make_server(config: Config, service: Service,
                     query.get("client_id", [None])[0], query.get("agent", [None])[0],
                     query.get("card", [None])[0],
                     query.get("pin", [""])[0] in ("1", "true"),
+                    query.get("effort", [None])[0], query.get("model", [None])[0],
                 )
             except RequestError as error:
                 self._fail(400, str(error))
@@ -297,6 +305,7 @@ def make_server(config: Config, service: Service,
                         body.get("text"), body.get("conversation", "default"),
                         body.get("client_id"), body.get("agent"), body.get("hop", 0),
                         body.get("card"), body.get("pin") is True,
+                        body.get("effort"), body.get("model"),
                     )
                     self._send(202, message)
                     return

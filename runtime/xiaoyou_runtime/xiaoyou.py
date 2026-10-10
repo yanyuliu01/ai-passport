@@ -30,9 +30,10 @@ from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, 
                      Outcome, clip, span)
 from .approvals import STALL, Approvals, Gate
 from .cards import ACTIVE, Cards, title_from
-from .config import Config
+from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
+from .usage import EFFORT_NAMES, Usage
 from .workspace import Workspace
 
 MOODS = ("idle", "busy", "ask", "happy", "oops")
@@ -113,6 +114,14 @@ def lane_schema(helpers: List[Agent]) -> Dict[str, Any]:
     if helpers:
         action["properties"]["agent"] = {
             "type": "string", "enum": [agent.name for agent in helpers]}
+        # 这一次用哪一档努力程度、换哪个模型：帮手里有人能选才有这两项。
+        efforts = [level for level in EFFORT_LEVELS
+                   if any(level in agent.spec.efforts for agent in helpers)]
+        models = sorted({name for agent in helpers for name in agent.spec.models})
+        if efforts:
+            action["properties"]["effort"] = {"type": "string", "enum": efforts}
+        if models:
+            action["properties"]["model"] = {"type": "string", "enum": models}
     schema["properties"]["card"] = {"type": "string"}
     schema["properties"]["action"] = action
     return schema
@@ -145,10 +154,48 @@ def describe_card(card: Dict[str, Any], now: float) -> str:
     return "- %s「%s」：%s" % (card["id"], card["title"], status)
 
 
+def tier_rules(helpers: List[Agent], quota: bool) -> List[str]:
+    """派活时怎么选档位、怎么看额度。帮手里没人能选档、也没有额度可看（quota）时是空的。"""
+    efforts = [level for level in EFFORT_LEVELS
+               if any(level in agent.spec.efforts for agent in helpers)]
+    models = any(agent.spec.models for agent in helpers)
+    if not efforts and not models and not quota:
+        return []
+    parts = ["", "## 档位和额度",
+             "帮手后面〔〕里是它用的模型、努力程度，和它的订阅额度还剩多少。"]
+    if efforts:
+        parts.append(
+            "交给帮手（start、amend）时可以在 action 里写 effort，指定这一次的努力程度：%s。"
+            "只能写那个帮手可选的；不写就用它平时的。越高想得越多，也越费额度。" % "、".join(
+                "%s 是%s" % (level, EFFORT_NAMES[level]) for level in efforts))
+        parts.append(
+            "- 主人说了用哪一档就按主人的；说“仔细点”“好好想想”就比平时高一档，"
+            "说“随便看看”“快一点”就低一档。")
+        parts.append(
+            "- 主人没说时：查一下、看一眼、改个小地方用 low；一般的事不写 effort；只有明显难的"
+            "（要动很多文件、查了几次都查不出原因）才用 high，并在 reply 里说一句这次用了高档。")
+    if models:
+        parts.append("- 主人说了换哪个模型，在 action 里写 model（只能写那个帮手可换的）；没说就不写。")
+    if quota:
+        parts.append("- 几个帮手都能做时，交给额度剩得多的那个：两个窗口里看更紧的那个。")
+        if efforts:
+            parts.append("- 帮手写着“快用完了”：主人没指定档位的话比平时低一档，并在 reply 里说一句。")
+        parts.append(
+            "- 帮手写着“用完了”：不要交给它，除非主人点了它的名。能做这件事的帮手都用完了，"
+            "就直接告诉主人什么时候重置，action 写 none。")
+        parts.append("- 写着“用量还不知道”的不算用完，照常用。")
+    return parts
+
+
 def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                 cards: List[Dict[str, Any]], focus: Optional[str], now: float,
-                pinned: bool = False) -> str:
-    """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。"""
+                pinned: bool = False, notes: Optional[Dict[str, str]] = None,
+                quota: bool = False) -> str:
+    """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。
+
+    notes 是每个帮手的模型、档位和额度（一句话），有就写在它后面；quota 表示帮手里有
+    订阅额度可看的。"""
+    notes = notes or {}
     parts = [persona, ""]
     parts.append("## 你怎么做事")
     parts.append(
@@ -185,8 +232,11 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("## 你的帮手")
     if helpers:
         for agent in helpers:
-            parts.append("- %s：%s" % (agent.name, agent.description or "（没有说明）"))
+            note = notes.get(agent.name)
+            parts.append("- %s：%s%s" % (agent.name, agent.description or "（没有说明）",
+                                        "〔%s〕" % note if note else ""))
         parts.append("自己能答的直接答，不要为了用而用。一句话只能交给一个帮手。")
+        parts.extend(tier_rules(helpers, quota))
     else:
         parts.append("现在没有别的帮手，你只能靠自己回答。做不到的事直接说做不到。")
     parts.append("")
@@ -291,8 +341,13 @@ def retry_note(problem: str) -> str:
 class Xiaoyou:
     def __init__(self, config: Config, agents: List[Agent], store: Store,
                  router: Optional[routing.Router] = None,
-                 workspace: Optional[Workspace] = None):
+                 workspace: Optional[Workspace] = None, usage: Optional[Usage] = None):
         self._config = config
+        # 用量和档位。没给就用一个不主动去问的：帮手自己报上来的照记。
+        self._usage = usage if usage is not None else Usage(
+            config, enabled=False, specs=[agent.spec for agent in agents])
+        # 正在做的每一轮在用量那边的记号：遥控器 → 记号
+        self._runs: Dict[Control, Dict[str, Any]] = {}
         # 共享工作区：每次把活交给别的代理、每次有结果，都在那里留一条。
         self._workspace = workspace if workspace is not None else Workspace()
         self._agents: Dict[str, Agent] = {agent.name: agent for agent in agents}
@@ -320,6 +375,10 @@ class Xiaoyou:
     def approvals(self) -> Approvals:
         return self._approvals
 
+    @property
+    def usage(self) -> Usage:
+        return self._usage
+
     def agents(self) -> List[Agent]:
         return [self._agents[name] for name in self._order]
 
@@ -345,17 +404,22 @@ class Xiaoyou:
 
     def hear(self, text: str, conversation: str, turn_id: str, asked: Optional[str] = None,
              card: Optional[str] = None, hop: int = 0, report: Optional[Report] = None,
-             pin: bool = False) -> Turn:
+             pin: bool = False, effort: Optional[str] = None,
+             model: Optional[str] = None) -> Turn:
         """接主人的一句话。很快返回：要花时间的部分已经交到后台，结果之后出现在卡上。
 
         card 是主人说这句话时屏幕上的那件事（没有就是 None）。pin 表示主人是打开那件事、
-        在它里面说的：这句话一定归到它，不另开卡。失败时抛 AgentError，消息可以直接给主人看。
+        在它里面说的：这句话一定归到它，不另开卡。effort / model 是调用方给这句话选的努力
+        程度和模型：交给帮手时用，那个帮手不认的当作没选。失败时抛 AgentError，消息可以
+        直接给主人看。
         """
         say: Report = report if report is not None else (lambda kind, agent, detail: None)
         available = self._available(hop)
         if not available:
             raise AgentError("这台 Runtime 上没有能接这句话的代理")
         route = routing.decide(text, asked, available, self._config.default_agent, self._router)
+        # 话里紧跟着名字说的档位，比调用方选的更近。
+        effort = route.effort or effort
         first = self._agents[route.agent]
         say("route", first.name, route.reason)
         focus = self._cards.get(card) if card else None
@@ -366,15 +430,17 @@ class Xiaoyou:
             # 指定了由谁做（或者默认代理只会干活）：不用问模型，直接交过去。
             if pinned and (focus["agent"] in (None, first.name)
                            or not self._tasks.active(focus["id"])):
-                return self._resume(focus, first, route, text, conversation, turn_id, hop, say)
-            return self._assign(first, route, text, conversation, turn_id, hop, say)
+                return self._resume(focus, first, route, text, conversation, turn_id, hop, say,
+                                    effort, model)
+            return self._assign(first, route, text, conversation, turn_id, hop, say, effort, model)
         return self._converse(first, text, conversation, turn_id, focus, available, hop, say,
-                              pinned)
+                              pinned, effort, model)
 
     # ---- 指定了由谁做 ----
 
     def _assign(self, agent: Agent, route: routing.Route, said: str, conversation: str,
-                turn_id: str, hop: int, say: Report) -> Turn:
+                turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
+                model: Optional[str] = None) -> Turn:
         reply = "交给 %s 了" % agent.name
         card = self._cards.open(conversation, route.text, "working", agent.name)
         self._cards.update(card["id"], said=said, say=reply, brief=reply, mood="busy")
@@ -388,17 +454,18 @@ class Xiaoyou:
             task = background(recent, task)
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
-        self._launch(card["id"], agent, task, conversation, hop)
+        self._launch(card["id"], agent, task, conversation, hop, effort, model)
         return Turn(reply, reply, "busy", agent.name, card["id"], True)
 
     def _resume(self, card: Dict[str, Any], agent: Agent, route: routing.Route, said: str,
-                conversation: str, turn_id: str, hop: int, say: Report) -> Turn:
+                conversation: str, turn_id: str, hop: int, say: Report,
+                effort: Optional[str] = None, model: Optional[str] = None) -> Turn:
         """主人在一件事里面点名让谁接着做：不另开卡，接在这件事上。"""
         task = route.text
         if route.reason == "mention" and agent.speaks:
             task = named_note(agent.name, task)
         reply = "好，告诉 %s 了" % agent.name
-        done = self._tasks.amend(card["id"], "after", task)
+        done = self._amend(card, agent, "after", task, effort, model)
         if done is None:
             # 这件事现在没人在做：让被点名的代理接着做一轮。它没做过这件事时带上背景。
             if not self._store.session("%s/%s" % (conversation, card["id"]), agent.name):
@@ -407,7 +474,7 @@ class Xiaoyou:
                     task = background(recent, task)
             self._cards.update(card["id"], said=said, say=reply, brief=reply, mood="busy",
                                state="working", edits=card["edits"] + 1)
-            self._launch(card["id"], agent, task, conversation, hop)
+            self._launch(card["id"], agent, task, conversation, hop, effort, model)
         else:
             self._cards.update(card["id"], said=said, say=reply, edits=card["edits"] + 1)
             self._workspace.note(card, agent.name, task, done)
@@ -419,8 +486,11 @@ class Xiaoyou:
 
     def _converse(self, lead: Agent, text: str, conversation: str, turn_id: str,
                   focus: Optional[Dict[str, Any]], available: List[Agent], hop: int,
-                  say: Report, pinned: bool = False) -> Turn:
+                  say: Report, pinned: bool = False, effort: Optional[str] = None,
+                  model: Optional[str] = None) -> Turn:
         now = time.time()
+        # 太久没问过额度的账号，放到后台问一次；这句话用手头的数，不等它。
+        self._usage.poke()
         cards = self._cards.recent(conversation)
         listed = [card for card in cards if card["state"] in ACTIVE]
         listed += [card for card in cards if card["state"] not in ACTIVE][-RECENT_FINISHED_CARDS:]
@@ -428,7 +498,9 @@ class Xiaoyou:
         if focus is not None and all(card["id"] != focus["id"] for card in listed):
             listed.insert(0, focus)
         system = lane_prompt(self._config.persona, self._config.brief_max_chars, available,
-                             listed, focus["id"] if focus is not None else None, now, pinned)
+                             listed, focus["id"] if focus is not None else None, now, pinned,
+                             self._usage.notes(),
+                             any(self._usage.account(agent.name) for agent in available))
         schema = lane_schema(available)
         outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True)
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
@@ -469,14 +541,16 @@ class Xiaoyou:
             self._cards.update(target["id"], said=text, say=reply)
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
         elif kind == "amend":
-            done = self._tasks.amend(target["id"], plan["mode"], plan["task"])
             worker = target["agent"] or lead.name
+            done = self._amend(target, self._agents[worker], plan["mode"], plan["task"],
+                               plan.get("effort") or effort, plan.get("model") or model)
             if done is None:
                 # 那件事已经不在做了：接着它原来的会话再做一轮。
                 self._cards.update(target["id"], said=text, say=reply, brief=clip(
                     reply, self._config.brief_max_chars), mood="busy", state="working",
                     edits=target["edits"] + 1)
-                self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop)
+                self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop,
+                             plan.get("effort") or effort, plan.get("model") or model)
             else:
                 self._cards.update(target["id"], said=text, say=reply, edits=target["edits"] + 1)
                 self._workspace.note(target, worker, plan["task"], done)
@@ -494,7 +568,8 @@ class Xiaoyou:
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._config.brief_max_chars))
             say("handoff", helper.name, reply)
-            self._launch(target["id"], helper, plan["task"], conversation, hop)
+            self._launch(target["id"], helper, plan["task"], conversation, hop,
+                         plan.get("effort") or effort, plan.get("model") or model)
             started = True
             turn = shape(reply, brief, "busy", self._config.brief_max_chars, helper.name,
                          target["id"], True)
@@ -523,6 +598,10 @@ class Xiaoyou:
             if target is None:
                 return None, "%s 要在 card 里写明是哪件事的编号" % kind
         plan: Dict[str, Any] = {"type": kind, "card": target}
+        # 她给这一次选的努力程度和模型。那个帮手不认的，交出去时当作没选（见 _tier）。
+        for key in ("effort", "model"):
+            if isinstance(action.get(key), str) and action[key].strip():
+                plan[key] = action[key].strip()
         names = [agent.name for agent in available]
         task = action.get("task") if isinstance(action.get("task"), str) else ""
         task = task.strip()[:MAX_TASK_CHARS]
@@ -583,11 +662,52 @@ class Xiaoyou:
 
     # ---- 后台的事 ----
 
-    def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int) -> None:
+    def _tier(self, agent: Agent, card: Optional[Dict[str, Any]], effort: Optional[str],
+              model: Optional[str]) -> Any:
+        """这一次交给这个帮手用的（努力程度，点名要换的模型）。
+
+        点的档、点的模型它不认时当作没点。没点时：这件事上一次就是它做的，沿用上一次的；
+        否则用它平时的。模型是 None 表示用它平时的那个。
+        """
+        spec = agent.spec
+        same = card is not None and card.get("agent") == agent.name
+        if effort not in spec.efforts:
+            effort = card["effort"] if same and card.get("effort") in spec.efforts else spec.effort
+        if model == spec.model:
+            model = None  # 点的就是它平时的那个
+        elif model not in spec.models:
+            model = (card["model_asked"]
+                     if same and card.get("model_asked") in spec.models else None)
+        return effort, model
+
+    def _amend(self, card: Dict[str, Any], agent: Agent, mode: str, text: str,
+               effort: Optional[str], model: Optional[str]) -> Optional[str]:
+        """对一件正在做的事补充或改要求；顺带换档、换模型时卡上也跟着改。没在做返回 None。"""
+        if effort not in agent.spec.efforts:
+            effort = None
+        if model not in agent.spec.models:
+            model = None
+        done = self._tasks.amend(card["id"], mode, text, effort, model)
+        if done is not None:
+            changes: Dict[str, Any] = {}
+            if effort is not None and effort != card.get("effort"):
+                changes["effort"] = effort
+            if model is not None and model != card.get("model_asked"):
+                changes.update(model_asked=model, model=model)
+            if changes:
+                self._cards.update(card["id"], **changes)
+        return done
+
+    def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int,
+                effort: Optional[str] = None, model: Optional[str] = None) -> None:
         speaking = agent.speaks
+        effort, model = self._tier(agent, self._cards.get(card_id), effort, model)
+        known = next((entry["model"] for entry in self._usage.snapshot()["agents"]
+                      if entry["name"] == agent.name), None)
         card = self._cards.update(card_id, state="working", agent=agent.name,
                                   started_at=time.time(),
-                                  queued=self._config.max_parallel > 0, fresh=True)
+                                  queued=self._config.max_parallel > 0, fresh=True,
+                                  effort=effort, model=model or known, model_asked=model)
         if card is not None:
             self._workspace.task(card, agent.name, task)
         self._tasks.start(Task(
@@ -595,6 +715,7 @@ class Xiaoyou:
             system=task_prompt(self._config.persona, self._config.brief_max_chars)
             if speaking else None,
             schema=reply_schema() if speaking else None,
+            effort=effort, model=model,
         ))
 
     def _begun(self, task: Task) -> None:
@@ -606,6 +727,19 @@ class Xiaoyou:
         """一轮开始前：进展记到卡上；要问“可以吗”的帮手，给它一把通到主人那里的钥匙。"""
         control.progress = lambda line, card=task.card: self._cards.update(card, progress=line)
         control.scratch = self._config.state_dir
+        name = task.agent.name
+
+        def model(seen: str, task: Task = task) -> None:
+            # 它实际用的模型：记到用量那边，卡上写的不一样就改过来。
+            self._usage.saw_model(task.agent.name, seen, usual=task.model is None)
+            card = self._cards.get(task.card)
+            if card is not None and card["model"] != seen:
+                self._cards.update(task.card, model=seen)
+
+        control.model = model
+        control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
+        # 这一轮开始：记下额度现在剩多少（太久没问过就先问一次），做完好算花了多少。
+        self._runs[control] = self._usage.begin(name, task.model)
         if task.agent.type == "claude_code":
             # Claude Code 的询问由另一个进程（权限询问工具）送进来，要一把钥匙。
             control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
@@ -638,9 +772,20 @@ class Xiaoyou:
         control.stalled = stalled
 
     def _release(self, task: Task, control: Control) -> None:
-        """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了。"""
+        """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了；记下这一轮花了多少。"""
         self._gate.shut(control.gate)
         self._approvals.drop(task.card)
+        run = self._runs.pop(control, None)
+        if run is None:
+            return
+        spent = dict(control.tokens)
+        spent.update(self._usage.end(run))
+        card = self._cards.get(task.card)
+        if card is not None and any(spent.values()):
+            cost = dict(card["cost"] or {})
+            for key, value in spent.items():
+                cost[key] = cost.get(key, 0) + value
+            self._cards.update(task.card, cost=cost)
 
     def _approval_changed(self, card_id: str, approval_id: Optional[str]) -> None:
         """一件事在等主人点头，或者不用等了。"""

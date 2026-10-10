@@ -105,6 +105,8 @@ Relative paths are resolved against the directory of the configuration file.
 | `workspace.bus_database` | none | The id of the "bus" database (the 32 characters in its link). Required for `notion`. |
 | `workspace.log_database` | none | The id of the "log" database. Leave it out to write the bus only. |
 | `workspace.author` | `xiaoyou` | The name Xiaoyou signs with in the shared workspace. |
+| `usage.enabled` | `true` | Whether the runtime asks for subscription quota on its own (since 0.6.0). With `false` no process is started for that; what helpers report while they work is still recorded. See [Usage](#usage-what-is-left-of-each-subscription). |
+| `usage.refresh_seconds` | `300` | How often to ask again while a client is watching (60 to 86400). |
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
@@ -141,8 +143,8 @@ Keys by type:
 
 | Type | What it does | Keys |
 | --- | --- | --- |
-| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env`, `env_files` |
-| `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args` |
+| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` (see [Tiers](#tiers-model-and-effort)) |
+| `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args`, `models`, `effort`, `efforts` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
@@ -225,6 +227,15 @@ The order is fixed:
 3. The router has an opinion: its choice.
 4. Otherwise: the default agent.
 
+Right after the name the owner may say which effort this one job runs at
+(since 0.6.0): `@codex high look at this error`. The words are `low`,
+`medium`, `high`, `xhigh`, `max`, `minimal` and their Chinese counterparts
+(`EFFORT_WORDS` in [`xiaoyou_runtime/router.py`](xiaoyou_runtime/router.py);
+the Chinese version of this page lists them, with the spoken form that puts a
+"use" word in between). Only a word directly after the name counts, and it is
+removed from what is handed to the helper. A level the helper may not use
+falls back to its usual one. See [Tiers](#tiers-model-and-effort).
+
 The first three rules all mean "it was decided who does this": the runtime
 does not ask a model. It opens a card, Xiaoyou says one sentence to the effect
 of "handed to codex", and that agent works in the background. The message
@@ -280,6 +291,120 @@ the owner's approval; see [Approvals](#approvals)),
 `state/cards.json`, the latest 50. Things that were in progress when the
 runtime restarts cannot be continued; they are marked `failed` with a note
 saying the runtime was restarted.
+
+A card whose work went to a helper has three more fields (since 0.6.0):
+`effort` is the effort the thing runs at, `model` the model actually used, and
+`cost` what it has spent so far. The next two sections explain them.
+
+### Tiers: model and effort
+
+Since 0.6.0 every `claude_code` and `codex` helper has a usual effort, and one
+job can run at another:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `effort` | `medium` | The effort this helper usually works at. |
+| `efforts` | `["low", "medium", "high"]` | The levels a job may choose from. Claude Code knows `low`, `medium`, `high`, `xhigh`, `max`; Codex knows `minimal`, `low`, `medium`, `high`, `xhigh`. Add higher ones yourself. `[]` means the runtime passes no effort and the tool's own default applies. |
+| `models` | `[]` | Models a job may switch to, besides `model`. Empty means no switching per job. |
+
+A `claude_code` helper pointed at another service through `env` (DeepSeek, for
+example) is the exception: without `efforts` in its configuration it gets
+`[]`, because that service may not accept an effort. Write the levels once you
+know it does. `command`, `remote` and `echo` have none of the three keys.
+While `efforts` is not empty, `extra_args` must not carry `--effort` or
+`model_reasoning_effort`.
+
+**Upgrading to 0.6.0 makes these two kinds of helper work at medium effort by
+default**, no longer at the tool's own default (which depends on the tool's
+configuration and version, and is often higher). The same job may be done less
+deeply and cost less. When that is not enough, tell her to redo the thing at
+high effort, or raise the helper's `effort`.
+
+How it reaches the tool: Claude Code gets `--effort <level>` and
+`--model <model>`; Codex gets `-c model_reasoning_effort="<level>"` and
+`--model` in `exec` mode, and `effort` and `model` in every `turn/start` in
+`app_server` mode. The call in which Xiaoyou herself takes a sentence does not
+carry the usual effort: it has to be quick.
+
+The effort of a job is decided in this order:
+
+1. The level the owner said right after the name (see
+   [Who gets a message](#who-gets-a-message)).
+2. Xiaoyou's choice in her reply: the `action` of `start` and `amend` may carry
+   `effort` and `model`. Her prompt says: follow the owner when he names a
+   level; otherwise use low for a quick look, write nothing for ordinary
+   things, and use high only for what is clearly hard, saying so.
+3. The caller's choice: `effort` and `model` in the interface.
+4. None of these: the level this helper used the last time it worked on this
+   thing, otherwise its usual one.
+
+A level or model the helper does not offer counts as not chosen. Changing the
+level while changing the request of a thing in progress stops the current
+round and does it over at the new level, instead of adding to the turn.
+
+The model a helper really runs on is reported by the helper: Claude Code says
+it at the start of its event stream, Codex when the thread is opened. So the
+model at work is known even when `model` is empty in the configuration. It is
+known after the first run and kept in `state/usage.json`.
+
+### Usage: what is left of each subscription
+
+Since 0.6.0 the runtime keeps, for every subscription login, how much is left
+in its two windows: the five-hour one and the weekly one. Three things use it:
+Xiaoyou when she hands out work, the phone and the device for display, and the
+cost recorded on a card.
+
+Quota belongs to a **login**, not to a helper: helpers that share a
+configuration directory share one quota. Only subscription logins count:
+`claude_code` helpers that are not pointed at another service through `env`
+and carry no key in `env`, and `codex` helpers. Other helpers have no quota;
+only their model is recorded.
+
+The numbers come from three places. The runtime reads no credentials itself;
+it asks the tools:
+
+| Source | When | What it gives |
+| --- | --- | --- |
+| Claude Code's event stream while it works (`rate_limit_event`) | every job given to it | how much of both windows is used and when they reset; said again whenever a number moves |
+| Claude Code's `get_usage` (`claude -p --input-format stream-json` with one control request; no model is called) | when the numbers are old; before a job starts; the `usage` command | the same numbers as `/usage` inside Claude Code |
+| Codex's app-server (`account/rateLimits/read`, and `account/rateLimits/updated` while it works) | at the start and end of every turn; when the numbers are old | how much of both windows is used and when they reset |
+
+Claude Code marks `get_usage` as experimental and the two windows in the event
+stream as internal. If either stops matching, that login shows as unknown with
+the reason in `note`, and nothing else is affected.
+
+The state of a login is `ok`, `warn` (a window has less than 20% left), `out`
+(a window is used up) or `unknown` (no number at all). A number is dropped once
+its window has reset.
+
+When Xiaoyou takes a sentence, each helper in her list carries a note in
+Chinese after its description: the model, the usual effort and the levels to
+choose from, then what is left of both windows and when each resets (the
+Chinese version of this page shows one).
+
+Her prompt says: when several helpers could do the job, give it to the one
+with more left; for one that is nearly used up, go one level down unless the
+owner named a level, and say so; do not give work to one that is used up
+unless the owner named it; unknown does not mean used up. The paths that
+decide who does a thing without asking a model (named in the interface, named
+in the sentence, the router) are not affected: the runtime never swaps the
+helper or lowers the level on the owner's behalf.
+
+After every round the card's `cost` grows by that round: `in`, `out` and
+`cached` are tokens (newly read, written, read from the cache), `d5` and `d7`
+are the percentage points the two windows went down. When one login works on
+several things at once, `d5` and `d7` cover all of them together and are only
+a rough figure; quota percentages are whole numbers, so small jobs often
+show 0.
+
+The numbers can be read without starting the service:
+
+```bash
+python3 -m xiaoyou_runtime --config config.json usage
+```
+
+It asks now and prints what is left of each login, why a login could not be
+asked, and each helper's model and effort. `--json` prints the raw data.
 
 ### Shared workspace
 
@@ -454,12 +579,12 @@ responses are JSON.
 | Request | Result |
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
-| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`: the agents Xiaoyou can use on this runtime. |
-| `GET /v1/usage` | `{"updated_at", "codex": [...], "claude": [...]}`: locally visible Codex and Claude Code usage/quota state. Codex reads app-server `account/rateLimits/read` when available and still reports local `state_5.sqlite` thread token totals. Claude Code reports whether the current configuration can represent claude.ai subscription quota, plus the latest cached quota error found in project history. |
-| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
-| `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyou can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
+| `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}` (since 0.6.0). `accounts` has one entry per subscription login: `{"id", "kind", "agents", "state", "windows": [{"kind": "5h" or "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`; `left` is the percentage that remains, `null` when unknown. `agents` has one entry per helper: `{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`; `running` is how many rounds it is working on and `now` the model of the one in progress. Without `refresh` the numbers at hand are returned (and asked for again in the background when they are old); with it they are asked for now, which takes a few seconds. See [Usage](#usage-what-is-left-of-each-subscription). |
+| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
+| `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
-| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": [...]}`: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: `usage` is the usage at this moment (as in `GET /v1/usage`; always present since 0.6.0), and a request that carries the `rev` of the usage it already has also returns early when usage changes. The rest: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
 | `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
 | `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
@@ -729,7 +854,8 @@ network interfaces, check that the address is the one the phone can reach.
 3. Otherwise the agent that speaks as Xiaoyou takes it. For Claude Code that is
    `claude -p --output-format json --append-system-prompt <persona + helpers +
    the things at the moment> --json-schema <reply, brief, mood, card, action>
-   --tools "" --permission-mode dontAsk [--model ...] [--resume <session>]`.
+   --tools "" --permission-mode dontAsk [--model ...] [--effort <a level the
+   owner or caller named>] [--resume <session>]`.
    The owner's text is sent on standard input, never as a command-line
    argument. The runtime does what the `action` in her reply says; see
    [One thing, one card](#one-thing-one-card).
@@ -738,7 +864,7 @@ network interfaces, check that the address is the one the phone can reach.
    --json-schema <reply, brief, mood>] --permission-mode <mode>
    --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <a temporary
    file in state> --add-dir <directory> [--allowedTools ...] [--model ...]
-   [--resume <the session of this thing>]`. It still starts in `workdir`. The
+   [--effort <level>] [--resume <the session of this thing>]`. It still starts in `workdir`. The
    runtime reads its events line by line: the session identifier is recorded
    right at the start, and every step becomes a line of progress. When the
    thing is cancelled or its request changes, it is ended together with every
@@ -795,6 +921,40 @@ conversation, retry by `client_id`, token checks, the HTTP interface
 (including the long poll on the feed); and voice messages with a fake
 recognition command (format checks, transcription, empty and failed
 recognition, clean-up of recordings).
+
+For the tiers and usage of 0.6.0 the tests verify: how levels and switchable
+models are read from the configuration and which forms are rejected; `--effort`,
+`model_reasoning_effort` and the app-server's `effort` on what is given to the
+fake `claude` and `codex`; a level word after a name; collecting the model,
+quota and tokens they report; the conversion of each of the three sources;
+keeping quota per login, dropping expired numbers, writing to disk and
+restarting; really asking a fake Claude Code and a fake app-server (including
+the cases where nothing can be asked: not a subscription, a version that is
+too old, not signed in); the difference between the start and the end of a
+round; the lines in Xiaoyou's prompt; how the level she picks, the level the
+caller picks and the level carried over from the last round reach the helper
+and the card; redoing a round when the level changes with the request; usage
+in the feed, and the feed returning early when usage changes.
+
+On 2026-10-10 this was looked at in a cloud workspace against the real Claude
+Code 2.1.294 and Codex 0.162.0, neither signed in with a subscription:
+`claude --help` lists `--effort <level>` (low, medium, high, xhigh, max); a job
+with `--model sonnet --effort medium` completed, its event stream named the
+model actually used at the start, and the tokens in its result reached the
+card; `get_usage` answered without a prompt in under a second, saying this
+login has no quota to show; Codex's protocol definition has `effort` and
+`model` in `turn/start` and `model` in the result of `thread/start`; signed
+out, `account/rateLimits/read` answered that a login is required, and a turn
+with `effort` was accepted (and then failed for lack of a login).
+
+**Not verified**: the actual numbers from `get_usage` and from the event
+stream under a subscription login (their shape follows the definitions shipped
+in Claude Code 2.1.294; no real answer has been seen); Codex quota under a
+subscription login; whether either matches the tool's own display; whether
+`d5` and `d7` are useful on real jobs; whether the model that speaks as
+Xiaoyou follows the prompt when it picks a level or weighs quota (only real
+conversations can show that); whether Claude Code and Codex accept another
+model or level within one continued session.
 
 Version 0.5 was checked by hand on 2026-10-09 with Claude Code 2.1.295 on
 Linux, in a cloud workspace rather than on the intended computer, with one

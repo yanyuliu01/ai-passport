@@ -83,6 +83,11 @@ class DeepSeekClaudeCodeAgent(ClaudeCodeAgent):
 
     def _call_env(self, job):
         env = self._env()
+        if job.model and job.model != self.spec.model:
+            # A model picked for this one job (one of the agent's `models`).
+            if not job.model.startswith("deepseek-"):
+                raise AgentError("DeepSeek 的 models 里只能写 DeepSeek 的模型，如 deepseek-v4-flash")
+            env.update({name: job.model for name in MODEL_VARIABLES})
         if job.plain:
             # DeepSeek ignores thinking.budget_tokens. Explicitly turn thinking
             # off for the short conversation/planning call, not for tool jobs.
@@ -128,7 +133,7 @@ class DeepSeekClaudeCodeAgent(ClaudeCodeAgent):
         if job.plain:
             names.update(("CLAUDE_CODE_DISABLE_THINKING", "MAX_THINKING_TOKENS",
                           "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_RETRIES", "API_TIMEOUT_MS"))
-        return {"model": self.spec.model, "env": {name: env[name] for name in names}}
+        return {"model": env["ANTHROPIC_MODEL"], "env": {name: env[name] for name in names}}
 
     @staticmethod
     def _trace(data):

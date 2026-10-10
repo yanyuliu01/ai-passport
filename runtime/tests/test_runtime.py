@@ -59,14 +59,42 @@ mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if mode == "crash":
     sys.stderr.write("not logged in\n")
     sys.exit(1)
+if "--input-format" in args:
+    # Asked about usage, the way a client asks without sending a prompt: no model is called.
+    usage = os.environ.get("FAKE_CLAUDE_USAGE", "ok")
+    for line in text.splitlines():
+        ask = json.loads(line)
+        assert ask["type"] == "control_request" and ask["request"] == {
+            "subtype": "get_usage", "skip_behaviors": True}, ask
+        if usage == "mute":
+            sys.stderr.write("something else went wrong\n"); sys.exit(3)
+        if usage == "old":
+            answer = {"subtype": "error", "request_id": ask["request_id"],
+                      "error": "Unsupported control request subtype: get_usage"}
+        else:
+            limits = None if usage == "api" else {
+                "five_hour": {"utilization": float(os.environ.get("FAKE_CLAUDE_USED", "42.4")),
+                              "resets_at": "2033-05-18T03:33:20.5Z"},
+                "seven_day": {"utilization": 19.0, "resets_at": "2033-05-21T00:00:00+00:00"},
+                "seven_day_opus": None}
+            answer = {"subtype": "success", "request_id": ask["request_id"], "response": {
+                "session": {"total_cost_usd": 0}, "subscription_type": None if usage == "api" else "max",
+                "rate_limits_available": usage != "api", "rate_limits": limits, "behaviors": None}}
+        print(json.dumps({"type": "control_response", "response": answer}), flush=True)
+    sys.exit(0)
 if "stream-json" in args:
     import subprocess, time
     def emit(event):
         print(json.dumps(event), flush=True)
     session = args[args.index("--resume") + 1] if "--resume" in args else "s-stream"
     print("a line that is not JSON", flush=True)
-    emit({"type": "system", "subtype": "init", "session_id": session})
+    emit({"type": "system", "subtype": "init", "session_id": session,
+          "model": args[args.index("--model") + 1] if "--model" in args else "claude-fake-1"})
     emit({"type": "stream_event", "event": {}})
+    emit({"type": "rate_limit_event", "rate_limit_info": {
+        "status": "allowed", "rateLimitType": "five_hour", "resetsAt": 2000000000,
+        "unifiedWindows": {"five_hour": {"utilization": 0.4449, "resetsAt": 2000000000},
+                           "seven_day": {"utilization": 0.2, "resetsAt": 2000500000}}}})
     emit({"type": "assistant", "message": {"content": [
         {"type": "text", "text": "let me look"},
         {"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": "ls  -la\n/tmp"}}]}})
@@ -103,7 +131,9 @@ if "stream-json" in args:
     emit({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "name": "StructuredOutput", "input": {}}]}})
     out = {"type": "result", "is_error": mode == "stream-error", "session_id": session,
-           "result": "plain " + text + " [" + verdict + "]"}
+           "result": "plain " + text + " [" + verdict + "]",
+           "usage": {"input_tokens": 100, "cache_creation_input_tokens": 20,
+                     "cache_read_input_tokens": 3000, "output_tokens": 40}}
     if "--json-schema" in args:
         out["structured_output"] = {"reply": "did " + text + " [" + verdict + "]", "brief": "did", "mood": "happy"}
     emit(out)
@@ -135,6 +165,8 @@ if mode == "failed":
     sys.exit(1)
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "draft"}}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "final " + text}}))
+print(json.dumps({"type": "turn.completed", "usage": {
+    "input_tokens": 900, "cached_input_tokens": 700, "output_tokens": 50}}))
 if mode != "no-file":
     with open(args[args.index("-o") + 1], "w", encoding="utf-8") as handle:
         handle.write("written " + text + "\n")
@@ -152,13 +184,29 @@ def note(entry):
             handle.write(json.dumps(entry) + "\n")
 def send(message):
     sys.stdout.write(json.dumps(message) + "\n"); sys.stdout.flush()
+LIMITS = {"rateLimits": {"limitId": "codex", "planType": "plus",
+    "primary": {"usedPercent": 37, "windowDurationMins": 300, "resetsAt": 2000000000},
+    "secondary": {"usedPercent": 12, "windowDurationMins": 10080, "resetsAt": 2000500000}}}
+asked_limits = 0
 def read():
-    line = sys.stdin.readline()
-    if not line:
-        sys.exit(0)
-    message = json.loads(line)
-    note({"got": message})
-    return message
+    global asked_limits
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            sys.exit(0)
+        message = json.loads(line)
+        note({"got": message})
+        if message.get("method") != "account/rateLimits/read":
+            return message
+        # Like the real one: answered whenever it is asked, also in the middle of a turn.
+        asked_limits += 1
+        if os.environ.get("FAKE_CODEX_LIMITS") == "none":
+            send({"id": message["id"], "error": {
+                "code": -32600, "message": "codex account authentication required to read rate limits"}})
+        else:
+            answer = json.loads(json.dumps(LIMITS))
+            answer["rateLimits"]["primary"]["usedPercent"] += 3 * (asked_limits - 1)
+            send({"id": message["id"], "result": answer})
 note({"args": args, "home": os.environ.get("CODEX_HOME"), "cwd": os.getcwd()})
 if args[:1] != ["app-server"] or mode == "old":
     sys.stderr.write("error: unrecognized subcommand 'app-server'\n"); sys.exit(2)
@@ -176,7 +224,8 @@ thread = opened["params"].get("threadId") or "thread-1"
 if mode == "no-thread":
     send({"id": opened["id"], "error": {"code": -32600, "message": "no rollout found for thread"}})
     read()
-send({"id": opened["id"], "result": {"thread": {"id": thread}}})
+send({"id": opened["id"], "result": {"thread": {"id": thread}, "model": "gpt-fake",
+                                    "reasoningEffort": "high"}})
 send({"method": "thread/started", "params": {"thread": {"id": thread}}})
 begun = read()
 text = begun["params"]["input"][0]["text"]
@@ -189,11 +238,19 @@ def item(kind, **fields):
 def done(body):
     send({"method": "item/completed", "params": {"item": body, "threadId": thread, "turnId": "turn-1"}})
 def finish(status="completed", error=None, say=None):
+    for spent in (300, 200):
+        send({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": thread, "turnId": "turn-1", "tokenUsage": {
+                "total": {"inputTokens": 99999, "cachedInputTokens": 0, "outputTokens": 9,
+                          "reasoningOutputTokens": 0, "totalTokens": 99999},
+                "last": {"inputTokens": spent, "cachedInputTokens": 100, "outputTokens": 30,
+                         "reasoningOutputTokens": 10, "totalTokens": spent + 30}}}})
     if say is not None:
         done({"type": "agentMessage", "id": "m-draft", "text": "draft"})
         done({"type": "agentMessage", "id": "m-final", "text": say})
     send({"method": "turn/completed", "params": {"threadId": thread, "turn": {
         "id": "turn-1", "status": status, "error": error, "items": []}}})
+    read()  # stays for whatever is asked after the turn; leaves when its input is closed
     sys.exit(0)
 done(item("userMessage"))
 verdicts = []
@@ -276,10 +333,12 @@ class TempDirCase(unittest.TestCase):
 class Scripted(agents_module.Agent):
     """A stand-in agent: records every job; answers from a script, or by echoing."""
 
-    def __init__(self, name, speaks=True, kind="echo", aliases=()):
+    def __init__(self, name, speaks=True, kind="echo", aliases=(), effort=None, efforts=(),
+                 models=(), model=None):
         super().__init__(config_module.AgentSpec(
             name=name, type=kind, description=name + " helper", aliases=list(aliases),
-            speaks=speaks, timeout_seconds=60,
+            speaks=speaks, timeout_seconds=60, effort=effort, efforts=list(efforts),
+            models=list(models), model=model,
         ))
         self.jobs = []
         self.started = []
@@ -287,6 +346,8 @@ class Scripted(agents_module.Agent):
         self.gate.set()
         self.fail_on = None
         self.script = []
+        # What it tells the runtime while it works: {"model", "limits": (kind, payload), "tokens"}.
+        self.reports = {}
 
     @property
     def texts(self):
@@ -297,6 +358,12 @@ class Scripted(agents_module.Agent):
         if job.text.endswith("slow"):
             self.gate.wait(5)
         self.jobs.append(job)
+        if job.control is not None and self.reports:
+            if "model" in self.reports:
+                job.control.model(job.model or self.reports["model"])
+            if "limits" in self.reports:
+                job.control.limits(*self.reports["limits"])
+            job.control.spend(self.reports.get("tokens"))
         if self.fail_on is not None and self.fail_on in job.text:
             raise AgentError("boom")
         if job.text.endswith("explode"):
@@ -311,13 +378,13 @@ class Scripted(agents_module.Agent):
                        {"reply": "re:" + job.text, "brief": "b:" + job.text, "mood": "happy"})
 
 
-def make_xiaoyou(folder, agents, router=None, workspace=None, **settings):
+def make_xiaoyou(folder, agents, router=None, workspace=None, usage=None, **settings):
     """Xiaoyou over stand-in agents; the first one is the default and the voice."""
     loaded = config_module.load(write_config(folder), {})
     loaded = dataclasses.replace(
         loaded, default_agent=agents[0].name, voice_agent=agents[0].name, **settings)
     store = Store(loaded.state_dir)
-    return Xiaoyou(loaded, agents, store, router, workspace), store
+    return Xiaoyou(loaded, agents, store, router, workspace, usage), store
 
 
 class ConfigTests(TempDirCase):
@@ -444,6 +511,51 @@ class ConfigTests(TempDirCase):
             self.load(env={"XIAOYOU_PORT": "abc"})
         with self.assertRaises(config_module.ConfigError):
             config_module.load(self.folder / "nope.json", {})
+
+    def test_how_hard_a_helper_works_and_which_models_it_may_switch_to(self):
+        def load(**agents):
+            return {spec.name: spec for spec in config_module.load(
+                write_config(self.folder, agents=agents), {}).agents}
+
+        specs = load(
+            claude={"type": "claude_code"},
+            codex={"type": "codex", "effort": "high", "efforts": ["xhigh", "low", "high"],
+                   "model": "gpt-a", "models": ["gpt-b", "gpt-a"]},
+            deepseek={"type": "claude_code", "env": {"ANTHROPIC_BASE_URL": "https://x.invalid",
+                                                     "ANTHROPIC_AUTH_TOKEN": "k"}},
+            quiet={"type": "codex", "efforts": [], "extra_args": ["-c", "model_reasoning_effort=low"]},
+            echo={"type": "echo"},
+        )
+        # Medium unless told otherwise, with three levels to choose from.
+        self.assertEqual((specs["claude"].effort, specs["claude"].efforts, specs["claude"].models),
+                         ("medium", ["low", "medium", "high"], []))
+        # Levels are kept from the cheapest up; the usual model is not listed among the others.
+        self.assertEqual((specs["codex"].effort, specs["codex"].efforts, specs["codex"].models),
+                         ("high", ["low", "high", "xhigh"], ["gpt-b"]))
+        # A Claude Code pointed at another service is sent no effort unless its config says so.
+        self.assertEqual((specs["deepseek"].effort, specs["deepseek"].efforts), (None, []))
+        self.assertEqual((specs["quiet"].effort, specs["echo"].effort), (None, None))
+        self.assertEqual(load(c={"type": "claude_code", "efforts": ["high", "max"]})["c"].effort, "high")
+        for bad in (
+            {"type": "claude_code", "efforts": ["minimal"]},      # Claude Code has no such level
+            {"type": "codex", "efforts": ["max"]},                # nor has Codex this one
+            {"type": "codex", "effort": "high", "efforts": ["low"]},
+            {"type": "codex", "effort": "low", "efforts": []},
+            {"type": "codex", "efforts": ["low", "low"]},
+            {"type": "claude_code", "extra_args": ["--effort", "high"]},
+            {"type": "codex", "extra_args": ["-c", "model_reasoning_effort=high"]},
+            {"type": "codex", "models": ["a b"]},
+            {"type": "codex", "models": ["a", "a"]},
+            {"type": "command", "command": ["cat"], "effort": "low"},
+            {"type": "echo", "models": ["x"]},
+        ):
+            with self.assertRaises(config_module.ConfigError, msg=bad):
+                load(a=bad)
+        for bad in ({"refresh_seconds": 5}, {"enabled": "yes"}):
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load(write_config(self.folder, usage=bad), {})
+        loaded = config_module.load(write_config(self.folder, usage={"enabled": False}), {})
+        self.assertEqual((loaded.usage_enabled, loaded.usage_refresh_seconds), (False, 300))
 
     def test_agents_and_who_speaks(self):
         loaded = self.load(
@@ -684,6 +796,38 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(seen[-1]["timeout"], 3600)
         self.assertNotIn("--tools", agent.command(Job("hi")))
 
+    def test_the_effort_and_the_model_of_one_job(self):
+        def flags(job):
+            args = self.agent.command(job)
+            return (args[args.index("--model") + 1],
+                    args[args.index("--effort") + 1] if "--effort" in args else None)
+
+        # Work runs at the agent's usual effort; one job can ask for another level or model.
+        self.assertEqual(flags(Job("x")), ("some-model", "medium"))
+        self.assertEqual(flags(Job("x", effort="high", model="other-model")), ("other-model", "high"))
+        # A level this agent may not use counts as not asked for.
+        self.assertEqual(flags(Job("x", effort="max")), ("some-model", "medium"))
+        # When she only talks the answer has to come fast: no effort unless one was asked for.
+        self.assertEqual(flags(Job("x", plain=True)), ("some-model", None))
+        self.assertEqual(flags(Job("x", plain=True, effort="low")), ("some-model", "low"))
+        # The flags come before the owner's own extra arguments.
+        self.assertEqual(self.agent.command(Job("x"))[-2:], ["--max-turns", "9"])
+        silent = agents_module.create(dataclasses.replace(
+            self.config.agents[0], effort=None, efforts=[], model=None))
+        self.assertNotIn("--effort", silent.command(Job("x", effort="high")))
+        self.assertNotIn("--model", silent.command(Job("x")))
+
+    def test_what_it_says_about_model_quota_and_tokens_is_passed_on(self):
+        control = agents_module.Control()
+        models, limits = [], []
+        control.model, control.limits = models.append, lambda kind, payload: limits.append((kind, payload))
+        self.agent.run(Job("count", control=control, model="picked-model"))
+        self.assertEqual(models, ["picked-model"])
+        self.assertEqual([(kind, sorted(payload["unifiedWindows"])) for kind, payload in limits],
+                         [("claude_event", ["five_hour", "seven_day"])])
+        # Fresh input and what was written count; what came from the cache is kept apart.
+        self.assertEqual(control.tokens, {"in": 120, "out": 40, "cached": 3000})
+
     def test_plain_work_gets_no_persona_and_returns_the_raw_result(self):
         outcome = self.agent.run(Job("count the files", session_id="s-prev"))
         self.assertEqual((outcome.text, outcome.session_id, outcome.fields),
@@ -705,6 +849,17 @@ class ClaudeCodeAgentTests(TempDirCase):
         os.environ["FAKE_CLAUDE_MODE"] = "error"
         with self.assertRaisesRegex(AgentError, "usage limit reached"):
             self.agent.run(Job("x"))
+
+    def test_a_claude_code_too_old_for_effort_is_named_at_start(self):
+        old = self.folder / "old_claude.py"
+        old.write_text("import sys\nprint('Usage: claude [options]\\n  --model <model>  Model')\n",
+                       encoding="utf-8")
+        spec = dataclasses.replace(self.config.agents[0], command=[sys.executable, str(old)])
+        self.assertIn("不认 --effort", agents_module.create(spec).check())
+        # No effort is passed: nothing to complain about. Help that says nothing either way passes.
+        self.assertIsNone(agents_module.create(dataclasses.replace(
+            spec, effort=None, efforts=[])).check())
+        self.assertIsNone(self.agent.check())
 
     def test_missing_command_is_explained_at_start_and_when_used(self):
         spec = dataclasses.replace(self.config.agents[0], command=[str(self.folder / "no-such-claude")])
@@ -852,6 +1007,19 @@ class CodexAgentTests(TempDirCase):
         # The file for the last message is a temporary one and is gone afterwards.
         self.assertFalse(Path(args[args.index("-o") + 1]).exists())
 
+    def test_the_effort_goes_in_as_a_config_override(self):
+        control = agents_module.Control()
+        self.agent.run(Job("q", control=control))
+        args = self.calls()[0]["args"]
+        self.assertEqual(args[args.index("--model") + 1], "some-model")
+        self.assertEqual(args[args.index("--model") + 2:args.index("--model") + 4],
+                         ["-c", 'model_reasoning_effort="medium"'])
+        # What each turn spent is in the event output; input read from the cache is kept apart.
+        self.assertEqual(control.tokens, {"in": 200, "out": 50, "cached": 700})
+        args = self.agent.command(Job("q", effort="high", model="gpt-b"), Path("out.txt"))
+        self.assertIn('model_reasoning_effort="high"', args)
+        self.assertEqual(args[args.index("--model") + 1], "gpt-b")
+
     def test_a_separate_codex_home_is_used_only_when_set(self):
         self.agent.run(Job("x"))
         self.assertIsNone(self.calls()[0]["home"])
@@ -947,9 +1115,40 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual(self.sent("thread/start")[0]["params"], {
             "cwd": str(self.config.agents[0].workdir), "approvalPolicy": "on-request",
             "sandbox": "read-only", "model": "some-model"})
+        # The model and the effort are said again on every turn: a resumed thread may have
+        # been left on another one.
         turn = self.sent("turn/start")[0]["params"]
-        self.assertEqual(turn, {"threadId": "thread-1",
+        self.assertEqual(turn, {"threadId": "thread-1", "model": "some-model", "effort": "medium",
                                 "input": [{"type": "text", "text": "review -- $(x)"}]})
+
+    def test_quota_tokens_and_the_model_come_back_from_the_app_server(self):
+        control = self.control()
+        models, limits = [], []
+        control.model, control.limits = models.append, lambda kind, payload: limits.append(payload)
+        self.agent.run(Job("q", control=control, effort="high"))
+        self.assertEqual(self.sent("turn/start")[0]["params"]["effort"], "high")
+        self.assertEqual(models, ["some-model"])
+        # Asked once when the turn starts and once more when it is over.
+        asks = self.sent("account/rateLimits/read")
+        self.assertEqual([ask["params"] for ask in asks], [{"excludeResetCreditDetails": True}] * 2)
+        self.assertEqual([payload["rateLimits"]["primary"]["usedPercent"] for payload in limits],
+                         [37, 40])
+        self.assertEqual(control.tokens, {"in": 300, "out": 60, "cached": 200})
+        # With no model in the config, the one Codex says it uses is reported.
+        plain = agents_module.create(dataclasses.replace(self.config.agents[0], model=None))
+        control = self.control()
+        control.model = models.append
+        plain.run(Job("q", control=control))
+        self.assertEqual(models[-1], "gpt-fake")
+        self.assertNotIn("model", self.sent("turn/start")[-1]["params"])
+        # Not signed in with a subscription: nothing to report, and the turn is not disturbed.
+        os.environ["FAKE_CODEX_LIMITS"] = "none"
+        self.addCleanup(os.environ.pop, "FAKE_CODEX_LIMITS", None)
+        control = self.control()
+        seen = []
+        control.limits = lambda kind, payload: seen.append(payload)
+        self.assertEqual(self.agent.run(Job("q", control=control)).text, "final q")
+        self.assertEqual(seen, [])
 
     def test_continuing_resumes_the_thread_and_a_speaking_codex_gets_the_shape(self):
         schema = xiaoyou_module.reply_schema()
@@ -1087,6 +1286,9 @@ class CodexAppServerTests(TempDirCase):
         os.environ["FAKE_CODEX_MODE"] = "steer"
         again = service.get(service.submit("@codex 写测试")["id"], wait=5)
         self.assertTrue(until(lambda: len(self.sent("turn/start")) == 2))
+        # The runtime can pass a sentence on only once it has the turn's number back.
+        self.assertTrue(until(lambda: getattr(getattr(
+            xiaoyou._tasks._active.get(again["card"]), "control", None), "_steer", None)))
         self.assertEqual(xiaoyou._tasks.amend(again["card"], "redo", "Windows 也要"), "steer")
         card = xiaoyou.settle(again["card"], 10)
         self.assertIn("+ Windows 也要", claude.jobs[-1].text)
@@ -1147,6 +1349,27 @@ class RouterTests(unittest.TestCase):
         for text in ("codex 是什么", "看看 @codex", "@codexes 看看", "@nobody 看看", "让我想想",
                      "用codexes试试", "问一下天气", ""):
             self.assertIsNone(router_module.mention(text, self.agents), msg=text)
+
+    def test_an_effort_said_right_after_the_name(self):
+        decide = lambda text: router_module.decide(text, None, self.agents, "claude", router_module.Router())
+        cases = {
+            "@codex 高档 看看这个报错": ("high", "看看这个报错"),
+            "@codex medium, check it": ("medium", "check it"),
+            "让codex用高档看一下这个报错": ("high", "让codex看一下这个报错"),
+            "让 codex 用 low 来 review this": ("low", "让 codex review this"),
+            "叫科迪用特高档跑一下测试": ("xhigh", "叫科迪跑一下测试"),
+            # Only right after the name, and only as a word of its own.
+            "@codex 高档餐厅有哪些": (None, "高档餐厅有哪些"),
+            "@codex highlight this": (None, "highlight this"),
+            "让codex用高档的那台机器跑": (None, "让codex用高档的那台机器跑"),
+            "@codex 看看 高档 的": (None, "看看 高档 的"),
+            # A level and nothing else is not a task: the words are passed on as they are.
+            "@codex 高档": (None, "高档"),
+        }
+        for text, (effort, said) in cases.items():
+            route = decide(text)
+            self.assertEqual((route.agent, route.effort, route.text), ("codex", effort, said), msg=text)
+        self.assertIsNone(decide("高档 看看").effort)
 
     def test_the_order_of_decisions(self):
         class Fixed(router_module.Router):
@@ -2515,6 +2738,53 @@ class ServiceTests(TempDirCase):
         self.assertIn(done["status"], ("done", "failed"))
         return done
 
+    def test_the_caller_may_choose_effort_and_model_within_what_the_helper_offers(self):
+        tiered = Scripted("tiered", speaks=False, kind="codex", effort="medium",
+                          efforts=["low", "medium"], model="gpt-a", models=["gpt-b"])
+        xiaoyou, store = make_xiaoyou(self.folder / "t", [Scripted("claude"), tiered])
+        service = Service(xiaoyou, store)
+        self.addCleanup(service.close)
+        for wrong in ({"effort": "huge"}, {"agent": "tiered", "effort": "high"},
+                      {"agent": "tiered", "model": "gpt-z"}, {"agent": "claude", "effort": "low"},
+                      {"model": "has space"}, {"effort": 3}):
+            with self.assertRaises(RequestError, msg=wrong):
+                service.submit("hi", **wrong)
+        done = service.get(service.submit("do it", agent="tiered", effort="low", model="gpt-b")["id"],
+                           wait=5)
+        self.assertEqual((done["effort"], done["model"]), ("low", "gpt-b"))
+        xiaoyou.settle(done["card"], 5)
+        self.assertEqual((tiered.jobs[0].effort, tiered.jobs[0].model), ("low", "gpt-b"))
+        self.assertEqual([(entry["name"], entry["model"], entry["effort"], entry["efforts"], entry["models"])
+                          for entry in service.agents()],
+                         [("claude", None, None, [], []),
+                          ("tiered", "gpt-a", "medium", ["low", "medium"], ["gpt-b"])])
+
+    def test_the_feed_carries_usage_and_returns_when_it_changes(self):
+        import xiaoyou_runtime.service as service_module
+        tiered = Scripted("tiered", speaks=False, kind="codex")
+        xiaoyou, store = make_xiaoyou(self.folder / "t", [Scripted("claude"), tiered])
+        service = Service(xiaoyou, store)
+        self.addCleanup(service.close)
+        old = service_module.FEED_USAGE_SECONDS
+        service_module.FEED_USAGE_SECONDS = 0.02
+        self.addCleanup(setattr, service_module, "FEED_USAGE_SECONDS", old)
+        feed = service.feed("default")
+        self.assertEqual(([account["state"] for account in feed["usage"]["accounts"]], feed["cards"]),
+                         (["unknown"], []))
+        result = {}
+        waiter = threading.Thread(target=lambda: result.update(
+            service.feed("default", feed["seq"], 5, feed["usage"]["rev"])))
+        waiter.start()
+        xiaoyou.usage.observe("tiered", "codex", codex_limits(95))
+        waiter.join(3)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual((result["cards"], result["usage"]["accounts"][0]["state"]), ([], "warn"))
+        # Without a rev of its own a caller only waits for cards, as before.
+        self.assertEqual(service.feed("default", feed["seq"], 0.05)["cards"], [])
+        with self.assertRaises(RequestError):
+            service.feed("default", 0, 0, "x")
+        self.assertEqual(service.usage()["rev"], result["usage"]["rev"])
+
     def test_her_line_takes_one_sentence_at_a_time_and_continues_the_session(self):
         self.agent.gate.clear()
         first = self.service.submit("one slow")
@@ -2655,36 +2925,406 @@ class ServiceTests(TempDirCase):
             self.service.cards("a/b")
 
 
-class UsageTests(TempDirCase):
-    def test_codex_thread_tokens_are_read_from_its_home(self):
-        home = self.folder / "codex-home"
-        home.mkdir()
-        database = sqlite3.connect(home / "state_5.sqlite")
-        try:
-            database.execute("create table threads (tokens_used integer, updated_at_ms integer)")
-            database.executemany("insert into threads values (?, ?)", [(100, 10), (25, 20)])
-            database.commit()
-        finally:
-            database.close()
-        loaded = config_module.load(write_config(self.folder, agents={
-            "codex": {"type": "codex", "config_dir": str(home), "mode": "exec"},
-        }))
-        snapshot = usage_module.UsageMonitor(loaded).snapshot()
-        self.assertEqual(snapshot["codex"][0]["tokens"]["threads"], 2)
-        self.assertEqual(snapshot["codex"][0]["tokens"]["total_tokens"], 125)
+NOW = 1900000000.0
 
-    def test_rate_limit_payload_is_normalized(self):
-        parsed = usage_module._rate_limits_response({"ordinaryUsageAllowed": True, "rateLimits": {
-            "limitId": "codex",
-            "planType": "pro",
-            "primary": {"usedPercent": 37, "resetsAt": 1791619200, "windowDurationMins": 300},
-            "credits": {"balance": "12.50", "hasCredits": True, "unlimited": False},
-        }})
-        bucket = parsed["buckets"]["codex"]
-        self.assertTrue(parsed["available"])
-        self.assertEqual(parsed["ordinary_usage_allowed"], True)
-        self.assertEqual(bucket["primary"]["remaining_percent"], 63)
-        self.assertEqual(bucket["credits"]["balance"], "12.50")
+
+def codex_limits(short_used, week_used=12, short_resets=2000000000):
+    return {"rateLimits": {"limitId": "codex", "planType": "plus",
+                           "primary": {"usedPercent": short_used, "windowDurationMins": 300,
+                                       "resetsAt": short_resets},
+                           "secondary": {"usedPercent": week_used, "windowDurationMins": 10080,
+                                         "resetsAt": 2000500000}}}
+
+
+class UsageTests(TempDirCase):
+    """What is left of each subscription, and which model and effort each helper runs on."""
+
+    def meter(self, enabled=False, **agents):
+        agents = agents or {
+            "claude": {"type": "claude_code", "config_dir": str(self.folder / "login")},
+            "tailor": {"type": "claude_code", "config_dir": str(self.folder / "login"),
+                       "speaks": False},
+            "codex": {"type": "codex", "model": "gpt-a", "models": ["gpt-b"]},
+            "deepseek": {"type": "claude_code", "model": "deepseek-x", "env": {
+                "ANTHROPIC_BASE_URL": "https://x.invalid", "ANTHROPIC_AUTH_TOKEN": "k"}},
+            "echo": {"type": "echo"},
+        }
+        self.config = config_module.load(write_config(self.folder, agents=agents), {})
+        self.now = [NOW]
+        return usage_module.Usage(self.config, enabled=enabled, clock=lambda: self.now[0])
+
+    def test_what_the_tools_report_becomes_two_windows(self):
+        windows = usage_module.claude_event_windows
+        self.assertEqual(
+            windows({"status": "allowed", "rateLimitType": "five_hour", "resetsAt": 2000000000,
+                     "unifiedWindows": {"five_hour": {"utilization": 0.4449, "resetsAt": 2000000000},
+                                        "seven_day": {"utilization": 1.2, "resetsAt": 2000500000}}}),
+            {"5h": {"left": 56, "resets_at": 2000000000}, "7d": {"left": 0, "resets_at": 2000500000}})
+        # Older shape: only the window that is limiting, a share of 1, and milliseconds.
+        self.assertEqual(windows({"status": "allowed_warning", "rateLimitType": "seven_day",
+                                  "utilization": 0.85, "resetsAt": 2000500000000}),
+                         {"7d": {"left": 15, "resets_at": 2000500000}})
+        self.assertEqual(windows({"status": "allowed_warning", "rateLimitType": "five_hour",
+                                  "resetsAt": 2000000000}),
+                         {"5h": {"left": None, "resets_at": 2000000000, "flag": "warn"}})
+        self.assertEqual(windows({"status": "rejected", "rateLimitType": "five_hour"})["5h"]["left"], 0)
+        for junk in (None, [], {"status": "allowed"}, {"rateLimitType": "overage", "utilization": 1}):
+            self.assertEqual(windows(junk), {})
+
+        asked = usage_module.claude_usage_windows
+        self.assertEqual(asked({"subscription_type": "max", "rate_limits_available": True, "rate_limits": {
+            "five_hour": {"utilization": 42.4, "resets_at": "2033-05-18T03:33:20.5Z"},
+            "seven_day": {"utilization": None, "resets_at": None}, "seven_day_opus": None}}),
+            ({"5h": {"left": 58, "resets_at": 2000000000}, "7d": {"left": None, "resets_at": None}},
+             "max", None))
+        found, plan, problem = asked({"rate_limits_available": False, "rate_limits": None})
+        self.assertEqual((found, plan), ({}, None))
+        self.assertIn("不是订阅", problem)
+        self.assertIsNotNone(asked("nonsense")[2])
+
+        codex = usage_module.codex_windows
+        self.assertEqual(codex(codex_limits(37)), (
+            {"5h": {"left": 63, "resets_at": 2000000000}, "7d": {"left": 88, "resets_at": 2000500000}},
+            "plus"))
+        # The bucket named codex wins over the single one kept for old clients.
+        both = dict(codex_limits(10), rateLimitsByLimitId={"codex": codex_limits(90)["rateLimits"]})
+        self.assertEqual(codex(both)[0]["5h"]["left"], 10)
+        # A notification carries the same thing; without lengths the first is the short window.
+        self.assertEqual(codex({"rateLimits": {"primary": {"usedPercent": 5},
+                                               "rateLimitReachedType": "rate_limit_reached"}}),
+                         ({"5h": {"left": 0, "resets_at": None}}, None))
+        self.assertEqual(codex({"rateLimits": {"primary": None, "secondary": None}}), ({}, None))
+        self.assertEqual(codex(None), ({}, None))
+
+    def test_quota_belongs_to_a_login_not_to_a_helper(self):
+        meter = self.meter()
+        view = meter.snapshot()
+        self.assertEqual([(account["kind"], account["agents"], account["state"])
+                          for account in view["accounts"]],
+                         [("claude", ["claude", "tailor"], "unknown"), ("codex", ["codex"], "unknown")])
+        self.assertEqual({entry["name"]: (entry["model"], entry["effort"], entry["account"] is not None)
+                          for entry in view["agents"]},
+                         {"claude": (None, "medium", True), "tailor": (None, "medium", True),
+                          "codex": ("gpt-a", "medium", True), "deepseek": ("deepseek-x", None, False),
+                          "echo": (None, None, False)})
+        # What one of them hears while it works is true for the other one too.
+        meter.observe("tailor", "claude_event", {"unifiedWindows": {
+            "five_hour": {"utilization": 0.88, "resetsAt": 2000000000},
+            "seven_day": {"utilization": 0.19, "resetsAt": 2000500000}}})
+        meter.observe("deepseek", "claude_event", {"unifiedWindows": {}})  # no account: ignored
+        account = meter.snapshot()["accounts"][0]
+        self.assertEqual((account["state"], account["source"], account["updated_at"]),
+                         ("warn", "events", NOW))
+        self.assertEqual([(window["kind"], window["left"]) for window in account["windows"]],
+                         [("5h", 12), ("7d", 81)])
+        notes = meter.notes()
+        self.assertIn("和 tailor 共用额度，5 小时剩 12%", notes["claude"])
+        self.assertTrue(notes["claude"].endswith("本周剩 81%%（%s 重置） · 快用完了" % (
+            usage_module.clock_text(2000500000, NOW))))
+        self.assertTrue(notes["codex"].startswith("gpt-a · 平时中档，可选 低/中/高 · 可换模型 gpt-b；"))
+        self.assertTrue(notes["codex"].endswith("用量还不知道"))
+        self.assertEqual(notes["deepseek"], "deepseek-x")
+        self.assertNotIn("echo", notes)
+        # A status without a number keeps the number already known for that window...
+        meter.observe("claude", "claude_event", {"status": "allowed_warning",
+                                                 "rateLimitType": "five_hour", "resetsAt": 2000000000})
+        self.assertEqual(meter.snapshot()["accounts"][0]["windows"][0]["left"], 12)
+        # ...and nothing is left of a number once its window has started over.
+        self.now[0] = 2000000001
+        account = meter.snapshot()["accounts"][0]
+        self.assertEqual([(window["left"], window["resets_at"]) for window in account["windows"]],
+                         [(None, None), (81, 2000500000)])
+        self.assertEqual(account["state"], "ok")
+        meter.observe("codex", "codex", codex_limits(100, short_resets=2000100000))
+        self.assertEqual(meter.snapshot()["accounts"][1]["state"], "out")
+        self.assertIn("5 小时用完了", meter.notes()["codex"])
+
+    def test_it_asks_claude_code_and_codex_without_calling_a_model(self):
+        fake_claude, fake_codex = self.folder / "fake_claude.py", self.folder / "fake_codex_app.py"
+        fake_claude.write_text(FAKE_CLAUDE, encoding="utf-8")
+        fake_codex.write_text(FAKE_CODEX_APP, encoding="utf-8")
+        log = self.folder / "calls.jsonl"
+        for name, value in (("FAKE_CLAUDE_LOG", str(log)), ("FAKE_CODEX_MODE", "check-only")):
+            os.environ[name] = value
+        for name in ("FAKE_CLAUDE_LOG", "FAKE_CODEX_MODE", "FAKE_CLAUDE_USAGE", "FAKE_CODEX_LIMITS",
+                     "FAKE_CLAUDE_MODE"):
+            self.addCleanup(os.environ.pop, name, None)
+        meter = self.meter(
+            True,
+            claude={"type": "claude_code", "command": [sys.executable, str(fake_claude)],
+                    "config_dir": str(self.folder / "login"), "extra_args": ["--max-turns", "9"]},
+            codex={"type": "codex", "command": [sys.executable, str(fake_codex)]})
+        meter.refresh()
+        claude, codex = meter.snapshot()["accounts"]
+        self.assertEqual((claude["state"], claude["plan"], claude["source"], claude["note"]),
+                         ("ok", "max", "get_usage", None))
+        self.assertEqual([(window["kind"], window["left"], window["resets_at"])
+                          for window in claude["windows"]],
+                         [("5h", 58, 2000000000), ("7d", 81, 2000246400)])
+        self.assertEqual((codex["state"], codex["plan"], codex["source"]), ("ok", "plus", "app_server"))
+        self.assertEqual([window["left"] for window in codex["windows"]], [63, 88])
+        # Claude Code was asked on its input, with no prompt and none of the owner's extra flags.
+        call = json.loads(log.read_text("utf-8").splitlines()[0])
+        self.assertEqual(call["args"], ["-p", "--input-format", "stream-json", "--output-format",
+                                        "stream-json", "--verbose", "--strict-mcp-config"])
+        # The same numbers again are not a change: nobody waiting on usage is woken.
+        seen = meter.rev
+        meter.refresh()
+        self.assertEqual(meter.rev, seen)
+        # When it cannot be asked, the reason is kept and the last numbers stay.
+        for mode, reason in (("api", "不是订阅"), ("old", "不能这样查用量"), ("mute", "退出码 3")):
+            os.environ["FAKE_CLAUDE_USAGE"] = mode
+            meter.refresh()
+            account = meter.snapshot()["accounts"][0]
+            self.assertIn(reason, account["note"], msg=mode)
+            self.assertEqual(account["windows"][0]["left"], 58)
+        os.environ["FAKE_CODEX_LIMITS"] = "none"
+        meter.refresh()
+        self.assertIn("authentication required", meter.snapshot()["accounts"][1]["note"])
+        report = meter.report(detail=True)
+        self.assertIn("claude（max）：5 小时剩 58%", report)
+        self.assertIn("  查不到：", report)
+        self.assertIn("codex：模型还不知道 · 平时中档，可选 低/中/高", report)
+        # Switched off, nothing is started at all.
+        before = len(log.read_text("utf-8").splitlines())
+        quiet = usage_module.Usage(self.config, enabled=False)
+        quiet.refresh()
+        quiet.poke()
+        quiet.end(quiet.begin("claude"))
+        self.assertEqual(len(log.read_text("utf-8").splitlines()), before)
+
+    def test_what_a_round_spent_is_the_difference_between_before_and_after(self):
+        meter = self.meter(True)
+        answers = {"claude": [42.0, 45.0, 45.0], "codex": [10]}
+        asked = []
+
+        def fetch_claude(spec):
+            asked.append(spec.name)
+            used = answers["claude"].pop(0)
+            return ({"5h": {"left": 100 - int(used), "resets_at": 2000000000},
+                     "7d": {"left": 80, "resets_at": 2000500000}}, "max", None)
+
+        def fetch_codex(spec):
+            asked.append(spec.name)
+            return usage_module.codex_windows(codex_limits(answers["codex"].pop(0))) + (None,)
+
+        meter.fetchers = {"claude": fetch_claude, "codex": fetch_codex}
+        # Nothing known yet: it asks before the round, and again after it when the helper
+        # said nothing about quota while it worked.
+        run = meter.begin("tailor")
+        self.assertEqual((asked, meter.snapshot()["agents"][1]["running"]), (["claude"], 1))
+        self.now[0] += 60
+        self.assertEqual(meter.end(run), {"d5": 3, "d7": 0})
+        self.assertEqual((asked, meter.snapshot()["agents"][1]["running"]), (["claude", "claude"], 0))
+        # Fresh numbers are not asked for again; what the helper reports while working is enough.
+        run = meter.begin("claude", "picked")
+        self.assertEqual(meter.snapshot()["agents"][0]["now"], "picked")
+        self.now[0] += 30
+        meter.observe("claude", "claude_event", {"unifiedWindows": {
+            "five_hour": {"utilization": 0.50, "resetsAt": 2000000000}}})
+        self.assertEqual(meter.end(run), {"d5": 5, "d7": 0})
+        self.assertEqual(len(asked), 2)
+        # A window that started over in between has no meaningful difference.
+        run = meter.begin("codex")
+        self.now[0] += 30
+        meter.observe("codex", "codex", codex_limits(2, 13, short_resets=2000018000))
+        self.assertEqual(meter.end(run), {"d7": 1})
+        self.assertEqual(asked[2:], ["codex"])
+        # Helpers without a subscription cost nothing here.
+        self.assertEqual(meter.end(meter.begin("deepseek")), {})
+        # A fetcher that blows up is a note, not a crash.
+        meter.fetchers["codex"] = lambda spec: 1 / 0
+        meter.refresh()
+        self.assertIn("ZeroDivisionError", meter.snapshot()["accounts"][1]["note"])
+
+    def test_someone_looking_makes_it_ask_again_only_now_and_then(self):
+        meter = self.meter(True)
+        asked = []
+        done = threading.Event()
+
+        def fetch(spec):
+            asked.append(spec.name)
+            done.set()
+            return {"5h": {"left": 70, "resets_at": 2000000000}}, None, None
+
+        meter.fetchers = {"claude": fetch, "codex": lambda spec: ({}, None, "not signed in")}
+        seen = meter.rev
+        meter.poke()
+        self.assertTrue(done.wait(5))
+        self.assertTrue(meter.wait(seen, 5))
+        self.assertFalse(meter.wait(meter.rev, 0.01))
+        meter.poke()
+        self.now[0] += self.config.usage_refresh_seconds - 1
+        meter.poke()
+        self.assertEqual(asked, ["claude"])
+        self.now[0] += 2
+        done.clear()
+        meter.poke()
+        self.assertTrue(done.wait(5))
+        self.assertEqual(asked, ["claude", "claude"])
+
+    def test_what_it_knows_survives_a_restart(self):
+        meter = self.meter()
+        meter.observe("codex", "codex", codex_limits(37))
+        meter.saw_model("codex", "gpt-real")
+        meter.saw_model("codex", "gpt-b", usual=False)  # picked for one job: not its usual one
+        meter.saw_model("nobody", "x")
+        saved = (self.config.state_dir / "usage.json").read_text("utf-8")
+        self.assertNotIn(TOKEN, saved)
+        again = usage_module.Usage(self.config, enabled=False, clock=lambda: NOW + 60)
+        view = again.snapshot()
+        self.assertEqual([window["left"] for window in view["accounts"][1]["windows"]], [63, 88])
+        self.assertEqual(view["accounts"][1]["updated_at"], NOW)
+        self.assertEqual(view["agents"][2]["model"], "gpt-real")
+        (self.config.state_dir / "usage.json").write_text("{broken", encoding="utf-8")
+        self.assertEqual(usage_module.Usage(self.config, enabled=False).snapshot()["accounts"][1]["state"],
+                         "unknown")
+
+
+class TierTests(TempDirCase):
+    """Which effort and model a piece of work runs on, and what she is told about quota."""
+
+    LEVELS = ["low", "medium", "high"]
+
+    def setUp(self):
+        super().setUp()
+        self.claude = Scripted("claude")
+        self.codex = Scripted("codex", speaks=False, kind="codex", effort="medium",
+                              efforts=self.LEVELS, model="gpt-a", models=["gpt-b"])
+        self.codex.reports = {"model": "gpt-real", "tokens": {"in": 10, "out": 5, "cached": 0}}
+        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.claude, self.codex])
+        self.addCleanup(self.xiaoyou.close)
+        self.addCleanup(self.codex.gate.set)
+        self.count = 0
+
+    def say(self, text, **extra):
+        self.count += 1
+        return self.xiaoyou.hear(text, "default", "turn-%d" % self.count, **extra)
+
+    def settled(self, card_id):
+        card = self.xiaoyou.settle(card_id, 5)
+        self.assertNotIn(card["state"], cards_module.ACTIVE)
+        return card
+
+    def pick(self, effort=None, model=None, card="new"):
+        plan = start("codex", "do it", "标题", card=card)
+        for key, value in (("effort", effort), ("model", model)):
+            if value is not None:
+                plan["action"][key] = value
+        return plan
+
+    def test_she_is_told_each_helpers_model_effort_and_quota(self):
+        self.xiaoyou.usage.observe("codex", "codex", codex_limits(37))
+        self.say("你好")
+        job = self.claude.jobs[0]
+        self.assertIn("- codex：codex helper〔gpt-a · 平时中档，可选 低/中/高 · 可换模型 gpt-b；"
+                      "5 小时剩 63%", job.system)
+        self.assertIn("## 档位和额度", job.system)
+        self.assertIn("low 是低档、medium 是中档、high 是高档", job.system)
+        self.assertIn("交给额度剩得多的那个", job.system)
+        action = job.schema["properties"]["action"]["properties"]
+        self.assertEqual((action["effort"]["enum"], action["model"]["enum"]), (self.LEVELS, ["gpt-b"]))
+        # She herself has nothing to choose and no quota: nothing is written after her name.
+        self.assertIn("- claude：claude helper\n", job.system)
+        # With no helper that has levels or quota, none of this is in her way.
+        plain, _ = make_xiaoyou(self.folder / "plain", [Scripted("claude"), Scripted("echo2")])
+        self.addCleanup(plain.close)
+        plain.hear("你好", "default", "t1")
+        job = plain._agents["claude"].jobs[0]
+        self.assertNotIn("档位和额度", job.system)
+        self.assertNotIn("effort", job.schema["properties"]["action"]["properties"])
+
+    def test_the_level_she_picks_reaches_the_helper_and_is_written_on_the_card(self):
+        self.claude.script = [self.pick("high", "gpt-b")]
+        card = self.settled(self.say("难的事").card)
+        job = self.codex.jobs[0]
+        self.assertEqual((job.effort, job.model), ("high", "gpt-b"))
+        self.assertEqual((card["effort"], card["model"], card["model_asked"]), ("high", "gpt-b", "gpt-b"))
+        # Nothing picked: the helper's usual effort and model, and the model it really ran on.
+        self.claude.script = [self.pick(), {"reply": "ok", "brief": "", "mood": "idle"}]
+        card = self.settled(self.say("平常的事").card)
+        job = self.codex.jobs[1]
+        self.assertEqual((job.effort, job.model), ("medium", None))
+        self.assertEqual((card["effort"], card["model"], card["model_asked"]),
+                         ("medium", "gpt-real", None))
+        self.assertEqual(self.xiaoyou.usage.snapshot()["agents"][1]["model"], "gpt-real")
+        # What the helper does not offer counts as not picked; its own model by name is its usual one.
+        self.claude.script = [self.pick("max", "gpt-z"), {"reply": "ok", "brief": "", "mood": "idle"},
+                              self.pick(model="gpt-a")]
+        self.settled(self.say("写错的档").card)
+        self.settled(self.say("点了平时的模型").card)
+        self.assertEqual([(job.effort, job.model) for job in self.codex.jobs[2:]],
+                         [("medium", None), ("medium", None)])
+
+    def test_a_level_said_with_the_name_or_chosen_by_the_caller(self):
+        turn = self.say("@codex 高档 看看这个报错")
+        self.settled(turn.card)
+        job = self.codex.jobs[0]
+        self.assertEqual((job.effort, job.text), ("high", "看看这个报错"))
+        self.assertEqual(self.xiaoyou.cards.get(turn.card)["effort"], "high")
+        # The caller's choice is used when the sentence itself names none, also when she decides.
+        self.settled(self.say("@codex 看看", effort="low", model="gpt-b").card)
+        self.settled(self.say("@codex 高档 看看", effort="low").card)
+        self.claude.script = [self.pick(), {"reply": "ok", "brief": "", "mood": "idle"},
+                              self.pick("high"), {"reply": "ok", "brief": "", "mood": "idle"}]
+        self.settled(self.say("帮我看看", effort="low").card)
+        self.settled(self.say("帮我好好看看", effort="low").card)
+        self.assertEqual([(job.effort, job.model) for job in self.codex.jobs[1:]],
+                         [("low", "gpt-b"), ("high", None), ("low", None), ("high", None)])
+
+    def test_going_on_with_a_thing_keeps_its_level_unless_a_new_one_is_given(self):
+        self.claude.script = [self.pick("high", "gpt-b"), {"reply": "好了", "brief": "", "mood": "idle"}]
+        first = self.settled(self.say("难的事").card)
+        self.claude.script = [amend(first["id"], "再查一遍", "redo"),
+                              {"reply": "好了", "brief": "", "mood": "idle"}]
+        self.settled(self.say("再查一遍", card=first["id"]).card)
+        self.assertEqual((self.codex.jobs[1].effort, self.codex.jobs[1].model), ("high", "gpt-b"))
+        change = amend(first["id"], "简单看看就行", "redo")
+        change["action"]["effort"] = "low"
+        self.claude.script = [change, {"reply": "好了", "brief": "", "mood": "idle"}]
+        card = self.settled(self.say("简单看看就行", card=first["id"]).card)
+        self.assertEqual((self.codex.jobs[2].effort, self.codex.jobs[2].model), ("low", "gpt-b"))
+        self.assertEqual((card["effort"], card["model_asked"], card["edits"]), ("low", "gpt-b", 2))
+        # While it is being done: a new level stops the round and does it over at that level.
+        self.codex.gate.clear()
+        self.claude.script = [start("codex", "long slow", "慢的"), ]
+        running = self.say("慢的事")
+        self.assertTrue(until(lambda: self.codex.started[-1:] == ["long slow"]))
+        change = amend(running.card, "认真点", "redo")
+        change["action"]["effort"] = "high"
+        self.claude.script = [change, {"reply": "好了", "brief": "", "mood": "idle"}]
+        self.say("认真点", card=running.card)
+        self.assertEqual(self.xiaoyou.cards.get(running.card)["effort"], "high")
+        self.codex.gate.set()
+        self.settled(running.card)
+        self.assertEqual(self.codex.jobs[-1].effort, "high")
+        self.assertIn("主人改了要求：认真点", self.codex.jobs[-1].text)
+
+    def test_the_card_says_what_the_thing_cost(self):
+        meter = self.xiaoyou.usage
+        meter.observe("codex", "codex", codex_limits(37))
+        self.codex.reports["limits"] = ("codex", codex_limits(40, 13))
+        self.codex.gate.clear()
+        self.claude.script = [start("codex", "count slow", "数一数"),
+                              {"reply": "好了", "brief": "", "mood": "idle"}]
+        turn = self.say("数一数")
+        self.assertTrue(until(lambda: self.codex.started == ["count slow"]))
+        entry = meter.snapshot()["agents"][1]
+        self.assertEqual((entry["running"], entry["now"]), (1, None))
+        self.codex.gate.set()
+        card = self.settled(turn.card)
+        self.assertEqual(card["cost"], {"in": 10, "out": 5, "cached": 0, "d5": 3, "d7": 1})
+        self.assertEqual(meter.snapshot()["agents"][1]["running"], 0)
+        # More rounds on the same thing add up.
+        self.claude.script = [amend(card["id"], "再数一遍", "redo"),
+                              {"reply": "好了", "brief": "", "mood": "idle"}]
+        self.codex.reports["limits"] = ("codex", codex_limits(44, 13))
+        card = self.settled(self.say("再数一遍", card=card["id"]).card)
+        self.assertEqual(card["cost"], {"in": 20, "out": 10, "cached": 0, "d5": 7, "d7": 1})
+        # It is kept with the card across a restart.
+        self.xiaoyou.close()
+        again = cards_module.Cards(self.folder / "state" / "cards.json").get(card["id"])
+        self.assertEqual((again["cost"]["d5"], again["effort"], again["model"]), (7, "medium", "gpt-real"))
 
 
 class SharedHistoryTests(TempDirCase):
@@ -2817,6 +3457,19 @@ class HttpTests(TempDirCase):
             self.assertEqual(self.call("GET", "/v1/usage", token=token)[0], 401)
             self.assertEqual(self.call("POST", "/v1/conversations/default/reset", {}, token=token)[0], 401)
 
+    def test_effort_and_usage_over_http(self):
+        self.assertEqual(self.call("POST", "/v1/messages", {"text": "hi", "effort": "huge"})[0], 400)
+        status, body = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo", "effort": "low"})
+        self.assertEqual(status, 400)
+        self.assertIn("echo 不能选 low", body["error"])
+        status, message = self.call("POST", "/v1/messages", {"text": "hi", "effort": "low"})
+        self.assertEqual((status, message["effort"]), (202, "low"))
+        status, feed = self.call("GET", "/v1/feed?after=0&wait=5&usage=0")
+        self.assertEqual((status, feed["usage"]["accounts"], feed["usage"]["agents"][0]["name"]),
+                         (200, [], "echo"))
+        self.assertEqual(self.call("GET", "/v1/feed?usage=x")[0], 400)
+        self.assertEqual(self.call("GET", "/v1/usage?refresh=1")[1]["accounts"], [])
+
     def test_send_then_long_poll_and_continue(self):
         status, message = self.call("POST", "/v1/messages", {"text": "你好", "client_id": "c1"})
         self.assertEqual(status, 202)
@@ -2845,12 +3498,15 @@ class HttpTests(TempDirCase):
         self.assertEqual((status, body["default"]), (200, "echo"))
         self.assertEqual(body["agents"], [{
             "name": "echo", "type": "echo", "description": "原样复述，用来测试链路",
-            "speaks": True, "default": True,
+            "speaks": True, "default": True, "model": None, "effort": None, "efforts": [],
+            "models": [],
         }])
         status, usage = self.call("GET", "/v1/usage")
         self.assertEqual(status, 200)
-        self.assertEqual((usage["codex"], usage["claude"]), ([], []))
-        self.assertIn("updated_at", usage)
+        # Echo has no subscription behind it: nothing to meter, only its (unknown) model.
+        self.assertEqual(usage["accounts"], [])
+        self.assertEqual([(entry["name"], entry["model"], entry["effort"], entry["running"])
+                          for entry in usage["agents"]], [("echo", None, None, 0)])
         message = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo", "card": "c9"})[1]
         done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])[1]
         self.assertEqual((done["asked"], done["events"][0]["text"]), ("echo", "asked"))
@@ -3171,6 +3827,25 @@ class CommandLineTests(TempDirCase):
         self.assertIn("missing.json", err)
         self.assertNotIn(TOKEN, out + err)
 
+    def test_usage_asks_now_and_prints_what_is_left(self):
+        fake = self.folder / "fake_claude.py"
+        fake.write_text(FAKE_CLAUDE, encoding="utf-8")
+        os.environ["FAKE_CLAUDE_LOG"] = str(self.folder / "calls.jsonl")
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
+        path = str(write_config(self.folder, agents={
+            "claude": {"type": "claude_code", "command": [sys.executable, str(fake)], "model": "opus"},
+            "echo": {"type": "echo"}}))
+        code, out, err = self.run_main("--config", path, "usage")
+        self.assertEqual(code, 0)
+        self.assertIn("claude（max）：5 小时剩 58%", out)
+        self.assertIn("本周剩 81%", out)
+        self.assertIn("claude：opus · 平时中档，可选 低/中/高", out)
+        code, out, err = self.run_main("--config", path, "usage", "--json")
+        self.assertEqual(json.loads(out)["accounts"][0]["windows"][0]["left"], 58)
+        self.assertNotIn(TOKEN, out + err)
+        code, out, err = self.run_main("--config", str(write_config(self.folder / "e")), "usage")
+        self.assertEqual((code, out.strip()), (0, "没有订阅登录的帮手，没有额度可看"))
+
     def test_check_names_an_agent_whose_command_is_missing(self):
         path = str(write_config(self.folder, agents={
             "echo": {"type": "echo"},
@@ -3178,7 +3853,7 @@ class CommandLineTests(TempDirCase):
         }))
         code, out, err = self.run_main("--config", path, "--check")
         self.assertEqual(code, 2)
-        self.assertIn("codex（codex，只干活）", out)
+        self.assertIn("codex（codex，只干活，中档）", out)
         self.assertIn("no-codex", err)
 
 

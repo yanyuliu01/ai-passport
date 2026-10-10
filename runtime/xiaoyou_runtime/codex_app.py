@@ -8,7 +8,9 @@
   → initialize                      ← 结果          → initialized（通知）
   → thread/start 或 thread/resume   ← 结果里有线程编号（就是下次接着做要用的会话）
   → turn/start                      ← 结果里有这一轮的编号
+  → account/rateLimits/read         ← 订阅额度两个窗口各用了多少（做完后再问一次）
   ← 通知：item/started、item/completed……直到 turn/completed
+  ← 通知：account/rateLimits/updated、thread/tokenUsage/updated（额度和 token 用量）
   ← 请求（带 id，要回答）：item/commandExecution/requestApproval 等
 
 消息的形状对着 codex-cli 0.162.0 生成的协议定义写的
@@ -28,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .agents import (AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip,
-                     fields_from_text, kill_tree)
+                     codex_tokens, fields_from_text, kill_tree)
 from .config import AgentSpec
 
 MAX_OUTPUT_CHARS = 200000
@@ -39,6 +41,10 @@ INTERRUPT_SECONDS = 5
 # 一直在“重连”、别的什么都没有，超过这么久就不等了（没登录、断网时它会无限重试）。
 STALL_SECONDS = 120
 MAX_DIFF_CHARS = 6000
+# 一轮做完后再问一次额度，最多等这么久。
+LIMITS_SECONDS = 3
+# 只要两个窗口各用了多少，不要它另外去查“重置额度”的明细。
+LIMITS_PARAMS = {"excludeResetCreditDetails": True}
 
 
 def describe_change(changes: Any) -> str:
@@ -239,8 +245,9 @@ def check(spec: AgentSpec, env: Optional[Dict[str, str]]) -> Optional[str]:
     return None
 
 
-def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str]]) -> Outcome:
-    """跑一轮：把这段话交给 Codex，直到它这一轮结束。"""
+def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str]],
+        tier: Any = (None, None)) -> Outcome:
+    """跑一轮：把这段话交给 Codex，直到它这一轮结束。tier 是这一轮用的（模型，努力程度）。"""
     if control.cancelled:
         raise Cancelled("Codex 被叫停了")
     server = AppServer(spec, control, env)
@@ -248,7 +255,7 @@ def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str
     watch = Watchdog(control, "Codex", server.kill, job.timeout or spec.timeout_seconds,
                      spec.idle_seconds, spec.idle_command_seconds)
     try:
-        return _turn(server, spec, job, control, watch)
+        return _turn(server, spec, job, control, watch, tier)
     finally:
         watch.stop()
         control.can_steer(None)
@@ -256,21 +263,48 @@ def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str
         server.close()
 
 
+def _limits_after(server: AppServer, control: Control, asked: Any) -> None:
+    """一轮做完之后再问一次额度，这样“这件事花了多少”有个准数。等不到就算了。
+
+    asked 是之前问过、可能还没收到回答的那几次：它们的回答现在才到也照收。
+    """
+    request_id = server.request("account/rateLimits/read", LIMITS_PARAMS)
+    deadline = time.monotonic() + LIMITS_SECONDS
+    while True:
+        message = server.next(deadline - time.monotonic())
+        if not message:
+            return  # 超时，或者进程已经没了
+        if "method" not in message and message.get("id") in set(asked) | {request_id}:
+            if isinstance(message.get("result"), dict):
+                control.limits("codex", message["result"])
+            if message.get("id") == request_id:
+                return
+        elif message.get("method") == "account/rateLimits/updated":
+            params = message.get("params")
+            control.limits("codex", params if isinstance(params, dict) else {})
+
+
 def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
-          watch: Watchdog) -> Outcome:
+          watch: Watchdog, tier: Any = (None, None)) -> Outcome:
     handshake(server, time.monotonic() + HANDSHAKE_SECONDS)
     settings: Dict[str, Any] = {"cwd": str(spec.workdir) if spec.workdir else os.getcwd(),
                                 "approvalPolicy": spec.approval_policy}
     if spec.sandbox:
         settings["sandbox"] = spec.sandbox
-    if spec.model:
-        settings["model"] = spec.model
+    model, effort = tier
+    if model:
+        settings["model"] = model
     if job.session_id:
         opened = server.request("thread/resume", dict(settings, threadId=job.session_id))
     else:
         opened = server.request("thread/start", settings)
-    thread = server.expect(opened, time.monotonic() + HANDSHAKE_SECONDS,
-                           "thread/resume" if job.session_id else "thread/start").get("thread")
+    began = server.expect(opened, time.monotonic() + HANDSHAKE_SECONDS,
+                          "thread/resume" if job.session_id else "thread/start")
+    thread = began.get("thread")
+    # 这一轮实际用的模型：我们指定了就是指定的那个；没指定时只有它自己知道。
+    using = model or (began.get("model") if isinstance(began.get("model"), str) else None)
+    if using:
+        control.model(using)
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     if not isinstance(thread_id, str):
         raise AgentError("Codex 没有给出线程编号。可以先把这个代理的 mode 改成 exec")
@@ -280,6 +314,11 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
     start: Dict[str, Any] = {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
     if job.schema:
         start["outputSchema"] = job.schema
+    # 模型和努力程度每一轮都明说：接着做的线程里上一轮可能用的是别的。
+    if model:
+        start["model"] = model
+    if effort:
+        start["effort"] = effort
     begun = server.request("turn/start", start)
     turn = server.expect(begun, time.monotonic() + HANDSHAKE_SECONDS, "turn/start").get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
@@ -302,6 +341,8 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
 
     control.can_steer(steer)
     control.can_stop(stop)
+    # 顺手问一次订阅额度：回答在下面的循环里收。问不到（比如用的是 API 密钥）不要紧。
+    asked_limits = {server.request("account/rateLimits/read", LIMITS_PARAMS)}
 
     said = ""
     problem = ""
@@ -327,7 +368,9 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
         method = message.get("method")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         if method is None:
-            continue  # 我们发的某个请求的回答，这里不用管
+            if message.get("id") in asked_limits and isinstance(message.get("result"), dict):
+                control.limits("codex", message["result"])
+            continue  # 我们发的别的请求的回答，这里不用管
         if "id" in message:
             # 它来问我们了：另起线程去等主人，主循环接着读。
             threading.Thread(target=_answer, args=(server, spec, control, message, changes),
@@ -358,6 +401,12 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
                 said = item["text"]
         else:
             control.touch()
+        if method == "account/rateLimits/updated":
+            control.limits("codex", params)
+        elif method == "thread/tokenUsage/updated":
+            usage = params.get("tokenUsage") if isinstance(params.get("tokenUsage"), dict) else {}
+            if params.get("turnId") in (None, turn_id):
+                control.spend(codex_tokens(usage.get("last")))
         if method == "turn/completed":
             done = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             if done.get("id") not in (None, turn_id):
@@ -374,6 +423,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
             if not said.strip():
                 raise AgentError("Codex 没有给出结果：%s" % clip(problem or "这一轮什么都没说", 200))
             said = said.strip()[:MAX_OUTPUT_CHARS]
+            _limits_after(server, control, asked_limits)
             return Outcome(said, thread_id, fields_from_text(said) if job.system else None)
 
 
