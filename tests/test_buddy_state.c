@@ -849,6 +849,93 @@ static void test_ok_goes_round_the_three_screens(void)
     assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_UI_REFRESH);
 }
 
+static buddy_event_t tasks_event(unsigned count, uint32_t generation);
+
+static buddy_event_t usage_event(unsigned count, uint32_t generation)
+{
+    buddy_event_t event = {.type = BUDDY_EVENT_USAGE};
+    unsigned index;
+
+    for (index = 0; index < count && index < BUDDY_USAGE_COUNT; ++index) {
+        event.usage[index].state = (uint8_t)BUDDY_QUOTA_OK;
+        event.usage[index].left_short = (int8_t)(50 + index);
+        event.usage[index].left_week = -1;
+        event.usage[index].who_count = 1;
+        snprintf(event.usage[index].who[0].name, sizeof(event.usage[index].who[0].name),
+                 "helper%u", index);
+    }
+    event.usage_count = count;
+    event.ble.connection_generation = generation;
+    return event;
+}
+
+static void test_usage_adds_a_fourth_screen_to_the_round(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t up = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_UP};
+    buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+    buddy_event_t twice = {.type = BUDDY_EVENT_KEY_DOUBLE, .key = BUDDY_KEY_OK};
+    buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
+    buddy_event_t gone = {.type = BUDDY_EVENT_BLE_DISCONNECTED};
+    buddy_event_t event;
+
+    voice_ready_state(&state);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(!snapshot.usage_known && snapshot.usage_count == 0U);
+    /* Usage from another connection is not taken. */
+    event = usage_event(2, 6);
+    buddy_state_reduce(&state, &event, 100, &action);
+    assert(!state.usage_known && action.type == BUDDY_ACTION_NONE);
+    event = usage_event(2, 7);
+    buddy_state_reduce(&state, &event, 100, &action);
+    assert(action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.usage_known && snapshot.usage_count == 2U && snapshot.usage_since_ms == 100U);
+    assert(snapshot.usage[1].left_short == 51 && strcmp(snapshot.usage[1].who[0].name, "helper1") == 0);
+
+    /* Home, conversation, tasks, usage, home. */
+    buddy_state_reduce(&state, &ok, 110, &action);
+    buddy_state_reduce(&state, &ok, 111, &action);
+    assert(state.page == BUDDY_PAGE_TASKS);
+    buddy_state_reduce(&state, &ok, 112, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && action.type == BUDDY_ACTION_UI_REFRESH);
+    /* UP and DOWN scroll it; what is held there is said like on the first screen. */
+    buddy_state_reduce(&state, &up, 113, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && action.type == BUDDY_ACTION_UI_SCROLL &&
+           action.scroll_delta < 0);
+    buddy_state_reduce(&state, &long_ok, 114, &action);
+    assert(action.type == BUDDY_ACTION_VOICE_START && action.voice_card[0] == '\0' &&
+           !action.voice_pin);
+    event = voice_event(BUDDY_VOICE_CANCELLED, 7);
+    buddy_state_reduce(&state, &event, 115, &action);
+    buddy_state_reduce(&state, &twice, 116, &action);
+    assert(state.page == BUDDY_PAGE_MENU);
+    buddy_state_reduce(&state, &twice, 117, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
+    state.page = BUDDY_PAGE_USAGE;
+    buddy_state_reduce(&state, &ok, 118, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
+
+    /* From inside a task the round also goes on to usage. */
+    event = tasks_event(1, 7);
+    buddy_state_reduce(&state, &event, 120, &action);
+    state.page = BUDDY_PAGE_TASKS;
+    buddy_state_reduce(&state, &ok, 121, &action);
+    assert(state.page == BUDDY_PAGE_TALK && state.thread);
+    buddy_state_reduce(&state, &ok, 122, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && !state.thread);
+
+    /* An empty list still means "this hub sends usage": the screen stays in the round. */
+    event = usage_event(0, 7);
+    buddy_state_reduce(&state, &event, 130, &action);
+    assert(state.usage_known && state.usage_count == 0U && state.page == BUDDY_PAGE_USAGE);
+    /* When the connection goes the numbers go with it, and so does the screen. */
+    buddy_state_reduce(&state, &gone, 140, &action);
+    assert(!state.usage_known && state.usage_count == 0U && state.page == BUDDY_PAGE_HOME);
+}
+
 static void test_guide_scrolls_and_returns_to_more(void)
 {
     buddy_state_t state;
@@ -2110,6 +2197,7 @@ int main(void)
     test_hold_ok_talks_and_release_sends();
     test_talking_needs_a_voice_capable_host();
     test_ok_goes_round_the_three_screens();
+    test_usage_adds_a_fourth_screen_to_the_round();
     test_guide_scrolls_and_returns_to_more();
     test_screen_off_wakes_on_key_and_on_attention();
     test_assistant_turn_is_kept_only_while_connected();

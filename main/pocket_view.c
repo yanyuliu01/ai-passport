@@ -118,6 +118,92 @@ uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_
     return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
 }
 
+int pocket_screen_count(const buddy_ui_snapshot_t *snapshot)
+{
+    return snapshot != NULL && snapshot->usage_known ? 4 : 3;
+}
+
+int pocket_screen_index(const buddy_ui_snapshot_t *snapshot)
+{
+    if (snapshot == NULL || pocket_view_for(snapshot) != POCKET_VIEW_PAGE) {
+        return -1;
+    }
+    switch (snapshot->page) {
+    case BUDDY_PAGE_HOME:
+        return 0;
+    case BUDDY_PAGE_TALK:
+        return snapshot->card_thread ? 2 : 1;
+    case BUDDY_PAGE_TASKS:
+        return 2;
+    case BUDDY_PAGE_USAGE:
+        return 3;
+    default:
+        return -1;
+    }
+}
+
+int64_t pocket_now_epoch(const buddy_ui_snapshot_t *snapshot)
+{
+    int64_t now;
+
+    if (snapshot == NULL || snapshot->epoch_seconds <= 0) {
+        return 0;
+    }
+    now = snapshot->epoch_seconds;
+    if (snapshot->uptime_ms > snapshot->time_received_ms) {
+        now += (int64_t)((snapshot->uptime_ms - snapshot->time_received_ms) / 1000U);
+    }
+    return now;
+}
+
+int pocket_format_reset(uint32_t at, int32_t timezone_offset_seconds, int64_t now_epoch,
+                        char *out, size_t size)
+{
+    int64_t local;
+    int64_t day;
+    int64_t seconds_of_day;
+
+    if (out == NULL || size == 0U) {
+        return -1;
+    }
+    out[0] = '\0';
+    if (at == 0U || (now_epoch > 0 && (int64_t)at <= now_epoch)) {
+        return -1;
+    }
+    local = (int64_t)at + timezone_offset_seconds;
+    if (local < 0) {
+        return -1;
+    }
+    day = local / 86400;
+    seconds_of_day = local % 86400;
+    (void)snprintf(out, size, "%02d:%02d", (int)(seconds_of_day / 3600),
+                   (int)(seconds_of_day % 3600 / 60));
+    if (now_epoch <= 0 || (now_epoch + timezone_offset_seconds) / 86400 == day) {
+        return 0;
+    }
+    // 1970-01-01 是周四。
+    return (int)((day + 3) % 7) + 1;
+}
+
+uint32_t pocket_usage_minutes(uint32_t reported_seconds, uint64_t since_ms, uint64_t now_ms)
+{
+    return pocket_task_seconds(reported_seconds, since_ms, now_ms) / 60U;
+}
+
+int pocket_usage_cells(int left, int cells)
+{
+    int lit;
+
+    if (left < 0 || left > 100 || cells <= 0) {
+        return -1;
+    }
+    lit = (left * cells + 50) / 100;
+    if (lit == 0 && left > 0) {
+        lit = 1;
+    }
+    return lit;
+}
+
 static pocket_pet_mood_t pocket_pet_from_mood(buddy_mood_t mood)
 {
     switch (mood) {

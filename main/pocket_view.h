@@ -47,6 +47,24 @@ int pocket_card_scroll(int y, int direction, int content, int view, int step, in
 // 第三屏（任务）里一件事已经做了多少秒：中枢说的秒数加上从那以后过去的时间。
 uint32_t pocket_task_seconds(uint32_t reported, uint64_t since_ms, uint64_t now_ms);
 
+// 一共几屏轮着切：中枢发过用量就是四屏（多一屏用量），否则三屏。
+int pocket_screen_count(const buddy_ui_snapshot_t *snapshot);
+// 现在在第几屏（0 起）；不在这几屏上（菜单之类）是 -1。从第三屏进到一件任务里时
+// 仍算第三屏。
+int pocket_screen_index(const buddy_ui_snapshot_t *snapshot);
+// 设备现在的时间（Unix 秒）：对面同步过来的时间加上从那以后过去的。没同步过是 0。
+int64_t pocket_now_epoch(const buddy_ui_snapshot_t *snapshot);
+// 第四屏（用量）里一个窗口什么时候重置：out 里写当地的 “HH:MM”。返回星期几
+// （1 到 7，周一是 1）；就在今天、或者不知道今天是哪天（now_epoch 为 0）时返回 0。
+// at 为 0（不知道）或者已经过了时返回 -1，写入空串。
+int pocket_format_reset(uint32_t at, int32_t timezone_offset_seconds, int64_t now_epoch,
+                        char *out, size_t size);
+// 用量里的数是多少分钟之前的：中枢说的秒数加上从那以后过去的时间。
+uint32_t pocket_usage_minutes(uint32_t reported_seconds, uint64_t since_ms, uint64_t now_ms);
+// 进度条 cells 格里亮几格：剩得越多亮得越多；还剩一点就至少亮一格，一点不剩才全灭。
+// left 不在 0 到 100 之间（不知道）时返回 -1。
+int pocket_usage_cells(int left, int cells);
+
 // 换固件这件事现在要不要占着屏幕：正在收、正在核对、马上重启。
 // 收到一半连接断了（等手机回来）时不占，照常显示别的。
 bool pocket_update_shown(pocket_update_phase_t phase);

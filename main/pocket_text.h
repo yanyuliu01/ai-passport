@@ -72,6 +72,42 @@
 #define PT_TASK_NO_STEPS   "（还没有进展）"
 #define PT_TASKS_HINT      "按住确认键 接着这件事说"
 
+// ---- 努力程度：跟在帮手名字后面的那个字（“codex 高”）----
+#define PT_EFFORT_MINIMAL  "最低"
+#define PT_EFFORT_LOW      "低"
+#define PT_EFFORT_MEDIUM   "中"
+#define PT_EFFORT_HIGH     "高"
+#define PT_EFFORT_XHIGH    "特高"
+#define PT_EFFORT_MAX      "最高"
+
+// ---- 第四屏：用量。每个订阅账号还剩多少，每个帮手用的是哪个模型 ----
+#define PT_USAGE_EMPTY     "还没有用量数据"
+#define PT_USAGE_EMPTY_SUB "帮手做过一件事\n这里就有了"
+#define PT_USAGE_SHORT     "5 小时"
+#define PT_USAGE_WEEK      "本周"
+// 还剩百分之几填在 %u 里
+#define PT_USAGE_LEFT      "剩 %u%%"
+#define PT_USAGE_GONE      "用完了"
+#define PT_USAGE_UNKNOWN   "额度还不知道"
+// 没有订阅的帮手：模型名后面跟这个
+#define PT_USAGE_PAYG      "按量"
+// 这个帮手还没干过活，不知道它用的是哪个模型
+#define PT_USAGE_NO_MODEL  "还没跑过"
+// 什么时候重置。%s 是 “14:20”，或者不在今天时的 “周三 09:00”
+#define PT_USAGE_RESET     "%s 重置"
+#define PT_USAGE_RESET_BOTH "%s · %s 重置"
+#define PT_WEEKDAY_1       "周一"
+#define PT_WEEKDAY_2       "周二"
+#define PT_WEEKDAY_3       "周三"
+#define PT_WEEKDAY_4       "周四"
+#define PT_WEEKDAY_5       "周五"
+#define PT_WEEKDAY_6       "周六"
+#define PT_WEEKDAY_7       "周日"
+// 这些数是多久之前的
+#define PT_USAGE_AGE_NOW   "刚刚更新"
+#define PT_USAGE_AGE_MIN   "%u 分钟前更新"
+#define PT_USAGE_AGE_HOUR  "%u 小时前更新"
+
 // ---- 顶栏：后台在做几件事 ----
 #define PT_TOP_DOING       "在做 %u"
 

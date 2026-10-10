@@ -357,10 +357,83 @@ static void test_task_clock(void)
     assert(pocket_task_seconds(UINT32_MAX, 0, 10000) == UINT32_MAX);
 }
 
+static void test_which_screen(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+
+    /* 三屏；中枢发过用量就多一屏。 */
+    assert(pocket_screen_count(NULL) == 3 && pocket_screen_count(&snapshot) == 3);
+    assert(pocket_screen_index(NULL) == -1 && pocket_screen_index(&snapshot) == 0);
+    snapshot.page = BUDDY_PAGE_TALK;
+    assert(pocket_screen_index(&snapshot) == 1);
+    /* 从第三屏进到一件任务里：还算第三屏。 */
+    snapshot.card_thread = true;
+    assert(pocket_screen_index(&snapshot) == 2);
+    snapshot.page = BUDDY_PAGE_TASKS;
+    assert(pocket_screen_index(&snapshot) == 2);
+    snapshot.usage_known = true;
+    snapshot.page = BUDDY_PAGE_USAGE;
+    assert(pocket_screen_count(&snapshot) == 4 && pocket_screen_index(&snapshot) == 3);
+    snapshot.page = BUDDY_PAGE_MENU;
+    assert(pocket_screen_index(&snapshot) == -1);
+    /* 有别的东西占着屏幕时不在任何一屏上。 */
+    snapshot.page = BUDDY_PAGE_USAGE;
+    snapshot.voice_phase = BUDDY_VOICE_LISTENING;
+    assert(pocket_screen_index(&snapshot) == -1);
+}
+
+static void test_usage_times_and_bars(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+    char text[8];
+    /* 2026-10-10 15:00:00 北京时间（周六）= 07:00:00 UTC。 */
+    const int64_t now = 1791615600;
+    const int32_t zone = 8 * 3600;
+
+    /* 设备现在几点：对面同步过来的加上从那以后过去的。没同步过是 0。 */
+    assert(pocket_now_epoch(NULL) == 0 && pocket_now_epoch(&snapshot) == 0);
+    snapshot.epoch_seconds = now;
+    snapshot.time_received_ms = 1000;
+    snapshot.uptime_ms = 61000;
+    assert(pocket_now_epoch(&snapshot) == now + 60);
+
+    /* 今天之内只写几点。 */
+    assert(pocket_format_reset((uint32_t)(now + 2 * 3600 + 20 * 60), zone, now, text,
+                               sizeof(text)) == 0);
+    assert(strcmp(text, "17:20") == 0);
+    /* 过了半夜就是明天：带星期（周日是 7）。 */
+    assert(pocket_format_reset((uint32_t)(now + 10 * 3600), zone, now, text, sizeof(text)) == 7);
+    assert(strcmp(text, "01:00") == 0);
+    /* 四天后的上午九点：周三（3）。 */
+    assert(pocket_format_reset((uint32_t)(now + 4 * 86400 - 6 * 3600), zone, now, text,
+                               sizeof(text)) == 3);
+    assert(strcmp(text, "09:00") == 0);
+    /* 不知道今天是哪天：只写几点。 */
+    assert(pocket_format_reset((uint32_t)(now + 10 * 3600), zone, 0, text, sizeof(text)) == 0);
+    assert(strcmp(text, "01:00") == 0);
+    /* 不知道、或者已经过了：什么都不写。 */
+    assert(pocket_format_reset(0, zone, now, text, sizeof(text)) == -1 && text[0] == '\0');
+    assert(pocket_format_reset((uint32_t)(now - 1), zone, now, text, sizeof(text)) == -1);
+    assert(pocket_format_reset((uint32_t)now, zone, now, NULL, 0) == -1);
+
+    /* 这些数是多少分钟之前的。 */
+    assert(pocket_usage_minutes(0, 1000, 1000) == 0U);
+    assert(pocket_usage_minutes(119, 1000, 1500) == 1U);
+    assert(pocket_usage_minutes(120, 1000, 61000) == 3U);
+
+    /* 十二格：剩一点就至少亮一格，一点不剩才全灭；不知道是 -1。 */
+    assert(pocket_usage_cells(100, 12) == 12 && pocket_usage_cells(58, 12) == 7);
+    assert(pocket_usage_cells(1, 12) == 1 && pocket_usage_cells(0, 12) == 0);
+    assert(pocket_usage_cells(-1, 12) == -1 && pocket_usage_cells(101, 12) == -1);
+    assert(pocket_usage_cells(50, 0) == -1);
+}
+
 int main(void)
 {
     test_scrolling_inside_a_card();
     test_task_clock();
+    test_which_screen();
+    test_usage_times_and_bars();
     test_view_priority();
     test_voice_view();
     test_update_view();

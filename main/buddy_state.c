@@ -156,6 +156,13 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     memset(state->tasks, 0, sizeof(state->tasks));
     state->task_count = 0;
     state->task_selected = 0;
+    /* Usage too: the numbers go stale with nobody refreshing them. */
+    memset(state->usage, 0, sizeof(state->usage));
+    state->usage_count = 0;
+    state->usage_known = false;
+    if (state->page == BUDDY_PAGE_USAGE) {
+        state->page = BUDDY_PAGE_HOME; /* the screen is no longer in the round */
+    }
     buddy_invalidate_prompt(state);
 }
 
@@ -386,6 +393,13 @@ static void buddy_scroll(buddy_key_t key, buddy_action_t *action)
     }
 }
 
+/* Where the round goes after the tasks: to the usage screen when the hub sends
+ * usage, otherwise straight home (as before there was a fourth screen). */
+static buddy_page_t buddy_after_tasks(const buddy_state_t *state)
+{
+    return state->usage_known ? BUDDY_PAGE_USAGE : BUDDY_PAGE_HOME;
+}
+
 static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
                                buddy_action_t *action)
 {
@@ -414,6 +428,7 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
     case BUDDY_PAGE_HOME:
     case BUDDY_PAGE_TALK:
     case BUDDY_PAGE_TASKS:
+    case BUDDY_PAGE_USAGE:
     case BUDDY_PAGE_COUNT:
         break;
     }
@@ -426,17 +441,22 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
         if (state->page == BUDDY_PAGE_HOME) {
             state->page = BUDDY_PAGE_TALK;
             state->thread = false;
+        } else if (state->page == BUDDY_PAGE_USAGE) {
+            state->page = BUDDY_PAGE_HOME;
         } else if (state->page == BUDDY_PAGE_TALK) {
-            state->page = buddy_in_thread(state) ? BUDDY_PAGE_HOME : BUDDY_PAGE_TASKS;
+            state->page = buddy_in_thread(state) ? buddy_after_tasks(state) : BUDDY_PAGE_TASKS;
             state->thread = false;
         } else if (state->task_selected < state->task_count) {
             state->page = BUDDY_PAGE_TALK;
             state->thread = true;
         } else {
-            state->page = BUDDY_PAGE_HOME;
+            state->page = buddy_after_tasks(state);
         }
         ++state->card_serial;
         buddy_set_ui_refresh(action);
+    } else if (state->page == BUDDY_PAGE_USAGE) {
+        /* More helpers than fit: the screen scrolls. */
+        buddy_scroll(key, action);
     } else if (state->page == BUDDY_PAGE_TALK) {
         /* Within the thing on screen; at its end the interface asks for the
          * previous or the next one (BUDDY_EVENT_CARD_STEP). */
@@ -449,7 +469,7 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
 static bool buddy_on_a_screen(const buddy_state_t *state)
 {
     return state->page == BUDDY_PAGE_HOME || state->page == BUDDY_PAGE_TALK ||
-           state->page == BUDDY_PAGE_TASKS;
+           state->page == BUDDY_PAGE_TASKS || state->page == BUDDY_PAGE_USAGE;
 }
 
 static bool buddy_prompt_ids_match(const buddy_prompt_t *left, const buddy_prompt_t *right)
@@ -869,6 +889,23 @@ static void buddy_apply_tasks(buddy_state_t *state, const buddy_event_t *event,
     buddy_set_ui_refresh(action);
 }
 
+static void buddy_apply_usage(buddy_state_t *state, const buddy_event_t *event,
+                              uint64_t now_ms, buddy_action_t *action)
+{
+    unsigned count = event->usage_count < BUDDY_USAGE_COUNT ? event->usage_count
+                                                            : BUDDY_USAGE_COUNT;
+
+    if (event->ble.connection_generation != state->ble_connection_generation) {
+        return;
+    }
+    memset(state->usage, 0, sizeof(state->usage));
+    memcpy(state->usage, event->usage, count * sizeof(state->usage[0]));
+    state->usage_count = count;
+    state->usage_since_ms = now_ms;
+    state->usage_known = true;
+    buddy_set_ui_refresh(action);
+}
+
 /* The conversation screen was scrolled past the end of the card it shows. */
 static void buddy_card_step(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
 {
@@ -1143,6 +1180,9 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     case BUDDY_EVENT_TASKS:
         buddy_apply_tasks(state, event, now_ms, action);
         break;
+    case BUDDY_EVENT_USAGE:
+        buddy_apply_usage(state, event, now_ms, action);
+        break;
     case BUDDY_EVENT_KEY_LONG:
         buddy_long_press(state, event->key, action);
         break;
@@ -1270,6 +1310,10 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     snapshot->task_count = state->task_count;
     snapshot->task_selected = state->task_selected;
     snapshot->tasks_since_ms = state->tasks_since_ms;
+    memcpy(snapshot->usage, state->usage, sizeof(snapshot->usage));
+    snapshot->usage_count = state->usage_count;
+    snapshot->usage_since_ms = state->usage_since_ms;
+    snapshot->usage_known = state->usage_known;
     /* The hub says how many things are in progress; the list shows at most a
      * few of them, so whichever says more is right. */
     snapshot->doing = 0;

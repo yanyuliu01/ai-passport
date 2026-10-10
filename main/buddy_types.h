@@ -36,6 +36,12 @@
 #define BUDDY_TASK_COUNT 4
 #define BUDDY_TASK_TITLE_MAX 48
 #define BUDDY_TASK_LINE_MAX 64
+/* Usage, as the hub lists it for the fourth screen: one entry per subscription
+ * login (what is left of its two windows) with the helpers that share it, and
+ * one per helper that has no subscription behind it (only its model). */
+#define BUDDY_USAGE_COUNT 4
+#define BUDDY_USAGE_WHO 2
+#define BUDDY_MODEL_MAX 20
 
 typedef enum {
     BUDDY_CONNECTION_OFFLINE,
@@ -60,6 +66,9 @@ typedef enum {
     BUDDY_PAGE_HOME,    /* first screen: Xiaoyou herself and what she is doing */
     BUDDY_PAGE_TALK,    /* second screen: the conversation, one thing at a time */
     BUDDY_PAGE_TASKS,   /* third screen: the things in progress */
+    BUDDY_PAGE_USAGE,   /* fourth screen: what is left of each subscription, and
+                         * which model each helper runs on; only in the round
+                         * once the hub has sent usage */
     BUDDY_PAGE_MENU,    /* double press OK */
     BUDDY_PAGE_NOTICES, /* recent entries from the host */
     BUDDY_PAGE_HELPERS, /* the agents Xiaoyou can hand work to */
@@ -123,6 +132,26 @@ typedef enum {
     BUDDY_TASK_CANCELLED,
 } buddy_task_state_t;
 
+/* How hard a helper works on a thing (the runtime's effort). */
+typedef enum {
+    BUDDY_EFFORT_NONE, /* not said: the helper has no levels, or an older hub */
+    BUDDY_EFFORT_MINIMAL,
+    BUDDY_EFFORT_LOW,
+    BUDDY_EFFORT_MEDIUM,
+    BUDDY_EFFORT_HIGH,
+    BUDDY_EFFORT_XHIGH,
+    BUDDY_EFFORT_MAX,
+} buddy_effort_t;
+
+/* Where a subscription login stands. */
+typedef enum {
+    BUDDY_QUOTA_UNKNOWN,
+    BUDDY_QUOTA_OK,
+    BUDDY_QUOTA_WARN, /* a window is nearly used up */
+    BUDDY_QUOTA_OUT,  /* a window is used up */
+    BUDDY_QUOTA_NONE, /* no subscription: paid by use, nothing to count down */
+} buddy_quota_t;
+
 typedef enum {
     BUDDY_MOOD_IDLE,
     BUDDY_MOOD_BUSY,
@@ -173,6 +202,7 @@ typedef enum {
      * previous (key UP) or next (key DOWN) one. Raised by the interface. */
     BUDDY_EVENT_CARD_STEP,
     BUDDY_EVENT_FIRMWARE,   /* {"cmd":"fw",…}: goes to the updater, not to the state machine */
+    BUDDY_EVENT_USAGE,
 } buddy_event_type_t;
 
 typedef enum {
@@ -265,6 +295,7 @@ typedef struct {
     char stage[BUDDY_STAGE_MAX];   /* the title of the thing she handed over */
     char card[BUDDY_CARD_ID_MAX];  /* the card this turn went onto; empty when there is none */
     unsigned doing;                /* how many things are in progress in the background */
+    uint8_t effort;                /* buddy_effort_t the helper works at; NONE when not said */
 } buddy_chat_t;
 
 /* One card. Its words live in buddy_cards_t.text. */
@@ -277,6 +308,7 @@ typedef struct {
     uint8_t state;                 /* buddy_card_state_t */
     uint8_t edits;                 /* how many times it was added to or changed */
     bool cut;                      /* reply was longer than the device keeps */
+    uint8_t effort;                /* buddy_effort_t the helper works or worked at */
 } buddy_card_t;
 
 /* Cards in the order they were opened, oldest first. See buddy_cards.h. */
@@ -297,6 +329,7 @@ typedef struct {
     buddy_card_state_t state;
     uint8_t edits;
     bool clear; /* forget every card (the hub is about to send them again) */
+    uint8_t effort; /* buddy_effort_t */
 } buddy_card_update_t;
 
 /* A thing handed to a helper: in progress, or one of the latest that ended. */
@@ -309,7 +342,29 @@ typedef struct {
     char line2[BUDDY_TASK_LINE_MAX];
     buddy_task_state_t state;
     uint32_t seconds; /* how long it had been going when the hub said so */
+    uint8_t effort;   /* buddy_effort_t */
 } buddy_task_t;
+
+/* A helper on the usage screen. */
+typedef struct {
+    char name[BUDDY_AGENT_MAX];
+    char model[BUDDY_MODEL_MAX]; /* the model it runs on; empty until it has run once */
+    uint8_t effort;              /* buddy_effort_t it usually works at */
+    uint8_t running;             /* how many things it is working on right now */
+} buddy_usage_who_t;
+
+/* One entry of the usage screen. left_*: percent that remains, -1 when unknown.
+ * reset_*: when the window starts over, Unix seconds, 0 when unknown. */
+typedef struct {
+    buddy_usage_who_t who[BUDDY_USAGE_WHO];
+    uint32_t reset_short;
+    uint32_t reset_week;
+    uint32_t age; /* how many seconds old the numbers were when the hub sent them */
+    int8_t left_short;
+    int8_t left_week;
+    uint8_t state; /* buddy_quota_t */
+    uint8_t who_count;
+} buddy_usage_t;
 
 /* An agent Xiaoyou can hand work to. */
 typedef struct {
@@ -372,6 +427,8 @@ typedef struct {
     buddy_task_t tasks[BUDDY_TASK_COUNT];
     unsigned task_count;
     pocket_update_command_t firmware;
+    buddy_usage_t usage[BUDDY_USAGE_COUNT];
+    unsigned usage_count;
 } buddy_event_t;
 
 typedef struct {
@@ -453,6 +510,12 @@ typedef struct {
     unsigned task_count;
     unsigned task_selected;
     uint64_t tasks_since_ms;
+    /* The usage screen: usage_known says the hub sends usage at all (the screen
+     * is then in the round), usage_since_ms when the list arrived. */
+    buddy_usage_t usage[BUDDY_USAGE_COUNT];
+    unsigned usage_count;
+    uint64_t usage_since_ms;
+    bool usage_known;
     /* How many things are in progress in the background, for the top bar. */
     unsigned doing;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];

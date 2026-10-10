@@ -429,9 +429,35 @@ static bool buddy_copy_id(const cJSON *object, const char *name, char *destinati
     return true;
 }
 
+/* "eff": how hard a helper works on a thing, as the runtime names it. Missing,
+ * or a word this firmware does not know, reads as "not said". */
+static uint8_t buddy_parse_effort(const cJSON *object)
+{
+    static const struct {
+        const char *name;
+        buddy_effort_t effort;
+    } efforts[] = {
+        {"minimal", BUDDY_EFFORT_MINIMAL}, {"low", BUDDY_EFFORT_LOW},
+        {"medium", BUDDY_EFFORT_MEDIUM},   {"high", BUDDY_EFFORT_HIGH},
+        {"xhigh", BUDDY_EFFORT_XHIGH},     {"max", BUDDY_EFFORT_MAX},
+    };
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, "eff");
+    size_t index;
+
+    if (!cJSON_IsString(item) || item->valuestring == NULL) {
+        return (uint8_t)BUDDY_EFFORT_NONE;
+    }
+    for (index = 0; index < sizeof(efforts) / sizeof(efforts[0]); ++index) {
+        if (strcmp(item->valuestring, efforts[index].name) == 0) {
+            return (uint8_t)efforts[index].effort;
+        }
+    }
+    return (uint8_t)BUDDY_EFFORT_NONE;
+}
+
 /* {"cmd":"chat","phase":"thinking|helper|done|failed|idle","said":"...",
  *  "reply":"...","agent":"...","stage":"...","mood":"idle|busy|ask|happy|oops",
- *  "card":"c12","doing":2}
+ *  "card":"c12","doing":2,"eff":"high"}
  * A hub host reports where the conversation with Xiaoyou stands: this is what
  * the first screen shows. Everything except phase is optional. card is the
  * card the turn went onto, doing how many things are in progress in the
@@ -505,6 +531,7 @@ static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
         !buddy_json_unsigned(object, "doing", &event->chat.doing)) {
         return false;
     }
+    event->chat.effort = buddy_parse_effort(object);
     event->type = BUDDY_EVENT_CHAT;
     return true;
 }
@@ -567,6 +594,7 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
         return false;
     }
     event->card.edits = edits > 255U ? 255U : (uint8_t)edits;
+    event->card.effort = buddy_parse_effort(object);
     return true;
 }
 
@@ -611,6 +639,7 @@ static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
             return false;
         }
         task->seconds = seconds;
+        task->effort = buddy_parse_effort(item);
         task->state = BUDDY_TASK_WORKING;
         if (state != NULL && strcmp(state, "waiting") == 0) {
             task->state = BUDDY_TASK_WAITING;
@@ -630,6 +659,128 @@ static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
         }
     }
     event->type = BUDDY_EVENT_TASKS;
+    return true;
+}
+
+/* A percentage that remains, 0 to 100; missing or anything else is "unknown". */
+static int8_t buddy_parse_left(const cJSON *object, const char *name)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
+
+    if (!cJSON_IsNumber(item) || !(item->valuedouble >= 0.0) || item->valuedouble > 100.0) {
+        return -1;
+    }
+    return (int8_t)item->valuedouble;
+}
+
+/* Unix seconds; missing, zero or out of range is "unknown". */
+static uint32_t buddy_parse_seconds(const cJSON *object, const char *name)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
+
+    if (!cJSON_IsNumber(item) || !(item->valuedouble >= 1.0) ||
+        item->valuedouble > 4294967295.0) {
+        return 0U;
+    }
+    return (uint32_t)item->valuedouble;
+}
+
+/* {"cmd":"usage","list":[{"st":"ok|warn|out|unknown|na","w5":58,"r5":1791620000,
+ *  "w7":81,"r7":1792000000,"age":120,
+ *  "who":[{"n":"codex","m":"gpt-…","eff":"medium","run":1}, ...]}, ...]}
+ * The fourth screen. One entry per subscription login: what is left of its
+ * five-hour (w5) and weekly (w7) window in percent, when each resets (r5, r7,
+ * Unix seconds), how old the numbers are, and the helpers that share the login.
+ * "na" is a helper with no subscription behind it: only who it is and its model.
+ * Entries beyond BUDDY_USAGE_COUNT, helpers beyond BUDDY_USAGE_WHO and entries
+ * without a helper are left out; an empty list means there is nothing to show. */
+static bool buddy_parse_usage(const cJSON *object, buddy_event_t *event)
+{
+    static const struct {
+        const char *name;
+        buddy_quota_t state;
+    } states[] = {
+        {"ok", BUDDY_QUOTA_OK},   {"warn", BUDDY_QUOTA_WARN}, {"out", BUDDY_QUOTA_OUT},
+        {"na", BUDDY_QUOTA_NONE}, {"unknown", BUDDY_QUOTA_UNKNOWN},
+    };
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
+    const cJSON *item;
+
+    if (list == NULL || !cJSON_IsArray(list)) {
+        return false;
+    }
+    cJSON_ArrayForEach(item, list)
+    {
+        buddy_usage_t *usage;
+        const cJSON *who;
+        const cJSON *helper;
+        const char *state;
+        size_t state_length;
+        unsigned age = 0;
+        size_t index;
+
+        if (event->usage_count >= BUDDY_USAGE_COUNT) {
+            break;
+        }
+        if (!cJSON_IsObject(item) ||
+            !buddy_json_optional_string(item, "st", &state, &state_length)) {
+            return false;
+        }
+        usage = &event->usage[event->usage_count];
+        usage->state = (uint8_t)BUDDY_QUOTA_UNKNOWN;
+        for (index = 0; state != NULL && index < sizeof(states) / sizeof(states[0]); ++index) {
+            if (strcmp(state, states[index].name) == 0) {
+                usage->state = (uint8_t)states[index].state;
+            }
+        }
+        usage->left_short = buddy_parse_left(item, "w5");
+        usage->left_week = buddy_parse_left(item, "w7");
+        usage->reset_short = buddy_parse_seconds(item, "r5");
+        usage->reset_week = buddy_parse_seconds(item, "r7");
+        if (cJSON_GetObjectItemCaseSensitive(item, "age") != NULL &&
+            !buddy_json_unsigned(item, "age", &age)) {
+            return false;
+        }
+        usage->age = age;
+        who = cJSON_GetObjectItemCaseSensitive(item, "who");
+        if (who != NULL && !cJSON_IsArray(who)) {
+            return false;
+        }
+        cJSON_ArrayForEach(helper, who)
+        {
+            buddy_usage_who_t *one;
+            unsigned running = 0;
+
+            if (usage->who_count >= BUDDY_USAGE_WHO) {
+                break;
+            }
+            if (!cJSON_IsObject(helper)) {
+                return false;
+            }
+            one = &usage->who[usage->who_count];
+            if (!buddy_copy_field(helper, "n", one->name, sizeof(one->name), NULL) ||
+                !buddy_copy_field(helper, "m", one->model, sizeof(one->model), NULL)) {
+                return false;
+            }
+            if (cJSON_GetObjectItemCaseSensitive(helper, "run") != NULL &&
+                !buddy_json_unsigned(helper, "run", &running)) {
+                return false;
+            }
+            one->running = running > 255U ? 255U : (uint8_t)running;
+            one->effort = buddy_parse_effort(helper);
+            if (one->name[0] != '\0') {
+                ++usage->who_count;
+            } else {
+                memset(one, 0, sizeof(*one));
+            }
+        }
+        if (usage->who_count > 0U) {
+            ++event->usage_count;
+        } else {
+            memset(usage, 0, sizeof(*usage));
+        }
+    }
+    event->type = BUDDY_EVENT_USAGE;
     return true;
 }
 
@@ -862,6 +1013,8 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
         result = buddy_parse_card(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "tasks") == 0) {
         result = buddy_parse_tasks(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "usage") == 0) {
+        result = buddy_parse_usage(root, event) ? (int)event->type : result;
     } else if (strcmp(command, "fw") == 0) {
         result = buddy_parse_firmware(root, event) ? (int)event->type : result;
     } else if (buddy_is_unsupported_folder_command(command)) {
@@ -1046,7 +1199,7 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
 
     buddy_writer_init(&writer, json, size);
     buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                         "\"threads\":true}\n");
+                         "\"threads\":true,\"usage\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

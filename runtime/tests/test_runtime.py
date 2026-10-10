@@ -3173,7 +3173,10 @@ class UsageTests(TempDirCase):
         meter.poke()
         self.assertTrue(done.wait(5))
         self.assertTrue(meter.wait(seen, 5))
-        self.assertFalse(meter.wait(meter.rev, 0.01))
+        # Both accounts are asked in that one round; let it settle.
+        settled = meter.rev
+        while meter.wait(settled, 0.2):
+            settled = meter.rev
         meter.poke()
         self.now[0] += self.config.usage_refresh_seconds - 1
         meter.poke()

@@ -5,6 +5,7 @@
 //   第二屏 对话：一屏一件事——你说的那句和小幽最新的话；上下键在这件事里翻，翻到头
 //               再按就换到上一件 / 下一件。
 //   第三屏 任务：正在做的事，和选中那件的最近两步。
+//   第四屏 用量：每个订阅账号还剩多少、每个帮手用的是哪个模型。中枢发过用量才有这一屏。
 // 低频的东西（通知、帮手、设置）都收在双击确认键的菜单里。
 //
 // 结构：一块屏幕上常驻三层——顶栏、内容区、底部按键提示。内容区里每个页面和每个
@@ -75,10 +76,11 @@ enum {
 #define PET_CHAT_SCALE  3
 #define PET_FRAME_MS    450
 
-// 顶栏中间的三个小点：现在在第几屏。
+// 顶栏中间的小点：现在在第几屏。三屏三个；有用量那一屏时四个。
 #define DOT_SIZE        5
 #define DOT_GAP         5
-#define DOT_X           (SCREEN_W / 2 - (3 * DOT_SIZE + 2 * DOT_GAP) / 2)
+#define DOT_MAX         4
+#define DOT_X(count)    (SCREEN_W / 2 - ((count) * DOT_SIZE + ((count) - 1) * DOT_GAP) / 2)
 #define DOT_Y           15
 
 // 第一屏。小幽下面是标题，再下面最多三行。她把活交给帮手时，第一行换成
@@ -125,6 +127,21 @@ enum {
 #define TASK_LINE_Y     (TASK_RULE_Y + 5)
 #define TASK_HINT_Y     (TASK_LINE_Y + 4 * LINE_16 + 1)
 
+// 第四屏。一个账号一块：每个帮手一行（名牌，后面是模型名），下面两行是两个窗口各还剩
+// 多少（一条格子、一个数），再一行小字是什么时候重置。没有订阅的帮手只有名牌那一行。
+#define USAGE_WHO_H     24
+#define USAGE_ROW_H     18
+#define USAGE_GAP       8
+#define USAGE_LABEL_W   46
+#define USAGE_CELLS     12
+#define USAGE_CELL_W    6
+#define USAGE_CELL_GAP  2
+#define USAGE_BAR_W     (USAGE_CELLS * (USAGE_CELL_W + USAGE_CELL_GAP) - USAGE_CELL_GAP)
+#define USAGE_BAR_H     8
+#define USAGE_LEFT_W    64
+// 名牌里名字最宽能占多少（档位那个字另算）。
+#define USAGE_TAG_TEXT_W 84
+
 // 说话时的音量条。
 #define LEVEL_BARS      15
 #define LEVEL_SAMPLE_MS 90U
@@ -165,18 +182,35 @@ typedef struct {
     const char *text;
 } hint_item_t;
 
-// 名牌：一个带描边的小圆角框，里面是帮手的名字。
+// 名牌：一个带描边的小圆角框，里面是帮手的名字，后面可以跟着档位（“codex 高”）。
 typedef struct {
     lv_obj_t *box;
     lv_obj_t *label;
-    char name[BUDDY_AGENT_MAX];
+    char name[BUDDY_AGENT_MAX + 12];  // 现在写在上面的字
+    char who[BUDDY_AGENT_MAX];        // 这是照着哪个名字、哪一档、多宽摆的
+    uint8_t effort;
+    int16_t fit;
 } tag_t;
+
+// 第四屏的一块，用到的时候才建。
+typedef struct {
+    lv_obj_t *box;
+    tag_t tags[BUDDY_USAGE_WHO];
+    lv_obj_t *models[BUDDY_USAGE_WHO];
+    uintptr_t model_shown[BUDDY_USAGE_WHO];  // 上次量的是哪段字、名牌多宽
+    bool model_below[BUDDY_USAGE_WHO];       // 名牌旁边放不下，写在下一行
+    lv_obj_t *names[2];   // “5 小时”“本周”
+    lv_obj_t *bars[2];
+    lv_obj_t *lefts[2];
+    lv_obj_t *reset;
+} usage_block_t;
 
 static struct {
     // 顶栏
     lv_obj_t *link_dot;
     lv_obj_t *clock;
-    lv_obj_t *page_dots[3];
+    lv_obj_t *page_dots[DOT_MAX];
+    int dot_count;
     lv_obj_t *doing;
     lv_obj_t *battery;
     lv_obj_t *battery_fill;
@@ -227,6 +261,11 @@ static struct {
     lv_obj_t *task_lines[2];
     lv_obj_t *task_result;
     lv_obj_t *tasks_empty;
+    // 第四屏：用量
+    lv_obj_t *usage_scroll;
+    lv_obj_t *usage_empty;
+    lv_obj_t *usage_age;
+    usage_block_t usage_blocks[BUDDY_USAGE_COUNT];
     // 通知
     lv_obj_t *entry_rows[BUDDY_ENTRY_COUNT];
     lv_obj_t *entry_labels[BUDDY_ENTRY_COUNT];
@@ -706,6 +745,28 @@ static void bars_draw_cb(lv_event_t *event)
     }
 }
 
+// 第四屏的一条额度：USAGE_CELLS 个格子，还剩多少就亮多少。剩得不多了是黄的，
+// 一点不剩时全灭。还剩百分之几存在 user_data 里（加一，零表示还没给过）。
+static void usage_bar_draw_cb(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_current_target(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_rect_dsc_t dsc;
+    lv_area_t coords;
+    int left = (int)(intptr_t)lv_obj_get_user_data(obj) - 1;
+    int lit = pocket_usage_cells(left, USAGE_CELLS);
+    int index;
+
+    lv_obj_get_coords(obj, &coords);
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_COVER;
+    for (index = 0; index < USAGE_CELLS; ++index) {
+        draw_block(layer, &dsc, coords.x1 + index * (USAGE_CELL_W + USAGE_CELL_GAP), coords.y1,
+                   USAGE_CELL_W, USAGE_BAR_H,
+                   index < lit ? (left < 20 ? C_WARN : C_OK) : C_LINE);
+    }
+}
+
 // 换固件的进度：UPDATE_CELLS 个格子，写进闪存多少就点亮多少。
 static void update_bar_draw_cb(lv_event_t *event)
 {
@@ -739,16 +800,17 @@ static void build_top_bar(lv_obj_t *root)
     {
         int index;
 
-        for (index = 0; index < 3; ++index) {
-            s.page_dots[index] =
-                make_box(root, DOT_X + index * (DOT_SIZE + DOT_GAP), DOT_Y, DOT_SIZE, DOT_SIZE);
+        for (index = 0; index < DOT_MAX; ++index) {
+            s.page_dots[index] = make_box(root, DOT_X(3) + index * (DOT_SIZE + DOT_GAP), DOT_Y,
+                                          DOT_SIZE, DOT_SIZE);
             fill(s.page_dots[index], C_LINE, LV_RADIUS_CIRCLE);
             lv_obj_add_flag(s.page_dots[index], LV_OBJ_FLAG_HIDDEN);
         }
+        s.dot_count = 3;
     }
     // 后台在做几件事：没有就不显示。
     s.doing = make_label(root, &pocket_font_14, C_XIAOYOU, "");
-    lv_obj_set_pos(s.doing, DOT_X + 3 * (DOT_SIZE + DOT_GAP) + 4, 8);
+    lv_obj_set_pos(s.doing, DOT_X(3) + 3 * (DOT_SIZE + DOT_GAP) + 4, 8);
     lv_obj_add_flag(s.doing, LV_OBJ_FLAG_HIDDEN);
 
     s.battery = make_box(root, SCREEN_W - 22 - 24, 12, 22, 12);
@@ -788,6 +850,9 @@ static void make_tag(lv_obj_t *parent, tag_t *tag, int x, int y)
     tag->label = make_label(tag->box, &pocket_font_16, C_XIAOYOU, "");
     lv_obj_align(tag->label, LV_ALIGN_LEFT_MID, 0, 0);
     tag->name[0] = '\0';
+    tag->who[0] = '\0';
+    tag->effort = (uint8_t)BUDDY_EFFORT_NONE;
+    tag->fit = 0;
 }
 
 static void build_home(lv_obj_t *page)
@@ -936,6 +1001,32 @@ static void build_tasks(lv_obj_t *page)
     lv_obj_set_width(s.tasks_empty, INNER_W);
     lv_obj_set_style_text_align(s.tasks_empty, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s.tasks_empty, SIDE, 104);
+}
+
+// 第四屏：一开始只有空着时的两行字和最下面那行“多久之前更新的”；每一块用到时才建
+// （usage_block），这样没有用量可看的时候不占内存。
+static void build_usage(lv_obj_t *page)
+{
+    lv_obj_t *label;
+
+    s.usage_scroll = make_box(page, 0, 0, SCREEN_W, AREA_H);
+    lv_obj_add_flag(s.usage_scroll, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s.usage_scroll, LV_DIR_VER);
+    style_scrollbar(s.usage_scroll);
+    s.usage_age = make_label(s.usage_scroll, &pocket_font_14, C_DIM, "");
+    lv_obj_set_width(s.usage_age, INNER_W);
+    lv_obj_set_style_text_align(s.usage_age, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_x(s.usage_age, SIDE);
+
+    s.usage_empty = make_box(page, 0, 0, SCREEN_W, AREA_H);
+    label = make_label(s.usage_empty, &pocket_font_22, C_DIM, PT_USAGE_EMPTY);
+    lv_obj_set_width(label, INNER_W);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(label, SIDE, 84);
+    label = make_label(s.usage_empty, &pocket_font_16, C_DIM, PT_USAGE_EMPTY_SUB);
+    lv_obj_set_width(label, INNER_W);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(label, SIDE, 122);
 }
 
 static void build_notices(lv_obj_t *page)
@@ -1146,7 +1237,8 @@ void pocket_ui_init(void)
 {
     static void (*const builders[BUDDY_PAGE_COUNT])(lv_obj_t *) = {
         [BUDDY_PAGE_HOME] = build_home,       [BUDDY_PAGE_TALK] = build_talk,
-        [BUDDY_PAGE_TASKS] = build_tasks,     [BUDDY_PAGE_MENU] = build_menu,
+        [BUDDY_PAGE_TASKS] = build_tasks,     [BUDDY_PAGE_USAGE] = build_usage,
+        [BUDDY_PAGE_MENU] = build_menu,
         [BUDDY_PAGE_NOTICES] = build_notices, [BUDDY_PAGE_HELPERS] = build_helpers,
         [BUDDY_PAGE_MORE] = build_more,       [BUDDY_PAGE_GUIDE] = build_guide,
     };
@@ -1228,12 +1320,25 @@ static void set_hints(const hint_item_t *items, int count)
     }
 }
 
-// screen：现在在三屏里的第几屏（0、1、2）；不在三屏上是 -1。
+// screen：现在在第几屏（0 起）；不在这几屏上是 -1。
 static void render_top_bar(const buddy_ui_snapshot_t *snap, int screen)
 {
     char text[24];
     uint32_t color = C_DIM;
+    int count = pocket_screen_count(snap);
     int index;
+
+    if (count > DOT_MAX) {
+        count = DOT_MAX;
+    }
+    if (s.dot_count != count) {
+        // 多了（或者少了）用量那一屏：小点重新排，仍然居中。
+        s.dot_count = count;
+        for (index = 0; index < DOT_MAX; ++index) {
+            lv_obj_set_x(s.page_dots[index], DOT_X(count) + index * (DOT_SIZE + DOT_GAP));
+        }
+        lv_obj_set_x(s.doing, DOT_X(count) + count * (DOT_SIZE + DOT_GAP) + 4);
+    }
 
     // 圆点：灰是没连上，黄是正在配对，绿是连好了。
     if (snap->ble_enabled && snap->ble_connected) {
@@ -1245,9 +1350,9 @@ static void render_top_bar(const buddy_ui_snapshot_t *snap, int screen)
                               snap->time_received_ms, snap->uptime_ms, text, sizeof(text));
     set_text(s.clock, text);
 
-    // 三个小点：只在三屏上显示，亮着的那个是现在这一屏。
-    for (index = 0; index < 3; ++index) {
-        set_visible(s.page_dots[index], screen >= 0);
+    // 小点：只在这几屏上显示，亮着的那个是现在这一屏。
+    for (index = 0; index < DOT_MAX; ++index) {
+        set_visible(s.page_dots[index], screen >= 0 && index < count);
         set_bg_color(s.page_dots[index], index == screen ? C_XIAOYOU : C_LINE);
     }
     set_visible(s.doing, screen >= 0 && snap->doing > 0U);
@@ -1300,6 +1405,72 @@ static void set_tag(tag_t *tag, const char *name, uint32_t color, int max_width)
     }
     set_text_color(tag->label, color);
     set_border_color(tag->box, color);
+}
+
+// 档位写在名牌上的那个字；没说档位时是 NULL。
+static const char *effort_text(uint8_t effort)
+{
+    switch ((buddy_effort_t)effort) {
+    case BUDDY_EFFORT_MINIMAL:
+        return PT_EFFORT_MINIMAL;
+    case BUDDY_EFFORT_LOW:
+        return PT_EFFORT_LOW;
+    case BUDDY_EFFORT_MEDIUM:
+        return PT_EFFORT_MEDIUM;
+    case BUDDY_EFFORT_HIGH:
+        return PT_EFFORT_HIGH;
+    case BUDDY_EFFORT_XHIGH:
+        return PT_EFFORT_XHIGH;
+    case BUDDY_EFFORT_MAX:
+        return PT_EFFORT_MAX;
+    case BUDDY_EFFORT_NONE:
+        break;
+    }
+    return NULL;
+}
+
+// 名牌上写名字，后面跟着这件事用的档位：“codex 高”。放不下时截的是名字，档位留着。
+// 没说档位就只有名字。字和描边的颜色分开给：实心的名牌字是深色的。
+static void set_tag_tier_colors(tag_t *tag, const char *name, uint8_t effort,
+                                uint32_t text_color, uint32_t border_color, int max_width)
+{
+    static char text[sizeof(tag->name)];
+    const char *level = effort_text(effort);
+    size_t length;
+
+    if (level == NULL) {
+        if (tag->who[0] != '\0' || tag->effort != (uint8_t)BUDDY_EFFORT_NONE ||
+            strcmp(tag->name, name) != 0) {
+            tag->effort = (uint8_t)BUDDY_EFFORT_NONE;
+            tag->who[0] = '\0';
+            tag->name[0] = '\0';
+            set_tag(tag, name, border_color, max_width);
+        }
+    } else if (tag->effort != effort || tag->fit != max_width || strcmp(tag->who, name) != 0) {
+        // 量字宽不便宜，所以只在名字、档位或者能占的宽度变了的时候重排。
+        length = strlen(name);
+        (void)snprintf(text, sizeof(text), "%s %s", name, level);
+        while (length > 0U && text_width(text) > max_width) {
+            do {
+                --length;
+            } while (length > 0U && ((unsigned char)name[length] & 0xC0U) == 0x80U);
+            (void)snprintf(text, sizeof(text), "%.*s%s %s", (int)length, name, PT_ELLIPSIS,
+                           level);
+        }
+        (void)snprintf(tag->who, sizeof(tag->who), "%s", name);
+        tag->effort = effort;
+        tag->fit = (int16_t)max_width;
+        tag->name[0] = '\0';  // 让 set_tag 重新摆一次
+        set_tag(tag, text, border_color, max_width);
+    }
+    set_text_color(tag->label, text_color);
+    set_border_color(tag->box, border_color);
+}
+
+static void set_tag_tier(tag_t *tag, const char *name, uint8_t effort, uint32_t color,
+                         int max_width)
+{
+    set_tag_tier_colors(tag, name, effort, color, color, max_width);
 }
 
 static void set_link_color(lv_obj_t *link, uint32_t color)
@@ -1414,8 +1585,8 @@ static void render_home(const buddy_ui_snapshot_t *snap)
     set_visible(s.home_row, helper);
     if (helper) {
         set_link_color(s.home_link, color);
-        set_tag(&s.home_tag, snap->chat.agent, color,
-                SCREEN_W - SIDE - HOME_ROW_X - (34 + LINK_W + 6) - 2 * TAG_PAD - 4);
+        set_tag_tier(&s.home_tag, snap->chat.agent, snap->chat.effort, color,
+                     SCREEN_W - SIDE - HOME_ROW_X - (34 + LINK_W + 6) - 2 * TAG_PAD - 4);
     }
     set_visible(s.home_sub, sub_lines > 0);
     if (sub_lines > 0) {
@@ -1515,6 +1686,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
                     snap->card_index < (int)cards->count;
     const buddy_card_t *card = has_card ? &cards->cards[snap->card_index] : NULL;
     const char *agent = "";
+    uint8_t effort = (uint8_t)BUDDY_EFFORT_NONE;
     const char *status = "";
     const char *said = "";
     const char *reply = "";
@@ -1583,6 +1755,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         case POCKET_HOME_HELPER:
             status = PT_HEAD_WORKING;
             agent = snap->chat.agent;
+            effort = snap->chat.effort;
             working = true;
             reply = snap->chat.stage;
             timer = true;
@@ -1607,6 +1780,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
         bool agent_fits;
 
         agent = card->agent;
+        effort = card->effort;
         agent_fits = text_width(agent) <= 72;
         identity = card->id;
         said = buddy_cards_said(cards, (unsigned)snap->card_index);
@@ -1700,7 +1874,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     set_visible(s.head_tag.box, working);
     if (working) {
         set_link_color(s.head_link, color);
-        set_tag(&s.head_tag, agent, color, HEAD_TAG_TEXT_W);
+        set_tag_tier(&s.head_tag, agent, effort, color, HEAD_TAG_TEXT_W);
     }
     // 计时在右边占一块；没有计时的时候这一行都给状态。
     if (lv_obj_get_width(s.head_status) != (timer ? HEAD_TEXT_W - HEAD_ELAPSED_W - 2 : HEAD_TEXT_W)) {
@@ -1745,7 +1919,9 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
         set_visible(s.task_tags[index].box, task->agent[0] != '\0');
         title_x = 6;
         if (task->agent[0] != '\0') {
-            set_tag(&s.task_tags[index], task->agent, color, TASK_TAG_TEXT_W);
+            // 带着档位时名牌宽一个字，标题让出来。
+            set_tag_tier(&s.task_tags[index], task->agent, task->effort, color,
+                         TASK_TAG_TEXT_W + (task->effort != BUDDY_EFFORT_NONE ? 22 : 0));
             title_x = lv_obj_get_x(s.task_tags[index].box) +
                       lv_obj_get_width(s.task_tags[index].box) + 6;
         }
@@ -1820,6 +1996,226 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
                                             : PT_TASK_NO_STEPS);
         set_block_text(s.task_lines[1], task->line2[0] != '\0' ? task->line2 : task->line1);
     }
+}
+
+// ---- 第四屏：用量 ----
+
+// 第 index 块；第一次用到时才把它的控件建出来。
+static usage_block_t *usage_block(unsigned index)
+{
+    static const char *const names[2] = {PT_USAGE_SHORT, PT_USAGE_WEEK};
+    usage_block_t *block = &s.usage_blocks[index];
+    int each;
+
+    if (block->box != NULL) {
+        return block;
+    }
+    block->box = make_box(s.usage_scroll, SIDE, 0, INNER_W, USAGE_WHO_H);
+    for (each = 0; each < BUDDY_USAGE_WHO; ++each) {
+        make_tag(block->box, &block->tags[each], 0, each * USAGE_WHO_H);
+        // 模型名是对面发来的字，用正文那套字库。
+        block->models[each] = make_text_block(block->box, &pocket_font_16, C_DIM, 0,
+                                              each * USAGE_WHO_H, 10, LINES_16(1));
+    }
+    for (each = 0; each < 2; ++each) {
+        block->names[each] = make_label(block->box, &pocket_font_14, C_DIM, names[each]);
+        block->bars[each] = make_box(block->box, USAGE_LABEL_W, 0, USAGE_BAR_W, USAGE_BAR_H);
+        lv_obj_add_event_cb(block->bars[each], usage_bar_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+        block->lefts[each] = make_label(block->box, &pocket_font_14, C_TEXT, "");
+        lv_obj_set_width(block->lefts[each], USAGE_LEFT_W);
+        lv_obj_set_style_text_align(block->lefts[each], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_x(block->lefts[each], INNER_W - USAGE_LEFT_W);
+    }
+    block->reset = make_text_block(block->box, &pocket_font_14, C_DIM, 2, 0, INNER_W - 4, 16);
+    return block;
+}
+
+static void set_y(lv_obj_t *obj, int y)
+{
+    if (lv_obj_get_y(obj) != y) {
+        lv_obj_set_y(obj, y);
+    }
+}
+
+// 一个重置时间怎么写：今天之内只写几点，别的带星期。写不出来（不知道）时是空串。
+static void format_reset(const buddy_ui_snapshot_t *snap, uint32_t at, char *out, size_t size)
+{
+    static const char *const weekdays[7] = {PT_WEEKDAY_1, PT_WEEKDAY_2, PT_WEEKDAY_3,
+                                            PT_WEEKDAY_4, PT_WEEKDAY_5, PT_WEEKDAY_6,
+                                            PT_WEEKDAY_7};
+    char clock[8];
+    int weekday = pocket_format_reset(at, snap->timezone_offset_seconds, pocket_now_epoch(snap),
+                                      clock, sizeof(clock));
+
+    if (weekday < 0) {
+        out[0] = '\0';
+    } else if (weekday == 0) {
+        (void)snprintf(out, size, "%s", clock);
+    } else {
+        (void)snprintf(out, size, "%s %s", weekdays[weekday - 1], clock);
+    }
+}
+
+// 返回这一屏的内容比窗口高不高（高就能上下翻）。
+static bool render_usage(const buddy_ui_snapshot_t *snap)
+{
+    static char text[BUDDY_MODEL_MAX + 24];
+    unsigned count = snap->usage_count < BUDDY_USAGE_COUNT ? snap->usage_count
+                                                           : BUDDY_USAGE_COUNT;
+    uint32_t oldest = 0;
+    bool timed = false;
+    unsigned index;
+    int y = 2;
+
+    set_visible(s.usage_empty, count == 0U);
+    set_visible(s.usage_scroll, count > 0U);
+    for (index = 0; index < BUDDY_USAGE_COUNT; ++index) {
+        const buddy_usage_t *usage = &snap->usage[index];
+        usage_block_t *block = &s.usage_blocks[index];
+        const int8_t lefts[2] = {usage->left_short, usage->left_week};
+        bool metered = usage->state != (uint8_t)BUDDY_QUOTA_NONE;
+        bool known = lefts[0] >= 0 || lefts[1] >= 0;
+        unsigned who;
+        int row = 0;
+        int each;
+
+        if (index >= count) {
+            if (block->box != NULL) {
+                set_visible(block->box, false);
+            }
+            continue;
+        }
+        block = usage_block(index);
+        set_visible(block->box, true);
+        for (who = 0; who < BUDDY_USAGE_WHO; ++who) {
+            const buddy_usage_who_t *one = &usage->who[who];
+            bool present = who < usage->who_count;
+            uint32_t color = pocket_helper_color(one->name);
+            const char *model = one->model[0] != '\0' ? one->model : PT_USAGE_NO_MODEL;
+            int x;
+
+            set_visible(block->tags[who].box, present);
+            set_visible(block->models[who], present);
+            if (!present) {
+                continue;
+            }
+            // 正在干活的那个：名牌是实心的，模型名是亮的——一眼看得出现在是谁、用哪个模型在干。
+            set_tag_tier_colors(&block->tags[who], one->name, one->effort,
+                                one->running > 0U ? C_ON_COLOR : color, color,
+                                USAGE_TAG_TEXT_W);
+            set_bg_color(block->tags[who].box, color);
+            set_bg_opa(block->tags[who].box, one->running > 0U ? LV_OPA_COVER : LV_OPA_TRANSP);
+            set_y(block->tags[who].box, row);
+            x = lv_obj_get_width(block->tags[who].box) + 6;
+            if (metered) {
+                (void)snprintf(text, sizeof(text), "%s", model);
+            } else {
+                (void)snprintf(text, sizeof(text), "%s%s%s", model, PT_KEY_SEPARATOR,
+                               PT_USAGE_PAYG);
+            }
+            {
+                // 名牌旁边放不下就写到下一行，不截模型名。量字宽只在字或名牌变了的时候做。
+                uintptr_t shown = text_hash((uintptr_t)x, text);
+                bool below = block->model_below[who];
+
+                if (block->model_shown[who] != shown) {
+                    block->model_shown[who] = shown;
+                    below = text_width(text) > INNER_W - x;
+                    block->model_below[who] = below;
+                    lv_obj_set_x(block->models[who], below ? 2 : x);
+                    lv_obj_set_width(block->models[who], below ? INNER_W - 4 : INNER_W - x);
+                    lv_obj_set_user_data(block->models[who], NULL);
+                }
+                set_y(block->models[who], below ? row + USAGE_WHO_H - 1 : row);
+                row += below ? USAGE_WHO_H + LINE_16 : USAGE_WHO_H;
+            }
+            set_block_text(block->models[who], text);
+            set_text_color(block->models[who], one->running > 0U ? C_TEXT : C_DIM);
+        }
+        // 两个窗口：格子和数。一个数都没有时只写一句“还不知道”。
+        for (each = 0; each < 2; ++each) {
+            bool shown = metered && known;
+            int left = lefts[each];
+
+            set_visible(block->names[each], shown);
+            set_visible(block->bars[each], shown && left >= 0);
+            set_visible(block->lefts[each], shown);
+            if (!shown) {
+                continue;
+            }
+            set_y(block->names[each], row);
+            set_y(block->bars[each], row + 5);
+            set_y(block->lefts[each], row);
+            if ((int)(intptr_t)lv_obj_get_user_data(block->bars[each]) != left + 1) {
+                lv_obj_set_user_data(block->bars[each], (void *)(intptr_t)(left + 1));
+                lv_obj_invalidate(block->bars[each]);
+            }
+            if (left < 0) {
+                set_text(block->lefts[each], PT_NO_VALUE);
+                set_text_color(block->lefts[each], C_DIM);
+            } else if (left == 0) {
+                set_text(block->lefts[each], PT_USAGE_GONE);
+                set_text_color(block->lefts[each], C_DANGER);
+            } else {
+                (void)snprintf(text, sizeof(text), PT_USAGE_LEFT, (unsigned)left);
+                set_text(block->lefts[each], text);
+                set_text_color(block->lefts[each], left < 20 ? C_WARN : C_TEXT);
+            }
+            row += USAGE_ROW_H;
+        }
+        set_visible(block->reset, metered);
+        if (metered) {
+            char first[16];
+            char second[16];
+
+            format_reset(snap, usage->reset_short, first, sizeof(first));
+            format_reset(snap, usage->reset_week, second, sizeof(second));
+            if (!known) {
+                (void)snprintf(text, sizeof(text), "%s", PT_USAGE_UNKNOWN);
+            } else if (first[0] != '\0' && second[0] != '\0') {
+                (void)snprintf(text, sizeof(text), PT_USAGE_RESET_BOTH, first, second);
+            } else if (first[0] != '\0' || second[0] != '\0') {
+                (void)snprintf(text, sizeof(text), PT_USAGE_RESET,
+                               first[0] != '\0' ? first : second);
+            } else {
+                text[0] = '\0';
+            }
+            set_block_text(block->reset, text);
+            set_y(block->reset, row);
+            if (text[0] != '\0') {
+                row += USAGE_ROW_H;
+            }
+            // 最下面那行说的是最旧的那个账号的数。
+            if (!timed || usage->age > oldest) {
+                oldest = usage->age;
+                timed = true;
+            }
+        }
+        set_y(block->box, y);
+        if (lv_obj_get_height(block->box) != row) {
+            lv_obj_set_height(block->box, row);
+        }
+        y += row + USAGE_GAP;
+    }
+    set_visible(s.usage_age, count > 0U && timed);
+    if (count > 0U && timed) {
+        uint32_t minutes = pocket_usage_minutes(oldest, snap->usage_since_ms, snap->uptime_ms);
+
+        if (minutes == 0U) {
+            (void)snprintf(text, sizeof(text), "%s", PT_USAGE_AGE_NOW);
+        } else if (minutes < 60U) {
+            (void)snprintf(text, sizeof(text), PT_USAGE_AGE_MIN, (unsigned)minutes);
+        } else {
+            (void)snprintf(text, sizeof(text), PT_USAGE_AGE_HOUR,
+                           (unsigned)(minutes / 60U > 99U ? 99U : minutes / 60U));
+        }
+        set_text(s.usage_age, text);
+        // 半小时以上的数只能当个大概：暗下去。
+        set_text_color(s.usage_age, minutes >= 30U ? C_LINE : C_DIM);
+        set_y(s.usage_age, y - 2);
+        y += USAGE_ROW_H;
+    }
+    return count > 0U && y > AREA_H;
 }
 
 static void render_notices(const buddy_ui_snapshot_t *snap)
@@ -2104,11 +2500,11 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     s.view = view;
     s.page = page;
 
-    // 顶栏三个点：从第三屏进到一件任务里时，亮的还是第三个。
-    render_top_bar(snap, view != POCKET_VIEW_PAGE || page > BUDDY_PAGE_TASKS
-                             ? -1
-                             : (page == BUDDY_PAGE_TALK && snap->card_thread ? (int)BUDDY_PAGE_TASKS
-                                                                            : (int)page));
+    // 顶栏的小点：从第三屏进到一件任务里时，亮的还是第三个。
+    render_top_bar(snap, pocket_screen_index(snap));
+    if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_USAGE && entered) {
+        lv_obj_scroll_to_y(s.usage_scroll, 0, LV_ANIM_OFF);
+    }
     switch (view) {
     case POCKET_VIEW_UPDATE:
         // 这时按键都不管用，所以底下不写提示。
@@ -2164,6 +2560,15 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
             hints[count++] = (hint_item_t){
                 KEY_OK, snap->task_count > 0U ? (can_talk ? PT_HINT_OPEN_ADD : PT_HINT_ENTER)
                                               : (can_talk ? PT_HINT_SCREEN_TALK : PT_HINT_SCREEN)};
+            break;
+        case BUDDY_PAGE_USAGE:
+            if (render_usage(snap)) {
+                hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
+                hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+            }
+            notice = pocket_notice_visible(snap) && snap->host_hub;
+            hints[count++] =
+                (hint_item_t){KEY_OK, can_talk ? PT_HINT_SCREEN_TALK : PT_HINT_SCREEN};
             break;
         case BUDDY_PAGE_MENU:
             render_menu(snap);
@@ -2223,6 +2628,10 @@ int pocket_ui_scroll(int delta)
         // 按整行滚动，避免卡片上下沿出现被切掉一半的字。
         lv_obj_scroll_by_bounded(s.guide_scroll, 0, delta > 0 ? -3 * LINE_16 : 3 * LINE_16,
                                  LV_ANIM_OFF);
+    } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_USAGE) {
+        // 一次翻三块名牌那么高。
+        lv_obj_scroll_by_bounded(s.usage_scroll, 0,
+                                 delta > 0 ? -3 * USAGE_WHO_H : 3 * USAGE_WHO_H, LV_ANIM_OFF);
     } else if (s.view == POCKET_VIEW_PAGE && s.page == BUDDY_PAGE_TALK) {
         // 在这件事里翻七行；已经到头了，告诉调用方该换到上一件 / 下一件。
         s.tl_y = pocket_card_scroll(s.tl_y, delta, s.tl_content, TL_H, TL_STEP, &edge);

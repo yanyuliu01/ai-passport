@@ -153,6 +153,7 @@ static inline bool buddy_cards_put(buddy_cards_t *cards, const buddy_card_update
         index = (unsigned)found;
         card = &cards->cards[index];
         if (card->state == (uint8_t)update->state && card->edits == update->edits &&
+            card->effort == update->effort &&
             card->cut == cut && strcmp(card->at, update->at) == 0 &&
             strcmp(card->agent, update->agent) == 0 &&
             strcmp(buddy_cards_said(cards, index), said) == 0 &&
@@ -187,6 +188,7 @@ static inline bool buddy_cards_put(buddy_cards_t *cards, const buddy_card_update
     buddy_cards_copy(card->agent, sizeof(card->agent), update->agent);
     card->state = (uint8_t)update->state;
     card->edits = update->edits;
+    card->effort = update->effort;
     card->cut = cut;
     card->said = cards->used;
     memcpy(cards->text + cards->used, said, said_size);

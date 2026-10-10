@@ -21,14 +21,16 @@ feature, not a supported product feature).
 
 ## What it does
 
-Three screens; a click on `OK` goes round them. The three small dots in the
-middle of the top bar show which one you are on.
+Three screens, and a fourth once the host has reported usage; a click on `OK`
+goes round them. The small dots in the middle of the top bar (three or four)
+show which one you are on.
 
 | Screen | What it shows |
 | --- | --- |
 | 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
 | 2 Conversation | Conversation only, that is what Xiaoyou answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
 | 3 Tasks | The things handed to helpers, at most four, those in progress first and then the latest that ended: who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). Below are the two latest steps of the selected one, with tool names and commands shown verbatim; when the selected one has ended, its conclusion is shown instead (the brief). A short press on `OK` opens the selected thing's own page: its latest exchange (what you said later and what Xiaoyou answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
+| 4 Usage | Shown only after the host sent `usage`. One block per subscription account: the name tags of the helpers that run on it (filled while that helper is working, with the effort tier inside the tag) and the model each one last ran, then how much of the 5-hour and of the weekly allowance is left (a bar and a percentage; amber below 20 %, red when used up) and when each resets. Helpers billed per call come after, marked as such. The last line says how old the numbers are |
 
 | Capability | Behavior |
 | --- | --- |
@@ -80,7 +82,8 @@ always shows what the keys do right now.
 | --- | --- | --- | --- | --- |
 | Screen 1, mascot | — | To screen 2 | Open the menu | Talk; release to send |
 | Screen 2, conversation | Scroll seven lines within this thing; at the end, one more press goes to the previous / next thing | To screen 3 | Open the menu | Talk, addressed to the thing on screen |
-| Screen 3, tasks | Select the previous / next one | To screen 1 | Open the menu | Talk, addressed to the selected thing |
+| Screen 3, tasks | Select the previous / next one | To screen 4 when there is one, otherwise to screen 1 | Open the menu | Talk, addressed to the selected thing |
+| Screen 4, usage | Scroll when it does not fit | To screen 1 | Open the menu | Talk |
 | Menu, More settings | Move the selection (wraps) | Run the selected item | Return to screen 1 | Return to screen 1 |
 | Notices, Helpers | — | Back to the menu | Return to screen 1 | Return to screen 1 |
 | Connection guide | Scroll three lines | Back to More settings | Return to screen 1 | Return to screen 1 |
@@ -147,7 +150,7 @@ rules, so a wrapped line can begin with a punctuation mark.
 
 ## Push-to-talk
 
-Hold `OK` on any of the three screens. Xiaoyou says to wait a moment, then
+Hold `OK` on any of the screens. Xiaoyou says to wait a moment, then
 says she is listening: the level bars move with your voice, which is how you
 know the microphone is live. Speak, and release to send. Screens 1 and 2 then
 show that the recording is on its way until the host says what it heard. A
@@ -165,7 +168,7 @@ understand:
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true}`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true}`; `usage` says the firmware has the fourth screen and understands `usage` and `eff`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
 | Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it. Pressed on screen 3 it is followed by `"pin":true`: the sentence is said inside that thing and is always filed on it |
 | Device → host | voice frames | One notification per frame; see below |
 | Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
@@ -199,6 +202,7 @@ ack that the host ignores. A host sends `card` and `tasks` only after it saw
 | Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
 | Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, and the `reply` of that thing's `card` is its latest exchange, one paragraph per sentence of the owner and of Xiaoyou, at most 480 bytes). At most four are kept; an empty list means there are none |
 | Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
+| Host → device | `{"cmd":"usage","list":[{"st":"ok","w5":58,"r5":1760000000,"w7":81,"r7":1760400000,"age":40,"who":[{"n":"codex","m":"gpt-6.1-sol","eff":"medium","run":true}]}]}` | Subscription allowance and who runs on it: **screen 4**. Sent only to firmware that announced `usage`. `st` is `ok`, `warn` (under 20 % left), `out`, `unknown`, or `na` (billed per call, no allowance); `w5` / `w7` are the percentages left of the 5-hour and weekly windows (omitted when unknown), `r5` / `r7` when they reset (Unix seconds), `age` how many seconds old the numbers are. `who` lists at most two helpers: name, model (at most 19 bytes), effort tier, and whether it is working right now. At most four entries are kept; an empty list keeps the screen and says there is no data yet |
 
 `chat`: `phase` is `idle` (nothing is being said), `thinking`, `helper` (she
 handed the work to the agent named in `agent`; `stage` is the title of the
@@ -234,6 +238,11 @@ Approval requests need no new message: the host puts the operation to confirm
 into the heartbeat's `prompt` (`tool` is the helper and the tool, `hint` is
 the content verbatim, of which up to 319 bytes are shown), and the device
 answers with the existing `permission` command.
+
+`chat`, `card` and each item of `tasks` may carry `"eff"`: the effort tier the
+helper was asked to work at (`minimal`, `low`, `medium`, `high`, `xhigh` or
+`max`). It is shown inside the helper's name tag on screens 1 to 3. An unknown
+or missing value shows nothing.
 
 ### What the device keeps
 
@@ -375,6 +384,13 @@ turn kept before. None of this has been measured on a device; in the host
 renderer LVGL peaks at about 69 KB (a 64-bit host, where objects are larger
 than in the firmware).
 
+The usage screen adds about 0.9 KB of static memory (four entries of 108
+bytes, once in the state and once in the snapshot, plus one list in the event
+structure). Its widgets are created the first time the host sends `usage`, so
+a host that never does costs no heap. With that screen built the host renderer
+peaks at about 92 KB; the difference has not been measured on a device, so
+watch the `heap:` log line with the fourth screen open.
+
 Replacing the firmware over Bluetooth keeps one task (a 5 KB stack) and two
 small queues at all times; the buffer for incoming image data (2.3 KB) is
 allocated the first time an image arrives and kept afterwards. Checking a
@@ -388,7 +404,7 @@ reports how much of that task's stack was left, worth a look on a device.
 | `main/main.c` | Queues, the application task, BLE and settings glue |
 | `main/buddy_ble*.c` | NimBLE peripheral: Nordic UART Service, security, bonding |
 | `main/buddy_line.c`, `main/buddy_protocol.c` | Line assembly and bounded JSON parsing/serialization |
-| `main/buddy_state.c` | Link, approval, conversation, and three-screen navigation state machine |
+| `main/buddy_state.c` | Link, approval, conversation, usage, and screen navigation state machine |
 | `main/buddy_cards.h` | Cards: a byte-budgeted list, updated in place by id, header-only |
 | `main/buddy_orchestrator.c`, `main/buddy_app_logic.c`, `main/buddy_settings.c` | Command handling, queue policy, NVS settings |
 | `main/pocket_view.c` | Pure view logic: which view, what screen 1 shows, how a thing scrolls, the pet's mood, helper colours, time formatting |
@@ -482,7 +498,7 @@ on it later.
 ## On-device acceptance
 
 A successful build and the host preview are not device validation. This
-version (three screens) has not run on hardware yet. Check:
+version (three screens plus the usage screen) has not run on hardware yet. Check:
 
 1. Startup shows Xiaoyou asleep; the top bar shows the link dot, the three
    small dots and the battery.
@@ -492,6 +508,11 @@ version (three screens) has not run on hardware yet. Check:
    follow; a double press opens the menu, and a double press in the menu
    returns to screen 1. Judge whether the short delay of the click is
    acceptable.
+   With a host that sends `usage`: a fourth dot appears; the fourth screen
+   shows each account with bars, percentages and reset times that match the
+   phone; the tag of a working helper is filled and carries its effort tier;
+   `UP` / `DOWN` scroll; the age line counts up. After a disconnect the
+   fourth screen is gone again.
 4. Hold `OK`, speak, release: the level bars move while speaking; screen 1
    shows transcribing, then thinking and what you said, then the brief or that
    the work was handed over.

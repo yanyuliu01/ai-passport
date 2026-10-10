@@ -68,6 +68,12 @@ typedef struct {
     /* The talk page is open on the thing selected on the third screen (entered
      * from there with OK) instead of on the conversation. */
     bool thread;
+    /* Usage as the hub last listed it, and when. usage_known: this hub sends
+     * usage, so the fourth screen is in the round. */
+    buddy_usage_t usage[BUDDY_USAGE_COUNT];
+    unsigned usage_count;
+    uint64_t usage_since_ms;
+    bool usage_known;
     buddy_helper_t helpers[BUDDY_HELPER_COUNT];
     unsigned helper_count;
     bool host_hub;

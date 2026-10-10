@@ -220,6 +220,46 @@ static void put_task(buddy_ui_snapshot_t *snap, const char *id, const char *agen
     snap->tasks_since_ms = snap->uptime_ms;
 }
 
+/* One entry of the usage screen with one helper; add_who() adds a second one. */
+static buddy_usage_t *put_usage(buddy_ui_snapshot_t *snap, buddy_quota_t state, int left_short,
+                                int left_week, const char *name, const char *model,
+                                buddy_effort_t effort, unsigned running)
+{
+    buddy_usage_t *usage = &snap->usage[snap->usage_count++];
+    /* The snapshot's clock is 2026-09-21 21:33 in Beijing: the short window resets
+     * later the same evening, the weekly one on Thursday morning. */
+    const uint32_t now = (uint32_t)snap->epoch_seconds;
+
+    memset(usage, 0, sizeof(*usage));
+    usage->state = (uint8_t)state;
+    usage->left_short = (int8_t)left_short;
+    usage->left_week = (int8_t)left_week;
+    if (state != BUDDY_QUOTA_NONE) {
+        usage->reset_short = now + 107U * 60U;
+        usage->reset_week = now + 3U * 86400U - 12U * 3600U - 33U * 60U;
+    }
+    usage->age = 200;
+    usage->who_count = 1;
+    (void)snprintf(usage->who[0].name, sizeof(usage->who[0].name), "%s", name);
+    (void)snprintf(usage->who[0].model, sizeof(usage->who[0].model), "%s", model);
+    usage->who[0].effort = (uint8_t)effort;
+    usage->who[0].running = (uint8_t)running;
+    snap->usage_known = true;
+    snap->usage_since_ms = snap->uptime_ms;
+    return usage;
+}
+
+static void add_who(buddy_usage_t *usage, const char *name, const char *model,
+                    buddy_effort_t effort, unsigned running)
+{
+    buddy_usage_who_t *who = &usage->who[usage->who_count++];
+
+    (void)snprintf(who->name, sizeof(who->name), "%s", name);
+    (void)snprintf(who->model, sizeof(who->model), "%s", model);
+    who->effort = (uint8_t)effort;
+    who->running = (uint8_t)running;
+}
+
 static void set_text_field(char *field, size_t size, const char *text)
 {
     (void)snprintf(field, size, "%s", text);
@@ -649,6 +689,88 @@ int main(int argc, char **argv)
     snap.reply[0] = '\0';
     set_text_field(snap.message, sizeof(snap.message), "这个连接不能传语音");
     show("85_desktop_notice", &snap);
+
+    /* The fourth screen: what is left of each subscription and which model each
+     * helper runs on. Only a hub that sends usage has it; the dots show four. */
+    snap = hub_snapshot();
+    snap.cards = &s_cards;
+    snap.page = BUDDY_PAGE_USAGE;
+    snap.usage_known = true;
+    show("90_usage_empty", &snap);
+    put_usage(&snap, BUDDY_QUOTA_OK, 58, 81, "codex", "gpt-6.1-sol", BUDDY_EFFORT_MEDIUM, 0);
+    add_who(put_usage(&snap, BUDDY_QUOTA_OK, 76, 64, "claude", "sonnet-5-5", BUDDY_EFFORT_MEDIUM, 0),
+            "tailor", "", BUDDY_EFFORT_HIGH, 0);
+    put_usage(&snap, BUDDY_QUOTA_NONE, -1, -1, "deepseek", "deepseek-v4-pro", BUDDY_EFFORT_NONE, 0);
+    show("91_usage", &snap);
+    /* Somebody is working: its nameplate is filled and its model lights up. */
+    snap.usage[0].who[0].running = 1;
+    snap.usage[2].who[0].running = 1;
+    snap.doing = 2;
+    snap.uptime_ms += 9ULL * 60000ULL;
+    show("92_usage_working", &snap);
+    /* Nearly used up, used up, and a number that is not known. */
+    snap.usage[0].who[0].running = 0;
+    snap.usage[2].who[0].running = 0;
+    snap.doing = 0;
+    snap.usage[0].state = (uint8_t)BUDDY_QUOTA_WARN;
+    snap.usage[0].left_short = 12;
+    snap.usage[1].state = (uint8_t)BUDDY_QUOTA_OUT;
+    snap.usage[1].left_short = 0;
+    snap.usage[1].left_week = -1;
+    snap.usage[1].reset_week = 0;
+    snap.uptime_ms += 40ULL * 60000ULL;
+    show("93_usage_low", &snap);
+    /* A login nothing is known about yet, a long model name, levels at both ends. */
+    snap.usage_count = 0;
+    put_usage(&snap, BUDDY_QUOTA_UNKNOWN, -1, -1, "codex", "", BUDDY_EFFORT_XHIGH, 0);
+    snap.usage[0].reset_short = 0;
+    snap.usage[0].reset_week = 0;
+    put_usage(&snap, BUDDY_QUOTA_OK, 100, 3, "一个名字很长的帮手", "a-model-with-a-long",
+              BUDDY_EFFORT_MINIMAL, 1);
+    snap.uptime_ms += 3ULL * 3600000ULL;
+    show("94_usage_unknown", &snap);
+    /* More than fits: four entries, two of them shared. The screen scrolls. */
+    snap.usage_count = 0;
+    add_who(put_usage(&snap, BUDDY_QUOTA_OK, 58, 81, "claude", "opus-5-5", BUDDY_EFFORT_HIGH, 1),
+            "tailor", "sonnet-5-5", BUDDY_EFFORT_MEDIUM, 0);
+    add_who(put_usage(&snap, BUDDY_QUOTA_WARN, 9, 40, "codex", "gpt-6.1-sol", BUDDY_EFFORT_MEDIUM, 0),
+            "reviewer", "gpt-6.1-sol", BUDDY_EFFORT_LOW, 0);
+    put_usage(&snap, BUDDY_QUOTA_NONE, -1, -1, "deepseek", "deepseek-v4-pro", BUDDY_EFFORT_NONE, 0);
+    put_usage(&snap, BUDDY_QUOTA_NONE, -1, -1, "local", "qwen-9", BUDDY_EFFORT_NONE, 0);
+    show("95_usage_long", &snap);
+    (void)pocket_ui_scroll(1);
+    show("96_usage_long_scrolled", &snap);
+
+    /* The level a thing runs at, after the helper's name on the three nameplates. */
+    snap = hub_snapshot();
+    snap.cards = &s_cards;
+    snap.usage_known = true;
+    snap.chat.phase = BUDDY_CHAT_HELPER;
+    snap.chat.mood = BUDDY_MOOD_BUSY;
+    snap.chat.effort = (uint8_t)BUDDY_EFFORT_HIGH;
+    snap.chat.doing = 2;
+    set_text_field(snap.chat.said, sizeof(snap.chat.said), SAID);
+    set_text_field(snap.chat.agent, sizeof(snap.chat.agent), "codex");
+    set_text_field(snap.chat.stage, sizeof(snap.chat.stage), "看 retry 的重试次数");
+    snap.chat_since_ms = snap.uptime_ms - 48000ULL;
+    show("97_tier_home", &snap);
+    snap.page = BUDDY_PAGE_TALK;
+    snap.card_live = true;
+    snap.card_index = -1;
+    snap.card_serial = 40;
+    show("98_tier_talk", &snap);
+    snap.page = BUDDY_PAGE_TASKS;
+    snap.card_live = false;
+    put_task(&snap, "c21", "codex", "看 retry 的重试次数", BUDDY_TASK_WORKING, 48, "git diff",
+             "pytest -q tests/test_retry.py");
+    snap.tasks[0].effort = (uint8_t)BUDDY_EFFORT_HIGH;
+    put_task(&snap, "c22", "claude", "整理上周的会议记录", BUDDY_TASK_WAITING, 300, "Read notes.md",
+             "Write summary.md");
+    snap.tasks[1].effort = (uint8_t)BUDDY_EFFORT_XHIGH;
+    put_task(&snap, "c20", "deepseek", "查一下明天的天气", BUDDY_TASK_DONE, 0, "明天多云，18 到 24 度", "");
+    put_task(&snap, "c19", "tailor", "把字调大一号", BUDDY_TASK_DONE, 0, "改好了，已经推到设备上", "");
+    snap.tasks[3].effort = (uint8_t)BUDDY_EFFORT_LOW;
+    show("99_tier_tasks", &snap);
 
     {
         lv_mem_monitor_t monitor;

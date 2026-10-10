@@ -599,7 +599,8 @@ static void test_chat_reports_the_conversation(void)
         char ack[96];
 
         assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
-        assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true}\n") == 0);
+        assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
+                           "\"threads\":true,\"usage\":true}\n") == 0);
     }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }
@@ -732,6 +733,80 @@ static void test_tasks_lists_the_things_in_progress(void)
     assert(event.task_count == 0);
 }
 
+static void test_usage_lists_what_is_left_and_who_runs_on_what(void)
+{
+    buddy_event_t event;
+
+    assert(parse("{\"cmd\":\"usage\",\"list\":["
+                 "{\"st\":\"warn\",\"w5\":12,\"r5\":1791620000,\"w7\":81,\"r7\":1792000000,"
+                 "\"age\":120,\"who\":[{\"n\":\"claude\",\"m\":\"sonnet-5-5\",\"eff\":\"medium\","
+                 "\"run\":2},{\"n\":\"tailor\",\"eff\":\"high\"},{\"n\":\"third\"}]},"
+                 "{\"st\":\"ok\",\"w5\":100,\"who\":[{\"n\":\"codex\",\"m\":\"gpt-fake\"}]},"
+                 "{\"st\":\"na\",\"who\":[{\"n\":\"deepseek\",\"m\":\"deepseek-v4-pro\"}]},"
+                 "{\"st\":\"ok\",\"w5\":50,\"who\":[]},"
+                 "{\"st\":\"strange\",\"w5\":101,\"w7\":-3,\"r5\":-1,\"r7\":1e12,"
+                 "\"who\":[{\"n\":\"\"},{\"n\":\"odd\",\"eff\":\"turbo\",\"run\":999}]},"
+                 "{\"st\":\"ok\",\"who\":[{\"n\":\"fifth\"}]}]}",
+                 &event) == BUDDY_EVENT_USAGE);
+    /* At most four entries, at most two helpers each; one without a helper is left out. */
+    assert(event.usage_count == BUDDY_USAGE_COUNT);
+    assert(event.usage[0].state == BUDDY_QUOTA_WARN && event.usage[0].left_short == 12 &&
+           event.usage[0].left_week == 81);
+    assert(event.usage[0].reset_short == 1791620000U && event.usage[0].reset_week == 1792000000U);
+    assert(event.usage[0].age == 120U && event.usage[0].who_count == 2U);
+    assert(strcmp(event.usage[0].who[0].name, "claude") == 0 &&
+           strcmp(event.usage[0].who[0].model, "sonnet-5-5") == 0);
+    assert(event.usage[0].who[0].effort == BUDDY_EFFORT_MEDIUM && event.usage[0].who[0].running == 2U);
+    assert(strcmp(event.usage[0].who[1].name, "tailor") == 0 &&
+           event.usage[0].who[1].model[0] == '\0' &&
+           event.usage[0].who[1].effort == BUDDY_EFFORT_HIGH && event.usage[0].who[1].running == 0U);
+    /* What was not said is unknown, not zero. */
+    assert(event.usage[1].state == BUDDY_QUOTA_OK && event.usage[1].left_short == 100 &&
+           event.usage[1].left_week == -1 && event.usage[1].reset_short == 0U);
+    assert(event.usage[2].state == BUDDY_QUOTA_NONE && event.usage[2].left_short == -1 &&
+           strcmp(event.usage[2].who[0].model, "deepseek-v4-pro") == 0);
+    /* Numbers out of range and words this firmware does not know read as unknown. */
+    assert(event.usage[3].state == BUDDY_QUOTA_UNKNOWN && event.usage[3].left_short == -1 &&
+           event.usage[3].left_week == -1 && event.usage[3].reset_short == 0U &&
+           event.usage[3].reset_week == 0U);
+    assert(event.usage[3].who_count == 1U && strcmp(event.usage[3].who[0].name, "odd") == 0 &&
+           event.usage[3].who[0].effort == BUDDY_EFFORT_NONE &&
+           event.usage[3].who[0].running == 255U);
+
+    /* A model name that does not fit is cut on a character boundary. */
+    assert(parse("{\"cmd\":\"usage\",\"list\":[{\"who\":[{\"n\":\"a\","
+                 "\"m\":\"a-very-long-model-name-\xE5\xA5\xBD\"}]}]}",
+                 &event) == BUDDY_EVENT_USAGE);
+    assert(strlen(event.usage[0].who[0].model) == BUDDY_MODEL_MAX - 1U);
+    /* An empty list is a list: there is nothing to show. */
+    assert(parse("{\"cmd\":\"usage\",\"list\":[]}", &event) == BUDDY_EVENT_USAGE);
+    assert(event.usage_count == 0U);
+    assert(parse("{\"cmd\":\"usage\"}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"usage\",\"list\":[7]}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"usage\",\"list\":[{\"who\":7}]}", &event) == BUDDY_EVENT_MALFORMED);
+    assert(parse("{\"cmd\":\"usage\",\"list\":[{\"who\":[{\"n\":\"a\",\"run\":-1}]}]}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+    assert(event.usage_count == 0U);
+
+    /* The effort a thing runs at travels with the turn, its card and its line in the list. */
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"helper\",\"agent\":\"codex\",\"eff\":\"high\"}",
+                 &event) == BUDDY_EVENT_CHAT);
+    assert(event.chat.effort == BUDDY_EFFORT_HIGH);
+    assert(parse("{\"cmd\":\"chat\",\"phase\":\"helper\",\"agent\":\"codex\"}", &event) ==
+           BUDDY_EVENT_CHAT);
+    assert(event.chat.effort == BUDDY_EFFORT_NONE);
+    assert(parse("{\"cmd\":\"card\",\"id\":\"c1\",\"state\":\"working\",\"agent\":\"codex\","
+                 "\"eff\":\"xhigh\"}",
+                 &event) == BUDDY_EVENT_CARD);
+    assert(event.card.effort == BUDDY_EFFORT_XHIGH);
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"c1\",\"eff\":\"low\"},"
+                 "{\"id\":\"c2\",\"eff\":7},{\"id\":\"c3\",\"eff\":\"minimal\"},"
+                 "{\"id\":\"c4\",\"eff\":\"max\"}]}",
+                 &event) == BUDDY_EVENT_TASKS);
+    assert(event.tasks[0].effort == BUDDY_EFFORT_LOW && event.tasks[1].effort == BUDDY_EFFORT_NONE &&
+           event.tasks[2].effort == BUDDY_EFFORT_MINIMAL && event.tasks[3].effort == BUDDY_EFFORT_MAX);
+}
+
 static void test_helpers_lists_who_xiaoyou_can_ask(void)
 {
     buddy_event_t event;
@@ -820,6 +895,7 @@ int main(void)
     test_helpers_lists_who_xiaoyou_can_ask();
     test_card_carries_one_thing();
     test_tasks_lists_the_things_in_progress();
+    test_usage_lists_what_is_left_and_who_runs_on_what();
     test_firmware_commands();
     test_file_transfer_commands_are_unsupported();
     test_unknown_command_is_rejected();
