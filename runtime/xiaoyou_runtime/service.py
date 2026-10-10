@@ -81,13 +81,17 @@ class Service:
         ]
 
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
-               agent: Any = None, hop: Any = 0, card: Any = None) -> Dict[str, Any]:
-        """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。"""
+               agent: Any = None, hop: Any = 0, card: Any = None,
+               pin: Any = False) -> Dict[str, Any]:
+        """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
+
+        pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。"""
         if not isinstance(text, str) or not text.strip():
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
-        return self._enqueue("text", text, None, conversation, client_id, agent, hop, card)
+        return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
+                             pin is True)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
@@ -104,7 +108,8 @@ class Service:
         return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
-                 client_id: Any, agent: Any, hop: Any, card: Any = None) -> Dict[str, Any]:
+                 client_id: Any, agent: Any, hop: Any, card: Any = None,
+                 pin: bool = False) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         if card is not None:
             # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
@@ -149,6 +154,8 @@ class Service:
                 "asked": agent,
                 # 主人说这句话时屏幕上的那件事；处理完后是这句话归到的那张卡
                 "card": card,
+                # 主人是在那件事里面说的：这句话一定归到它
+                "pin": pin and card is not None,
                 # 接这句话的代理；交给了帮手时是那个帮手
                 "agent": None,
                 # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
@@ -362,6 +369,7 @@ class Service:
                 return
             text, conversation = message["text"], message["conversation"]
             asked, hop, card = message["asked"], message["hop"], message["card"]
+            pin = bool(message.get("pin"))
             audio = self._audio.pop(message_id, None)
         if audio is not None:
             self._update(message_id, status="transcribing")
@@ -390,7 +398,7 @@ class Service:
         self._update(message_id, status="running", text=text)
         try:
             turn = self._xiaoyou.hear(
-                text, conversation, message_id, asked=asked, card=card, hop=hop,
+                text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
                 report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
             )
         except AgentError as error:

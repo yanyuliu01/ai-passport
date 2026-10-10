@@ -1840,6 +1840,31 @@ class XiaoyouTests(TempDirCase):
         self.assertEqual(len(relays), 1)
         self.assertIn("raw:（主人改了要求", relays[0])
 
+    def test_a_sentence_said_inside_a_thing_stays_on_it(self):
+        self.settled(self.say("@codex one").card)
+        # She does not name the card: it still lands on the one the owner opened.
+        turn = self.say("结果在哪", card="c1", pin=True)
+        self.assertEqual((turn.card, turn.started), ("c1", False))
+        self.assertIn("在它里面说的", self.claude.jobs[-1].system)
+        self.assertEqual(self.words("c1")[-2:], [("you", "结果在哪"), ("xiaoyou", "re:结果在哪")])
+        # Work she starts as "new" from inside the thing continues it, in its own session.
+        self.claude.script = [start("codex", "two")]
+        turn = self.say("再做一步", card="c1", pin=True)
+        self.assertEqual((turn.card, turn.started), ("c1", True))
+        self.settled("c1")
+        self.assertEqual((self.codex.jobs[-1].text, self.codex.jobs[-1].session_id), ("two", "s1"))
+        # Naming a helper inside the thing continues it too, without asking the model.
+        asked = len(self.claude.jobs)
+        turn = self.say("@codex three", card="c1", pin=True)
+        self.assertEqual((turn.card, turn.agent, turn.started), ("c1", "codex", True))
+        card = self.settled("c1")
+        self.assertEqual((self.codex.jobs[-1].text, self.codex.jobs[-1].session_id), ("three", "s2"))
+        self.assertEqual(card["edits"], 1)
+        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+        self.assertGreaterEqual(len(self.claude.jobs), asked)
+        # The same sentence only "on screen" (the device) still opens a thing of its own.
+        self.assertEqual(self.say("@codex four", card="c1").card, "c2")
+
     def test_a_finished_thing_can_be_picked_up_again(self):
         self.settled(self.say("@codex one").card)
         # She often writes the number without its letter; that is understood.

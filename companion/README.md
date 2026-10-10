@@ -59,6 +59,29 @@ on all three.
 A runtime older than 0.5.0 has no cards and no approvals: the app's log says
 it is an old version, and the chat is listed line by line as before.
 
+### Conversation and tasks apart (0.8.0)
+
+The app has three pages, chosen with the row of buttons at the top:
+
+- **Conversation**: what Xiaoyou answered herself, as one continuous
+  exchange. A thing handed to a helper takes a single line here (its number,
+  helper, state and title); tapping it goes to that thing's own page.
+- **Tasks**: the things that were handed to a helper, the ones still
+  going first. Opening one shows all of it (what you said, what Xiaoyou said,
+  the helper's latest steps). A sentence sent from inside an open task carries
+  that thing's number and `pin`, so the runtime always files it on that thing
+  and continues its own session; it does not show up in the conversation page
+  and does not open another thing. Tapping the tasks button again, or Back,
+  returns to the list.
+- **Settings**: which computer answers, device firmware, the three
+  setup steps, sources, tests and the log.
+
+Operations waiting for consent are shown at the top of every page, with a
+button that opens the thing they belong to. The split only looks at whether a
+card has a helper: none means conversation, one means task. `pin` needs
+runtime 0.5.3; an older runtime ignores it, and then Xiaoyou still decides
+which thing a sentence said inside a task belongs to.
+
 Only what a notification contains can be forwarded. Whether a given assistant
 posts notifications for cloud sessions, and whether they carry action buttons,
 depends on that assistant's app and has not been verified.
@@ -150,7 +173,8 @@ the runtime can therefore have the app write any image to the device.
 | `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime, waits for cards to change, answers approvals, cancels a thing, and asks which agents and which firmware versions the runtime has |
 | `.../FirmwarePush.java` | One transfer of a firmware image to the device: what to send, when, and where to resend from; plain Java, unit tested |
 | `.../FirmwareSync.java` | Keeps the device on the version the runtime names: asks the device, watches the runtime, fetches, transfers, confirms, reports |
-| `.../MainActivity.java` | Operations waiting for consent, cards, chat box, device firmware, setup, source list, test buttons, log |
+| `.../CardViews.java` | Which cards are conversation and which are tasks, and how they are worded on the phone; plain Java, unit tested |
+| `.../MainActivity.java` | Three pages: conversation, tasks (the list and the open one), settings; operations waiting for consent, the input box |
 
 ## Status
 
@@ -172,5 +196,8 @@ and the speed Bluetooth actually reaches has not been measured),
 cards, tasks, approvals and the three-screen firmware (version 0.7.0, which
 needs runtime 0.5 or newer and the matching firmware; compiled in the build
 only, not run on a phone),
+the separate conversation and task pages and continuing inside a task
+(version 0.8.0; the split and the request body are unit tested, the screen
+was compiled in the build only and not run on a phone),
 reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.

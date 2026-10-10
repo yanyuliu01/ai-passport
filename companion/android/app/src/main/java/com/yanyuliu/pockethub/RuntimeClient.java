@@ -429,6 +429,11 @@ final class RuntimeClient {
         submit(context, text, null, null);
     }
 
+    /** 在一件事里面说一句话（card 是它的编号）：这句话一定归到它，不混进主对话。 */
+    static void send(Context context, String text, String card) {
+        submit(context, text, null, card);
+    }
+
     /**
      * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
      * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。
@@ -469,11 +474,9 @@ final class RuntimeClient {
                                     + (BuddyProtocol.cardId(card) ? "&card=" + card : ""), token,
                             wav, "audio/wav", 30);
                 } else {
-                    StringBuilder body = new StringBuilder("{\"text\":");
-                    BuddyProtocol.quote(body, text);
-                    body.append(",\"client_id\":\"").append(clientId).append("\"}");
                     message = request("POST", url + "/v1/messages", token,
-                            body.toString().getBytes(StandardCharsets.UTF_8),
+                            CardViews.messageJson(text, clientId, card)
+                                    .getBytes(StandardCharsets.UTF_8),
                             "application/json; charset=utf-8", 20);
                 }
                 String id = message.get("id");

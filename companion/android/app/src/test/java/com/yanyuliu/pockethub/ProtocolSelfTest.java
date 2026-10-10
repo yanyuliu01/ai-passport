@@ -376,6 +376,38 @@ public final class ProtocolSelfTest {
         check(plain.agent.isEmpty() && !plain.active() && plain.said().equals("几点了")
                 && plain.lastSay().isEmpty() && plain.startedAt == 0, "plain card");
 
+        // 对话和任务分开：交给过帮手的是任务，小幽自己答的是对话。
+        check(CardViews.isTask(parsed) && !CardViews.isTask(plain), "task or talk");
+        Card finished = Card.from(Json.parseObject("{\"id\":\"c9\",\"state\":\"done\","
+                + "\"agent\":\"claude\",\"title\":\"写周报\",\"brief\":\"写好了\\n在桌面\","
+                + "\"entries\":[{\"role\":\"you\",\"text\":\"写周报\"},"
+                + "{\"role\":\"xiaoyou\",\"text\":\"好了\"}]}"));
+        Card older = Card.from(Json.parseObject("{\"id\":\"c2\",\"state\":\"failed\","
+                + "\"agent\":\"codex\",\"title\":\"旧的\"}"));
+        List<Card> all = Arrays.asList(older, parsed, plain, finished);
+        List<Card> split = CardViews.tasks(all, 10);
+        check(split.size() == 3 && split.get(0) == parsed && split.get(1) == finished
+                && split.get(2) == older, "tasks: going first, then newest first");
+        check(CardViews.tasks(all, 2).size() == 2 && CardViews.doing(all) == 1, "limit and count");
+        check(CardViews.find(all, "c9") == finished && CardViews.find(all, "c1") == null
+                && CardViews.find(all, null) == null, "find");
+        check(CardViews.status(parsed).equals("c7 · codex · 等你点头（改过 1 次）")
+                && CardViews.status(plain).equals("c8 · 好了"), "status line");
+        check(CardViews.pointer(finished).equals("↪ 任务 c9 · claude · 好了\n写周报"), "pointer");
+        check(CardViews.listItem(parsed).equals(
+                "c7 · codex · 等你点头（改过 1 次）\n查日志\n› Bash grep -c 错 a.log"),
+                "a going task shows its latest step: " + CardViews.listItem(parsed));
+        check(CardViews.listItem(finished).equals("c9 · claude · 好了\n写周报\n写好了 在桌面")
+                && CardViews.listItem(older).equals("c2 · codex · 没成\n旧的"), "list item");
+        check(CardViews.thread(finished).equals("我：写周报\n\n小幽：好了")
+                && CardViews.thread(plain).isEmpty(), "thread");
+        check(CardViews.oneLine("一二三四五", 3).equals("一二三…")
+                && CardViews.oneLine("ab\uD83D\uDE00c", 3).equals("ab…"), "preview is cut whole");
+        check(CardViews.messageJson("改成\"蓝\"的", "k1", "c9").equals(
+                "{\"text\":\"改成\\\"蓝\\\"的\",\"client_id\":\"k1\",\"card\":\"c9\",\"pin\":true}")
+                && CardViews.messageJson("你好", "k2", null).equals(
+                "{\"text\":\"你好\",\"client_id\":\"k2\"}"), "said inside a task: pinned to it");
+
         check(Json.parseObject("[1]") == null && Json.parseObject("{\"a\":") == null
                 && Json.parseObject("{\"a\":1} x") == null && Json.parseObject("") == null
                 && Json.parseObject(null) == null && Json.parseObject("{\"a\":tru}") == null,

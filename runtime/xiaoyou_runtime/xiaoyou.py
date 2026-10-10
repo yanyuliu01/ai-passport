@@ -145,7 +145,8 @@ def describe_card(card: Dict[str, Any], now: float) -> str:
 
 
 def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
-                cards: List[Dict[str, Any]], focus: Optional[str], now: float) -> str:
+                cards: List[Dict[str, Any]], focus: Optional[str], now: float,
+                pinned: bool = False) -> str:
     """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。"""
     parts = [persona, ""]
     parts.append("## 你怎么做事")
@@ -193,7 +194,12 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         parts.extend(describe_card(card, now) for card in cards)
     else:
         parts.append("还没有。")
-    if focus is not None:
+    if focus is not None and pinned:
+        parts.append(
+            "主人是打开 %s 这件事、在它里面说的这句话：这句话就归到它，card 写 %s，不要写 new。"
+            "能直接答的直接答；要动手就接着这件事做（它还在做用 amend，已经结束了用 amend 或 "
+            "start，都会接着它原来的会话），不要另开一件事。" % (focus, focus))
+    elif focus is not None:
         parts.append(
             "主人说这句话时正看着 %s。没有别的线索时，“这个”“它”“这件事”指的就是它。" % focus)
     return "\n".join(parts)
@@ -337,11 +343,12 @@ class Xiaoyou:
         return speakers[0] if speakers else None
 
     def hear(self, text: str, conversation: str, turn_id: str, asked: Optional[str] = None,
-             card: Optional[str] = None, hop: int = 0, report: Optional[Report] = None) -> Turn:
+             card: Optional[str] = None, hop: int = 0, report: Optional[Report] = None,
+             pin: bool = False) -> Turn:
         """接主人的一句话。很快返回：要花时间的部分已经交到后台，结果之后出现在卡上。
 
-        card 是主人说这句话时屏幕上的那件事（没有就是 None）。失败时抛 AgentError，
-        消息可以直接给主人看。
+        card 是主人说这句话时屏幕上的那件事（没有就是 None）。pin 表示主人是打开那件事、
+        在它里面说的：这句话一定归到它，不另开卡。失败时抛 AgentError，消息可以直接给主人看。
         """
         say: Report = report if report is not None else (lambda kind, agent, detail: None)
         available = self._available(hop)
@@ -350,13 +357,18 @@ class Xiaoyou:
         route = routing.decide(text, asked, available, self._config.default_agent, self._router)
         first = self._agents[route.agent]
         say("route", first.name, route.reason)
-        if route.reason != "default" or not first.speaks:
-            # 指定了由谁做（或者默认代理只会干活）：不用问模型，直接交过去。
-            return self._assign(first, route, text, conversation, turn_id, hop, say)
         focus = self._cards.get(card) if card else None
         if focus is not None and focus["conversation"] != conversation:
             focus = None
-        return self._converse(first, text, conversation, turn_id, focus, available, hop, say)
+        pinned = pin and focus is not None
+        if route.reason != "default" or not first.speaks:
+            # 指定了由谁做（或者默认代理只会干活）：不用问模型，直接交过去。
+            if pinned and (focus["agent"] in (None, first.name)
+                           or not self._tasks.active(focus["id"])):
+                return self._resume(focus, first, route, text, conversation, turn_id, hop, say)
+            return self._assign(first, route, text, conversation, turn_id, hop, say)
+        return self._converse(first, text, conversation, turn_id, focus, available, hop, say,
+                              pinned)
 
     # ---- 指定了由谁做 ----
 
@@ -378,11 +390,35 @@ class Xiaoyou:
         self._launch(card["id"], agent, task, conversation, hop)
         return Turn(reply, reply, "busy", agent.name, card["id"], True)
 
+    def _resume(self, card: Dict[str, Any], agent: Agent, route: routing.Route, said: str,
+                conversation: str, turn_id: str, hop: int, say: Report) -> Turn:
+        """主人在一件事里面点名让谁接着做：不另开卡，接在这件事上。"""
+        task = route.text
+        if route.reason == "mention" and agent.speaks:
+            task = named_note(agent.name, task)
+        reply = "好，告诉 %s 了" % agent.name
+        done = self._tasks.amend(card["id"], "after", task)
+        if done is None:
+            # 这件事现在没人在做：让被点名的代理接着做一轮。它没做过这件事时带上背景。
+            if not self._store.session("%s/%s" % (conversation, card["id"]), agent.name):
+                recent = self._store.transcript.turns(conversation)[-BACKGROUND_TURNS:]
+                if recent:
+                    task = background(recent, task)
+            self._cards.update(card["id"], said=said, say=reply, brief=reply, mood="busy",
+                               state="working", edits=card["edits"] + 1)
+            self._launch(card["id"], agent, task, conversation, hop)
+        else:
+            self._cards.update(card["id"], said=said, say=reply, edits=card["edits"] + 1)
+            self._workspace.note(card, agent.name, task, done)
+        self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
+        say("handoff", agent.name, reply)
+        return Turn(reply, reply, "busy", agent.name, card["id"], True)
+
     # ---- 没指定：她自己接话 ----
 
     def _converse(self, lead: Agent, text: str, conversation: str, turn_id: str,
                   focus: Optional[Dict[str, Any]], available: List[Agent], hop: int,
-                  say: Report) -> Turn:
+                  say: Report, pinned: bool = False) -> Turn:
         now = time.time()
         cards = self._cards.recent(conversation)
         listed = [card for card in cards if card["state"] in ACTIVE]
@@ -391,15 +427,15 @@ class Xiaoyou:
         if focus is not None and all(card["id"] != focus["id"] for card in listed):
             listed.insert(0, focus)
         system = lane_prompt(self._config.persona, self._config.brief_max_chars, available,
-                             listed, focus["id"] if focus is not None else None, now)
+                             listed, focus["id"] if focus is not None else None, now, pinned)
         schema = lane_schema(available)
         outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True)
-        plan, problem = self._plan(outcome, conversation, focus, available)
+        plan, problem = self._plan(outcome, conversation, focus, available, pinned)
         self._trace(outcome, problem)
         if problem is not None:
             outcome = self._speak(lead, retry_note(problem), conversation, system, schema, hop,
                                   catch_up=False)
-            plan, problem = self._plan(outcome, conversation, focus, available)
+            plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
         fields = outcome.fields or {}
         reply = (self._field(outcome, "reply") or outcome.text).strip()
@@ -465,7 +501,7 @@ class Xiaoyou:
         return turn
 
     def _plan(self, outcome: Outcome, conversation: str, focus: Optional[Dict[str, Any]],
-              available: List[Agent]) -> Any:
+              available: List[Agent], pinned: bool = False) -> Any:
         """读出她要 Runtime 做什么。返回（计划，办不了的原因）；办得了时原因是 None。"""
         fields = outcome.fields or {}
         action = fields.get("action") if isinstance(fields.get("action"), dict) else {}
@@ -480,8 +516,8 @@ class Xiaoyou:
             target = self._cards.get(wanted)
             if target is None or target["conversation"] != conversation:
                 return None, "没有编号是 %s 的事" % clip(wanted, 20)
-        elif kind in ("amend", "cancel"):
-            # 没说是哪件：主人正看着的那件就是。
+        elif pinned or kind in ("amend", "cancel"):
+            # 没说是哪件：主人正看着的那件就是。主人在一件事里面说的话，写了 new 也归到它。
             target = focus
             if target is None:
                 return None, "%s 要在 card 里写明是哪件事的编号" % kind
