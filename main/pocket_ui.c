@@ -2135,7 +2135,7 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
     (void)thing_at(snap, selected, &thing);
     set_block_text(s.task_title, thing.title);
     {
-        char place[16];
+        char place[24];
 
         // 单子比窗口长才写：不然一眼就数得出来。
         place[0] = '\0';
