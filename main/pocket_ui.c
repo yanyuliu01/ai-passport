@@ -21,6 +21,10 @@
 
 #include "lvgl.h"
 
+#ifdef ESP_PLATFORM
+#include "esp_system.h"
+#endif
+
 #include "buddy_cards.h"
 #include "pocket_fonts.h"
 #include "pocket_pet.h"
@@ -2179,6 +2183,20 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
 
 // ---- 第四屏：用量 ----
 
+// 第四屏的控件用到时才建，一块十几个控件、几 KB。这块板没有外接内存：剩得不多时
+// 就不建了（这一屏照没有数据那样显示，数在手机上看），好过建到一半要不到内存、
+// 整台设备卡死重启——那时固件已经被认可，不会自己退回上一版。
+#define UI_GROW_RESERVE_BYTES (20U * 1024U)
+
+static bool ui_room_to_grow(void)
+{
+#ifdef ESP_PLATFORM
+    return esp_get_free_heap_size() >= UI_GROW_RESERVE_BYTES;
+#else
+    return true;
+#endif
+}
+
 // 第 index 块；第一次用到时才把它的控件建出来。
 static usage_block_t *usage_block(unsigned index)
 {
@@ -2243,6 +2261,7 @@ static bool render_usage(const buddy_ui_snapshot_t *snap)
                                                            : BUDDY_USAGE_COUNT;
     uint32_t oldest = 0;
     bool timed = false;
+    unsigned built = 0;
     unsigned index;
     int y = 2;
 
@@ -2264,6 +2283,10 @@ static bool render_usage(const buddy_ui_snapshot_t *snap)
             }
             continue;
         }
+        if (block->box == NULL && !ui_room_to_grow()) {
+            continue; // 内存不够再建一块：这一条不显示
+        }
+        ++built;
         block = usage_block(index);
         set_visible(block->box, true);
         for (who = 0; who < BUDDY_USAGE_WHO; ++who) {
@@ -2375,6 +2398,12 @@ static bool render_usage(const buddy_ui_snapshot_t *snap)
             lv_obj_set_height(block->box, row);
         }
         y += row + USAGE_GAP;
+    }
+    if (count > 0U && built == 0U) {
+        // 一块都没建成（内存不够）：照没有数据那样显示。
+        set_visible(s.usage_empty, true);
+        set_visible(s.usage_scroll, false);
+        return false;
     }
     set_visible(s.usage_age, count > 0U && timed);
     if (count > 0U && timed) {
