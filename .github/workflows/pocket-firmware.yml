@@ -49,6 +49,7 @@ jobs:
           extra_docker_args: >-
             -e CCACHE_DIR=/app/${{ github.repository }}/.ccache
             -e IDF_CCACHE_ENABLE=1
+            -e GITHUB_ACTIONS=true
           command: ./tools/validate.sh --firmware
 
       - name: Record the image hash
