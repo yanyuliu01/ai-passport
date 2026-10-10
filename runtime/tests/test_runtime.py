@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 import wave
@@ -426,6 +427,26 @@ class ConfigTests(TempDirCase):
         self.assertEqual((loaded.host, loaded.port), ("0.0.0.0", 9000))
         self.assertEqual(loaded.token, "env-token-env-token-env")
         self.assertEqual(loaded.state_dir, Path("/var/lib/xiaoyou"))
+
+    def test_host_can_be_this_machines_tailscale_address(self):
+        found = []
+        with mock.patch.object(config_module, "_route_source",
+                               lambda target: found.append(target) or "100.101.102.103"):
+            path = write_config(self.folder, server={"token": TOKEN, "host": "Tailscale"})
+            self.assertEqual(config_module.load(path, {}).host, "100.101.102.103")
+            self.assertEqual(self.load(env={"XIAOYOU_HOST": "tailscale"}).host, "100.101.102.103")
+        self.assertEqual(found, ["100.100.100.100"] * 2)
+        # Tailscale is off: the route leads somewhere else, or nowhere. Say so, do not
+        # quietly listen on another address.
+        for source in (lambda target: "192.168.1.7", lambda target: "100.128.0.1"):
+            with self.assertRaisesRegex(config_module.ConfigError, "Tailscale"):
+                config_module.tailscale_address(source)
+
+        def unreachable(target):
+            raise OSError("network is unreachable")
+
+        with self.assertRaisesRegex(config_module.ConfigError, "Tailscale"):
+            config_module.tailscale_address(unreachable)
 
     def test_the_whole_chain_can_be_switched_to_echo_from_the_environment(self):
         agents = {"claude": {"type": "claude_code"}, "codex": {"type": "codex"}}

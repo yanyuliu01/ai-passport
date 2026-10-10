@@ -68,7 +68,7 @@ Relative paths are resolved against the directory of the configuration file.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `server.host` | `127.0.0.1` | Address to listen on. |
+| `server.host` | `127.0.0.1` | Address to listen on. `tailscale` (since 0.5.6) means only this machine's Tailscale address (100.x.y.z): it is looked up at start, so the configuration does not change when the address does, and `--pair` prints the pairing string with it; with Tailscale off the runtime refuses to start. The LAN address and `127.0.0.1` then do not reach this runtime. |
 | `server.port` | `8765` | Port to listen on. |
 | `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
