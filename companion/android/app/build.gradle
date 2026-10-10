@@ -10,8 +10,8 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 11
-        versionName "0.9.0"
+        versionCode 12
+        versionName "0.9.1"
     }
 
     // A fixed debug key (public, password "android") so that every CI build can be
