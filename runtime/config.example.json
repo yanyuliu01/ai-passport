@@ -7,17 +7,79 @@
   },
   "state_dir": "state",
   "persona_file": "persona.txt",
-  "backend": "claude_code",
   "brief_max_chars": 120,
-  "turn_timeout_seconds": 600,
-  "claude_code": {
-    "command": ["claude"],
-    "workdir": "workdir",
-    "config_dir": null,
-    "model": null,
-    "permission_mode": "dontAsk",
-    "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
-    "extra_args": []
+  "turn_timeout_seconds": 0,
+  "idle_timeout_seconds": 600,
+  "idle_timeout_command_seconds": 1800,
+  "idle_answer_seconds": 1800,
+  "xiaoyou": {
+    "default_agent": "claude",
+    "voice_agent": null,
+    "max_parallel": 0,
+    "voice_timeout_seconds": 60,
+    "router": {
+      "type": "mention"
+    }
+  },
+  "agents": {
+    "claude": {
+      "type": "claude_code",
+      "description": "Claude Code：日常问答、读文件和搜索、查网页。",
+      "command": ["claude"],
+      "workdir": "workdir",
+      "config_dir": null,
+      "model": null,
+      "permission_mode": "manual",
+      "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "add_dirs": ["~"],
+      "extra_args": []
+    },
+    "deepseek": {
+      "type": "claude_code",
+      "enabled": false,
+      "description": "Claude Code 的外壳，模型换成 DeepSeek V4。",
+      "command": ["claude"],
+      "workdir": "workdir",
+      "config_dir": "~/.claude-xiaoyou-deepseek",
+      "model": "deepseek-v4-pro",
+      "permission_mode": "dontAsk",
+      "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": ""
+      }
+    },
+    "codex": {
+      "type": "codex",
+      "enabled": false,
+      "description": "OpenAI Codex 命令行：看代码、改代码、给第二意见。",
+      "aliases": [],
+      "command": ["codex"],
+      "workdir": "workdir",
+      "config_dir": null,
+      "mode": "app_server",
+      "approval_policy": "on-request",
+      "sandbox": "read-only",
+      "model": null
+    },
+    "tailor": {
+      "type": "claude_code",
+      "enabled": false,
+      "speaks": false,
+      "description": "改随身设备屏幕上的界面和交互：改固件代码、检查、经蓝牙推到设备上；也负责把设备换回以前的某一版。交代清楚想改成什么样。",
+      "aliases": ["裁缝"],
+      "command": ["claude"],
+      "workdir": "..",
+      "config_dir": null,
+      "model": null,
+      "permission_mode": "acceptEdits",
+      "allowed_tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+      "extra_args": [
+        "--append-system-prompt",
+        "这是小幽转交过来的、关于随身设备屏幕或固件版本的请求。严格按仓库里的 skills/pocket-screen-update/SKILL.zh_CN.md 去做；最后用两三句话说清楚改了什么、大约多久到设备上、怎么撤销。"
+      ],
+      "timeout_seconds": 1800
+    }
   },
   "stt": {
     "engine": "none",
@@ -25,12 +87,19 @@
     "language": "auto",
     "threads": 2
   },
-  "tools": [
-    {
-      "name": "Codex",
-      "enabled": false,
-      "description": "OpenAI Codex CLI. Run it with: codex exec \"<task>\". Good for a second opinion on code.",
-      "allowed_tools": ["Bash(codex exec *)"]
-    }
-  ]
+  "workspace": {
+    "type": "none",
+    "token": null,
+    "bus_database": null,
+    "log_database": null,
+    "author": "xiaoyou"
+  },
+  "firmware": {
+    "repo": null,
+    "asset": "FoloToy-AI-Passport-full.bin",
+    "tag_prefix": "firmware-build-",
+    "source_dir": null,
+    "build_command": [],
+    "build_output": "build/FoloToy-AI-Passport.bin"
+  }
 }

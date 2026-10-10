@@ -255,9 +255,85 @@ static void test_fifo(void)
     assert(s_decoded_count == SAMPLES && fifo.dropped == 2);
 }
 
+static void test_level(void)
+{
+    int16_t pcm[64];
+    size_t index;
+    unsigned previous = 0;
+    int peak;
+
+    assert(pocket_voice_level(NULL, 8) == 0);
+    assert(pocket_voice_level(pcm, 0) == 0);
+    memset(pcm, 0, sizeof(pcm));
+    assert(pocket_voice_level(pcm, 64) == 0);
+    /* Room noise stays at the bottom; full scale either way is the top. */
+    pcm[10] = 150;
+    assert(pocket_voice_level(pcm, 64) == 0);
+    pcm[10] = 32767;
+    assert(pocket_voice_level(pcm, 64) == 100);
+    pcm[10] = -32768;
+    assert(pocket_voice_level(pcm, 64) == 100);
+    /* Louder is never shown as quieter, and ordinary speech lands in the middle. */
+    for (peak = 100; peak < 32000; peak += peak / 8 + 1) {
+        unsigned level;
+
+        pcm[10] = (int16_t)peak;
+        level = pocket_voice_level(pcm, 64);
+        assert(level >= previous && level <= 100U);
+        previous = level;
+    }
+    pcm[10] = 3000;
+    assert(pocket_voice_level(pcm, 64) > 35U && pocket_voice_level(pcm, 64) < 75U);
+    /* Only the loudest sample counts, wherever it is. */
+    for (index = 0; index < 64; ++index) {
+        pcm[index] = (int16_t)(index == 63 ? -9000 : 40);
+    }
+    pcm[10] = 0;
+    {
+        unsigned level = pocket_voice_level(pcm, 64);
+
+        pcm[63] = 9000;
+        assert(level == pocket_voice_level(pcm, 64) && level > 50U);
+    }
+}
+
+static void test_start_line(void)
+{
+    char line[160];
+    char small[40];
+
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, NULL, false) > 0);
+    assert(strcmp(line, "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,"
+                        "\"codec\":\"ima-adpcm\"}\n") == 0);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "", false) > 0);
+    assert(strstr(line, "card") == NULL);
+    /* 按下时屏幕上有一件事：这句话是对它说的。 */
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c12", false) == strlen(line));
+    assert(strcmp(line, "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,"
+                        "\"codec\":\"ima-adpcm\",\"card\":\"c12\"}\n") == 0);
+    /* 在那件事里面说的（第三屏选中的那件）：多一项 pin。没有编号时不带。 */
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c12", true) == strlen(line));
+    assert(strcmp(line, "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,"
+                        "\"codec\":\"ima-adpcm\",\"card\":\"c12\",\"pin\":true}\n") == 0);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "", true) > 0);
+    assert(strstr(line, "pin") == NULL);
+    /* 编号里有会破坏这一行的字符就不带：宁可当作没有，也不发一行坏的。 */
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c\"1", false) > 0);
+    assert(strstr(line, "card") == NULL);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "c\\1", false) > 0);
+    assert(strstr(line, "card") == NULL);
+    assert(pocket_voice_start_line(line, sizeof(line), 16000, "\xE4\xBA\x8B", false) > 0);
+    assert(strstr(line, "card") == NULL);
+    /* 放不下：什么都不写。 */
+    assert(pocket_voice_start_line(small, sizeof(small), 16000, "c12", false) == 0 && small[0] == '\0');
+    assert(pocket_voice_start_line(NULL, 0, 16000, "c12", false) == 0);
+}
+
 int main(void)
 {
     make_speech_like();
+    test_level();
+    test_start_line();
     test_adpcm_round_trip();
     test_adpcm_extremes();
     test_packer();

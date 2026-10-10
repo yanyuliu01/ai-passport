@@ -1,19 +1,28 @@
-"""命令行入口：python3 -m xiaoyou_runtime --config config.json"""
+"""命令行入口：python3 -m xiaoyou_runtime --config config.json
+
+不带子命令就是启动服务。子命令 firmware 管这台电脑上留着的设备固件，
+见 python3 -m xiaoyou_runtime firmware --help。
+"""
 
 import argparse
 import ipaddress
 import os
+import signal
 import socket
 import sys
 import time
+import uuid
 from pathlib import Path
 
-from . import __version__, stt
-from .backends import BackendError, create
+from . import (__version__, agents as agent_module, firmware_cli, router as router_module, stt,
+               workspace as workspace_module)
+from .agents import AgentError
 from .config import ConfigError, load
+from .firmware import FirmwareStore
 from .server import make_server
 from .service import Service
 from .store import Store
+from .xiaoyou import Xiaoyou
 
 
 def _is_loopback(host: str) -> bool:
@@ -56,27 +65,53 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--once", metavar="TEXT", help="不启动服务，直接说一句话并打印回复")
     parser.add_argument("--conversation", default="default", help="--once 使用的对话名")
+    parser.add_argument("--agent", help="--once 时点名交给这个代理；不写就由小幽决定")
     parser.add_argument(
         "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
     )
     parser.add_argument("--version", action="version", version=__version__)
-    args = parser.parse_args(argv)
+    firmware_cli.add_arguments(parser.add_subparsers(dest="command", metavar="子命令"))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(arguments)
 
     try:
         config = load(Path(args.config))
     except ConfigError as error:
         print("配置有问题：%s" % error, file=sys.stderr)
         return 2
+    for notice in config.notices:
+        print("提示：%s" % notice, file=sys.stderr)
+    if args.command == "firmware":
+        # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
+        return firmware_cli.run(config, Path(args.config), args,
+                                arguments[arguments.index("firmware") + 1:])
+    agents = [agent_module.create(spec) for spec in config.agents]
+    router = router_module.create(
+        config, lambda message: print(message, file=sys.stderr))
+    roster = "、".join(
+        "%s（%s%s）" % (agent.name, agent.type, "" if agent.speaks else "，只干活")
+        for agent in agents
+    )
     if args.check:
-        print("配置没问题：后端 %s，监听 %s:%d，工具 %s，语音识别 %s" % (
-            config.backend, config.host, config.port,
-            "、".join(tool.name for tool in config.tools) or "无", config.stt_engine,
+        print("配置没问题：监听 %s:%d，代理 %s，默认交给 %s，路由 %s，语音识别 %s" % (
+            config.host, config.port, roster, config.default_agent, config.router_type,
+            config.stt_engine,
         ))
+        failed = False
+        for agent in agents:
+            problem = agent.check()
+            if problem:
+                print("代理 %s 还用不了：%s" % (agent.name, problem), file=sys.stderr)
+                failed = True
+        problem = router.check()
+        if problem:
+            print("路由器还用不了：%s" % problem, file=sys.stderr)
+            failed = True
         problem = stt.check(stt.create(config))
         if problem:
             print("语音识别还用不了：%s" % problem, file=sys.stderr)
-            return 2
-        return 0
+            failed = True
+        return 2 if failed else 0
 
     if args.stt is not None:
         try:
@@ -105,20 +140,65 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        store = Store(config.state_dir)
+        store = Store(config.state_dir, legacy_agent=config.default_agent)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 2
-    backend = create(config)
+    xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config))
 
     if args.once is not None:
+        if args.agent is not None and not xiaoyou.has(args.agent):
+            print("没有叫 %s 的代理（现在有：%s）" % (
+                args.agent, "、".join(agent.name for agent in agents)), file=sys.stderr)
+            return 2
         try:
-            turn = backend.turn(args.once, store.session(args.conversation))
-        except BackendError as error:
+            turn = xiaoyou.hear(
+                args.once, args.conversation, uuid.uuid4().hex, asked=args.agent,
+                report=lambda kind, agent, detail: print(
+                    "（%s %s：%s）" % (kind, agent or "-", detail), file=sys.stderr),
+            )
+        except AgentError as error:
             print("没成功：%s" % error, file=sys.stderr)
             return 1
-        if turn.session_id:
-            store.remember(args.conversation, turn.session_id)
+        if turn.started:
+            # 这件事交到后台了：先把她的第一句打出来，再等结果。
+            print("（%s：%s）" % (turn.card, turn.reply), file=sys.stderr)
+            # 总时长不限（默认）时一直等：卡没卡住由 Runtime 自己看着，到时会来问。
+            limit = config.agent(turn.agent).timeout_seconds
+            deadline = (time.monotonic() + limit + config.voice_timeout_seconds + 30
+                        if limit else float("inf"))
+            try:
+                while True:
+                    card = xiaoyou.settle(turn.card, 0.5)
+                    if card["state"] not in ("working", "waiting") or time.monotonic() > deadline:
+                        break
+                    for approval in xiaoyou.approvals.pending():
+                        # 没有手机和设备在场：在终端里问。
+                        stalled = approval["kind"] == "stall"
+                        print("（%s%s）\n%s" % (
+                            "" if stalled else "%s 想做：" % approval["agent"], approval["tool"],
+                            approval["detail"]), file=sys.stderr)
+                        allowed = False
+                        if sys.stdin.isatty():
+                            allowed = input("接着等吗？[y/N] " if stalled else "可以吗？[y/N] "
+                                            ).strip().lower() in ("y", "yes")
+                        else:
+                            print("（这里没法问你，当作不行）", file=sys.stderr)
+                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny")
+            except KeyboardInterrupt:
+                xiaoyou.cancel(turn.card)
+                xiaoyou.close()
+                print("取消了", file=sys.stderr)
+                return 1
+            xiaoyou.close()
+            said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
+            if card["state"] != "done":
+                print("没成功：%s" % (said[-1] if said else card["state"]), file=sys.stderr)
+                return 1
+            print("[%s] %s" % (card["mood"], card["brief"]))
+            print()
+            print(said[-1])
+            return 0
         print("[%s] %s" % (turn.mood, turn.brief))
         print()
         print(turn.reply)
@@ -128,21 +208,34 @@ def main(argv=None) -> int:
     problem = stt.check(recognizer)
     if problem:
         print("注意：语音识别还用不了，语音消息会失败：%s" % problem, file=sys.stderr)
-    service = Service(backend, store, recognizer)
+    for agent in agents:
+        problem = agent.check()
+        if problem:
+            print("注意：代理 %s 还用不了，交给它的事会失败：%s" % (agent.name, problem),
+                  file=sys.stderr)
+    service = Service(xiaoyou, store, recognizer)
     try:
-        server = make_server(config, service)
+        server = make_server(config, service, FirmwareStore(config.state_dir))
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         return 1
-    print("小幽 Runtime %s「%s」已启动：http://%s:%d（后端 %s，语音识别 %s）" % (
-        __version__, config.name, config.host, config.port, config.backend, config.stt_engine),
-        file=sys.stderr)
+    print("小幽 Runtime %s「%s」已启动：http://%s:%d（代理 %s，默认交给 %s，语音识别 %s）" % (
+        __version__, config.name, config.host, config.port, roster, config.default_agent,
+        config.stt_engine), file=sys.stderr)
     if not _is_loopback(config.host):
         print(
             "注意：正在监听非本机地址，而这个服务本身只有明文 HTTP。"
             "请只在可信网络里用，或者前面加一层加密通道（见 README）。",
             file=sys.stderr,
         )
+    def stop(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    # 被 kill（比如 pkill）时也走下面的收尾：后台的事各有自己的进程组，不收尾会留下来。
+    try:
+        signal.signal(signal.SIGTERM, stop)
+    except (ValueError, OSError):
+        pass  # 不在主线程里，或者这个平台没有
     try:
         server.serve_forever()
     except KeyboardInterrupt:

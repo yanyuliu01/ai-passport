@@ -401,6 +401,304 @@ static int buddy_parse_evt(const cJSON *object, buddy_event_t *event)
     return (int)event->type;
 }
 
+static bool buddy_copy_field(const cJSON *object, const char *name, char *destination,
+                             size_t destination_size, bool *truncated)
+{
+    const char *value;
+    size_t length;
+
+    if (!buddy_json_optional_string(object, name, &value, &length)) {
+        return false;
+    }
+    /* A missing field reads as empty. */
+    return buddy_copy_utf8(destination, destination_size, value, length, truncated);
+}
+
+/* An identifier has to arrive whole: one that was cut would name something else.
+ * A missing field reads as empty; returns false when it is malformed or too long. */
+static bool buddy_copy_id(const cJSON *object, const char *name, char *destination,
+                          size_t destination_size)
+{
+    bool truncated = false;
+
+    if (!buddy_copy_field(object, name, destination, destination_size, &truncated) ||
+        truncated) {
+        destination[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
+/* {"cmd":"chat","phase":"thinking|helper|done|failed|idle","said":"...",
+ *  "reply":"...","agent":"...","stage":"...","mood":"idle|busy|ask|happy|oops",
+ *  "card":"c12","doing":2}
+ * A hub host reports where the conversation with Xiaoyou stands: this is what
+ * the first screen shows. Everything except phase is optional. card is the
+ * card the turn went onto, doing how many things are in progress in the
+ * background. Text that does not fit is cut on a character boundary; only the
+ * reply says so, because only the reply is shown in full. */
+static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
+{
+    static const struct {
+        const char *name;
+        buddy_chat_phase_t phase;
+    } phases[] = {
+        {"idle", BUDDY_CHAT_NONE},     {"thinking", BUDDY_CHAT_THINKING},
+        {"helper", BUDDY_CHAT_HELPER}, {"done", BUDDY_CHAT_DONE},
+        {"failed", BUDDY_CHAT_FAILED},
+    };
+    static const struct {
+        const char *name;
+        buddy_mood_t mood;
+    } moods[] = {
+        {"idle", BUDDY_MOOD_IDLE},   {"busy", BUDDY_MOOD_BUSY}, {"ask", BUDDY_MOOD_ASK},
+        {"happy", BUDDY_MOOD_HAPPY}, {"oops", BUDDY_MOOD_OOPS},
+    };
+    const char *phase;
+    const char *mood;
+    size_t phase_length;
+    size_t mood_length;
+    size_t index;
+    bool known = false;
+
+    if (!buddy_json_optional_string(object, "phase", &phase, &phase_length) || phase == NULL ||
+        !buddy_json_optional_string(object, "mood", &mood, &mood_length)) {
+        return false;
+    }
+    for (index = 0; index < sizeof(phases) / sizeof(phases[0]); ++index) {
+        if (strcmp(phase, phases[index].name) == 0) {
+            event->chat.phase = phases[index].phase;
+            known = true;
+        }
+    }
+    if (!known) {
+        return false;
+    }
+    /* An unknown mood is not worth refusing the whole update for. */
+    event->chat.mood = BUDDY_MOOD_IDLE;
+    for (index = 0; mood != NULL && index < sizeof(moods) / sizeof(moods[0]); ++index) {
+        if (strcmp(mood, moods[index].name) == 0) {
+            event->chat.mood = moods[index].mood;
+        }
+    }
+    if (!buddy_copy_field(object, "said", event->chat.said, sizeof(event->chat.said), NULL) ||
+        !buddy_copy_field(object, "agent", event->chat.agent, sizeof(event->chat.agent),
+                          NULL) ||
+        !buddy_copy_field(object, "stage", event->chat.stage, sizeof(event->chat.stage),
+                          NULL) ||
+        !buddy_copy_field(object, "reply", event->reply, sizeof(event->reply),
+                          &event->reply_truncated)) {
+        return false;
+    }
+    /* The phone cuts the reply to the documented limit before sending it, so a
+     * cut reply arrives just short enough to fit and nothing above notices.
+     * A reply with no room left for one more character (at most 4 UTF-8 bytes)
+     * was almost certainly cut on the way, so it says so too. */
+    if (strlen(event->reply) > sizeof(event->reply) - 1U - 4U) {
+        event->reply_truncated = true;
+    }
+    if (!buddy_copy_id(object, "card", event->chat.card, sizeof(event->chat.card))) {
+        /* An id that does not fit names no card this device could hold. */
+        event->chat.card[0] = '\0';
+    }
+    if (cJSON_GetObjectItemCaseSensitive(object, "doing") != NULL &&
+        !buddy_json_unsigned(object, "doing", &event->chat.doing)) {
+        return false;
+    }
+    event->type = BUDDY_EVENT_CHAT;
+    return true;
+}
+
+/* {"cmd":"card","id":"c12","at":"14:02","state":"working|waiting|done|failed|
+ *  cancelled|talking","agent":"codex","edits":1,"said":"...","reply":"..."}
+ * One thing: the first sentence the owner said and the latest thing Xiaoyou
+ * said about it. A card that is already known is updated where it stands.
+ * {"cmd":"card","clear":true} forgets every card. */
+static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
+{
+    static const struct {
+        const char *name;
+        buddy_card_state_t state;
+    } states[] = {
+        {"talking", BUDDY_CARD_TALKING}, {"working", BUDDY_CARD_WORKING},
+        {"waiting", BUDDY_CARD_WAITING}, {"done", BUDDY_CARD_DONE},
+        {"failed", BUDDY_CARD_FAILED},   {"cancelled", BUDDY_CARD_CANCELLED},
+    };
+    const char *state;
+    size_t state_length;
+    unsigned edits = 0;
+    size_t index;
+    bool known = false;
+
+    event->type = BUDDY_EVENT_CARD;
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object, "clear")) != 0) {
+        event->card.clear = true;
+        return true;
+    }
+    if (!buddy_copy_id(object, "id", event->card.id, sizeof(event->card.id)) ||
+        event->card.id[0] == '\0' ||
+        !buddy_json_optional_string(object, "state", &state, &state_length) || state == NULL) {
+        return false;
+    }
+    for (index = 0; index < sizeof(states) / sizeof(states[0]); ++index) {
+        if (strcmp(state, states[index].name) == 0) {
+            event->card.state = states[index].state;
+            known = true;
+        }
+    }
+    if (!known ||
+        !buddy_copy_field(object, "at", event->card.at, sizeof(event->card.at), NULL) ||
+        !buddy_copy_field(object, "agent", event->card.agent, sizeof(event->card.agent),
+                          NULL) ||
+        !buddy_copy_field(object, "said", event->card_said, sizeof(event->card_said), NULL) ||
+        !buddy_copy_field(object, "reply", event->reply, sizeof(event->reply),
+                          &event->reply_truncated)) {
+        return false;
+    }
+    /* The phone cuts the reply to the documented limit before sending it, so a
+     * cut reply arrives just short enough to fit and nothing above notices.
+     * A reply with no room left for one more character (at most 4 UTF-8 bytes)
+     * was almost certainly cut on the way, so it says so too. */
+    if (strlen(event->reply) > sizeof(event->reply) - 1U - 4U) {
+        event->reply_truncated = true;
+    }
+    if (cJSON_GetObjectItemCaseSensitive(object, "edits") != NULL &&
+        !buddy_json_unsigned(object, "edits", &edits)) {
+        return false;
+    }
+    event->card.edits = edits > 255U ? 255U : (uint8_t)edits;
+    return true;
+}
+
+/* {"cmd":"tasks","list":[{"id":"c12","agent":"codex","title":"...",
+ *  "state":"working|waiting|queued|done|failed|cancelled","secs":42,
+ *  "p1":"...","p2":"..."}, ...]}
+ * The things handed to helpers: those in progress and, from a hub that saw
+ * "threads" in the ack, the latest that ended. Entries beyond BUDDY_TASK_COUNT
+ * and entries without an id are left out; an empty list means there are none. */
+static bool buddy_parse_tasks(const cJSON *object, buddy_event_t *event)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
+    const cJSON *item;
+
+    if (list == NULL || !cJSON_IsArray(list)) {
+        return false;
+    }
+    cJSON_ArrayForEach(item, list)
+    {
+        buddy_task_t *task;
+        const char *state;
+        size_t state_length;
+        unsigned seconds = 0;
+
+        if (event->task_count >= BUDDY_TASK_COUNT) {
+            break;
+        }
+        if (!cJSON_IsObject(item)) {
+            return false;
+        }
+        task = &event->tasks[event->task_count];
+        if (!buddy_copy_id(item, "id", task->id, sizeof(task->id)) ||
+            !buddy_copy_field(item, "agent", task->agent, sizeof(task->agent), NULL) ||
+            !buddy_copy_field(item, "title", task->title, sizeof(task->title), NULL) ||
+            !buddy_copy_field(item, "p1", task->line1, sizeof(task->line1), NULL) ||
+            !buddy_copy_field(item, "p2", task->line2, sizeof(task->line2), NULL) ||
+            !buddy_json_optional_string(item, "state", &state, &state_length)) {
+            return false;
+        }
+        if (cJSON_GetObjectItemCaseSensitive(item, "secs") != NULL &&
+            !buddy_json_unsigned(item, "secs", &seconds)) {
+            return false;
+        }
+        task->seconds = seconds;
+        task->state = BUDDY_TASK_WORKING;
+        if (state != NULL && strcmp(state, "waiting") == 0) {
+            task->state = BUDDY_TASK_WAITING;
+        } else if (state != NULL && strcmp(state, "queued") == 0) {
+            task->state = BUDDY_TASK_QUEUED;
+        } else if (state != NULL && strcmp(state, "done") == 0) {
+            task->state = BUDDY_TASK_DONE;
+        } else if (state != NULL && strcmp(state, "failed") == 0) {
+            task->state = BUDDY_TASK_FAILED;
+        } else if (state != NULL && strcmp(state, "cancelled") == 0) {
+            task->state = BUDDY_TASK_CANCELLED;
+        }
+        if (task->id[0] != '\0') {
+            ++event->task_count;
+        } else {
+            memset(task, 0, sizeof(*task));
+        }
+    }
+    event->type = BUDDY_EVENT_TASKS;
+    return true;
+}
+
+/* {"cmd":"helpers","list":[{"name":"claude","about":"..."}, ...]}
+ * The agents Xiaoyou can hand work to. Entries beyond BUDDY_HELPER_COUNT and
+ * entries without a name are left out; an empty list clears what was known. */
+static bool buddy_parse_helpers(const cJSON *object, buddy_event_t *event)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(object, "list");
+    const cJSON *item;
+
+    if (list == NULL || !cJSON_IsArray(list)) {
+        return false;
+    }
+    cJSON_ArrayForEach(item, list)
+    {
+        buddy_helper_t *helper;
+
+        if (event->helper_count >= BUDDY_HELPER_COUNT) {
+            break;
+        }
+        if (!cJSON_IsObject(item)) {
+            return false;
+        }
+        helper = &event->helpers[event->helper_count];
+        if (!buddy_copy_field(item, "name", helper->name, sizeof(helper->name), NULL) ||
+            !buddy_copy_field(item, "about", helper->about, sizeof(helper->about), NULL)) {
+            return false;
+        }
+        if (helper->name[0] != '\0') {
+            ++event->helper_count;
+        } else {
+            memset(helper, 0, sizeof(*helper));
+        }
+    }
+    event->type = BUDDY_EVENT_HELPERS;
+    return true;
+}
+
+/* {"cmd":"fw","op":"info|begin|end|abort|confirm|rollback","size":N,"sha256":"…"}
+ * A hub host replaces the firmware over this link; see pocket_update_core.h.
+ * size and sha256 are required for "begin" and ignored otherwise. */
+static bool buddy_parse_firmware(const cJSON *object, buddy_event_t *event)
+{
+    const char *op;
+    const char *sha256;
+    size_t length;
+    uint64_t size = 0;
+
+    if (!buddy_json_optional_string(object, "op", &op, &length) || op == NULL) {
+        return false;
+    }
+    event->firmware.op = pocket_update_op_from_name(op);
+    if (event->firmware.op == POCKET_UPDATE_OP_NONE) {
+        return false;
+    }
+    if (event->firmware.op == POCKET_UPDATE_OP_BEGIN) {
+        if (!buddy_json_required_u64(object, "size", &size) || size == 0U ||
+            size > UINT32_MAX ||
+            !buddy_json_optional_string(object, "sha256", &sha256, &length) ||
+            sha256 == NULL || !pocket_update_parse_sha256(sha256, event->firmware.sha256)) {
+            return false;
+        }
+        event->firmware.size = (uint32_t)size;
+    }
+    event->type = BUDDY_EVENT_FIRMWARE;
+    return true;
+}
+
 static bool buddy_is_unsupported_folder_command(const char *command)
 {
     return strcmp(command, "char_begin") == 0 || strcmp(command, "file") == 0 ||
@@ -556,6 +854,16 @@ int buddy_protocol_parse(const char *json, size_t length, buddy_event_t *event)
         event->host_voice =
             cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "voice")) != 0;
         result = (int)event->type;
+    } else if (strcmp(command, "chat") == 0) {
+        result = buddy_parse_chat(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "helpers") == 0) {
+        result = buddy_parse_helpers(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "card") == 0) {
+        result = buddy_parse_card(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "tasks") == 0) {
+        result = buddy_parse_tasks(root, event) ? (int)event->type : result;
+    } else if (strcmp(command, "fw") == 0) {
+        result = buddy_parse_firmware(root, event) ? (int)event->type : result;
     } else if (buddy_is_unsupported_folder_command(command)) {
         result = BUDDY_EVENT_UNSUPPORTED_COMMAND;
     } else {
@@ -729,6 +1037,16 @@ int buddy_protocol_command_ack_json(char *json, size_t size, const char *command
         buddy_writer_json_string(&writer, error, error_length);
     }
     buddy_writer_literal(&writer, "}\n");
+    return buddy_writer_finish(&writer);
+}
+
+int buddy_protocol_hub_ack_json(char *json, size_t size)
+{
+    buddy_json_writer_t writer;
+
+    buddy_writer_init(&writer, json, size);
+    buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
+                         "\"threads\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

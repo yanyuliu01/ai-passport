@@ -7,10 +7,15 @@ CONFIG_IDF_TARGET="esp32c3"
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 # 固定 8MB 镜像头，关闭 detect，便于 idf.py merge-bin。
 CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
-# 默认模板只保留 NVS、PHY data 和占用剩余空间的 factory app；用户可按需修改。
+# 分区表：NVS、PHY data、OTA 数据和两个一样大的应用槽位（各 3.9 MB），见 partitions.csv。
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# --- 经蓝牙换固件 ---
+# 新固件第一次启动时处于“待认可”状态：手机连上来说一声认可才算数；没等到就重启，
+# 引导程序会自动退回上一版（见 main/pocket_update.c）。
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # --- 控制台:USB-Serial-JTAG(C3 原生 USB,GPIO18/19)---
 # 不用 UART0:其默认 TX=GPIO21 与本板背光引脚冲突。

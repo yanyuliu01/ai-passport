@@ -46,23 +46,35 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
                                    uint64_t now_ms, buddy_action_t *action)
 {
     buddy_event_t event;
+
+    return buddy_orchestrator_process_rx_into(state, ops, json, length, connection_generation,
+                                              now_ms, action, &event);
+}
+
+bool buddy_orchestrator_process_rx_into(buddy_state_t *state,
+                                        const buddy_orchestrator_ops_t *ops,
+                                        const char *json, size_t length,
+                                        uint32_t connection_generation,
+                                        uint64_t now_ms, buddy_action_t *action,
+                                        buddy_event_t *scratch)
+{
     esp_err_t err = ESP_OK;
     bool setting_command = false;
     int parsed;
 
-    if (state == NULL || ops == NULL || ops->generation_secure == NULL ||
+    if (state == NULL || ops == NULL || scratch == NULL || ops->generation_secure == NULL ||
         !ops->generation_secure(ops->context, connection_generation)) {
         return false;
     }
-    parsed = buddy_protocol_parse(json, length, &event);
+    parsed = buddy_protocol_parse(json, length, scratch);
     if (parsed < BUDDY_EVENT_NONE) {
-        if (event.command.name[0] != '\0') {
+        if (scratch->command.name[0] != '\0') {
             const char *error = parsed == BUDDY_EVENT_UNSUPPORTED_COMMAND
                                     ? "unsupported"
                                     : (parsed == BUDDY_EVENT_UNKNOWN_COMMAND
                                            ? "unknown command"
                                            : "invalid request");
-            (void)buddy_orchestrator_send_ack(ops, event.command.name, false, error,
+            (void)buddy_orchestrator_send_ack(ops, scratch->command.name, false, error,
                                               connection_generation);
         }
         return false;
@@ -72,40 +84,57 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
         return false;
     }
 
-    event.ble.connection_generation = connection_generation;
-    if (event.type == BUDDY_EVENT_NAME) {
+    scratch->ble.connection_generation = connection_generation;
+    if (scratch->type == BUDDY_EVENT_FIRMWARE) {
+        /* Not the state machine's business: the updater owns the transfer and
+         * every answer to it. */
+        if (ops->firmware == NULL) {
+            (void)buddy_orchestrator_send_ack(ops, "fw", false, "unsupported",
+                                              connection_generation);
+        } else {
+            ops->firmware(ops->context, &scratch->firmware, connection_generation);
+        }
+        return false;
+    }
+    if (scratch->type == BUDDY_EVENT_NAME) {
         setting_command = true;
-        err = event.command.value_truncated || ops->commit_name == NULL
+        err = scratch->command.value_truncated || ops->commit_name == NULL
                   ? ESP_ERR_INVALID_ARG
-                  : ops->commit_name(ops->context, event.command.value);
-    } else if (event.type == BUDDY_EVENT_OWNER) {
+                  : ops->commit_name(ops->context, scratch->command.value);
+    } else if (scratch->type == BUDDY_EVENT_OWNER) {
         setting_command = true;
-        err = event.command.value_truncated || ops->commit_owner == NULL
+        err = scratch->command.value_truncated || ops->commit_owner == NULL
                   ? ESP_ERR_INVALID_ARG
-                  : ops->commit_owner(ops->context, event.command.value);
+                  : ops->commit_owner(ops->context, scratch->command.value);
     }
 
-    if (event.type == BUDDY_EVENT_HOST_HELLO) {
-        buddy_state_reduce(state, &event, now_ms, action);
-        /* The acknowledgement tells the host this firmware understands "hub". */
-        (void)buddy_orchestrator_send_ack(ops, "hub", true, NULL, connection_generation);
+    if (scratch->type == BUDDY_EVENT_HOST_HELLO) {
+        buddy_state_reduce(state, scratch, now_ms, action);
+        /* The acknowledgement tells the host this firmware understands "hub",
+         * and that it takes the conversation as "chat" messages. */
+        {
+            char json[BUDDY_PROTOCOL_TX_MAX];
+            int ack_length = buddy_protocol_hub_ack_json(json, sizeof(json));
+
+            (void)buddy_orchestrator_send_json(ops, json, ack_length, connection_generation);
+        }
         return true;
     }
 
     if (err == ESP_OK) {
-        buddy_state_reduce(state, &event, now_ms, action);
-        if (event.type == BUDDY_EVENT_NAME) {
+        buddy_state_reduce(state, scratch, now_ms, action);
+        if (scratch->type == BUDDY_EVENT_NAME) {
             buddy_orchestrator_copy(state->settings.name, sizeof(state->settings.name),
-                                    event.command.value);
-        } else if (event.type == BUDDY_EVENT_OWNER) {
+                                    scratch->command.value);
+        } else if (scratch->type == BUDDY_EVENT_OWNER) {
             buddy_orchestrator_copy(state->settings.owner, sizeof(state->settings.owner),
-                                    event.command.value);
+                                    scratch->command.value);
         }
     }
     if (setting_command) {
-        const char *error = event.command.value_truncated ? "invalid value" : "persist failed";
+        const char *error = scratch->command.value_truncated ? "invalid value" : "persist failed";
         esp_err_t send_err = buddy_orchestrator_send_ack(
-            ops, event.command.name, err == ESP_OK, err == ESP_OK ? NULL : error,
+            ops, scratch->command.name, err == ESP_OK, err == ESP_OK ? NULL : error,
             connection_generation);
         return err == ESP_OK && send_err == ESP_OK;
     }

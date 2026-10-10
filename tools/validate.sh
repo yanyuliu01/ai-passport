@@ -35,6 +35,10 @@ run_app_host_tests() {
         -o "${test_dir}/test_pocket_voice"
     "${test_dir}/test_pocket_voice"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_pocket_update.c main/pocket_update_core.c \
+        -o "${test_dir}/test_pocket_update"
+    "${test_dir}/test_pocket_update"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_buddy_line.c main/buddy_line.c \
         -o "${test_dir}/test_buddy_line"
     "${test_dir}/test_buddy_line"
@@ -57,18 +61,48 @@ run_app_host_tests() {
     cjson="$(cjson_dir)"
     if [[ -z "${cjson}" ]]; then
         echo "Host tests (protocol/state/orchestrator): SKIPPED - set IDF_PATH for cJSON" >&2
+        echo "Firmware update interop (app code against firmware code): SKIPPED - set IDF_PATH for cJSON" >&2
         return 0
     fi
     "${CC:-cc}" -std=c11 -w -c "${cjson}/cJSON.c" -o "${test_dir}/cJSON.o"
     for name in protocol state orchestrator; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/test_shims -Imain -I"${cjson}" \
             "tests/test_buddy_${name}.c" main/buddy_protocol.c main/buddy_state.c \
-            main/buddy_orchestrator.c "${test_dir}/cJSON.o" -lm \
+            main/buddy_orchestrator.c main/pocket_update_core.c "${test_dir}/cJSON.o" -lm \
             -ffunction-sections -fdata-sections -Wl,--gc-sections \
             -o "${test_dir}/test_buddy_${name}"
         "${test_dir}/test_buddy_${name}"
     done
     echo "Host tests (protocol/state/orchestrator): PASS"
+    run_update_interop "${test_dir}" "${cjson}"
+}
+
+# The phone app's transfer code against the firmware's own protocol code: the
+# same image goes through FirmwarePush.java on one side and buddy_protocol.c
+# plus pocket_update_core.c on the other. Needs a JDK as well as cJSON; where
+# one is missing this is reported as skipped (each side's own tests still run).
+run_update_interop() {
+    local test_dir="$1"
+    local cjson="$2"
+    local app="companion/android/app/src"
+    local package="com/yanyuliu/pockethub"
+
+    if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+        echo "Firmware update interop (app code against firmware code): SKIPPED - no JDK" >&2
+        return 0
+    fi
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/test_shims -Imain -I"${cjson}" \
+        tests/update_interop/peer.c main/buddy_protocol.c main/pocket_update_core.c \
+        "${test_dir}/cJSON.o" -lm -o "${test_dir}/update_peer"
+    mkdir -p "${test_dir}/interop"
+    javac -encoding UTF-8 -d "${test_dir}/interop" \
+        "${app}/main/java/${package}/BuddyProtocol.java" \
+        "${app}/main/java/${package}/FirmwarePush.java" \
+        "${app}/main/java/${package}/VoiceRecording.java" \
+        "${app}/test/java/${package}/FirmwareSelfTest.java" \
+        tests/update_interop/Interop.java
+    java -cp "${test_dir}/interop" com.yanyuliu.pockethub.Interop \
+        "${test_dir}/update_peer" "${test_dir}/interop"
 }
 
 run_static_checks() {
@@ -112,6 +146,7 @@ run_static_checks() {
     run_app_host_tests "${test_dir}"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pocket_fonts.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_firmware.py
     echo "Runtime tests: PASS"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py

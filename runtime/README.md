@@ -4,21 +4,31 @@
 
 # Xiaoyou Runtime
 
-Xiaoyou is the single voice the owner talks to. This runtime is the small,
-always-on service behind that voice: it receives a message, hands it to an
-agent backend together with Xiaoyou's persona, and returns a full reply, a
+Xiaoyou is the single voice the owner talks to, and an identity of her own: she
+is not another name for one model. This runtime is the small, always-on service
+behind her, and what is hers lives here: the persona, the transcript of her
+conversations with the owner, the decision of who gets each message, and how
+somebody else's result is reported back. Claude Code, Codex, Xiaoyou on another
+computer, and a local model added later are all **agents** she can use.
+
+Every request the owner makes is **one thing** with a card of its own: what he
+said, what Xiaoyou answered and anything added later are kept on that card.
+Xiaoyou herself only does what is quick: she understands the sentence, answers
+at once when she can, and hands anything that takes time to a helper working in
+the background. So an unfinished thing does not hold up the next sentence,
+several things can be in progress at once, and a thing can be added to, changed
+or cancelled while it runs. Whatever Xiaoyou says comes as a full reply, a
 short brief for the Passport screen, and a mood for the pixel pet. A message
 can be typed text or a voice recording; a recording is first turned into text
 by a speech recognition engine chosen in the configuration.
 
-Today the only real backend drives the **Claude Code command line** in
-non-interactive mode, using the Claude login already present on the machine.
-Other agents (for example Codex) are not separate voices: they are listed in the
-configuration as tools that Xiaoyou may hand work to and then summarize.
-
 ```text
-phone app / any client ──HTTP──> Xiaoyou Runtime ──runs──> claude -p (persona, tools)
-                                                              └─> other agent CLIs as tools
+phone app / any client ──HTTP──> Xiaoyou Runtime
+                                   │  persona · transcript · cards · routing · reporting back
+                                   ├──> claude   (Claude Code command line; can answer as Xiaoyou)
+                                   ├──> codex    (Codex command line; does work only)
+                                   ├──> any command (a local model, for example)
+                                   └──> Xiaoyou Runtime on another computer
 ```
 
 Status: verification stage, intended to run on your own computer. The same
@@ -29,8 +39,10 @@ particular host. See [What is and is not verified](#what-is-and-is-not-verified)
 
 - Python 3.9 or newer. No third-party packages, unless you enable the built-in
   speech recognition engine (see [Voice](#voice)).
-- For the `claude_code` backend: Claude Code installed and logged in on the same
-  machine and user account (`claude` must work in a terminal).
+- Whatever each configured agent needs: a `claude_code` agent needs Claude Code
+  installed and logged in on the same machine and user (`claude` must work in a
+  terminal); a `codex` agent needs the Codex command line installed and logged
+  in. `--check` names any agent whose command cannot be found.
 
 ## Quick start
 
@@ -46,7 +58,9 @@ python3 -m xiaoyou_runtime --config config.json                  # start the ser
 `config.json`, `state/`, and `workdir/` are ignored by Git. Never commit a real
 token.
 
-To try the whole path without calling any model, set `"backend": "echo"`.
+To try the whole path without calling any model, start it with the environment
+variable `XIAOYOU_DEFAULT_AGENT=echo`: every message goes to an agent that
+repeats it, and the configuration file stays as it is.
 
 ## Configuration
 
@@ -54,34 +68,337 @@ Relative paths are resolved against the directory of the configuration file.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `server.host` | `127.0.0.1` | Address to listen on. |
+| `server.host` | `127.0.0.1` | Address to listen on. `tailscale` (since 0.5.6) means only this machine's Tailscale address (100.x.y.z): it is looked up at start, so the configuration does not change when the address does, and `--pair` prints the pairing string with it; with Tailscale off the runtime refuses to start. The LAN address and `127.0.0.1` then do not reach this runtime. |
 | `server.port` | `8765` | Port to listen on. |
 | `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
-| `state_dir` | `state` | Where the conversation-to-session table is kept. |
-| `persona_file` | `persona.txt` | Xiaoyou's persona, appended to the backend's system prompt. |
-| `backend` | `claude_code` | `claude_code` or `echo`. |
+| `state_dir` | `state` | Where the session table, the cards and Xiaoyou's transcript are kept. |
+| `persona_file` | `persona.txt` | Xiaoyou's persona. Given only to an agent that answers as Xiaoyou. |
 | `brief_max_chars` | `120` | Upper bound for the small-screen brief (20 to 400). |
-| `turn_timeout_seconds` | `600` | A turn is stopped after this long (10 to 7200). |
-| `claude_code.command` | `["claude"]` | Command to run, as a list. |
-| `claude_code.workdir` | `workdir` | Working directory for Claude Code; created if missing. |
-| `claude_code.config_dir` | `null` | Optional Claude Code configuration directory, passed to it as `CLAUDE_CONFIG_DIR`. See [Using a separate Claude login](#using-a-separate-claude-login). |
-| `claude_code.model` | `null` | Optional model name passed as `--model`. |
-| `claude_code.permission_mode` | `dontAsk` | Passed as `--permission-mode`. |
-| `claude_code.allowed_tools` | `[]` | Rules passed as `--allowedTools`. |
-| `claude_code.extra_args` | `[]` | Extra arguments appended to the command. |
-| `tools[]` | `[]` | Agents Xiaoyou may delegate to: `name`, `description`, `allowed_tools`, `enabled`. |
+| `turn_timeout_seconds` | `0` | How long one thing in the background may take from start to end; `0` means no limit (the default since 0.5.4; it was `3600`). Used by agents that do not set their own `timeout_seconds` (`0`, or 10 to 86400). Whether a thing is stuck is judged by how long it has been silent, see [Long tasks](#long-tasks-watched-for-silence-not-for-total-time). |
+| `idle_timeout_seconds` | `600` | When a thing in the background has produced no event for this long, the owner is asked whether to keep waiting (`0` turns this off, or 30 to 86400). |
+| `idle_timeout_command_seconds` | `1800` | The same, while an operation has started and not finished (the event stream is quiet during a build or a test run anyway). Must not be smaller than the previous one. |
+| `idle_answer_seconds` | `1800` | When nobody answers that question for this long, the thing is stopped (`0` waits forever, or 30 to 86400). |
+| `agents.<name>` | none | An agent; see [Agents](#agents). At least one must be enabled. |
+| `xiaoyou.default_agent` | the first agent | Who gets a message when nobody is named and the router has no opinion. |
+| `xiaoyou.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyou, after an agent that only does work. |
+| `xiaoyou.max_parallel` | `0` | How many things may be in progress at once (0 to 64); `0` means no limit. The rest wait their turn. |
+| `xiaoyou.voice_timeout_seconds` | `60` | How long Xiaoyou herself may take over one sentence (5 to 600). She gets no tools for this step; it is only understanding and dispatching. |
+| `xiaoyou.max_handoffs` | `2` | A 0.4 setting that no longer has any effect; still read so that old configurations load. |
+| `xiaoyou.router.type` | `mention` | `mention` or `command`; see [Who gets a message](#who-gets-a-message). |
+| `xiaoyou.router.command` | `[]` | `command`: the command that decides. |
+| `xiaoyou.router.timeout_seconds` | `10` | `command`: after this long the default agent is used instead (1 to 120). |
 | `stt.engine` | `none` | Speech recognition: `none`, `sense_voice`, or `command`. See [Voice](#voice). |
 | `stt.model_dir` | none | `sense_voice`: folder holding `model.int8.onnx` (or `model.onnx`) and `tokens.txt`. |
 | `stt.language` | `auto` | `sense_voice`: `auto`, `zh`, `en`, `ja`, `ko`, or `yue`. |
 | `stt.threads` | `2` | `sense_voice`: processor threads (1 to 16). |
 | `stt.command` | `[]` | `command`: the command to run; one argument must contain `{audio}`. |
 | `stt.timeout_seconds` | `60` | `command`: a recognition run is stopped after this long (5 to 600). |
+| `firmware.repo` | none | The GitHub repository to fetch built device firmware from, as `owner/name`. See [Device firmware](#device-firmware). |
+| `firmware.asset` | `FoloToy-AI-Passport-full.bin` | The name of the firmware file in a release. |
+| `firmware.tag_prefix` | `firmware-build-` | Releases that carry firmware have a tag that starts with this. |
+| `firmware.source_dir` | none | Where the firmware source is on this computer; used by `fetch --commit HEAD` and `build`. |
+| `firmware.build_command` | `[]` | The command that builds the firmware on this computer, run in `source_dir`. Empty means this computer does not build it. |
+| `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | The firmware file a build produces, relative to `source_dir`. |
+| `workspace.type` | `none` | `none` or `notion`. See [Shared workspace](#shared-workspace). |
+| `workspace.token` | none | The Notion integration token; the environment variable `XIAOYOU_NOTION_TOKEN` also works. |
+| `workspace.bus_database` | none | The id of the "bus" database (the 32 characters in its link). Required for `notion`. |
+| `workspace.log_database` | none | The id of the "log" database. Leave it out to write the bus only. |
+| `workspace.author` | `xiaoyou` | The name Xiaoyou signs with in the shared workspace. |
 
 Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
-`XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`, `XIAOYOU_BACKEND`,
-`XIAOYOU_CLAUDE_CONFIG_DIR`.
+`XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`,
+`XIAOYOU_DEFAULT_AGENT`, `XIAOYOU_CODEX_CONFIG_DIR` (applied to every `codex`
+agent), `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent),
+and `XIAOYOU_NOTION_TOKEN`.
+
+With `XIAOYOU_DEBUG` set (to anything), every sentence Xiaoyou takes adds one
+line to standard error: which card she put it on and what she asked the
+runtime to do.
+
+A configuration written for 0.3 or earlier (`backend`, `claude_code`, `tools`)
+still loads: it is read as a single agent named `claude`, a notice at start-up
+says it is the old shape, and existing sessions continue. An entry under `tools`
+that was enabled has to be rewritten by hand as an agent under `agents`.
+
+## Agents
+
+`agents` is an object whose keys are agent names (letters, digits, underscores
+and hyphens, at most 24 characters). Every agent has:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `type` | none | `claude_code`, `codex`, `command`, `remote`, or `echo`. |
+| `enabled` | `true` | `false` makes the runtime treat it as absent. |
+| `description` | empty | One sentence on what it is good at. Xiaoyou reads it to decide whether to hand work over, and so does the router. |
+| `aliases` | `[]` | Other names it answers to when named in a message, for example how speech recognition tends to spell it. |
+| `speaks` | by type | Whether it may answer as Xiaoyou. `claude_code`, `remote` and `echo` do by default; `codex` and `command` only do work. |
+| `timeout_seconds` | `turn_timeout_seconds` | How long one run of this agent may take from start to end; `0` means no limit. Ways of running that have no event stream (`command`, and `codex` in `exec` mode) use 3600 seconds when this is `0`. |
+| `idle_timeout_seconds`, `idle_timeout_command_seconds` | the top-level settings of the same name | How long this agent may be silent before it counts as possibly stuck. Only for ways of running that have an event stream: `claude_code`, and `codex` in `app_server` mode. |
+
+Keys by type:
+
+| Type | What it does | Keys |
+| --- | --- | --- |
+| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env` |
+| `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args` |
+| `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
+| `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
+| `echo` | Repeats what it is given; calls no model. | none |
+
+`permission_mode` is the permission mode Claude Code works under when it is
+given a thing to do. The default is `manual`: whatever it would ask about in a
+terminal is asked of the owner; see [Approvals](#approvals). `allowed_tools`
+are rules that are approved in advance and never asked about; keep them
+narrow. `add_dirs` are the directories it may touch besides the one it starts
+in; the default is the whole home directory. To go back to "refuse whatever is
+not allowed, ask nobody", set `permission_mode` to `dontAsk`. None of these
+affect the one call in which Xiaoyou herself takes a sentence: that call never
+has tools.
+
+### Using another provider's model (for example DeepSeek V4)
+
+A `claude_code` agent accepts `env`: extra environment variables set when Claude
+Code is started. Point the endpoint and key at a service that speaks the Anthropic
+API and the shell is still Claude Code (tools, sessions and the reply format are
+unchanged) while the answering model is that provider's. The example configuration
+carries a disabled `deepseek` agent:
+
+```json
+"deepseek": {
+  "type": "claude_code",
+  "config_dir": "~/.claude-xiaoyou-deepseek",
+  "model": "deepseek-v4-pro",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "your DeepSeek key"
+  }
+}
+```
+
+Set `"enabled"` to `true`, fill in the key, and point `xiaoyou.default_agent` (and
+`voice_agent`, if set) at it: Xiaoyou herself is then answered by that model. The
+original `claude` stays as a helper, and switching back is pointing those two keys
+at `claude` again. Give it its own `config_dir` so its sessions stay apart from the
+subscription login; that directory needs no login. The key lives only in
+`config.json`, which is not committed.
+
+Not verified: this follows DeepSeek's API documentation and the requests Claude
+Code actually sends, but no turn has been run with a real key. Claude Code's web
+search is a server-side Anthropic tool and may not work on another service.
+
+The example configuration ships a disabled `codex` agent; set `"enabled": true`
+after installing and logging in to the Codex command line on the same machine,
+then run `--check` again.
+
+A local model is added later as a `command` agent with `"speaks": true`: it
+receives the persona together with the message, and may answer in plain text or
+with a JSON object `{"reply", "brief", "mood"}`.
+
+### Who gets a message
+
+The order is fixed:
+
+1. The caller named an agent (`agent` in the interface): that one.
+2. The owner named one at the start of the sentence: that one. Two forms are
+   recognized: `@codex look at this`, and a Chinese "let / ask / use / hand to"
+   word followed by a name or alias (the words are `ASK_WORDS` in
+   [`xiaoyou_runtime/router.py`](xiaoyou_runtime/router.py); the Chinese version
+   of this page lists them).
+3. The router has an opinion: its choice.
+4. Otherwise: the default agent.
+
+The first three rules all mean "it was decided who does this": the runtime
+does not ask a model. It opens a card, Xiaoyou says one sentence to the effect
+of "handed to codex", and that agent works in the background. The message
+record gets a `handoff` event and `agent` is that agent. This includes the
+agent that speaks as Xiaoyou: `@claude …` makes `claude` do the thing in the
+background, with its tools and as Xiaoyou, and it is told that it was the one
+named. When the default agent only does work, rule 4 is handled the same way.
+
+The router is the replaceable part. `mention` adds nothing beyond rules 1, 2
+and 4. `command` runs a command of yours: standard input is
+`{"text", "default", "agents": [{"name", "type", "description"}]}` and the first
+line of standard output is the chosen agent's name. Empty output, an unknown
+name, an error or a timeout all fall back to the default agent: a broken router
+must not leave the owner unable to talk. A small model or a classifier that
+decides routing plugs in here.
+
+### One thing, one card
+
+A sentence that nobody was named for is taken by the agent that speaks as
+Xiaoyou. For this step it gets **no tools** and at most
+`voice_timeout_seconds`: it only has to understand. The runtime tells it which
+helpers exist (its own agent included), which things there are at the moment
+(number, title, who is on it, for how long), and which thing was on the
+owner's screen when he spoke. Besides what to say, its reply states which card
+the sentence belongs to (a new one, or an existing number) and what the
+runtime is to do:
+
+| Action | Meaning |
+| --- | --- |
+| `none` | She has answered directly. |
+| `start` | Hand it to a helper in the background. She names the helper, a short title for the thing, and the task for the helper. |
+| `amend` | The owner has more to say about a thing. `after`: when the current round is done, carry on with the addition. `redo`: the request changed. A helper that can be told mid-way is told; otherwise the round is stopped and started over in the same session with the new request. If the thing had already ended, another round runs in its old session. |
+| `cancel` | Stop a thing that is in progress and drop its result. |
+
+What cannot be done (no such number, no such helper, nothing left to cancel)
+is put to her with the reason, and she answers once more; if it still cannot
+be done the owner is told so as it is, and she does not get to present
+something as done that was not.
+
+Each thing in the background has a thread of its own and none waits for
+another. One helper can be on several things at once, because a helper's
+session is kept per thing and helper (`conversation/card` in
+`state/sessions.json`). A helper that can speak as Xiaoyou works with the
+persona, and its result is what Xiaoyou says. A helper that only does work
+receives the task only, without the persona or the chat; its raw result comes
+back to the conversation's own line and `voice_agent` reports it. If
+`voice_agent` is unavailable at that moment, the owner gets the raw result
+rather than nothing. When a helper fails, the card says so, with the reason.
+
+A card is in one of the states `working` (a helper is on it), `waiting` (for
+the owner's approval; see [Approvals](#approvals)),
+`done`, `failed`, `cancelled`; `talking` is reserved. Cards are stored in
+`state/cards.json`, the latest 50. Things that were in progress when the
+runtime restarts cannot be continued; they are marked `failed` with a note
+saying the runtime was restarted.
+
+### Shared workspace
+
+Xiaoyou and other agents (Claude on claude.ai, Codex, later others) share one
+record, kept in Notion as two databases:
+
+- **Bus**: for agents, and the source of truth. One row per entry, content
+  verbatim (commands, paths and errors are not paraphrased).
+- **Log**: for people. One summary when a thing ends, matched to its bus rows
+  by the link column.
+
+On Xiaoyou's side the runtime's code writes every row; nothing depends on a
+model remembering to.
+
+| When | Where | What |
+| --- | --- | --- |
+| Work is handed to an agent (a new thing, a named agent, another round on a finished thing) | Bus | Type task, written by `xiaoyou`, addressed to and taken by that agent, status taken, body is the exact text given to it |
+| An addition or a changed requirement for work in progress | Bus | Type note; the first body line says what was actually done (steered midway, stopped and redone, queued for after) |
+| An agent returns a result, or fails | Bus | Type result, written by that agent, status done or failed, body is its raw result or the reason |
+| A cancellation | Bus, log | A bus note with status cancelled; one log row |
+| A thing ends | Log | Title, who did it, outcome, conclusion (the small-screen brief), body is what Xiaoyou finally said; when she needs a decision from you, that sentence is also in the your-action column |
+
+The link column is `runtime name/card id` (for example `mac/c12`). The one call
+where Xiaoyou herself takes a sentence (the call without tools) is not a
+handoff and is not written.
+
+Writing to Notion goes over the network, so rows go through a queue and a
+separate thread; neither Xiaoyou's replies nor background work wait for it.
+Rate limits and server errors are retried three times. Rows that still cannot
+be written (no network, a revoked token, a database not shared with the
+integration) are appended to `state/workspace-unsent.jsonl` and reported on
+standard error. The token is only sent in the request header and is never
+written into a row. Task text and results are written verbatim: a secret
+pasted into a task is written too, so keep secrets out of tasks.
+
+Setup: create an internal integration in Notion and copy its token; share the
+page that holds the two databases with that integration. The column and
+option names in Notion are Chinese and must match exactly; they are listed in
+[README.zh_CN.md](README.zh_CN.md) and in `xiaoyou_runtime/workspace.py`.
+
+Other agents read and write the same record through Notion directly (Notion
+MCP where they support MCP); they do not go through the runtime.
+
+### Approvals
+
+A thing given to Claude Code runs with `--permission-mode manual` and with the
+runtime's own permission tool attached
+(`xiaoyou_runtime/permission_mcp.py`, an MCP server with a single tool). Where
+Claude Code would ask "may I?", it calls that tool instead; the tool hands the
+operation to the runtime, the card of the thing becomes `waiting`, an entry
+appears under `approvals` in `/v1/feed`, and it waits. When the owner answers
+`allow` the step is carried out; with `deny` it is not, Claude Code is told
+that the owner said no, and decides how to go on. If the thing is cancelled,
+its request changes or it times out, approvals not yet answered lapse.
+
+What the owner is shown comes from the tool call as it is, without passing
+through a model: `tool` is "helper · tool name" (for example `claude · Bash`)
+and `detail` is the command itself; for writing a file it is the path and the
+content, for editing one the path with what is replaced and by what. Lines of
+progress are made the same way: the tool name and its one most telling
+argument.
+
+The permission tool is a separate process. It does not use the interface the
+phone connects to; it connects to an entrance the runtime opens on `127.0.0.1`
+only, on a random port, with a key that is valid for this one thing and this
+one round. The key is written to a temporary file under `state/` that only the
+owner of the process can read, and the file is removed when the round ends.
+The runtime's token is never written to any file.
+
+With `--once` on the command line no phone or device is present: an approval
+is asked in the terminal (`[y/N]`), and when there is no terminal the answer
+is no.
+
+A thing given to Codex asks in the same way, by a different route: Codex's
+app-server sends its questions to the runtime itself (running a command,
+changing files, wanting more permissions), so no permission tool is involved.
+The default is a read-only sandbox with `approval_policy: "on-request"`: it
+may read anywhere, and every change and every command that has to leave the
+sandbox is asked about. `tool` is the helper's name with a short Chinese label
+for a command, a file change or permissions (the labels are in
+[`xiaoyou_runtime/codex_app.py`](xiaoyou_runtime/codex_app.py); the Chinese
+version of this page lists them), and `detail` is the command
+and its directory, each file's path and diff, or the permissions it wants as
+they are, followed by the reason Codex itself gave. Anything else it asks
+(wanting the owner to type something, for example) is refused. To loosen
+this, change `sandbox` (with `workspace-write`, writing inside the working
+directory is not asked about) or `approval_policy`; with `mode` set to `exec`
+nothing is asked, and what the sandbox forbids simply cannot be done.
+
+Changing a request (`redo`) is, for Codex, adding to the turn in progress:
+the new sentence goes straight into it (`turn/steer`) and nothing is started
+over. Only when that is not possible (the turn has just begun or just ended)
+is the round stopped and run again, as with Claude Code. Cancelling first
+interrupts the turn (`turn/interrupt`) and ends the process if it has not
+stopped within 5 seconds.
+
+Codex's help marks the app-server as experimental. `--check` shakes hands
+with every `codex` agent in this mode (without calling a model); when that
+fails it says why, and `mode` can be set to `exec` for the time being.
+
+### Long tasks: watched for silence, not for total time
+
+A thing in the background has no limit on its total time by default (since
+0.5.4). A cut by the clock kills a thing that has been working properly for
+forty minutes. What the runtime watches is how long it has been silent:
+
+- Every line of Claude Code's event stream and every message from Codex's
+  app-server counts as activity.
+- Normally, `idle_timeout_seconds` (10 minutes by default) without a single
+  line means it may be stuck. While an operation has started and its result
+  has not come back (a command that is building or running tests), the event
+  stream is quiet anyway, so `idle_timeout_command_seconds` (30 minutes by
+  default) applies instead.
+- Time spent waiting for the owner's yes does not count, and it does not count
+  towards the total time either (if one is set): an owner who answers late
+  does not lose the thing.
+- When the time is up the thing is not stopped; the owner is asked first. Its
+  card becomes `waiting` and an entry appears under `approvals` in `/v1/feed`
+  with `kind` `stall`, a `tool` that names the helper and says it has gone silent, and a `detail` that says how
+  long it has been silent and quotes its last step. It uses the same popup as
+  an approval, so the device and the phone need no change: **yes means keep
+  waiting, no means stop**.
+- Yes: it goes on, and is asked about again only after twice as long. If it
+  moves again by itself while the question is open, the question is taken
+  back as if it had not been asked.
+- No, or nobody answering for `idle_answer_seconds` (30 minutes by default):
+  it is stopped, the card becomes `failed`, and the card says why.
+- Stopping loses nothing: the helper's session was recorded at the start, so
+  saying "go on" to that thing continues in the same session.
+
+For a hard limit, give `turn_timeout_seconds` or an agent's `timeout_seconds`
+a number. The `command` type and `codex` in `exec` mode have no event stream,
+so nothing can be seen of them; they are still limited by total time only
+(3600 seconds when set to no limit). The one call in which Xiaoyou herself
+takes a sentence is not affected: that is still `voice_timeout_seconds`.
 
 ### Using a separate Claude login
 
@@ -95,22 +412,23 @@ mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # any folder except your home f
 CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # log in with the subscription, check /status, quit
 ```
 
-Then set `"config_dir": "~/.claude-xiaoyou"` under `claude_code`. Do the login
+Then set `"config_dir": "~/.claude-xiaoyou"` on that `claude_code` agent. Do the login
 from a folder other than your home folder: Claude Code also loads
 `<current folder>/.claude/settings.json` as project settings, and in the home
 folder that is the very file you are trying to avoid.
 
-### Adding an agent as a tool
+Codex is the same with `~/.codex`: a `config.toml` there that points at a
+gateway decides where every request goes, whatever account is logged in. Give
+Xiaoyou's Codex its own directory (`CODEX_HOME`); Codex does not create it:
 
-A tool entry does two things: its `name` and `description` are added to
-Xiaoyou's system prompt, and its `allowed_tools` rules are added to
-`--allowedTools` so Claude Code may run it without asking. The example
-configuration ships a disabled Codex entry; set `"enabled": true` after
-installing and logging in to that command line on the same machine.
+```bash
+mkdir -p ~/.codex-xiaoyou
+CODEX_HOME=~/.codex-xiaoyou codex login
+CODEX_HOME=~/.codex-xiaoyou codex login status
+```
 
-With `permission_mode` set to `dontAsk`, anything not covered by an allow rule
-is refused instead of waiting for a person who is not there. Keep the allow
-rules narrow: every rule is something Xiaoyou can do unattended.
+Then set `"config_dir": "~/.codex-xiaoyou"` on that `codex` agent.
+
 
 ## HTTP interface
 
@@ -119,12 +437,32 @@ responses are JSON.
 
 | Request | Result |
 | --- | --- |
-| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. |
-| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?}` | `202` and the message record, status `queued`. |
-| `POST /v1/voice?conversation=<name>&client_id=<id>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
-| `GET /v1/messages/<id>?wait=<seconds>` | The message record. With `wait` (up to 60) the call returns as soon as the turn finishes. |
-| `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the model with the next message. |
-| `POST /v1/conversations/<name>/reset` | Forgets the session of that conversation; the next message starts fresh. |
+| `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`: the agents Xiaoyou can use on this runtime. |
+| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
+| `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
+| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>` | `{"seq", "cards": [...], "approvals": [...]}`: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
+| `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
+| `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
+| `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
+| `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
+| `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`: the firmware library, newest version first. See [Device firmware](#device-firmware). |
+| `GET /v1/firmware/target?wait=<seconds>&rev=<n>` | The version the device should run, as one flat object: `id` (empty when there is none), `seq`, `build`, `size`, `sha256`, `note`, `reason`, `attempts`, `notice`, `notice_at`, `rev`. With `rev`, returns as soon as the library changes. |
+| `GET /v1/firmware/<id>/image` | That version's application image (binary). |
+| `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
+| `POST /v1/firmware/target` with `{"id": version or null, "reason"?, "force"?}` | Sets (or clears) the version the device should run; answers like `GET /v1/firmware/target`. |
+| `POST /v1/firmware/device` with `{"event", "build", "state", "prev", …}` | What the phone app says about the device. `event` is `connected`, `progress`, `installed`, `failed` or `unsupported`; answers like `GET /v1/firmware/target`. |
+
+A message record says whether Xiaoyou has dealt with the sentence, not whether
+the thing is finished: once she has answered or handed the work out, `status`
+is `done`, and the progress and the result are on the card, to be waited for
+with `/v1/feed`. Only a sentence passed on by another runtime (a `remote`
+agent) waits until the thing has ended. A client that only reads message
+records (phone app 0.5.0) can therefore still send and receive with this
+version, but sees the "handed to codex" sentence and never the result from
+the background.
 
 A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
 `voice`), `status` (`queued`, `transcribing`, `running`, `done`, `failed`),
@@ -132,8 +470,32 @@ A message record has `id`, `client_id`, `conversation`, `kind` (`text` or
 `error`, `created_at`, and `finished_at`. For a voice message `text` is empty
 until the recording has been transcribed.
 
+The record also says who the sentence went to:
+
+- `asked`: the agent the caller named, or `null`.
+- `card`: the card the sentence was put on. Until it has been dealt with, this
+  is the number the caller sent.
+- `agent`: the agent that took the sentence, or the helper it was handed to.
+- `stage`, `helper`: fields left from 0.4. They may hold a value for the few
+  seconds Xiaoyou is dealing with the sentence and are `null` afterwards.
+- `rev`: a counter that goes up every time the record changes.
+- `events`: the steps taken, each `{"at", "kind", "agent", "text"}`. `kind` is
+  `route` (who got it; `text` is the reason: `asked`, `mention`, `router`,
+  `default`) or `handoff` (handed to a helper; `text` is what Xiaoyou said).
+
+A card has `id` (`c1`, `c2`, …), `conversation`, `title` (at most 24
+characters), `state`, `agent` (who is or was on it; `null` when Xiaoyou
+answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at"}]`,
+the latest 40), `brief`, `mood`, `progress` (the latest 5 lines of progress,
+starting over with each round), `started_at`, `edits` (how many times it was
+added to or changed), `approval` (the number of the approval it is waiting
+for, or `null`), `queued`
+(waiting its turn under a limit on parallel things), `created_at`,
+`updated_at`, and `seq`.
+
 Sending the same `client_id` again returns the existing record instead of
-running the turn twice, so a client may retry safely after a lost response.
+dealing with the sentence twice, so a client may retry safely after a lost
+response.
 
 ```bash
 TOKEN=...   # the value of server.token
@@ -141,7 +503,97 @@ curl -s -X POST http://127.0.0.1:8765/v1/messages \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"text": "hello", "client_id": "demo-1"}'
 curl -s "http://127.0.0.1:8765/v1/messages/<id>?wait=60" -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8765/v1/feed?after=0&wait=60" -H "Authorization: Bearer $TOKEN"
 ```
+
+## Device firmware
+
+The device's firmware can be
+[replaced over Bluetooth](../docs/claude-pocket.md#replacing-the-firmware-over-bluetooth).
+The computer that runs the runtime keeps every version and records which one
+the device should run. What writes firmware to the device is the phone app:
+while it is connected to the device and can reach this runtime, it notices that
+the two differ, fetches the image and sends it over Bluetooth; after the device
+restarts it confirms the new firmware and reports the outcome back.
+
+Each version's application image is stored as it is in
+`<state_dir>/firmware/images/`, with the list in
+`<state_dir>/firmware/index.json`. **Nothing is removed automatically** (a
+version is about 1.7 MB). Adding a version checks the image's checksum and
+reads its version string, build time and `build` (the first 16 hex digits of
+the firmware ELF's SHA-256, which is also what the device reports). Every
+version gets a number in the order it arrived, so "version 7" is enough to name
+one.
+
+```bash
+python3 -m xiaoyou_runtime firmware list              # the versions; ● on the device, → waiting to be pushed
+python3 -m xiaoyou_runtime firmware status            # what the device runs, what is pending, recent history
+python3 -m xiaoyou_runtime firmware fetch --push      # take the newest build from GitHub, store it, push it
+python3 -m xiaoyou_runtime firmware add FILE.bin      # store a firmware file (application or merged image)
+python3 -m xiaoyou_runtime firmware restore 5         # put the device back on version 5
+python3 -m xiaoyou_runtime firmware restore previous  # back to the version in the device's other slot (seconds, no transfer)
+python3 -m xiaoyou_runtime firmware cancel            # do not push after all
+python3 -m xiaoyou_runtime firmware remove 3          # delete version 3 from the library
+```
+
+A version is named by its number (`7` or `#7`), the first digits of its id,
+`latest`, `current` (what the device runs) or `previous`. `push` and `restore`
+are the same thing. These commands and the running service share one list, so
+the service does not need a restart.
+
+`fetch` takes firmware from the releases of `firmware.repo`: the newest without
+arguments, a given tag, or with `--commit <commit>` only one built from that
+commit (`HEAD` means the commit `firmware.source_dir` is on). `--wait 900`
+waits up to 900 seconds for a build that is not there yet, and stops at once if
+the build of that commit has already failed. `--detach` does the waiting and
+fetching in the background and returns immediately; the log is
+`<state_dir>/firmware/fetch.log`.
+
+The builds are found with `git ls-remote` (each build is a tag on the commit it
+was built from) and downloaded directly, so waiting for one does not use up
+GitHub's hourly allowance for API queries. Only the question "has this build
+already failed?" goes to the API, at most every 90 seconds. On a computer
+without `git` everything goes through the API; without a login that is 60
+queries an hour, and the `GITHUB_TOKEN` environment variable raises it.
+
+On a computer with ESP-IDF, `firmware.build_command` can be set (for example
+`["bash", "-lc", "source ~/esp/esp-idf/export.sh && idf.py build"]`), and
+`firmware build --push` then builds locally and pushes without waiting for
+GitHub.
+
+Safeguards:
+
+- A version that **cannot itself be replaced over Bluetooth** once installed
+  (firmware from before this feature) is not pushed without `--force`.
+- A version that fails to install twice in a row is not pushed again; `status`
+  says why.
+- A fetch that did not work (a failed build, a timeout) and a failed install
+  are recorded in the history, and the "device firmware" line of the phone app
+  shows them.
+- Images are not signed. Whoever can use this runtime's interface (that is,
+  knows the token) can have the phone push any image to the device.
+
+### Changing the screen by saying so
+
+Enable the agent called `tailor` in `config.example.json` and fill in
+`firmware.repo` and `firmware.source_dir` (`..`, this repository). It is a
+`claude_code` agent that only does work, with the firmware repository as its
+working directory, and it follows
+[`skills/pocket-screen-update`](../skills/pocket-screen-update/SKILL.md): change
+the interface code, run the checks, commit locally, then build on this computer
+and push the result to the device (when ESP-IDF is installed with
+`tools/install_idf.sh` and `firmware.build_command` is set; GitHub is not needed
+then), or else push to GitHub and have the runtime wait for the build there. Say "@tailor make the strip at the
+top thinner" to the device (the example also gives it a Chinese alias), or
+just say what should change and let Xiaoyou decide to hand it over. "Go back to the previous one" is its job as well.
+
+What has to be in place first: the repository on this computer can `git push`;
+`tailor` has `Bash` in `allowed_tools`, which lets it run commands in this
+repository. That is what the job needs, but enable it only on your own
+computer. From the spoken sentence to the device starting the update takes the
+time Claude Code needs for the change (a minute or two) plus GitHub's build
+(several minutes); the conversation waits for the change, and the build and the
+push happen in the background.
 
 ## Windows
 
@@ -187,6 +639,13 @@ What carries over is what was said: the owner's words and Xiaoyou's full
 replies, each shortened to 500 and 1000 characters when quoted to the model.
 What does not carry over is everything else the other session knew: files it
 read, tool output, and anything older than the turns the phone still holds.
+
+The other arrangement is not to switch at all: the phone talks to one runtime,
+and the other computer is registered there as a `remote` agent. Work that
+belongs on that computer is then handed over by Xiaoyou, or sent there when the
+owner names it, and the transcript stays on the main runtime. A message that
+another runtime has already passed on is not passed on again, so two runtimes
+that list each other do not bounce it back and forth.
 
 ## Voice
 
@@ -243,16 +702,44 @@ machine, and the traffic is unencrypted HTTP, so do this only on a network you
 trust. `--pair` guesses the machine's local address; if the machine has several
 network interfaces, check that the address is the one the phone can reach.
 
-## How a turn works
+## How a sentence is processed
 
-1. Messages are queued and handled one at a time.
-2. The backend runs `claude -p --output-format json --append-system-prompt
-   <persona + tool list> --json-schema <reply, brief, mood> --permission-mode
-   <mode> [--allowedTools ...] [--model ...] [--resume <session>]`. The owner's
-   text is sent on standard input, never as a command-line argument.
-3. The session identifier returned by Claude Code is stored per conversation in
-   `state/sessions.json` and passed back with `--resume` next time. The
-   conversation transcript itself stays with Claude Code.
+1. Messages queue per conversation: one sentence at a time within a
+   conversation, and conversations do not wait for each other.
+2. The order in [Who gets a message](#who-gets-a-message) says whether it was
+   decided who does this. If so, a card is opened, the work goes to the
+   background, and the sentence has been dealt with.
+3. Otherwise the agent that speaks as Xiaoyou takes it. For Claude Code that is
+   `claude -p --output-format json --append-system-prompt <persona + helpers +
+   the things at the moment> --json-schema <reply, brief, mood, card, action>
+   --tools "" --permission-mode dontAsk [--model ...] [--resume <session>]`.
+   The owner's text is sent on standard input, never as a command-line
+   argument. The runtime does what the `action` in her reply says; see
+   [One thing, one card](#one-thing-one-card).
+4. A thing in the background: for Claude Code that is `claude -p
+   --output-format stream-json --verbose [--append-system-prompt <persona>
+   --json-schema <reply, brief, mood>] --permission-mode <mode>
+   --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <a temporary
+   file in state> --add-dir <directory> [--allowedTools ...] [--model ...]
+   [--resume <the session of this thing>]`. It still starts in `workdir`. The
+   runtime reads its events line by line: the session identifier is recorded
+   right at the start, and every step becomes a line of progress. When the
+   thing is cancelled or its request changes, it is ended together with every
+   process it started (Claude Code runs commands in a session of their own, so
+   the whole tree is found by parentage). The runtime does the same clean-up
+   when it is itself killed.
+5. Session identifiers are stored in `state/sessions.json`: per conversation
+   and agent for Xiaoyou's own line, per conversation/card and agent for things
+   in the background.
+6. Every sentence and every result from the background is added to Xiaoyou's
+   own transcript, `state/transcript.json`, together with whether the agent
+   that speaks for her witnessed it. What it did not witness (results from the
+   background, sentences that went straight to another agent, turns the phone
+   carried over) it is told first, once, when it next takes a sentence.
+
+The transcript is Xiaoyou's, not any agent's: when a different agent takes the
+next message, Xiaoyou still knows what was just said. Each agent's own session
+holds only the part it took part in.
 
 ## Running on another machine or a virtual machine
 
@@ -269,12 +756,85 @@ network interfaces, check that the address is the one the phone can reach.
 ## What is and is not verified
 
 Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
---static`): configuration checks, the exact command line and standard input
-given to a fake `claude` executable, result and error parsing, session
-continuation, ordering, retry by `client_id`, token checks, the HTTP interface
-with the `echo` backend, and voice messages with a fake recognition command
-(format checks, transcription, empty and failed recognition, clean-up of
-recordings).
+--static`): configuration checks and the old configuration shape; the exact
+command line and standard input given to fake `claude` and `codex` executables,
+result and error parsing, session continuation; naming an agent, the order of
+routing rules and a command as the router; storing cards, their sequence numbers, writing them to
+disk and marking unfinished ones as failed after a restart; Xiaoyou answering
+directly, being free for the next sentence right after handing work out,
+several things in progress at once, adding to a thing, changing its request
+(including really stopping a process and running it again), cancelling
+(including a grandchild process in a session of its own), the limit on
+parallel things, recording, waiting for and answering approvals, the
+permission tool itself and the entrance that listens on this machine only,
+the whole path with a fake Claude Code from the question through the owner's
+answer to the file being written or not, Codex's app-server mode (against a
+stand-in: a turn, continuing, the three kinds of question, adding to a turn,
+interrupting, the ways it fails), a helper that fails or does not exist, putting what
+cannot be done to her once more, reporting back after a work-only helper,
+telling her what she did not witness; the `remote` agent between two real
+runtimes (with `echo`), including two that list each other; queueing per
+conversation, retry by `client_id`, token checks, the HTTP interface
+(including the long poll on the feed); and voice messages with a fake
+recognition command (format checks, transcription, empty and failed
+recognition, clean-up of recordings).
+
+Version 0.5 was checked by hand on 2026-10-09 with Claude Code 2.1.295 on
+Linux, in a cloud workspace rather than on the intended computer, with one
+`claude_code` agent that had `Bash` allowed, through the HTTP interface:
+
+- First sentence, "run sleep 20 and then count the .conf files under /etc":
+  it had been dealt with after 7.6 seconds; Xiaoyou said she had handed it to
+  Claude Code, and the card was `working`.
+- Second sentence right after, "how many eggs are in a dozen": answered after
+  13.7 seconds ("12", with a remark that the other thing was still running),
+  on a card of its own. The first thing was still in progress.
+- After 37 seconds the feed delivered the first card as `done`, with the count.
+- Xiaoyou takes about 6 to 7 seconds over a sentence, most of it Claude Code
+  starting up and answering.
+
+The same day, in the same environment, with the default `manual` mode (only
+the tools that read files approved in advance), through the HTTP interface:
+
+- Asked to write one line into a file: two approvals came in turn (a `Bash`
+  command, then a `Write`), the card became `waiting`, and the feed carried
+  the content as it was. Both answered `deny`: the file was not written, and
+  Xiaoyou said so. Answering the same approval again returned `409`.
+- Asked again, both answered `allow`: the file was written with the right
+  content, and no temporary file was left in `state/`.
+- Separately, an approval was left unanswered for 100 seconds; Claude Code
+  waited and then carried on as usual.
+- Changing a request: asked to `sleep 45` and then read a file, and told after
+  9 seconds to skip the sleep. Xiaoyou picked that card and `redo`; Claude
+  Code was stopped, continued in the same session, and had the result about
+  10 seconds later, without waiting out the 45 seconds.
+- Cancelling: asked to `sleep 60`, then told to forget it. Xiaoyou picked that
+  card and `cancel`; Claude Code and the `sleep` it had started both ended.
+  Killing the runtime ends things in progress in the same way.
+- Two things found and fixed on the way: the model often writes a card number
+  `c3` as `3` (now understood), and Claude Code runs commands in a session of
+  their own, so ending its process group alone left `sleep` behind (the whole
+  tree is now ended by parentage).
+- This cloud environment makes every `claude -p` share one session identifier
+  unless it is started with a clean environment (`env -i HOME=$HOME
+  PATH=$PATH`). The checks in this list were done with a clean environment;
+  the earlier one about things in parallel was not.
+
+Earlier the same day version 0.4 was checked by hand with Claude Code 2.1.295
+on Linux, also in a cloud workspace, with one `claude_code` agent and a
+stand-in helper of type `command`. In that version a helper finished within
+the same turn, so the timings below do not apply to the current one:
+
+- A direct answer took about 5 seconds, and a second turn continued the first.
+- Xiaoyou deciding to hand over: asked to "find someone who reviews code",
+  Claude Code produced the hand-over in the requested structure, the runtime ran
+  the helper, and Claude Code summed it up; it noticed that the stand-in had
+  answered a different question and told the owner so. Polling the HTTP
+  interface showed `agent` and `stage` change. The turn took 18 to 21 seconds.
+- Naming a work-only agent (`@name`): the helper ran first and Claude Code
+  reported the result, in about 6 seconds.
+- A configuration and a session table in the 0.3 shape loaded as before, with
+  the old session identifier attributed to `claude`.
 
 Checked by hand on 2026-10-08 with Claude Code 2.1.294 on Linux, in a cloud
 workspace rather than on the intended computer:
@@ -282,8 +842,9 @@ workspace rather than on the intended computer:
 - `--once` produced a reply, a brief, and a mood in the requested structure;
   a second turn recalled a detail from the first, so continuation works.
 - Through the HTTP interface, a request without the token got `401`, and a
-  request asking for a second opinion made the model run a stand-in tool
-  configured under `tools`, then summarize its output in its own words.
+  request asking for a second opinion made the model run a stand-in tool, then
+  summarize its output in its own words. (That was version 0.2, where other
+  agents were listed under `tools` and run by Claude Code itself.)
 - A simple turn took about six seconds end to end.
 
 Checked by hand on 2026-10-08 on Linux with sherpa-onnx 1.13 and the int8
@@ -303,35 +864,95 @@ request code on a desktop Java runtime: a fact told to the first runtime was
 recalled by the second after the turns were carried over, and something the
 second said was recalled by the first after carrying them back.
 
+Verified by hand on 2026-10-09 on Linux (in a cloud workspace), the firmware
+library: `firmware fetch` took `firmware-build-2` from this repository's real
+releases on GitHub, checked the published SHA-256, and read a version string
+that is the commit it was built from; `--commit … --wait … --detach` fetched the
+same version in the background; a locally compiled application image and its
+merged image stored as the same version; `list`, `status`, `push`, `restore`,
+`cancel` and `remove` behaved as described. `runtime/tests/test_firmware.py`
+covers parsing, the library, the interface and the command line with images
+assembled by hand.
+
 Not verified:
 
+- The firmware library together with the phone app and a real device: no
+  version has actually been installed on a device over Bluetooth.
+- The `tailor` agent: the whole loop of changing the interface, committing,
+  pushing and waiting for the build has not been run with a real Claude Code.
+  Whether this computer can `git push`, and whether Claude Code accepts the
+  `allowed_tools` in the example, has to be confirmed on that computer.
+- `firmware build`: tested with a stand-in command only, never against a real
+  ESP-IDF.
 - Windows: nothing in this directory has been run on Windows.
 - Voice from a real device: microphone quality, Bluetooth throughput, and
   recognition of real speech in a real room.
 - sherpa-onnx on macOS.
 
-- The real Codex command line; the delegation check used a stand-in script.
-- A virtual machine, and a long-running service over days. On macOS only a
-  single `--once` turn has been run (by the owner, with a separate
-  `config_dir`); the HTTP service has not.
-- Use from a phone. The app's request code was run on a desktop Java runtime
-  against this service with the `echo` backend (send, wait, wrong token), but
-  the app itself has not been run on a phone.
-- How the model behaves when a delegated tool is slow, fails, or returns a
-  large output.
+- A complete turn with the real Codex. The `codex` agent was written against
+  codex-cli 0.162.0. In app-server mode the message shapes come from the
+  protocol definition it generates itself; against the real command line the
+  handshake, starting a thread, starting a turn, and reporting "cannot connect"
+  within a bounded time when not logged in were checked. Approval requests,
+  adding to a turn, interrupting, and a turn ending normally were only
+  exercised against a stand-in written from that definition: there is no
+  logged-in Codex in the cloud workspace. The options of `exec` mode come from
+  its help output, and no turn has completed for real there either.
+- The `remote` agent against another real computer over a real network.
+- A local model: a `command` agent answering as Xiaoyou has only been
+  exercised with a script in the tests.
+- A virtual machine, and a long-running service over days.
+- Version 0.5 on macOS and together with the phone app and the device. Phone
+  app 0.5.0 and the current firmware do not know about cards: they can send
+  and receive, but never see a result from the background. The matching app
+  and firmware do not exist yet.
+- Whether the model always picks the right `card` and `action`: only the
+  sentences above were tried by hand.
+- An owner who takes very long to answer an approval (100 seconds was the
+  longest tried).
+- "Ask when it goes silent" on a really long task: tried once in the cloud with
+  a real Claude Code (limit set to 30 seconds, told to run `sleep 50`; asked at
+  30 seconds, stopped after the answer "no"). Whether the defaults of ten and
+  thirty minutes fit, whether Claude Code is asked about by mistake while it
+  thinks for long, and whether Codex's app-server sends messages while a
+  command runs, has not been seen on a real long task.
+- Several approvals at once within one thing: the permission tool passes them
+  on one at a time, the rest queue.
+- Whether this computer and the account's usage limits cope with many things
+  in progress at once.
+- How the model behaves when a helper is slow or returns a large output.
 
 Known risks:
 
 - This relies on running Claude Code non-interactively with a subscription
   login. Claude Code documents a `--bare` mode that skips that login and states
-  it is intended to become the default for `-p`; if that happens this backend
-  needs another way to authenticate. Check the current Claude Code terms before
+  it is intended to become the default for `-p`; if that happens the
+  `claude_code` agent needs another way to authenticate. Check the current Claude Code terms before
   offering this to anyone other than yourself.
-- Turns count against the usage limits of the logged-in account.
+- Every call counts against the usage limits of the logged-in account. Each
+  sentence nobody was named for costs one call to the agent that speaks, and a
+  work-only helper's result costs one more for the report. Parallel things are
+  not limited by default; the owner keeps an eye on usage himself.
+- With the default configuration a thing given to Claude Code can reach the
+  whole home directory, and what keeps that safe is that everything that
+  should be asked is asked. An operation the owner allows really happens; the
+  device shows only the first 319 bytes of it, and the phone the whole.
+- Phone app 0.5.0 and the current firmware do not show these approvals: until
+  the matching app and firmware exist, a thing waiting for approval can only
+  be answered through the HTTP interface, or waits until it times out.
+- Two things changing the same folder at the same time are not protected from
+  each other.
+- The shared workspace has only been tested against a local stand-in (row
+  contents, retries, keeping what could not be written); not one row has been
+  written to the real Notion. It only writes: tasks other agents leave on the
+  bus are not picked up by the runtime yet.
+- Starting a conversation over (reset) neither stops things in progress nor
+  removes cards.
 - One shared token, no per-device identity, no rate limiting.
 
 ## Tests
 
 ```bash
 python3 runtime/tests/test_runtime.py
+python3 runtime/tests/test_firmware.py
 ```

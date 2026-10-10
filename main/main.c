@@ -3,6 +3,7 @@
 // 数据流：BLE 字节流 → 完整 JSON 行 → 协议事件 → 状态机(buddy_state) → 快照 → 界面(pocket_ui)
 // 按键流：BSP 按键回调 → 队列 → 状态机 → 界面刷新或向电脑回发决定
 // 语音流：长按确认键 → 状态机 → 语音任务(pocket_voice) 采集并发给手机 → 结果回到状态机
+// 换固件：{"cmd":"fw"} 和数据帧 → 换固件任务(pocket_update) 写进另一个槽位 → 核对后重启
 //
 // 线程：NimBLE 回调和按键回调只入队；所有状态变更和 LVGL 调用都在 app 任务里，
 // LVGL 调用前后持有 bsp_lvgl_lock()。
@@ -36,7 +37,16 @@
 #include "buddy_state.h"
 #include "pocket_text.h"
 #include "pocket_ui.h"
+#include "pocket_update.h"
+#include "pocket_view.h"
 #include "pocket_voice.h"
+
+_Static_assert(BUDDY_BLE_RX_FRAME_MAGIC == POCKET_UPDATE_MAGIC,
+               "the only binary frames a host sends are firmware data");
+_Static_assert(POCKET_UPDATE_FRAME_MAX == BUDDY_BLE_TX_CHUNK_MAX,
+               "a firmware frame is at most one write");
+// 换固件时屏幕是熄着的，就亮到这个程度让人看得见进度。
+#define BUDDY_UPDATE_BACKLIGHT_PERCENT 40
 
 #define BUDDY_CRITICAL_QUEUE_DEPTH 1U
 #define BUDDY_BUTTON_QUEUE_DEPTH 4U
@@ -75,7 +85,8 @@ typedef struct {
             uint32_t view_generation;
             buddy_page_t page;
             buddy_confirmation_t confirmation;
-            buddy_settings_item_t settings_selection;
+            buddy_menu_item_t menu_selection;
+            buddy_more_item_t more_selection;
             bool approval_visible;
             bool passkey_visible;
             bool ble_enabled;
@@ -101,7 +112,8 @@ typedef struct {
     uint32_t generation;
     buddy_page_t page;
     buddy_confirmation_t confirmation;
-    buddy_settings_item_t settings_selection;
+    buddy_menu_item_t menu_selection;
+    buddy_more_item_t more_selection;
     bool approval_visible;
     bool passkey_visible;
     bool ble_enabled;
@@ -340,9 +352,11 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     buddy_control_event_t control = {0};
 
     (void)context;
-    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。把它当作一次短按：
-     * 既不会让“连按确认”变成没反应，也不会让一次连按被当成两次决定。 */
-    if (event == BSP_BTN_DOUBLE) {
+    /* 快速连按两下时按键库只报一次 DOUBLE、不报 CLICK。上键和下键把它当作一次短按。
+     * 确认键的双击另有用处（打开菜单），原样往下传；有授权、确认、配对这些浮层时
+     * 状态机也按一次短按处理：既不会让“连按确认”变成没反应，也不会让一次连按被
+     * 当成两次决定。 */
+    if (event == BSP_BTN_DOUBLE && button != BSP_BTN_OK) {
         event = BSP_BTN_CLICK;
     }
     if (event == BSP_BTN_RELEASE) {
@@ -355,7 +369,8 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
         }
         return;
     }
-    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG) || s_button_queue == NULL) {
+    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG && event != BSP_BTN_DOUBLE) ||
+        s_button_queue == NULL) {
         return;
     }
     control.type = BUDDY_CONTROL_KEY;
@@ -365,7 +380,8 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     control.data.key.view_generation = s_rendered_view.generation;
     control.data.key.page = s_rendered_view.page;
     control.data.key.confirmation = s_rendered_view.confirmation;
-    control.data.key.settings_selection = s_rendered_view.settings_selection;
+    control.data.key.menu_selection = s_rendered_view.menu_selection;
+    control.data.key.more_selection = s_rendered_view.more_selection;
     control.data.key.approval_visible = s_rendered_view.approval_visible;
     control.data.key.passkey_visible = s_rendered_view.passkey_visible;
     control.data.key.ble_enabled = s_rendered_view.ble_enabled;
@@ -388,6 +404,11 @@ static void on_ble_event(const buddy_ble_event_t *event, void *context)
 
     (void)context;
     if (event == NULL) {
+        return;
+    }
+    if (event->type == BUDDY_BLE_EVENT_RX_FRAME) {
+        pocket_update_frame(event->data.rx_frame.data, event->data.rx_frame.length,
+                            event->data.rx_frame.connection_generation);
         return;
     }
     if (event->type == BUDDY_BLE_EVENT_RX_LINE) {
@@ -438,6 +459,7 @@ static void on_ble_event(const buddy_ble_event_t *event, void *context)
         buddy_queue_critical(s_bond_queue, &control);
         break;
     case BUDDY_BLE_EVENT_RX_LINE:
+    case BUDDY_BLE_EVENT_RX_FRAME:
         return;
     }
 }
@@ -492,10 +514,12 @@ static bool buddy_key_matches_state(const buddy_control_event_t *control,
     return state->confirmation == BUDDY_CONFIRM_NONE && !state->passkey_visible &&
            state->prompt.id[0] == '\0' && state->page == control->data.key.page &&
            state->screen_off == control->data.key.screen_off &&
-           (state->page != BUDDY_PAGE_SETTINGS ||
-            (state->settings_selection == control->data.key.settings_selection &&
-             (state->settings_selection != BUDDY_SETTINGS_BLE ||
-              state->settings.ble_enabled == control->data.key.ble_enabled)));
+           (state->page != BUDDY_PAGE_MENU ||
+            (state->menu_selection == control->data.key.menu_selection &&
+             (state->menu_selection != BUDDY_MENU_BLE ||
+              state->settings.ble_enabled == control->data.key.ble_enabled))) &&
+           (state->page != BUDDY_PAGE_MORE ||
+            state->more_selection == control->data.key.more_selection);
 }
 
 static bool buddy_translate_key(const buddy_control_event_t *control, buddy_event_t *event)
@@ -519,6 +543,8 @@ static bool buddy_translate_key(const buddy_control_event_t *control, buddy_even
     }
     if (control->data.key.event == BSP_BTN_CLICK) {
         event->type = BUDDY_EVENT_KEY_CLICK;
+    } else if (control->data.key.event == BSP_BTN_DOUBLE) {
+        event->type = BUDDY_EVENT_KEY_DOUBLE;
     } else if (control->data.key.event == BSP_BTN_LONG) {
         event->type = BUDDY_EVENT_KEY_LONG;
     } else {
@@ -822,6 +848,13 @@ static esp_err_t buddy_orchestrator_persist_level(void *context, uint64_t level)
     return buddy_settings_set_highest_celebrated_level(level);
 }
 
+static void buddy_orchestrator_firmware(void *context, const pocket_update_command_t *command,
+                                        uint32_t generation)
+{
+    (void)context;
+    pocket_update_command(command, generation);
+}
+
 static buddy_orchestrator_ops_t buddy_orchestrator_ops(buddy_state_t *state)
 {
     const buddy_orchestrator_ops_t ops = {
@@ -836,6 +869,7 @@ static buddy_orchestrator_ops_t buddy_orchestrator_ops(buddy_state_t *state)
         .factory_reset = buddy_orchestrator_factory_reset,
         .set_ble_enabled = buddy_orchestrator_set_ble,
         .persist_level = buddy_orchestrator_persist_level,
+        .firmware = buddy_orchestrator_firmware,
     };
     return ops;
 }
@@ -858,7 +892,8 @@ static bool buddy_execute_action(buddy_state_t *state, const buddy_action_t *act
     }
     if (action->type == BUDDY_ACTION_VOICE_START) {
         memset(result_event, 0, sizeof(*result_event));
-        if (pocket_voice_start(action->connection_generation) == ESP_OK) {
+        if (pocket_voice_start(action->connection_generation, action->voice_card,
+                               action->voice_pin) == ESP_OK) {
             return false;
         }
         /* 语音任务没起来或上一轮还没收尾：让状态机按“麦克风没准备好”收场。 */
@@ -880,7 +915,8 @@ static bool buddy_rendered_view_same(const buddy_rendered_view_t *left,
                                      const buddy_rendered_view_t *right)
 {
     return left->page == right->page && left->confirmation == right->confirmation &&
-           left->settings_selection == right->settings_selection &&
+           left->menu_selection == right->menu_selection &&
+           left->more_selection == right->more_selection &&
            left->screen_off == right->screen_off &&
            left->approval_visible == right->approval_visible &&
            left->passkey_visible == right->passkey_visible &&
@@ -897,7 +933,8 @@ static void buddy_publish_rendered_view(const buddy_ui_snapshot_t *snapshot)
     buddy_rendered_view_t next = {
         .page = snapshot->page,
         .confirmation = snapshot->confirmation,
-        .settings_selection = snapshot->settings_selection,
+        .menu_selection = snapshot->menu_selection,
+        .more_selection = snapshot->more_selection,
         .screen_off = snapshot->screen_off,
         .approval_visible = !snapshot->confirmation_pending && !snapshot->passkey_visible &&
                             !snapshot->approval_locked && snapshot->prompt_id[0] != '\0',
@@ -931,33 +968,43 @@ static void buddy_apply_backlight(const buddy_state_t *state)
     static int applied = -1;
     int wanted = buddy_state_backlight_percent(state);
 
+    if (wanted == 0 && pocket_update_shown(pocket_update_phase())) {
+        wanted = BUDDY_UPDATE_BACKLIGHT_PERCENT;
+    }
     if (wanted != applied) {
         bsp_display_backlight((uint8_t)wanted);
         applied = wanted;
     }
 }
 
-static void buddy_render(buddy_state_t *state, const buddy_action_t *action, uint64_t now_ms)
+/* 返回界面要不要换一件事：第二屏里这件事已经翻到头还往那个方向按时是 -1（上）或
+ * 1（下），其余是 0。 */
+static int buddy_render(buddy_state_t *state, const buddy_action_t *action, uint64_t now_ms)
 {
     static buddy_ui_snapshot_t snapshot;
     buddy_settings_snapshot_t settings;
+    int edge = 0;
 
     buddy_state_snapshot(state, &snapshot);
     snapshot.uptime_ms = now_ms;
+    snapshot.voice_level = pocket_voice_level_now();
+    snapshot.update_phase = pocket_update_phase();
+    snapshot.update_percent = pocket_update_percent_now();
     if (buddy_settings_load(&settings) == ESP_OK) {
         snapshot.approval_count = settings.approval_count;
         snapshot.denial_count = settings.denial_count;
     }
     if (!bsp_lvgl_lock(1000)) {
-        return;
+        return 0;
     }
     pocket_ui_render(&snapshot);
     if (action->type == BUDDY_ACTION_UI_SCROLL) {
-        pocket_ui_scroll(action->scroll_delta);
+        edge = pocket_ui_scroll(action->scroll_delta);
     }
     bsp_lvgl_unlock();
     buddy_publish_rendered_view(&snapshot);
     buddy_apply_backlight(state);
+    return edge;
 }
 
 static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
@@ -966,9 +1013,10 @@ static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
 {
     buddy_orchestrator_ops_t ops = buddy_orchestrator_ops(state);
 
-    (void)event;
-    return buddy_orchestrator_process_rx(state, &ops, slot->data, slot->length,
-                                         slot->connection_generation, now_ms, action);
+    /* 事件结构有几 KB，解析到应用任务那个静态的缓冲里，不放在任务栈上。 */
+    return buddy_orchestrator_process_rx_into(state, &ops, slot->data, slot->length,
+                                              slot->connection_generation, now_ms, action,
+                                              event);
 }
 
 static QueueHandle_t buddy_next_ready_queue(void)
@@ -1033,7 +1081,11 @@ static void buddy_app_task(void *context)
             ready == s_voice_queue) {
             buddy_control_event_t control;
 
+            /* 正在换固件时屏幕上只有进度，按键按下去不知道会碰到什么，所以不理会；
+             * “松开”照常处理，免得换之前按住说的那一句收不了尾。 */
             if (xQueueReceive(ready, &control, 0) == pdTRUE &&
+                !(control.type == BUDDY_CONTROL_KEY &&
+                  pocket_update_shown(pocket_update_phase())) &&
                 buddy_control_to_event(&control, &state, &event)) {
                 buddy_state_reduce(&state, &event, now_ms, &action);
                 reduced = true;
@@ -1047,13 +1099,24 @@ static void buddy_app_task(void *context)
             }
         }
         if (!reduced) {
-            const buddy_event_t tick = {.type = BUDDY_EVENT_TICK};
+            /* 事件结构有几 KB，放在静态区而不是任务栈上。 */
+            static const buddy_event_t tick = {.type = BUDDY_EVENT_TICK};
 
             buddy_state_reduce(&state, &tick, now_ms, &action);
         }
 
         if (buddy_execute_action(&state, &action, &event)) {
             buddy_state_reduce(&state, &event, now_ms, &action);
+        }
+        if (pocket_update_take_failure()) {
+            buddy_copy_text(state.message, sizeof(state.message), PT_UPDATE_FAILED);
+        }
+        if (pocket_update_restart_due()) {
+            /* 新固件已经定下来（或者要切回上一版）：把还没落盘的设置存好再重启。 */
+            if (buddy_settings_flush(true) != ESP_OK) {
+                ESP_LOGW(TAG, "settings flush before restart failed");
+            }
+            esp_restart();
         }
         if (now_ms - last_battery_ms >= BUDDY_BATTERY_SAMPLE_MS) {
             buddy_sample_battery(&state);
@@ -1081,7 +1144,18 @@ static void buddy_app_task(void *context)
         }
         state.ble_connected = atomic_load(&s_ble_initialized) && buddy_ble_is_connected();
         state.ble_encrypted = atomic_load(&s_ble_initialized) && buddy_ble_is_encrypted();
-        buddy_render(&state, &action, now_ms);
+        {
+            int edge = buddy_render(&state, &action, now_ms);
+
+            if (edge != 0) {
+                /* 第二屏里这件事翻到头了：换到上一件 / 下一件，再画一遍。 */
+                memset(&event, 0, sizeof(event));
+                event.type = BUDDY_EVENT_CARD_STEP;
+                event.key = edge > 0 ? BUDDY_KEY_DOWN : BUDDY_KEY_UP;
+                buddy_state_reduce(&state, &event, now_ms, &action);
+                (void)buddy_render(&state, &action, now_ms);
+            }
+        }
     }
 }
 
@@ -1164,6 +1238,9 @@ void app_main(void)
                     BUDDY_APP_PRIORITY, &s_app_task_handle) != pdPASS) {
         ESP_LOGE(TAG, "application queue/task initialization failed");
         return;
+    }
+    if (pocket_update_init() != ESP_OK) {
+        ESP_LOGW(TAG, "update task initialization failed; firmware cannot be replaced over BLE");
     }
     if (pocket_voice_init(on_voice_event, NULL) != ESP_OK) {
         ESP_LOGW(TAG, "voice task initialization failed; push-to-talk unavailable");

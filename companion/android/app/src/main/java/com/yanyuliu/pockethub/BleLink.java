@@ -48,6 +48,13 @@ final class BleLink {
         void onClosed();
     }
 
+    /** 文本都发完了、蓝牙空着的时候，从这里要下一帧二进制数据；没有就返回 null。 */
+    interface FrameSource {
+        byte[] nextFrame();
+    }
+
+    private static final long FRAME_RETRY_MS = 30;
+
     private static final UUID SERVICE = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID RX = UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID TX = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
@@ -71,6 +78,7 @@ final class BleLink {
     private boolean writing;
     private boolean receiverRegistered;
     private int mtu = 23;
+    private FrameSource frameSource;
 
     BleLink(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -122,6 +130,26 @@ final class BleLink {
         } catch (RuntimeException ignored) {
             // 只是优化，失败了照常工作。
         }
+    }
+
+    /** 一次写入最多带多少字节。 */
+    int writePayload() {
+        return Math.max(20, mtu - 3);
+    }
+
+    /**
+     * 设置（或用 null 取消）二进制数据的来源，用来传固件。文本行优先：有文本排着队就先发文本，
+     * 所以心跳照常，设备不会因为在收固件就以为连接断了。数据帧用“不等应答”的写入，快得多；
+     * 路上丢了由上层按偏移重发。
+     */
+    void setFrameSource(FrameSource source) {
+        frameSource = source;
+        pump();
+    }
+
+    /** 数据来源那边又有东西可发了。 */
+    void kick() {
+        pump();
     }
 
     /** 排队发送一行（必须以换行结尾）。没连上时直接丢弃：状态类消息下次心跳会重发。 */
@@ -279,6 +307,8 @@ final class BleLink {
         ready = false;
         writing = false;
         outbox.clear();
+        frameSource = null;
+        main.removeCallbacks(pumpAgain);
         assembler.reset();
         if (wasOpen) {
             listener.onClosed();
@@ -426,6 +456,11 @@ final class BleLink {
                 writing = false;
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     outbox.clear();
+                    if (frameSource != null) {
+                        // 传固件时不能就此停下：过一会儿接着发，缺的那一段设备会要回去。
+                        main.removeCallbacks(pumpAgain);
+                        main.postDelayed(pumpAgain, FRAME_RETRY_MS);
+                    }
                     return;
                 }
                 pump();
@@ -433,17 +468,30 @@ final class BleLink {
         }
     };
 
+    private final Runnable pumpAgain = this::pump;
+
     private void pump() {
         if (writing || !ready || gatt == null || rx == null) {
             return;
         }
         byte[] next = outbox.poll();
+        boolean frame = false;
+        if (next == null && frameSource != null) {
+            next = frameSource.nextFrame();
+            frame = next != null;
+        }
         if (next == null) {
             return;
         }
+        rx.setWriteType(frame ? BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                : BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
         rx.setValue(next);
         if (gatt.writeCharacteristic(rx)) {
             writing = true;
+        } else if (frame) {
+            // 协议栈正忙：这一帧就当丢了，设备会按偏移要回去；稍等再发下一帧。
+            main.removeCallbacks(pumpAgain);
+            main.postDelayed(pumpAgain, FRAME_RETRY_MS);
         } else {
             // 协议栈正忙：这一行作废，下次心跳会带上最新状态。
             outbox.clear();

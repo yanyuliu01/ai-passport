@@ -15,6 +15,10 @@ typedef struct {
     char owner[BUDDY_OWNER_MAX];
     char time[BUDDY_MESSAGE_MAX];
     char message[BUDDY_MESSAGE_MAX];
+    /* When the text in message last changed (and a hash to notice the change):
+     * with a hub host the line is a passing notice, not a standing status. */
+    uint32_t message_hash;
+    uint64_t message_since_ms;
     char entries[BUDDY_ENTRY_COUNT][BUDDY_ENTRY_MAX];
     unsigned total;
     unsigned running;
@@ -36,11 +40,39 @@ typedef struct {
     bool confirmation_pending;
     buddy_confirmation_t confirmation;
     bool confirmation_acknowledge;
-    buddy_settings_item_t settings_selection;
+    buddy_menu_item_t menu_selection;
+    buddy_more_item_t more_selection;
     bool screen_off;
     uint8_t brightness_level;
     char reply[BUDDY_REPLY_MAX];
     bool reply_truncated;
+    /* The conversation with Xiaoyou, when the host is a hub. */
+    buddy_chat_t chat;
+    uint64_t chat_since_ms;
+    /* The cards the hub has sent. They outlive the connection: what was said
+     * stays readable until the hub sends them again. */
+    buddy_cards_t cards;
+    /* The card the conversation screen shows; empty means the newest. */
+    char card_current[BUDDY_CARD_ID_MAX];
+    /* The conversation screen goes with the turn in progress: it shows that turn
+     * until its card arrives, then that card. Ends when the owner moves to
+     * another card himself; starts again with the next turn. */
+    bool card_follow;
+    /* Goes up whenever the conversation screen should start from the top again. */
+    uint32_t card_serial;
+    /* Things in progress, the one selected on the third screen, when the list came. */
+    buddy_task_t tasks[BUDDY_TASK_COUNT];
+    unsigned task_count;
+    unsigned task_selected;
+    uint64_t tasks_since_ms;
+    /* The talk page is open on the thing selected on the third screen (entered
+     * from there with OK) instead of on the conversation. */
+    bool thread;
+    buddy_helper_t helpers[BUDDY_HELPER_COUNT];
+    unsigned helper_count;
+    bool host_hub;
+    /* The hub reports the conversation with "chat" (a newer phone app). */
+    bool host_chat;
     buddy_permission_delivery_t permission_delivery;
     /* What the owner answered to the prompt on screen; NONE until a key decides. */
     buddy_permission_decision_t permission_decision;

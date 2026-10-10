@@ -2,14 +2,20 @@
 
 配置是一个 JSON 文件；少数敏感或随机器变化的值可以用环境变量覆盖，方便以后放到
 虚拟机或容器里运行而不改文件。只用标准库，兼容 Python 3.9。
+
+配置里最重要的一块是 agents：小幽可以把话交给哪些代理。小幽自己不是其中任何一个；
+她的人设、对话记录和“交给谁”的判断都在 Runtime 里。0.3 及更早的配置（backend、
+claude_code、tools）仍然能读，会被换算成只有一个代理的 agents。
 """
 
+import ipaddress
 import json
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 class ConfigError(Exception):
@@ -17,12 +23,46 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
-class Tool:
-    """小幽可以调用的一个外部工具（例如 Codex）。"""
+class AgentSpec:
+    """一个代理的配置。各类型用到的字段不同，用不到的保持默认值。"""
 
     name: str
+    type: str
+    # 写给小幽和路由器看的一句话：这个代理擅长什么
     description: str
-    allowed_tools: List[str]
+    # 点名时除了 name 之外还认的叫法（例如语音识别常写成的中文名）
+    aliases: List[str]
+    # 能不能直接以小幽的身份回话。不能的只干活，结果由小幽转述
+    speaks: bool
+    # 一轮从头到尾最长多久；0 是不限（看得见事件流的代理靠下面两项判断卡没卡住）
+    timeout_seconds: int
+    # 连续这么久一行事件都没有，就当它可能卡住了，去问主人还等不等；0 是不管
+    idle_seconds: int = 600
+    # 最后一步是一条还没跑完的命令（编译、跑测试时事件流本来就是安静的）时，放宽到这么久
+    idle_command_seconds: int = 1800
+    # claude_code / codex / command：要运行的命令
+    command: List[str] = field(default_factory=list)
+    workdir: Optional[Path] = None
+    model: Optional[str] = None
+    extra_args: List[str] = field(default_factory=list)
+    # claude_code
+    config_dir: Optional[Path] = None
+    # 后台做事时的权限模式。manual：该问的都问，问到主人那里
+    permission_mode: str = "manual"
+    allowed_tools: List[str] = field(default_factory=list)
+    # 除了启动目录之外，还让它碰哪些目录
+    add_dirs: List[Path] = field(default_factory=list)
+    # claude_code：启动命令时额外设置的环境变量（例如换一个兼容 Anthropic 接口的服务）
+    env: Dict[str, str] = field(default_factory=dict)
+    # codex
+    sandbox: Optional[str] = None
+    # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
+    codex_mode: str = "app_server"
+    # app_server 模式下什么时候来问：untrusted、on-request、never
+    approval_policy: str = "on-request"
+    # remote：另一台小幽 Runtime
+    url: Optional[str] = None
+    token: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -34,19 +74,23 @@ class Config:
     token: str
     state_dir: Path
     persona: str
-    backend: str
     brief_max_chars: int
-    turn_timeout_seconds: int
-    # claude_code 后端
-    claude_command: List[str]
-    claude_workdir: Path
-    # Claude Code 自己的配置目录；None 表示用它的默认位置（~/.claude）
-    claude_config_dir: Optional[Path]
-    claude_model: Optional[str]
-    claude_permission_mode: str
-    claude_allowed_tools: List[str]
-    claude_extra_args: List[str]
-    tools: List[Tool] = field(default_factory=list)
+    agents: List[AgentSpec]
+    # 没人点名、路由器也没意见时，话交给谁
+    default_agent: str
+    # 只会干活的代理做完之后，由谁用小幽的口吻转述
+    voice_agent: str
+    # 0.4 的设置，现在不用了（帮手在后台做事，不再在一轮里来回转交）；留着只为旧配置能读
+    max_handoffs: int
+    # 同时在做的事最多几件；0 是不限
+    max_parallel: int = 0
+    # 小幽这条线上一次调用最长多久：她只负责听懂、马上答、把活派出去
+    voice_timeout_seconds: int = 60
+    # 问了主人“还等不等”之后，这么久没人答就停掉；0 是一直等
+    idle_answer_seconds: int = 1800
+    router_type: str = "mention"
+    router_command: List[str] = field(default_factory=list)
+    router_timeout_seconds: int = 10
     # 语音识别；engine 为 none 时不接受语音消息
     stt_engine: str = "none"
     stt_command: List[str] = field(default_factory=list)
@@ -54,23 +98,51 @@ class Config:
     stt_language: str = "auto"
     stt_threads: int = 2
     stt_timeout_seconds: int = 60
-    # 配置文件所在的目录；相对路径和 stt.command 都以它为准
+    # 设备固件：从哪个 GitHub 仓库取构建好的镜像，源码在这台电脑的哪里，会不会自己构建
+    firmware_repo: Optional[str] = None
+    firmware_asset: str = "FoloToy-AI-Passport-full.bin"
+    firmware_tag_prefix: str = "firmware-build-"
+    firmware_source_dir: Optional[Path] = None
+    firmware_build_command: List[str] = field(default_factory=list)
+    firmware_build_output: str = "build/FoloToy-AI-Passport.bin"
+    # 共享工作区：小幽和别的 agent 共用的记录（Notion）。none 时不写
+    workspace_type: str = "none"
+    workspace_token: Optional[str] = None
+    workspace_bus_database: Optional[str] = None
+    workspace_log_database: Optional[str] = None
+    # 小幽在共享工作区里署的名字
+    workspace_author: str = "xiaoyou"
+    workspace_api_base: str = "https://api.notion.com"
+    # 配置文件所在的目录；相对路径、stt.command 和 router.command 都以它为准
     base_dir: Path = Path(".")
+    # 读配置时发现的、不妨碍启动但值得让人知道的事
+    notices: List[str] = field(default_factory=list)
 
-    def allowed_tools(self) -> List[str]:
-        merged = list(self.claude_allowed_tools)
-        for tool in self.tools:
-            for rule in tool.allowed_tools:
-                if rule not in merged:
-                    merged.append(rule)
-        return merged
+    def agent(self, name: str) -> Optional[AgentSpec]:
+        for spec in self.agents:
+            if spec.name == name:
+                return spec
+        return None
 
 
-BACKENDS = ("claude_code", "echo")
+AGENT_TYPES = ("claude_code", "codex", "command", "remote", "echo")
+# 这些类型默认直接以小幽的身份回话；其余的默认只干活。
+SPEAKS_BY_DEFAULT = ("claude_code", "remote", "echo")
+ROUTER_TYPES = ("mention", "command")
+CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+CODEX_MODES = ("app_server", "exec")
+CODEX_APPROVAL_POLICIES = ("untrusted", "on-request", "never")
+WORKSPACE_TYPES = ("none", "notion")
+NOTION_ID = re.compile(r"^[0-9a-fA-F]{32}$")
 STT_ENGINES = ("none", "sense_voice", "command")
 STT_LANGUAGES = ("auto", "zh", "en", "ja", "ko", "yue")
+GITHUB_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 MIN_TOKEN_LENGTH = 16
 PLACEHOLDER_TOKEN = "change-me-to-a-long-random-string"
+AGENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$")
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAX_AGENTS = 12
+MAX_ALIAS_CHARS = 24
 
 
 def _expect(value: Any, kind: type, where: str) -> Any:
@@ -90,9 +162,206 @@ def _strings(value: Any, where: str) -> List[str]:
     return list(value)
 
 
+def _optional_string(value: Any, where: str) -> Optional[str]:
+    if value is None:
+        return None
+    _expect(value, str, where)
+    if not value.strip():
+        raise ConfigError("%s 不能是空字符串；不需要就删掉这一项" % where)
+    return value.strip()
+
+
+def _env(value: Any, where: str) -> Dict[str, str]:
+    _expect(value, dict, where)
+    for key, item in value.items():
+        if not ENV_NAME.match(key):
+            raise ConfigError("%s 里的名字 %r 不像环境变量名" % (where, key))
+        if not isinstance(item, str):
+            raise ConfigError("%s.%s 应该是字符串" % (where, key))
+        if key == "CLAUDE_CONFIG_DIR":
+            raise ConfigError("%s 里不要写 CLAUDE_CONFIG_DIR；用这个代理的 config_dir" % where)
+    return dict(value)
+
+
 def _path(value: str, base: Path) -> Path:
     path = Path(os.path.expanduser(value))
     return path if path.is_absolute() else (base / path).resolve()
+
+
+MAX_TIMEOUT_SECONDS = 86400
+
+
+def _timeout(value: Any, where: str, least: int = 10) -> int:
+    """一个时限：0 是不限，否则在 least 到一天之间。"""
+    _expect(value, int, where)
+    if value != 0 and not least <= value <= MAX_TIMEOUT_SECONDS:
+        raise ConfigError("%s 应该是 0（不限），或者在 %d 到 %d 之间" % (
+            where, least, MAX_TIMEOUT_SECONDS))
+    return value
+
+
+def _idle(raw: Dict[str, Any], where: str, default: Tuple[int, int]) -> Tuple[int, int]:
+    """没动静多久算卡住：（平时，命令在跑时）。"""
+    prefix = where + "." if where else ""
+    idle = _timeout(raw.get("idle_timeout_seconds", default[0]),
+                    prefix + "idle_timeout_seconds", 30)
+    command = _timeout(raw.get("idle_timeout_command_seconds", default[1]),
+                       prefix + "idle_timeout_command_seconds", 30)
+    if idle and command and command < idle:
+        raise ConfigError("%sidle_timeout_command_seconds 不能比 %sidle_timeout_seconds 小：命令在跑时"
+                          "事件流本来就安静，应该等得更久" % (prefix, prefix))
+    return idle, command
+
+
+def _agent(name: str, raw: Any, base: Path, default_timeout: int,
+           env: Mapping[str, str], default_idle: Tuple[int, int] = (600, 1800)) -> Optional[AgentSpec]:
+    """读一个代理；enabled 为 false 时返回 None。"""
+    where = "agents.%s" % name
+    if not AGENT_NAME.match(name):
+        raise ConfigError(
+            "代理的名字 %r 不行：只能用字母、数字、下划线和连字符，以字母或数字开头，最多 24 个字符"
+            % name
+        )
+    _expect(raw, dict, where)
+    if not _expect(raw.get("enabled", True), bool, where + ".enabled"):
+        return None
+    kind = _expect(raw.get("type", ""), str, where + ".type")
+    if kind not in AGENT_TYPES:
+        raise ConfigError("%s.type 只能是 %s 之一" % (where, "、".join(AGENT_TYPES)))
+    aliases = _strings(raw.get("aliases", []), where + ".aliases")
+    for alias in aliases:
+        if len(alias) > MAX_ALIAS_CHARS or alias != alias.strip():
+            raise ConfigError(
+                "%s.aliases 里的叫法不能超过 %d 个字符，前后不能有空白" % (where, MAX_ALIAS_CHARS)
+            )
+    idle, idle_command = _idle(raw, where, default_idle)
+    common = dict(
+        idle_seconds=idle,
+        idle_command_seconds=idle_command,
+        name=name,
+        type=kind,
+        description=_expect(raw.get("description", ""), str, where + ".description").strip(),
+        aliases=aliases,
+        speaks=_expect(raw.get("speaks", kind in SPEAKS_BY_DEFAULT), bool, where + ".speaks"),
+        timeout_seconds=_timeout(
+            raw.get("timeout_seconds", default_timeout), where + ".timeout_seconds"
+        ),
+    )
+    if kind == "echo":
+        return AgentSpec(**common)
+    if kind == "remote":
+        url = _optional_string(raw.get("url"), where + ".url")
+        token = _optional_string(raw.get("token"), where + ".token")
+        if url is None or not url.startswith(("http://", "https://")):
+            raise ConfigError("%s.url 要写成 http:// 或 https:// 开头的地址" % where)
+        if token is None or len(token) < MIN_TOKEN_LENGTH:
+            raise ConfigError("%s.token 要填那台 Runtime 的令牌（至少 %d 位）" % (where, MIN_TOKEN_LENGTH))
+        if not common["speaks"]:
+            raise ConfigError("%s 是另一台小幽，本来就以小幽的身份回话；不要把 speaks 设成 false" % where)
+        return AgentSpec(url=url.rstrip("/"), token=token, **common)
+
+    default_command = {"claude_code": ["claude"], "codex": ["codex"]}.get(kind, [])
+    command = _strings(raw.get("command", default_command), where + ".command")
+    if not command:
+        raise ConfigError("%s.command 不能为空" % where)
+    workdir = _path(_expect(raw.get("workdir", "workdir"), str, where + ".workdir"), base)
+    shared = dict(
+        command=command,
+        workdir=workdir,
+        model=_optional_string(raw.get("model"), where + ".model"),
+        extra_args=_strings(raw.get("extra_args", []), where + ".extra_args"),
+    )
+    if kind == "command":
+        if shared["model"] is not None or shared["extra_args"]:
+            raise ConfigError("%s 是 command 类型：参数直接写进 command，不用 model 和 extra_args" % where)
+        return AgentSpec(**common, **shared)
+    if kind == "codex":
+        sandbox = _optional_string(raw.get("sandbox", "read-only"), where + ".sandbox")
+        if sandbox is not None and sandbox not in CODEX_SANDBOXES:
+            raise ConfigError("%s.sandbox 只能是 %s 之一" % (where, "、".join(CODEX_SANDBOXES)))
+        mode = _expect(raw.get("mode", "app_server"), str, where + ".mode")
+        if mode not in CODEX_MODES:
+            raise ConfigError("%s.mode 只能是 %s 之一" % (where, "、".join(CODEX_MODES)))
+        policy = _expect(raw.get("approval_policy", "on-request"), str, where + ".approval_policy")
+        if policy not in CODEX_APPROVAL_POLICIES:
+            raise ConfigError("%s.approval_policy 只能是 %s 之一" % (
+                where, "、".join(CODEX_APPROVAL_POLICIES)))
+        codex_home = _optional_string(raw.get("config_dir"), where + ".config_dir")
+        codex_home = env.get("XIAOYOU_CODEX_CONFIG_DIR") or codex_home
+        return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
+                         config_dir=_path(codex_home, base) if codex_home else None,
+                         **common, **shared)
+
+    config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
+    config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
+    return AgentSpec(
+        config_dir=_path(config_dir, base) if config_dir else None,
+        permission_mode=_expect(
+            raw.get("permission_mode", "manual"), str, where + ".permission_mode"
+        ),
+        add_dirs=[_path(folder, base)
+                  for folder in _strings(raw.get("add_dirs", ["~"]), where + ".add_dirs")],
+        allowed_tools=_strings(raw.get("allowed_tools", []), where + ".allowed_tools"),
+        env=_env(raw.get("env", {}), where + ".env"),
+        **common,
+        **shared,
+    )
+
+
+def _legacy_agents(raw: Dict[str, Any], env: Mapping[str, str], notices: List[str]) -> Dict[str, Any]:
+    """把 0.3 及更早的 backend / claude_code / tools 换算成 agents。"""
+    backend = _expect(raw.get("backend", "claude_code"), str, "backend")
+    if backend not in ("claude_code", "echo"):
+        raise ConfigError("backend 只能是 claude_code、echo 之一（新写法见 README 的 agents）")
+    claude = dict(_expect(raw.get("claude_code", {}), dict, "claude_code"))
+    for index, item in enumerate(_expect(raw.get("tools", []), list, "tools")):
+        where = "tools[%d]" % index
+        _expect(item, dict, where)
+        name = _expect(item.get("name", ""), str, where + ".name").strip()
+        if not name:
+            raise ConfigError(where + ".name 不能为空")
+        if _expect(item.get("enabled", True), bool, where + ".enabled"):
+            raise ConfigError(
+                "tools 这种写法不再使用：把 %s 登记成 agents 里的一个代理（见 README 的“代理”一节），"
+                "由小幽把活转交给它" % name
+            )
+    if "tools" in raw:
+        notices.append("配置里的 tools 已经不用了：别的代理现在登记在 agents 里")
+    notices.append("这份配置是旧写法（backend / claude_code），已按只有一个代理来读；新写法见 config.example.json")
+    if backend == "echo":
+        return {"echo": {"type": "echo", "description": "原样复述，用来测试链路"}}
+    claude["type"] = "claude_code"
+    claude.setdefault("description", "Claude Code")
+    return {"claude": claude}
+
+
+# Tailscale 给每台机器的地址都在这一段里（100.64.0.0/10）。
+TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+# Tailscale 自己的服务地址：只用来问系统“去那里走哪个本机地址”，不会真的发包。
+TAILSCALE_PROBE = "100.100.100.100"
+
+
+def _route_source(target: str) -> str:
+    """去 target 时系统会用的本机地址。UDP 的 connect 只查路由，不发任何东西。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((target, 9))
+        return probe.getsockname()[0]
+
+
+def tailscale_address(source: Any = None) -> str:
+    """这台机器在 Tailscale 里的地址（100.x.y.z）。server.host 写 tailscale 时用它来监听，
+    地址变了也不用改配置。Tailscale 没开时照实报错，不悄悄退回别的地址。"""
+    address = ""
+    try:
+        address = (source or _route_source)(TAILSCALE_PROBE)
+        inside = ipaddress.ip_address(address) in TAILSCALE_NET
+    except (OSError, ValueError):
+        inside = False
+    if not inside:
+        raise ConfigError(
+            "server.host 是 tailscale，但没找到这台机器的 Tailscale 地址（100.x.y.z）："
+            "先确认 Tailscale 已经打开并登录；或者把 server.host 直接写成要监听的地址")
+    return address
 
 
 def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
@@ -108,9 +377,12 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("配置文件最外层应该是一个对象")
     base = path.resolve().parent
+    notices: List[str] = []
 
     server = _expect(raw.get("server", {}), dict, "server")
     host = env.get("XIAOYOU_HOST") or _expect(server.get("host", "127.0.0.1"), str, "server.host")
+    if host.strip().lower() == "tailscale":
+        host = tailscale_address()
     port_text = env.get("XIAOYOU_PORT")
     try:
         port = int(port_text) if port_text else _expect(server.get("port", 8765), int, "server.port")
@@ -144,55 +416,82 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     if not persona:
         raise ConfigError("人设文件 %s 是空的" % persona_file)
 
-    backend = env.get("XIAOYOU_BACKEND") or _expect(raw.get("backend", "claude_code"), str, "backend")
-    if backend not in BACKENDS:
-        raise ConfigError("backend 只能是 %s 之一" % "、".join(BACKENDS))
-
     brief = _expect(raw.get("brief_max_chars", 120), int, "brief_max_chars")
     if not 20 <= brief <= 400:
         raise ConfigError("brief_max_chars 应该在 20 到 400 之间")
-    timeout = _expect(raw.get("turn_timeout_seconds", 600), int, "turn_timeout_seconds")
-    if not 10 <= timeout <= 7200:
-        raise ConfigError("turn_timeout_seconds 应该在 10 到 7200 之间")
+    # 一件后台的事从头到尾最长做多久（各代理可以用自己的 timeout_seconds 改）。默认不限：
+    # 长任务按总时长一刀切不合理，卡没卡住看的是多久没动静。
+    timeout = _timeout(raw.get("turn_timeout_seconds", 0), "turn_timeout_seconds")
+    idle = _idle(raw, "", (600, 1800))
+    idle_answer = _timeout(raw.get("idle_answer_seconds", 1800), "idle_answer_seconds", 30)
 
-    claude = _expect(raw.get("claude_code", {}), dict, "claude_code")
-    command = _strings(claude.get("command", ["claude"]), "claude_code.command")
-    if not command:
-        raise ConfigError("claude_code.command 不能为空")
-    model = claude.get("model")
-    if model is not None:
-        _expect(model, str, "claude_code.model")
-    permission_mode = _expect(
-        claude.get("permission_mode", "dontAsk"), str, "claude_code.permission_mode"
-    )
+    if "agents" in raw:
+        for old in ("backend", "claude_code", "tools"):
+            if old in raw:
+                raise ConfigError("配置里同时有 agents 和旧写法的 %s；只留 agents" % old)
+        raw_agents = _expect(raw["agents"], dict, "agents")
+    else:
+        raw_agents = _legacy_agents(raw, env, notices)
+    # 不改配置文件就能把整条链路换成回声来测试；XIAOYOU_BACKEND 是旧名字。
+    forced = env.get("XIAOYOU_DEFAULT_AGENT")
+    if forced == "echo" or env.get("XIAOYOU_BACKEND") == "echo":
+        forced = "echo"
+        if "echo" not in raw_agents:
+            raw_agents = dict(raw_agents, echo={"type": "echo", "description": "原样复述，用来测试链路"})
+    if len(raw_agents) > MAX_AGENTS:
+        raise ConfigError("agents 最多登记 %d 个" % MAX_AGENTS)
+    agents: List[AgentSpec] = []
+    for agent_name, agent_raw in raw_agents.items():
+        spec = _agent(agent_name, agent_raw, base, timeout, env, idle)
+        if spec is not None:
+            agents.append(spec)
+    if not agents:
+        raise ConfigError("agents 里至少要有一个启用的代理")
+    taken: Dict[str, str] = {}
+    for spec in agents:
+        for label in [spec.name] + spec.aliases:
+            owner = taken.setdefault(label.lower(), spec.name)
+            if owner != spec.name:
+                raise ConfigError("%s 和 %s 都叫 %s；名字和叫法不能重复" % (owner, spec.name, label))
+    names = [spec.name for spec in agents]
 
-    config_dir = claude.get("config_dir")
-    if config_dir is not None:
-        _expect(config_dir, str, "claude_code.config_dir")
-        if not config_dir.strip():
-            raise ConfigError("claude_code.config_dir 不能是空字符串；不需要就删掉这一项")
-    config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
-
-    tools: List[Tool] = []
-    seen: Dict[str, bool] = {}
-    for index, item in enumerate(_expect(raw.get("tools", []), list, "tools")):
-        where = "tools[%d]" % index
-        _expect(item, dict, where)
-        if not _expect(item.get("enabled", True), bool, where + ".enabled"):
-            continue
-        name = _expect(item.get("name", ""), str, where + ".name").strip()
-        if not name:
-            raise ConfigError(where + ".name 不能为空")
-        if name in seen:
-            raise ConfigError("工具名 %s 重复了" % name)
-        seen[name] = True
-        tools.append(
-            Tool(
-                name=name,
-                description=_expect(item.get("description", ""), str, where + ".description").strip(),
-                allowed_tools=_strings(item.get("allowed_tools", []), where + ".allowed_tools"),
-            )
-        )
+    xiaoyou = _expect(raw.get("xiaoyou", {}), dict, "xiaoyou")
+    default_agent = forced or _optional_string(xiaoyou.get("default_agent"), "xiaoyou.default_agent")
+    if default_agent is None:
+        default_agent = names[0]
+    if default_agent not in names:
+        raise ConfigError("默认代理 %s 不在启用的代理里（%s）" % (default_agent, "、".join(names)))
+    voice_agent = _optional_string(xiaoyou.get("voice_agent"), "xiaoyou.voice_agent")
+    by_name = {spec.name: spec for spec in agents}
+    if voice_agent is None:
+        # 默认代理自己能说话就用它，否则找第一个能说话的。
+        speakers = [spec.name for spec in agents if spec.speaks]
+        voice_agent = default_agent if by_name[default_agent].speaks else (
+            speakers[0] if speakers else default_agent)
+    elif voice_agent not in names:
+        raise ConfigError("xiaoyou.voice_agent %s 不在启用的代理里" % voice_agent)
+    elif not by_name[voice_agent].speaks:
+        raise ConfigError("xiaoyou.voice_agent %s 的 speaks 是 false，没法替小幽说话" % voice_agent)
+    max_handoffs = _expect(xiaoyou.get("max_handoffs", 2), int, "xiaoyou.max_handoffs")
+    if not 0 <= max_handoffs <= 5:
+        raise ConfigError("xiaoyou.max_handoffs 应该在 0 到 5 之间")
+    max_parallel = _expect(xiaoyou.get("max_parallel", 0), int, "xiaoyou.max_parallel")
+    if not 0 <= max_parallel <= 64:
+        raise ConfigError("xiaoyou.max_parallel 应该在 0 到 64 之间（0 是不限）")
+    voice_timeout = _expect(
+        xiaoyou.get("voice_timeout_seconds", 60), int, "xiaoyou.voice_timeout_seconds")
+    if not 5 <= voice_timeout <= 600:
+        raise ConfigError("xiaoyou.voice_timeout_seconds 应该在 5 到 600 之间")
+    router = _expect(xiaoyou.get("router", {}), dict, "xiaoyou.router")
+    router_type = _expect(router.get("type", "mention"), str, "xiaoyou.router.type")
+    if router_type not in ROUTER_TYPES:
+        raise ConfigError("xiaoyou.router.type 只能是 %s 之一" % "、".join(ROUTER_TYPES))
+    router_command = _strings(router.get("command", []), "xiaoyou.router.command")
+    if router_type == "command" and not router_command:
+        raise ConfigError("xiaoyou.router.type 为 command 时要设置 xiaoyou.router.command")
+    router_timeout = _expect(router.get("timeout_seconds", 10), int, "xiaoyou.router.timeout_seconds")
+    if not 1 <= router_timeout <= 120:
+        raise ConfigError("xiaoyou.router.timeout_seconds 应该在 1 到 120 之间")
 
     stt = _expect(raw.get("stt", {}), dict, "stt")
     stt_engine = _expect(stt.get("engine", "none"), str, "stt.engine")
@@ -218,6 +517,56 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     if not 5 <= stt_timeout <= 600:
         raise ConfigError("stt.timeout_seconds 应该在 5 到 600 之间")
 
+    firmware = _expect(raw.get("firmware", {}), dict, "firmware")
+    firmware_repo = _optional_string(firmware.get("repo"), "firmware.repo")
+    if firmware_repo is not None and not GITHUB_REPO.match(firmware_repo):
+        raise ConfigError("firmware.repo 要写成 GitHub 的“用户名/仓库名”，例如 yanyuliu01/ai-passport")
+    firmware_asset = _expect(
+        firmware.get("asset", "FoloToy-AI-Passport-full.bin"), str, "firmware.asset").strip()
+    firmware_tag_prefix = _expect(
+        firmware.get("tag_prefix", "firmware-build-"), str, "firmware.tag_prefix").strip()
+    if not firmware_asset or not firmware_tag_prefix:
+        raise ConfigError("firmware.asset 和 firmware.tag_prefix 不能是空的")
+    firmware_source_dir = _optional_string(firmware.get("source_dir"), "firmware.source_dir")
+    firmware_build_command = _strings(firmware.get("build_command", []), "firmware.build_command")
+    firmware_build_output = _expect(
+        firmware.get("build_output", "build/FoloToy-AI-Passport.bin"), str,
+        "firmware.build_output").strip()
+    if firmware_build_command and firmware_source_dir is None:
+        raise ConfigError("设置了 firmware.build_command 就要同时设置 firmware.source_dir（固件源码在哪）")
+    if firmware_build_command and not firmware_build_output:
+        raise ConfigError("设置了 firmware.build_command 就要同时设置 firmware.build_output（构建出的文件）")
+
+    workspace = _expect(raw.get("workspace", {}), dict, "workspace")
+    workspace_type = _expect(workspace.get("type", "none"), str, "workspace.type")
+    if workspace_type not in WORKSPACE_TYPES:
+        raise ConfigError("workspace.type 只能是 %s 之一" % "、".join(WORKSPACE_TYPES))
+    workspace_token = env.get("XIAOYOU_NOTION_TOKEN") or _optional_string(
+        workspace.get("token"), "workspace.token")
+    databases: Dict[str, Optional[str]] = {}
+    for key in ("bus_database", "log_database"):
+        value = _optional_string(workspace.get(key), "workspace." + key)
+        if value is not None:
+            value = value.replace("-", "")
+            if not NOTION_ID.match(value):
+                raise ConfigError(
+                    "workspace.%s 要写 Notion 数据库的编号（32 位十六进制，链接里那一串）" % key)
+        databases[key] = value
+    workspace_author = _expect(workspace.get("author", "xiaoyou"), str, "workspace.author").strip()
+    if not AGENT_NAME.match(workspace_author):
+        raise ConfigError("workspace.author 只能用字母、数字、下划线和连字符，最多 24 个字符")
+    workspace_api_base = _expect(
+        workspace.get("api_base", "https://api.notion.com"), str, "workspace.api_base")
+    if not workspace_api_base.startswith(("http://", "https://")):
+        raise ConfigError("workspace.api_base 要写成 http:// 或 https:// 开头的地址")
+    if workspace_type == "notion":
+        if workspace_token is None:
+            raise ConfigError(
+                "workspace.type 为 notion 时要有 Notion 集成的令牌：设置环境变量 "
+                "XIAOYOU_NOTION_TOKEN，或者写在 workspace.token 里")
+        if databases["bus_database"] is None:
+            raise ConfigError("workspace.type 为 notion 时要设置 workspace.bus_database（总线）")
+
     return Config(
         name=name,
         host=host,
@@ -225,22 +574,35 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         token=token,
         state_dir=state_dir,
         persona=persona,
-        backend=backend,
         brief_max_chars=brief,
-        turn_timeout_seconds=timeout,
-        claude_command=command,
-        claude_workdir=_path(_expect(claude.get("workdir", "workdir"), str, "claude_code.workdir"), base),
-        claude_config_dir=_path(config_dir, base) if config_dir else None,
-        claude_model=model,
-        claude_permission_mode=permission_mode,
-        claude_allowed_tools=_strings(claude.get("allowed_tools", []), "claude_code.allowed_tools"),
-        claude_extra_args=_strings(claude.get("extra_args", []), "claude_code.extra_args"),
-        tools=tools,
+        agents=agents,
+        default_agent=default_agent,
+        voice_agent=voice_agent,
+        max_handoffs=max_handoffs,
+        max_parallel=max_parallel,
+        voice_timeout_seconds=voice_timeout,
+        idle_answer_seconds=idle_answer,
+        router_type=router_type,
+        router_command=router_command,
+        router_timeout_seconds=router_timeout,
         stt_engine=stt_engine,
         stt_command=stt_command,
         stt_model_dir=_path(stt_model_dir, base) if stt_model_dir else None,
         stt_language=stt_language,
         stt_threads=stt_threads,
         stt_timeout_seconds=stt_timeout,
+        firmware_repo=firmware_repo,
+        firmware_asset=firmware_asset,
+        firmware_tag_prefix=firmware_tag_prefix,
+        firmware_source_dir=_path(firmware_source_dir, base) if firmware_source_dir else None,
+        firmware_build_command=firmware_build_command,
+        firmware_build_output=firmware_build_output,
+        workspace_type=workspace_type,
+        workspace_token=workspace_token,
+        workspace_bus_database=databases["bus_database"],
+        workspace_log_database=databases["log_database"],
+        workspace_author=workspace_author,
+        workspace_api_base=workspace_api_base,
         base_dir=base,
+        notices=notices,
     )

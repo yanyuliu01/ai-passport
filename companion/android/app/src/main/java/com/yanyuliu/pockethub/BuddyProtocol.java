@@ -23,6 +23,18 @@ public final class BuddyProtocol {
     public static final int HINT_MAX = 319;
     public static final int TURN_TEXT_MAX = 3000;
     public static final int LINE_MAX = 4096;
+    // “chat”和“helpers”两条消息里各字段的上限（固件的缓冲区大小减去结尾的 0）。
+    public static final int REPLY_MAX = 959;
+    public static final int AGENT_MAX = 23;
+    public static final int STAGE_MAX = 159;
+    public static final int HELPER_COUNT = 4;
+    public static final int HELPER_ABOUT_MAX = 63;
+    // “card”和“tasks”两条消息：卡的编号超过上限的固件不收，这里也不发。
+    public static final int CARD_ID_MAX = 11;
+    public static final int CARD_KEPT = 8;
+    public static final int TASK_COUNT = 4;
+    public static final int TASK_TITLE_MAX = 47;
+    public static final int TASK_LINE_MAX = 63;
 
     private BuddyProtocol() {
     }
@@ -102,6 +114,185 @@ public final class BuddyProtocol {
         return "{\"cmd\":\"hub\",\"voice\":true}\n";
     }
 
+    /**
+     * 和小幽的对话现在走到哪一步了。phase 是 idle、thinking、helper、done、failed 之一；
+     * said 是我说的话，reply 是小幽的话，agent 是正在替她干活的帮手，stage 是她转交时说的那句，
+     * mood 是 idle、busy、ask、happy、oops 之一。只有连接时声明了 chat 的固件认识这一行。
+     */
+    public static String chat(String phase, String said, String reply, String agent,
+                              String stage, String mood) {
+        return chat(phase, said, reply, agent, stage, mood, null, -1);
+    }
+
+    /**
+     * 同上，给认识卡的固件：card 是这句话归到的那张卡（没有就不带），doing 是后台还在做的
+     * 事的件数（小于 0 表示不带）。
+     */
+    public static String chat(String phase, String said, String reply, String agent,
+                              String stage, String mood, String card, int doing) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"chat\",\"phase\":");
+        quote(out, phase == null ? "idle" : phase);
+        out.append(",\"said\":");
+        quote(out, clip(said, MESSAGE_MAX));
+        out.append(",\"reply\":");
+        quote(out, clip(reply, REPLY_MAX));
+        out.append(",\"agent\":");
+        quote(out, clip(agent, AGENT_MAX));
+        out.append(",\"stage\":");
+        quote(out, clip(stage, STAGE_MAX));
+        out.append(",\"mood\":");
+        quote(out, mood == null ? "idle" : mood);
+        if (cardId(card)) {
+            out.append(",\"card\":");
+            quote(out, card);
+        }
+        if (doing >= 0) {
+            out.append(",\"doing\":").append(doing);
+        }
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** 固件收得下的卡编号：不为空、不超过上限。更长的截断了就成了另一张卡，所以不发。 */
+    public static boolean cardId(String id) {
+        return id != null && !id.isEmpty() && utf8Length(id) <= CARD_ID_MAX;
+    }
+
+    /**
+     * 一件事的卡：at 是开始的“时:分”，state 是 working、waiting、done、failed、cancelled、
+     * talking 之一，said 是这件事的第一句话，reply 是小幽最新的话，edits 是补充或改过几次。
+     * 编号太长时返回 null（不发）。
+     */
+    public static String card(String id, String at, String state, String agent, int edits,
+                              String said, String reply) {
+        if (!cardId(id)) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"card\",\"id\":");
+        quote(out, id);
+        out.append(",\"at\":");
+        quote(out, clip(at, 5));
+        out.append(",\"state\":");
+        quote(out, state == null ? "done" : state);
+        out.append(",\"agent\":");
+        quote(out, clip(agent, AGENT_MAX));
+        out.append(",\"edits\":").append(Math.max(0, Math.min(edits, 99)));
+        out.append(",\"said\":");
+        quote(out, clip(said, MESSAGE_MAX));
+        out.append(",\"reply\":");
+        quote(out, clip(reply, REPLY_MAX));
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** 让设备忘掉所有的卡；接着把最近的几张重新发一遍。 */
+    public static String cardClear() {
+        return "{\"cmd\":\"card\",\"clear\":true}\n";
+    }
+
+    /** 交给帮手的一件事，设备第三屏上的一行。 */
+    public static final class Task {
+        public final String id;
+        public final String agent;
+        public final String title;
+        /** working、waiting、queued；做完的是 done、failed、cancelled（只发给分开显示的固件）。 */
+        public final String state;
+        public final long seconds;
+        /** 最近两步：p1 在前，p2 是最新的；只有一步时放在 p1。 */
+        public final String p1;
+        public final String p2;
+
+        public Task(String id, String agent, String title, String state, long seconds,
+                    String p1, String p2) {
+            this.id = id;
+            this.agent = agent;
+            this.title = title;
+            this.state = state;
+            this.seconds = seconds;
+            this.p1 = p1;
+            this.p2 = p2;
+        }
+    }
+
+    /** 正在做的事，最多带 TASK_COUNT 件；编号太长的跳过。空表表示没有在做的事。 */
+    public static String tasks(List<Task> tasks) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"tasks\",\"list\":[");
+        int count = 0;
+        if (tasks != null) {
+            for (Task task : tasks) {
+                if (count >= TASK_COUNT) {
+                    break;
+                }
+                if (task == null || !cardId(task.id)) {
+                    continue;
+                }
+                if (count++ > 0) {
+                    out.append(',');
+                }
+                out.append("{\"id\":");
+                quote(out, task.id);
+                out.append(",\"agent\":");
+                quote(out, clip(task.agent, AGENT_MAX));
+                out.append(",\"title\":");
+                quote(out, clip(task.title, TASK_TITLE_MAX));
+                out.append(",\"state\":");
+                quote(out, task.state == null ? "working" : task.state);
+                out.append(",\"secs\":").append(Math.max(0L, task.seconds));
+                out.append(",\"p1\":");
+                quote(out, clip(task.p1, TASK_LINE_MAX));
+                out.append(",\"p2\":");
+                quote(out, clip(task.p2, TASK_LINE_MAX));
+                out.append('}');
+            }
+        }
+        out.append("]}\n");
+        return out.toString();
+    }
+
+    /** 小屏幕上先看结论：简报在前，完整回复跟在后面；两者一样或者回复以简报开头时只留回复。 */
+    public static String chatReply(String brief, String reply) {
+        String shortText = brief == null ? "" : brief.trim();
+        String fullText = reply == null ? "" : reply.trim();
+        if (shortText.isEmpty() || fullText.startsWith(shortText)) {
+            return fullText;
+        }
+        if (fullText.isEmpty()) {
+            return shortText;
+        }
+        return shortText + "\n\n" + fullText;
+    }
+
+    /** 小幽能找的帮手：每项是 {名字, 一句说明}，最多带 HELPER_COUNT 个，没有名字的跳过。 */
+    public static String helpers(List<String[]> helpers) {
+        StringBuilder out = new StringBuilder(256);
+        out.append("{\"cmd\":\"helpers\",\"list\":[");
+        int count = 0;
+        if (helpers != null) {
+            for (String[] helper : helpers) {
+                if (count >= HELPER_COUNT) {
+                    break;
+                }
+                String name = helper == null || helper.length == 0 ? "" : clip(helper[0], AGENT_MAX);
+                if (name.isEmpty()) {
+                    continue;
+                }
+                if (count++ > 0) {
+                    out.append(',');
+                }
+                out.append("{\"name\":");
+                quote(out, name);
+                out.append(",\"about\":");
+                quote(out, clip(helper.length > 1 ? helper[1] : "", HELPER_ABOUT_MAX));
+                out.append('}');
+            }
+        }
+        out.append("]}\n");
+        return out.toString();
+    }
+
     /** 设备发来的语音控制行里的 state（start / end / cancel）；不是语音控制行返回 null。 */
     public static String parseVoiceState(String line) {
         Map<String, String> fields = parseFlatObject(line);
@@ -113,13 +304,117 @@ public final class BuddyProtocol {
                 ? state : null;
     }
 
+    /**
+     * 设备的“录音开始”那一行里带的卡：按下时屏幕上的那件事，这句话是对它说的。
+     * 没带、或者这一行不是录音开始时返回 null。
+     */
+    public static String parseVoiceCard(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null || !"voice".equals(fields.get("cmd"))
+                || !"start".equals(fields.get("state"))) {
+            return null;
+        }
+        String card = fields.get("card");
+        return cardId(card) ? card : null;
+    }
+
+    /** “录音开始”那一行说这句话是在那件事里面说的（设备第三屏选中的那件）：一定归到它。 */
+    public static boolean parseVoicePin(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return parseVoiceCard(line) != null && "true".equals(fields.get("pin"));
+    }
+
+    /** 设备声明它把对话和任务分开显示：任务单子里可以带做完的事。 */
+    public static boolean hubAckHasThreads(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return hubAckHasCards(line) && "true".equals(fields.get("threads"));
+    }
+
+    /** 设备对 hubHello 的应答里有没有声明它认识 card 和 tasks 这两条消息。 */
+    public static boolean hubAckHasCards(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return fields != null && "hub".equals(fields.get("ack")) && "true".equals(fields.get("ok"))
+                && "true".equals(fields.get("cards"));
+    }
+
     /** 设备对 hubHello 的应答：true 能说话，false 是旧固件，null 表示这一行不是应答。 */
     public static Boolean parseHubAck(String line) {
         Map<String, String> fields = parseFlatObject(line);
         if (fields == null || !"hub".equals(fields.get("ack"))) {
             return null;
         }
-        return line.contains("\"ok\":true");
+        return "true".equals(fields.get("ok"));
+    }
+
+    /** 设备对 hubHello 的应答里有没有声明它认识 chat 和 helpers 这两条消息。 */
+    public static boolean hubAckHasChat(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return fields != null && "hub".equals(fields.get("ack")) && "true".equals(fields.get("ok"))
+                && "true".equals(fields.get("chat"));
+    }
+
+    /**
+     * 取出一层对象里某个键下面的对象数组，每个对象按 parseFlatObject 解析。
+     * 用来读 Runtime 的 /v1/agents。格式不对或者没有这个键时返回空表。
+     */
+    public static List<Map<String, String>> parseObjectArray(String text, String key) {
+        List<Map<String, String>> items = new ArrayList<>();
+        if (text == null || key == null) {
+            return items;
+        }
+        int[] at = {0};
+        skipSpace(text, at);
+        if (at[0] >= text.length() || text.charAt(at[0]) != '{') {
+            return items;
+        }
+        at[0]++;
+        while (at[0] < text.length()) {
+            skipSpace(text, at);
+            String name = readString(text, at);
+            if (name == null) {
+                return items;
+            }
+            skipSpace(text, at);
+            if (at[0] >= text.length() || text.charAt(at[0]) != ':') {
+                return items;
+            }
+            at[0]++;
+            skipSpace(text, at);
+            if (name.equals(key) && at[0] < text.length() && text.charAt(at[0]) == '[') {
+                at[0]++;
+                while (at[0] < text.length()) {
+                    skipSpace(text, at);
+                    if (at[0] < text.length() && text.charAt(at[0]) == ']') {
+                        return items;
+                    }
+                    int start = at[0];
+                    if (!skipValue(text, at) || at[0] <= start) {
+                        return items;
+                    }
+                    Map<String, String> item = parseFlatObject(text.substring(start, at[0]));
+                    if (item != null) {
+                        items.add(item);
+                    }
+                    if (at[0] < text.length() && text.charAt(at[0]) == ',') {
+                        at[0]++;
+                    }
+                }
+                return items;
+            }
+            if (at[0] < text.length() && text.charAt(at[0]) == '"') {
+                if (readString(text, at) == null) {
+                    return items;
+                }
+            } else if (!skipValue(text, at)) {
+                return items;
+            }
+            skipSpace(text, at);
+            if (at[0] >= text.length() || text.charAt(at[0]) != ',') {
+                return items;
+            }
+            at[0]++;
+        }
+        return items;
     }
 
     /** 解析设备发来的一行；不是权限决定就返回 null。 */
@@ -140,6 +435,100 @@ public final class BuddyProtocol {
             return new Decision(id, false);
         }
         return null;
+    }
+
+    // ---- 经蓝牙换固件（固件的 main/pocket_update_core.h）----
+
+    /** 数据帧的第一个字节。0xFE 不会出现在 UTF-8 里，设备靠它把数据帧和文本行分开。 */
+    public static final int FW_MAGIC = 0xFE;
+    public static final int FW_HEADER_BYTES = 5;
+    /** 一次写入最多带这么多字节（含帧头）。 */
+    public static final int FW_FRAME_MAX = 244;
+
+    /** {"cmd":"fw","op":…}：info、end、abort、confirm、rollback 这几个不带别的参数。 */
+    public static String fwOp(String op) {
+        StringBuilder out = new StringBuilder("{\"cmd\":\"fw\",\"op\":");
+        quote(out, op);
+        return out.append("}\n").toString();
+    }
+
+    /** 开始传一份镜像：多大、SHA-256 是什么（64 位十六进制）。 */
+    public static String fwBegin(int size, String sha256) {
+        StringBuilder out = new StringBuilder("{\"cmd\":\"fw\",\"op\":\"begin\",\"size\":");
+        out.append(Math.max(0, size)).append(",\"sha256\":");
+        quote(out, sha256);
+        return out.append("}\n").toString();
+    }
+
+    /** 一帧固件数据：[0xFE][偏移，4 字节小端][image 里从 offset 开始的 length 字节]。 */
+    public static byte[] fwFrame(byte[] image, int offset, int length) {
+        byte[] frame = new byte[FW_HEADER_BYTES + length];
+        frame[0] = (byte) FW_MAGIC;
+        frame[1] = (byte) offset;
+        frame[2] = (byte) (offset >> 8);
+        frame[3] = (byte) (offset >> 16);
+        frame[4] = (byte) (offset >> 24);
+        System.arraycopy(image, offset, frame, FW_HEADER_BYTES, length);
+        return frame;
+    }
+
+    /** 设备关于换固件说的一行：对某个 op 的应答，或者传输中的进度。 */
+    public static final class FwLine {
+        /** true 是应答（"ack"），false 是进度（"evt"）。 */
+        public final boolean ack;
+        /** 应答的是哪个 op；旧固件不认识 fw，应答里没有 op，这里是空串。 */
+        public final String op;
+        public final boolean ok;
+        public final String error;
+        private final Map<String, String> fields;
+
+        FwLine(boolean ack, Map<String, String> fields) {
+            this.ack = ack;
+            this.fields = fields;
+            String name = fields.get("op");
+            this.op = name == null ? "" : name;
+            this.ok = !ack || "true".equals(fields.get("ok"));
+            String reason = fields.get("error");
+            this.error = reason == null ? "" : reason;
+        }
+
+        public String text(String key) {
+            String value = fields.get(key);
+            return value == null ? "" : value;
+        }
+
+        /** 非负整数；没有这一项或者写得不对时返回 fallback。 */
+        public int number(String key, int fallback) {
+            String value = fields.get(key);
+            if (value == null || value.isEmpty() || value.length() > 10) {
+                return fallback;
+            }
+            long total = 0;
+            for (int index = 0; index < value.length(); index++) {
+                char digit = value.charAt(index);
+                if (digit < '0' || digit > '9') {
+                    return fallback;
+                }
+                total = total * 10 + (digit - '0');
+            }
+            return total > Integer.MAX_VALUE ? fallback : (int) total;
+        }
+
+        public boolean flag(String key) {
+            return "true".equals(fields.get(key));
+        }
+    }
+
+    /** 这一行是不是设备关于换固件说的；不是返回 null。 */
+    public static FwLine parseFw(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        if (fields == null) {
+            return null;
+        }
+        if ("fw".equals(fields.get("ack"))) {
+            return new FwLine(true, fields);
+        }
+        return "fw".equals(fields.get("evt")) ? new FwLine(false, fields) : null;
     }
 
     /** 把一行切成不超过 size 字节的若干段，按顺序写入蓝牙特征。 */
@@ -255,7 +644,10 @@ public final class BuddyProtocol {
         out.append('"');
     }
 
-    /** 只认一层、值为字符串的 JSON 对象；其他类型的值跳过。格式不对返回 null。 */
+    /**
+     * 只认一层的 JSON 对象。字符串原样取出；数字和 true / false 取出它们写在 JSON 里的样子
+     * （"3"、"true"）；null、嵌套的对象和数组跳过，所以值为 null 的键查不到。格式不对返回 null。
+     */
     static Map<String, String> parseFlatObject(String line) {
         if (line == null) {
             return null;
@@ -289,8 +681,15 @@ public final class BuddyProtocol {
                     return null;
                 }
                 fields.put(key, value);
-            } else if (!skipValue(line, at)) {
-                return null;
+            } else {
+                int start = at[0];
+                if (!skipValue(line, at)) {
+                    return null;
+                }
+                String raw = line.substring(start, at[0]).trim();
+                if (isNumberOrBoolean(raw)) {
+                    fields.put(key, raw);
+                }
             }
             skipSpace(line, at);
             if (at[0] >= line.length()) {
@@ -305,6 +704,24 @@ public final class BuddyProtocol {
             }
         }
         return null;
+    }
+
+    private static boolean isNumberOrBoolean(String raw) {
+        if (raw.equals("true") || raw.equals("false")) {
+            return true;
+        }
+        if (raw.isEmpty() || raw.length() > 24) {
+            return false;
+        }
+        for (int index = 0; index < raw.length(); index++) {
+            char value = raw.charAt(index);
+            boolean digit = value >= '0' && value <= '9';
+            if (!digit && value != '-' && value != '+' && value != '.' && value != 'e' && value != 'E') {
+                return false;
+            }
+        }
+        char first = raw.charAt(0);
+        return first == '-' || (first >= '0' && first <= '9');
     }
 
     private static void skipSpace(String line, int[] at) {
