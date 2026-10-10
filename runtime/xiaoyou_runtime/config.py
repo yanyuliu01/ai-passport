@@ -48,6 +48,8 @@ class AgentSpec:
     add_dirs: List[Path] = field(default_factory=list)
     # claude_code：启动命令时额外设置的环境变量（例如换一个兼容 Anthropic 接口的服务）
     env: Dict[str, str] = field(default_factory=dict)
+    # claude_code：值从文件里读的环境变量（密钥放在 config.json 之外），每次启动命令时现读
+    env_files: Dict[str, Path] = field(default_factory=dict)
     # codex
     sandbox: Optional[str] = None
     # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
@@ -165,6 +167,20 @@ def _env(value: Any, where: str) -> Dict[str, str]:
     return dict(value)
 
 
+def _env_files(value: Any, env: Dict[str, str], base: Path, where: str) -> Dict[str, Path]:
+    _expect(value, dict, where)
+    for key, item in value.items():
+        if not ENV_NAME.match(key):
+            raise ConfigError("%s 里的名字 %r 不像环境变量名" % (where, key))
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError("%s.%s 应该是文件路径" % (where, key))
+        if key == "CLAUDE_CONFIG_DIR":
+            raise ConfigError("%s 里不要写 CLAUDE_CONFIG_DIR；用这个代理的 config_dir" % where)
+        if key in env:
+            raise ConfigError("%s 和 env 里都有 %s；只留一处" % (where, key))
+    return {key: _path(item.strip(), base) for key, item in value.items()}
+
+
 def _path(value: str, base: Path) -> Path:
     path = Path(os.path.expanduser(value))
     return path if path.is_absolute() else (base / path).resolve()
@@ -255,6 +271,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
 
     config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
     config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
+    extra_env = _env(raw.get("env", {}), where + ".env")
     return AgentSpec(
         config_dir=_path(config_dir, base) if config_dir else None,
         permission_mode=_expect(
@@ -263,7 +280,8 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         add_dirs=[_path(folder, base)
                   for folder in _strings(raw.get("add_dirs", ["~"]), where + ".add_dirs")],
         allowed_tools=_strings(raw.get("allowed_tools", []), where + ".allowed_tools"),
-        env=_env(raw.get("env", {}), where + ".env"),
+        env=extra_env,
+        env_files=_env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files"),
         **common,
         **shared,
     )

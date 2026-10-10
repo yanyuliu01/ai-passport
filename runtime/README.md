@@ -132,7 +132,7 @@ Keys by type:
 
 | Type | What it does | Keys |
 | --- | --- | --- |
-| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env` |
+| `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env`, `env_files` |
 | `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
@@ -162,18 +162,34 @@ carries a disabled `deepseek` agent:
   "config_dir": "~/.claude-xiaoyou-deepseek",
   "model": "deepseek-v4-pro",
   "env": {
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_AUTH_TOKEN": "your DeepSeek key"
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+  },
+  "env_files": {
+    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
   }
 }
 ```
 
-Set `"enabled"` to `true`, fill in the key, and point `xiaoyou.default_agent` (and
+`env_files` sets a variable from the contents of a file (surrounding whitespace
+removed), so the key stays out of `config.json`. The file is read each time Claude
+Code is started, so a new key takes effect without a restart. `--check` reports a
+missing or empty file, and a file that other users can read (`chmod 600` it). One way
+to write the key without it reaching shell history:
+
+```bash
+mkdir -p ~/.config/xiaoyou && chmod 700 ~/.config/xiaoyou
+read -rs "key?DeepSeek key: " && printf '%s\n' "$key" > ~/.config/xiaoyou/deepseek.key; unset key
+chmod 600 ~/.config/xiaoyou/deepseek.key
+```
+
+(That is zsh; in bash write `read -rsp "DeepSeek key: " key`.)
+
+Set `"enabled"` to `true`, put the key in place, and point `xiaoyou.default_agent` (and
 `voice_agent`, if set) at it: Xiaoyou herself is then answered by that model. The
 original `claude` stays as a helper, and switching back is pointing those two keys
 at `claude` again. Give it its own `config_dir` so its sessions stay apart from the
-subscription login; that directory needs no login. The key lives only in
-`config.json`, which is not committed.
+subscription login; that directory needs no login. Writing the key directly into
+`env` still works, but then it sits in `config.json`.
 
 Not verified: this follows DeepSeek's API documentation and the requests Claude
 Code actually sends, but no turn has been run with a real key. Claude Code's web

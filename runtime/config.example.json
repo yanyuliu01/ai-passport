@@ -42,8 +42,10 @@
       "permission_mode": "dontAsk",
       "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
       "env": {
-        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": ""
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+      },
+      "env_files": {
+        "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
       }
     },
     "codex": {

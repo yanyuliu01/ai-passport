@@ -736,6 +736,53 @@ class ClaudeCodeAgentTests(TempDirCase):
             with self.assertRaises(config_module.ConfigError):
                 config_module.load(write_config(self.folder, agents=agents(bad)), {})
 
+    def test_key_can_be_read_from_a_file_outside_the_config(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        def agents(env_files, env=None):
+            return {"claude": {"type": "claude_code", "command": [sys.executable],
+                               "env": env or {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic"},
+                               "env_files": env_files}}
+
+        key = self.folder / "example.key"
+        loaded = config_module.load(write_config(
+            self.folder, agents=agents({"ANTHROPIC_AUTH_TOKEN": "example.key"})), {})
+        spec = loaded.agents[0]
+        self.assertEqual(spec.env_files, {"ANTHROPIC_AUTH_TOKEN": key.resolve()})
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", spec.env)
+
+        agent = agents_module.ClaudeCodeAgent(spec, run=fake_run)
+        self.assertIn("读不到", agent.check())
+        with self.assertRaises(agents_module.AgentError):
+            agent.run(Job("x"))
+        self.assertEqual(seen, [])
+
+        key.write_text("\n", encoding="utf-8")
+        os.chmod(key, 0o600)
+        self.assertIn("是空的", agent.check())
+
+        key.write_text("sk-fake-for-tests\n", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(key, 0o644)
+            self.assertIn("chmod 600", agent.check())
+            os.chmod(key, 0o600)
+        self.assertIsNone(agent.check())
+        agent.run(Job("x"))
+        self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-for-tests")
+        # 换了密钥，下一次启动就用新的。
+        key.write_text("sk-fake-rotated", encoding="utf-8")
+        agent.run(Job("x"))
+        self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
+
+        for bad in (agents({"A-B": "x"}), agents({"A": ""}), agents({"CLAUDE_CONFIG_DIR": "x"}),
+                    agents({"ANTHROPIC_AUTH_TOKEN": "x"}, env={"ANTHROPIC_AUTH_TOKEN": ""})):
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load(write_config(self.folder, agents=bad), {})
+
 
 class CodexAgentTests(TempDirCase):
     def setUp(self):
