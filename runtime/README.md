@@ -368,6 +368,7 @@ responses are JSON.
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`: the agents Xiaoyou can use on this runtime. |
+| `GET /v1/usage` | `{"updated_at", "codex": [...], "claude": [...]}`: locally visible Codex and Claude Code usage/quota state. Codex reads app-server `account/rateLimits/read` when available and still reports local `state_5.sqlite` thread token totals. Claude Code reports whether the current configuration can represent claude.ai subscription quota, plus the latest cached quota error found in project history. |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?}` | `202` and the message record, status `queued`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |

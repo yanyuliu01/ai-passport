@@ -2,6 +2,7 @@
 
   GET  /healthz                         不需要令牌，只说明服务活着
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
+  GET  /v1/usage                        Codex / Claude Code 本机用量和可见额度状态
   POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?} → 202 + 消息
   POST /v1/voice?conversation=&client_id=&agent=&card=   请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
@@ -37,6 +38,7 @@ from . import __version__
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from .service import MAX_AUDIO_BYTES, RequestError, Service
+from .usage import UsageMonitor
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_HISTORY_BODY_BYTES = 1024 * 1024
@@ -48,6 +50,7 @@ def make_server(config: Config, service: Service,
     expected = ("Bearer " + config.token).encode("utf-8")
     if firmware is None:
         firmware = FirmwareStore(config.state_dir)
+    usage = UsageMonitor(config)
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -195,6 +198,9 @@ def make_server(config: Config, service: Service,
                 return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
+                return
+            if parts == ["v1", "usage"]:
+                self._send(200, usage.snapshot())
                 return
             query = parse_qs(url.query)
             if parts == ["v1", "cards"]:

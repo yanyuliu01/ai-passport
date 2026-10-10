@@ -295,6 +295,7 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default"}]}`：小幽在这台 Runtime 上能用的代理。 |
+| `GET /v1/usage` | `{"updated_at", "codex": [...], "claude": [...]}`：本机可见的 Codex / Claude Code 用量和额度状态。Codex 优先读 app-server 的 `account/rateLimits/read`，拿不到时仍给出本地 `state_5.sqlite` 的线程 token 统计；Claude Code 只报告当前配置是否能代表 claude.ai 订阅额度，以及项目历史里缓存到的最近 quota 错误。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?}` | `202` 和这条消息的记录，状态为 `queued`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |

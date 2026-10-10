@@ -12,6 +12,7 @@ import dataclasses
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,7 @@ from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import router as router_module  # noqa: E402
 from xiaoyou_runtime import stt as stt_module  # noqa: E402
 from xiaoyou_runtime import tasks as tasks_module  # noqa: E402
+from xiaoyou_runtime import usage as usage_module  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
 from xiaoyou_runtime.agents import AgentError, Job, Outcome  # noqa: E402
@@ -2202,6 +2204,38 @@ class ServiceTests(TempDirCase):
             self.service.cards("a/b")
 
 
+class UsageTests(TempDirCase):
+    def test_codex_thread_tokens_are_read_from_its_home(self):
+        home = self.folder / "codex-home"
+        home.mkdir()
+        database = sqlite3.connect(home / "state_5.sqlite")
+        try:
+            database.execute("create table threads (tokens_used integer, updated_at_ms integer)")
+            database.executemany("insert into threads values (?, ?)", [(100, 10), (25, 20)])
+            database.commit()
+        finally:
+            database.close()
+        loaded = config_module.load(write_config(self.folder, agents={
+            "codex": {"type": "codex", "config_dir": str(home), "mode": "exec"},
+        }))
+        snapshot = usage_module.UsageMonitor(loaded).snapshot()
+        self.assertEqual(snapshot["codex"][0]["tokens"]["threads"], 2)
+        self.assertEqual(snapshot["codex"][0]["tokens"]["total_tokens"], 125)
+
+    def test_rate_limit_payload_is_normalized(self):
+        parsed = usage_module._rate_limits_response({"ordinaryUsageAllowed": True, "rateLimits": {
+            "limitId": "codex",
+            "planType": "pro",
+            "primary": {"usedPercent": 37, "resetsAt": 1791619200, "windowDurationMins": 300},
+            "credits": {"balance": "12.50", "hasCredits": True, "unlimited": False},
+        }})
+        bucket = parsed["buckets"]["codex"]
+        self.assertTrue(parsed["available"])
+        self.assertEqual(parsed["ordinary_usage_allowed"], True)
+        self.assertEqual(bucket["primary"]["remaining_percent"], 63)
+        self.assertEqual(bucket["credits"]["balance"], "12.50")
+
+
 class SharedHistoryTests(TempDirCase):
     """Turns that happened on another runtime are carried over by the phone."""
 
@@ -2329,6 +2363,7 @@ class HttpTests(TempDirCase):
             self.assertEqual(self.call("POST", "/v1/messages", {"text": "hi"}, token=token)[0], 401)
             self.assertEqual(self.call("GET", "/v1/messages/abc", token=token)[0], 401)
             self.assertEqual(self.call("GET", "/v1/agents", token=token)[0], 401)
+            self.assertEqual(self.call("GET", "/v1/usage", token=token)[0], 401)
             self.assertEqual(self.call("POST", "/v1/conversations/default/reset", {}, token=token)[0], 401)
 
     def test_send_then_long_poll_and_continue(self):
@@ -2361,6 +2396,10 @@ class HttpTests(TempDirCase):
             "name": "echo", "type": "echo", "description": "原样复述，用来测试链路",
             "speaks": True, "default": True,
         }])
+        status, usage = self.call("GET", "/v1/usage")
+        self.assertEqual(status, 200)
+        self.assertEqual((usage["codex"], usage["claude"]), ([], []))
+        self.assertIn("updated_at", usage)
         message = self.call("POST", "/v1/messages", {"text": "hi", "agent": "echo", "card": "c9"})[1]
         done = self.call("GET", "/v1/messages/%s?wait=5" % message["id"])[1]
         self.assertEqual((done["asked"], done["events"][0]["text"]), ("echo", "asked"))
