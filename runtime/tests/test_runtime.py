@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import urllib.error
@@ -1528,6 +1529,57 @@ class CardsTests(TempDirCase):
     def cards(self):
         return cards_module.Cards(self.folder / "cards.json")
 
+    def test_a_finished_task_gets_a_finish_time_and_survives_a_flood_of_chat(self):
+        cards = self.cards()
+        first = cards.open("default", "第一件", "working", "codex")
+        self.assertIsNone(first["finished_at"])
+        cards.update(first["id"], say="好了", brief="ok", state="done")
+        done = cards.get(first["id"])
+        self.assertGreater(done["finished_at"], 0)
+        # 小幽自己答的话不是任务，没有完成时间。
+        chat = cards.open("default", "闲聊")
+        cards.update(chat["id"], say="在的")
+        self.assertIsNone(cards.get(chat["id"])["finished_at"])
+        # 一堆闲聊卡不会把做完的任务挤掉：它是历史，要留给第三屏。
+        for number in range(cards_module.MAX_CARDS + 10):
+            cards.open("default", "闲聊 %d" % number)
+        self.assertIsNotNone(cards.get(first["id"]))
+        # 重启后还在，完成时间也在。
+        again = self.cards().get(first["id"])
+        self.assertEqual(again["finished_at"], done["finished_at"])
+
+    def test_a_task_taken_up_again_is_finished_when_it_ends_again(self):
+        cards = self.cards()
+        card = cards.open("default", "一件事", "working", "codex")
+        cards.update(card["id"], state="done")
+        first = cards.get(card["id"])["finished_at"]
+        cards.update(card["id"], said="再改一下", state="working")
+        self.assertIsNone(cards.get(card["id"])["finished_at"])
+        time.sleep(0.01)
+        cards.update(card["id"], state="failed")
+        self.assertGreater(cards.get(card["id"])["finished_at"], first)
+
+    def test_only_the_latest_finished_tasks_are_kept(self):
+        cards = self.cards()
+        ids = []
+        for number in range(cards_module.MAX_HISTORY + 10):
+            card = cards.open("default", "任务 %d" % number, "working", "codex")
+            cards.update(card["id"], state="done")
+            ids.append(card["id"])
+        # 再压上足够的对话卡，逼出淘汰。
+        for number in range(cards_module.MAX_CARDS):
+            cards.open("default", "闲聊 %d" % number)
+        kept = [card["id"] for card in cards.recent(None, 1000)
+                if card["agent"] and card["state"] not in cards_module.ACTIVE]
+        # 最近做完的 MAX_HISTORY 件一定都在；更早的被挤掉。
+        self.assertTrue(set(ids[-cards_module.MAX_HISTORY:]) <= set(kept))
+        self.assertNotIn(ids[0], kept)
+        # 还在做的事永远不丢，哪怕它很早。
+        early = cards.open("default", "还在做", "working", "codex")
+        for number in range(cards_module.MAX_CARDS + 5):
+            cards.open("default", "更多闲聊 %d" % number)
+        self.assertIsNotNone(cards.get(early["id"]))
+
     def test_a_card_collects_what_was_said_and_numbers_every_change(self):
         cards = self.cards()
         first = cards.open("default", "  帮我 看看\n这个很长很长很长很长很长很长很长很长的标题  ")
@@ -2660,6 +2712,27 @@ class WorkspaceTests(TempDirCase):
             write_config(self.folder, workspace=dict(type="notion", bus_database=BUS)),
             {"XIAOYOU_NOTION_TOKEN": "from-env-" + "x" * 20})
         self.assertEqual(loaded.workspace_token, "from-env-" + "x" * 20)
+
+    def test_the_token_can_live_in_a_file_outside_the_config(self):
+        secret = self.folder / "notion.key"
+        settings = dict(type="notion", bus_database=BUS, token_file="notion.key")
+        with self.assertRaises(config_module.ConfigError) as missing:
+            config_module.load(write_config(self.folder, workspace=settings), {})
+        self.assertIn("读不到", str(missing.exception))
+        secret.write_text("  \n", encoding="utf-8")
+        with self.assertRaises(config_module.ConfigError) as empty:
+            config_module.load(write_config(self.folder, workspace=settings), {})
+        self.assertIn("是空的", str(empty.exception))
+        secret.write_text("from-file-" + "x" * 20 + "\n", encoding="utf-8")
+        loaded = config_module.load(write_config(self.folder, workspace=settings), {})
+        self.assertEqual(loaded.workspace_token, "from-file-" + "x" * 20)
+        # 环境变量仍然最优先；两处都写了令牌是配置写错了。
+        loaded = config_module.load(write_config(self.folder, workspace=settings),
+                                    {"XIAOYOU_NOTION_TOKEN": "from-env-" + "x" * 20})
+        self.assertEqual(loaded.workspace_token, "from-env-" + "x" * 20)
+        with self.assertRaises(config_module.ConfigError):
+            config_module.load(write_config(
+                self.folder, workspace=dict(settings, token="inline-" + "x" * 20)), {})
 
     def test_every_handoff_and_result_is_written_by_code(self):
         recorder = Recorder()

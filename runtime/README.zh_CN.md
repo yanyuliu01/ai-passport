@@ -91,6 +91,7 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | 构建出的固件文件，相对于 `source_dir`。 |
 | `workspace.type` | `none` | `none` 或 `notion`。见[共享工作区](#共享工作区)。 |
 | `workspace.token` | 无 | Notion 集成的令牌；也可以用环境变量 `XIAOYOU_NOTION_TOKEN`。 |
+| `workspace.token_file` | 无 | 令牌放在这个文件里（相对路径以配置文件所在的目录为准），启动时读一次；和 `workspace.token` 只能留一个。令牌不想写进 `config.json` 时用它。 |
 | `workspace.bus_database` | 无 | “总线”数据库的编号（链接里那 32 位）。`notion` 时必填。 |
 | `workspace.log_database` | 无 | “日志”数据库的编号。不填就只写总线。 |
 | `workspace.author` | `xiaoyou` | 小幽在共享工作区里署的名字。 |
@@ -237,7 +238,9 @@ JSON 对象。
 把结果给主人，不让这件事白做。帮手没做成，卡上照实写“没做成”和原因。
 
 卡的状态有 `working`（帮手在做）、`waiting`（等主人点头，见[授权](#授权)）、`done`、
-`failed`、`cancelled`；`talking` 是预留的。卡存在 `state/cards.json`，留最近 50 张。Runtime
+`failed`、`cancelled`；`talking` 是预留的。卡存在 `state/cards.json`，留最近 50 张；
+交给过帮手、已经结束的事里最近的 15 件一定留着，不被后来的卡挤掉（0.6.1 起，设备第三屏
+的任务历史靠它）。这样的事结束时记下 `finished_at`，又接着做的话清掉，再结束时重新记。Runtime
 重启时还在做的事没法接着做，会被标成 `failed`，原因写“Runtime 重启了，这件事没做完”。
 
 交给帮手做的卡另有三项（0.6.0 起）：`effort` 是这件事用的努力程度，`model` 是实际用的
@@ -498,7 +501,8 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 "at"}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
 `started_at`、`edits`（补充或改过几次）、`approval`（正在等的那个授权的编号，没有是
 `null`）、`queued`（设了并行
-上限、正在排队）、`created_at`、`updated_at`、`seq`。
+上限、正在排队）、`created_at`、`updated_at`、`finished_at`（交给过帮手的事是什么时候
+结束的；还在做、或者是小幽自己答的，是 `null`）、`seq`。
 
 同一个 `client_id` 再发一次，返回的是已有的那条记录，不会把这句话再处理一遍；所以客户端
 没收到响应时可以放心重试。

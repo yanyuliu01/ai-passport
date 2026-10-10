@@ -164,6 +164,9 @@ def run(config: Config, config_path: Path, args: Any, arguments: List[str],
                     known, device.get("build") or "?", device.get("ver") or "没有版本号",
                     "，新固件还在等认可" if device.get("state") == "pending" else "",
                     _when(device.get("seen_at"))))
+                if device.get("heap"):
+                    out("      内存还剩 %d KB，开机以来最少剩过 %d KB" % (
+                        device["heap"] // 1024, int(device.get("low") or 0) // 1024))
                 progress = device.get("progress")
                 if isinstance(progress, dict) and progress.get("size"):
                     out("      正在传：%d%%（%s / %s）" % (

@@ -636,8 +636,22 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     workspace_type = _expect(workspace.get("type", "none"), str, "workspace.type")
     if workspace_type not in WORKSPACE_TYPES:
         raise ConfigError("workspace.type 只能是 %s 之一" % "、".join(WORKSPACE_TYPES))
-    workspace_token = env.get("XIAOYOU_NOTION_TOKEN") or _optional_string(
-        workspace.get("token"), "workspace.token")
+    workspace_token = env.get("XIAOYOU_NOTION_TOKEN")
+    token_file = _optional_string(workspace.get("token_file"), "workspace.token_file")
+    inline = _optional_string(workspace.get("token"), "workspace.token")
+    if token_file is not None and inline is not None:
+        raise ConfigError("workspace.token 和 workspace.token_file 只能留一个")
+    if workspace_token is None and token_file is not None:
+        # 密钥放在 config.json 之外的文件里，只在启动时读一次。
+        path = _path(token_file, base)
+        try:
+            workspace_token = path.read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise ConfigError("读不到 workspace.token_file %s：%s" % (path, error))
+        if not workspace_token:
+            raise ConfigError("workspace.token_file %s 是空的" % path)
+    if workspace_token is None:
+        workspace_token = inline
     databases: Dict[str, Optional[str]] = {}
     for key in ("bus_database", "log_database"):
         value = _optional_string(workspace.get(key), "workspace." + key)

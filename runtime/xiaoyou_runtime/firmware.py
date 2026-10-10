@@ -467,6 +467,10 @@ class FirmwareStore:
                     device[key] = text(key, limit)
             if "max" in payload:
                 device["max"] = number("max")
+            # 设备的内部内存还剩多少、开机以来最少剩过多少：新固件多占了多少看这里。
+            for key in ("heap", "low"):
+                if key in payload:
+                    device[key] = number(key)
             device["detail"] = text("detail", 200)
             if event == "progress":
                 device["progress"] = {"id": text("id", ID_HEX), "sent": number("sent"),

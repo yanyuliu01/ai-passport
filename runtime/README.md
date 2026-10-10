@@ -102,6 +102,7 @@ Relative paths are resolved against the directory of the configuration file.
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | The firmware file a build produces, relative to `source_dir`. |
 | `workspace.type` | `none` | `none` or `notion`. See [Shared workspace](#shared-workspace). |
 | `workspace.token` | none | The Notion integration token; the environment variable `XIAOYOU_NOTION_TOKEN` also works. |
+| `workspace.token_file` | none | A file that holds the token (a relative path is taken from the folder of the config file), read once at start; set this or `workspace.token`, not both. For keeping the token out of `config.json`. |
 | `workspace.bus_database` | none | The id of the "bus" database (the 32 characters in its link). Required for `notion`. |
 | `workspace.log_database` | none | The id of the "log" database. Leave it out to write the bus only. |
 | `workspace.author` | `xiaoyou` | The name Xiaoyou signs with in the shared workspace. |
@@ -288,7 +289,11 @@ rather than nothing. When a helper fails, the card says so, with the reason.
 A card is in one of the states `working` (a helper is on it), `waiting` (for
 the owner's approval; see [Approvals](#approvals)),
 `done`, `failed`, `cancelled`; `talking` is reserved. Cards are stored in
-`state/cards.json`, the latest 50. Things that were in progress when the
+`state/cards.json`, the latest 50; the 15 most recent things that were handed
+to a helper and have ended are always kept, whatever cards come after them
+(since 0.6.1: the device's task history on its third screen relies on it).
+Such a thing gets a `finished_at` when it ends; taking it up again clears
+that until it ends again. Things that were in progress when the
 runtime restarts cannot be continued; they are marked `failed` with a note
 saying the runtime was restarted.
 
@@ -633,7 +638,8 @@ starting over with each round), `started_at`, `edits` (how many times it was
 added to or changed), `approval` (the number of the approval it is waiting
 for, or `null`), `queued`
 (waiting its turn under a limit on parallel things), `created_at`,
-`updated_at`, and `seq`.
+`updated_at`, `finished_at` (when a thing handed to a helper ended; `null`
+while it is in progress and for what Xiaoyou answered herself), and `seq`.
 
 Sending the same `client_id` again returns the existing record instead of
 dealing with the sentence twice, so a client may retry safely after a lost

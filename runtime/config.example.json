@@ -102,6 +102,7 @@
   "workspace": {
     "type": "none",
     "token": null,
+    "token_file": null,
     "bus_database": null,
     "log_database": null,
     "author": "xiaoyou"

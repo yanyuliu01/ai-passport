@@ -292,6 +292,19 @@ class StoreTests(TempDirCase):
         device = self.store.snapshot()["device"]
         self.assertEqual((device["build"], device["max"], len(device["name"])), ("", 0, 40))
 
+    def test_the_device_says_how_much_memory_it_has_left(self):
+        self.add("v1")
+        self.store.report({"event": "connected", "build": "b" * 16, "state": "valid",
+                           "heap": 41232, "low": 28764})
+        device = self.store.snapshot()["device"]
+        self.assertEqual((device["heap"], device["low"]), (41232, 28764))
+        # 老固件不报这两项：记录里就没有，不写成 0。
+        self.store.report({"event": "connected", "build": "c" * 16, "heap": "lots"})
+        self.assertEqual(self.store.snapshot()["device"]["heap"], 0)
+        other = FirmwareStore(self.folder / "elsewhere")
+        other.report({"event": "connected", "build": "d" * 16})
+        self.assertNotIn("heap", other.snapshot()["device"])
+
     def test_another_process_sees_the_same_library(self):
         first = self.add("v1")
         other = FirmwareStore(self.folder)
