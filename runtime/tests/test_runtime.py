@@ -653,6 +653,29 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.card, turn.started),
                          ("hello", "hello", "idle", "claude", "", False))
 
+    def test_clean_display_drops_backticks_and_emoji(self):
+        self.assertEqual(xiaoyou_module.clean_display("```python\nprint(1)\n```"), "print(1)")
+        self.assertEqual(xiaoyou_module.clean_display("运行 `foo` 命令"), "运行 foo 命令")
+        self.assertEqual(xiaoyou_module.clean_display("✅ 完成了 ⚠️ 注意"), "完成了 注意")
+        self.assertEqual(xiaoyou_module.clean_display("你好 😀 世界"), "你好 世界")
+        self.assertEqual(xiaoyou_module.clean_display("温度 25°C"), "温度 25C")
+
+    def test_clean_display_turns_markdown_into_plain_text(self):
+        self.assertEqual(
+            xiaoyou_module.clean_display("# 标题\n**重点** 和 [链接](http://x)"),
+            "标题\n重点 和 链接")
+        self.assertEqual(xiaoyou_module.clean_display("- 一\n- 二"), "· 一\n· 二")
+        self.assertEqual(xiaoyou_module.clean_display("> 引用一句话"), "引用一句话")
+        self.assertEqual(xiaoyou_module.clean_display("~~划掉~~ 保留"), "划掉 保留")
+
+    def test_clean_display_keeps_chinese_punctuation_and_newlines(self):
+        text = "第一行：你好，世界！\n\n第二行——（测试）……"
+        self.assertEqual(xiaoyou_module.clean_display(text), text)
+
+    def test_shape_cleans_reply_and_brief(self):
+        turn = xiaoyou_module.shape("**好了** `ok` ✅", "**好** `ok` ✅", "happy", 40, "claude")
+        self.assertEqual((turn.reply, turn.brief), ("好了 ok", "好 ok"))
+
     def test_a_structured_reply_written_as_text_is_recognised(self):
         fields = {"reply": "好", "brief": "好", "mood": "happy"}
         for text in (json.dumps(fields), "```json\n%s\n```" % json.dumps(fields),

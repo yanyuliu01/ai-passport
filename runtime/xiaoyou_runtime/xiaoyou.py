@@ -20,8 +20,10 @@ store.py 里：人设、她和主人的对话记录、每件事的卡、这句�
 
 import json
 import os
+import re
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
@@ -68,11 +70,70 @@ class Turn:
     started: bool = False  # 这件事还有帮手在后台做，结果之后出现在卡上
 
 
+# 小屏和终端显示不出来的东西：反引号代码围栏、表情符号、Markdown 标记。clean_display
+# 把它们清理或转写成纯文本，只保留中文、标点和必要的换行。
+
+# 行首的 Markdown 标记：标题 #、引用 >、列表 - * +，以及一整行都是分隔线（--- 之类）。
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
+_QUOTE = re.compile(r"^\s{0,3}>\s?")
+_BULLET = re.compile(r"^\s{0,3}[-*+]\s+")
+_RULE = re.compile(r"^\s{0,3}([-*_])\s*(?:\1\s*){2,}$")
+# 一行就是 ``` 或 ```语言：整个代码围栏的边框去掉（围栏里的内容留着）。
+_FENCE = re.compile(r"^\s*```[^`]*$")
+
+# 行内的 Markdown：链接/图片 [..](..)、加粗 **..**、删除线 ~~..~~。单星号的斜体和
+# 下划线不处理，免得把乘法、下划线变量名这些普通文字误伤。
+_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_BOLD = re.compile(r"\*\*([^*]+?)\*\*")
+_STRIKE = re.compile(r"~~([^~]+?)~~")
+
+
+def clean_display(text: str) -> str:
+    """把一段回复整理成小屏和终端能干净显示的样子。
+
+    去掉反引号代码围栏、表情符号和写不出来的符号，把 Markdown 标记转成纯文本，保留中文、
+    标点和必要的换行。空字符串原样返回。"""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    lines = []
+    for raw in text.split("\n"):
+        line = raw.rstrip()
+        if _FENCE.match(line):
+            lines.append("")
+            continue
+        line = _HEADING.sub("", line)
+        line = _QUOTE.sub("", line)
+        if _RULE.match(line):
+            line = ""
+        else:
+            line = _BULLET.sub("· ", line)
+        line = _LINK.sub(r"\1", line)
+        line = _BOLD.sub(r"\1", line)
+        line = _STRIKE.sub(r"\1", line)
+        lines.append(line)
+    text = "\n".join(lines)
+    text = text.replace("`", "")  # 行内代码的反引号直接去掉
+    text = "".join(ch for ch in text if _displayable(ch))
+    text = re.sub(r" {2,}", " ", text)      # 去掉符号后留下的多余空格
+    text = re.sub(r" +\n", "\n", text)      # 行尾多余空格
+    text = re.sub(r"\n{3,}", "\n\n", text)  # 连续空行压成一行
+    return text.strip()
+
+
+def _displayable(ch: str) -> bool:
+    """能上小屏的字符：字母、数字、标点、空白；符号和隐形标记不要。"""
+    category = unicodedata.category(ch)
+    if category in ("So", "Sk", "Mn", "Cf"):
+        return False
+    return category != "Cc" or ch == "\n"
+
+
 def shape(reply: str, brief: Any, mood: Any, limit: int, agent: str, card: str = "",
           started: bool = False) -> Turn:
     """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle。"""
-    reply = (reply or "").strip()
-    brief_text = brief.strip() if isinstance(brief, str) else ""
+    reply = clean_display(reply or "")
+    brief_text = clean_display(brief) if isinstance(brief, str) else ""
     return Turn(
         reply=reply,
         brief=clip(brief_text or reply, limit),
