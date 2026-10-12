@@ -80,6 +80,17 @@ def _epoch(value: Any) -> Optional[int]:
         text = value.strip()
         if text.endswith(("Z", "z")):
             text = text[:-1] + "+00:00"
+        if "." in text:
+            head, tail = text.split(".", 1)
+            zone = ""
+            for marker in ("+", "-"):
+                if marker in tail:
+                    fraction, zone = tail.split(marker, 1)
+                    zone = marker + zone
+                    break
+            else:
+                fraction = tail
+            text = head + "." + fraction[:6].ljust(6, "0") + zone
         try:
             parsed = datetime.fromisoformat(text)
         except ValueError:
@@ -134,6 +145,35 @@ def claude_usage_windows(answer: Any) -> Tuple[Windows, Optional[str], Optional[
             found[kind] = {"left": _left(_number(window.get("utilization"))),
                            "resets_at": _epoch(window.get("resets_at"))}
     return found, plan, None
+
+
+def claude_cached_usage_windows(config_dir: Optional[Path]) -> Windows:
+    """Claude Code 本地缓存的用量 → 各个窗口。
+
+    新版 Claude Code 可能不再把订阅额度放进 get_usage 的 rate_limits 字段，但会把同一份
+    使用量写到配置目录的 .claude.json。这里只读百分比和重置时间，不碰登录凭据。
+    """
+    path = (config_dir or Path.home() / ".claude") / ".claude.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    usage = raw.get("cachedUsageUtilization")
+    if not isinstance(usage, dict):
+        return {}
+    fetched_at = _epoch(usage.get("fetchedAtMs"))
+    if fetched_at is not None and time.time() - fetched_at > 86400:
+        return {}
+    limits = usage.get("utilization")
+    if not isinstance(limits, dict):
+        return {}
+    found: Windows = {}
+    for key, kind in (("five_hour", "5h"), ("seven_day", "7d")):
+        window = limits.get(key)
+        if isinstance(window, dict):
+            found[kind] = {"left": _left(_number(window.get("utilization"))),
+                           "resets_at": _epoch(window.get("resets_at"))}
+    return found
 
 
 def codex_windows(payload: Any) -> Tuple[Windows, Optional[str]]:
@@ -403,7 +443,13 @@ class Usage:
             if reply.get("subtype") != "success":
                 return {}, None, "这个版本的 Claude Code 不能这样查用量：%s" % (
                     str(reply.get("error") or "没有说明")[:120])
-            return claude_usage_windows(reply.get("response"))
+            windows, plan, problem = claude_usage_windows(reply.get("response"))
+            if windows:
+                return windows, plan, problem
+            cached = claude_cached_usage_windows(spec.config_dir)
+            if cached:
+                return cached, plan, None
+            return windows, plan, problem
         detail = (done.stderr.strip().splitlines() or ["没有输出"])[-1][:120]
         return {}, None, "Claude Code 没有回答用量（退出码 %d）：%s" % (done.returncode, detail)
 

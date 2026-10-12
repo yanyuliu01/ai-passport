@@ -3098,6 +3098,16 @@ class UsageTests(TempDirCase):
         self.assertEqual((found, plan), ({}, None))
         self.assertIn("不是订阅", problem)
         self.assertIsNotNone(asked("nonsense")[2])
+        cache = self.folder / "login" / ".claude.json"
+        cache.parent.mkdir()
+        cache.write_text(json.dumps({"cachedUsageUtilization": {"fetchedAtMs": NOW * 1000,
+            "utilization": {
+                "five_hour": {"utilization": 68, "resets_at": "2033-05-18T03:33:20Z"},
+                "seven_day": {"utilization": 51, "resets_at": "2033-05-24T03:33:20Z"}}}}),
+                         encoding="utf-8")
+        self.assertEqual(usage_module.claude_cached_usage_windows(cache.parent),
+                         {"5h": {"left": 32, "resets_at": 2000000000},
+                          "7d": {"left": 49, "resets_at": 2000518400}})
 
         codex = usage_module.codex_windows
         self.assertEqual(codex(codex_limits(37)), (
