@@ -270,9 +270,12 @@ SOC 准确度取决于电芯与 profile 的匹配程度。本驱动给出的是�
 - I2S DMA descriptor/frame buffer；
 - Audio demo 96 KB 录音堆；
 - Wi-Fi 驱动或 NimBLE host/controller（两个示例不同时常驻）；
-- 各 FreeRTOS 任务栈和最大连续空闲块。
+- 各 FreeRTOS 任务栈和最大连续空闲块；
+- 已连接的 NimBLE 会话额外占用的堆（实测：空闲/未连接时 free heap 约 37.7 KB，手机连上后降到约 26.8 KB 并维持在这个水平，不会回升）。
 
 新增图片、字体、网络栈、TLS、音频缓存或双缓冲时，应记录 build 后的静态 RAM/Flash 使用，并在运行时记录 free heap 与 largest free block。总 free heap 足够不代表能成功分配大连续缓冲。
+
+**红线**：`components/bsp/src/bsp_audio.c` 的 I2S DMA 缓冲大小（`dma_desc_num`/`dma_frame_num`）是按"空闲时约 30 KB free heap"这个前提校准的（见提交 `d5adb9a`）。这个前提不成立时——比如蓝牙已连接、实测只剩约 26.8 KB——麦克风初始化会稳定复现 `ESP_ERR_NO_MEM` 失败。任何会改变 NimBLE 连接期间堆占用、或改变这块 DMA 缓冲大小的改动，验证语音输入时都必须在**蓝牙已连接**状态下重测，不能只测空闲或仅广播状态。
 
 ## 11. 新功能的正确落点
 
@@ -478,6 +481,7 @@ idf.py flash monitor
 | 音频快/慢或变调 | 格式变化是否执行 close/open、采样率/MCLK，勿手改时钟寄存器 |
 | 录音全零 | `no_dac_ref` 是否为 true、DIN GPIO4、麦克风通路和输入增益 |
 | 录音缓冲分配失败 | C3 无 PSRAM；缩短录音或改流式，检查 largest free block |
+| 蓝牙已连接时麦克风初始化失败 `ESP_ERR_NO_MEM` | NimBLE 连接会额外占用堆（实测 free heap 从约 37.7 KB 降到约 26.8 KB）；核对 `bsp_audio.c` 的 I2S DMA 缓冲大小和**已连接状态下**的 largest free block，不要只用空闲/仅广播状态的数据 |
 | 电量显示 `--` | 0x63 是否应答、SOC 是否读到 >100/0xFF、profile/启动等待 |
 | Wi-Fi/BLE 第二次进入失败 | 退出页时是否已停止并 deinit radio stack，NVS/event loop 是否只初始化一次 |
 | light sleep 后黑屏 | timer wake source、`esp_light_sleep_start()` 错误日志、唤醒后是否恢复背光 |
@@ -495,6 +499,7 @@ idf.py flash monitor
 - [ ] 页面退出顺序能阻止后台任务访问已删除对象。
 - [ ] 音频格式变化仍执行 close/open，ES8311 时钟寄存器和 `no_dac_ref` 未被误改。
 - [ ] 内存增加已同时考虑 LVGL、LCD DMA、I2S DMA、任务栈和最大连续堆。
+- [ ] 涉及语音/音频的内存预算已在**蓝牙已连接**状态下复核过（已连接会额外占用堆，见第 14 节）。
 - [ ] `idf.py build` 通过并检查了 warnings；不能构建时说明真实原因。
 - [ ] 需要实机验证的项目明确列出，未把“编译通过”写成“硬件验证通过”。
 - [ ] `git diff` 只包含任务范围内的改动，用户原有修改保持不动。

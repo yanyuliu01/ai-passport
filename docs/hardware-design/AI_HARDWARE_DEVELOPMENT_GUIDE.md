@@ -213,7 +213,9 @@ preserved. See the [firmware layout](../development/engineering/firmware-layout.
 
 The console is USB Serial/JTAG. Do not switch to the UART0 default output without resolving its GPIO21 conflict with the backlight.
 
-Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, 96 KB demo recording, radio stacks, task stacks, total free heap, and largest contiguous block when adding assets, TLS/networking, audio buffers, or double buffering.
+Review at least the 24 KB LVGL pool, 9.6 KB LCD DMA buffer, I2S DMA, 96 KB demo recording, radio stacks, task stacks, total free heap, and largest contiguous block when adding assets, TLS/networking, audio buffers, or double buffering. Also account for what a connected NimBLE session costs: measured free heap is ~37.7 KB idle/disconnected, dropping to ~26.8 KB once a phone connects and staying there — it does not recover while connected.
+
+**Hard limit:** the I2S DMA buffer size in `components/bsp/src/bsp_audio.c` (`dma_desc_num`/`dma_frame_num`) was tuned against an idle free-heap budget of ~30 KB (see commit `d5adb9a`). When that assumption no longer holds — for example once BLE is connected and free heap drops to ~26.8 KB — microphone init reliably fails with `ESP_ERR_NO_MEM`. Any change to NimBLE's connected-state heap usage, or to this DMA buffer sizing, must be re-verified for voice input **with an active BLE connection**, not only while idle or merely advertising.
 
 ## 11. Adding features
 
@@ -297,6 +299,7 @@ the demo test UI just to follow these examples.
 | Audio speed/pitch wrong | close/open on format change, sample rate/MCLK, no manual clock writes |
 | Recording is zero | `no_dac_ref`, DIN GPIO4, microphone path, gain |
 | Recording allocation fails | no PSRAM; shorten/stream and inspect largest block |
+| Mic init fails `ESP_ERR_NO_MEM` while BLE is connected | a connected NimBLE session costs extra heap (measured ~37.7 KB -> ~26.8 KB free after connect); check `bsp_audio.c` I2S DMA buffer sizing and the largest free block **while connected**, not just idle/advertising |
 | Battery shows `--` | `0x63` response, invalid SOC, profile/startup delay |
 | Wi-Fi/BLE fails on second entry | stack stop/deinit and one-time NVS/event-loop setup |
 | Black after light sleep | timer wake source, sleep error, backlight restore |
@@ -314,6 +317,7 @@ the demo test UI just to follow these examples.
 - [ ] Page exit prevents background access to deleted objects.
 - [ ] Audio format changes retain close/open and required codec settings.
 - [ ] Memory review includes LVGL, LCD DMA, I2S DMA, task stacks, and largest block.
+- [ ] Voice/audio memory budget re-checked **with an active BLE connection** (a connected session costs extra heap — see §14).
 - [ ] Automated validation passed or the actual failure is reported.
 - [ ] Build results and observed device results are reported separately.
 - [ ] The diff contains only task-scoped changes and preserves user work.

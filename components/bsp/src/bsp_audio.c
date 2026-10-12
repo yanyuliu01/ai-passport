@@ -303,11 +303,15 @@ static esp_err_t i2s_full_duplex_init(void) {
     i2s_chan_config_t chan = {
         .id = BSP_I2S_PORT,
         .role = I2S_ROLE_MASTER,
-        // 收发各 4 块、每块 240 帧（16 kHz 下 15 毫秒）：一共约 7.7 KB，建好之后一直占着。
-        // 这块板没有外接内存，原来各 6 块（11.5 KB）时，按住说话在内存只剩三十来 KB 的
-        // 设备上申请不到。60 毫秒的余量对一直在读的录音任务是够的。
+        // 收发各 4 块、每块 160 帧（16 kHz 下 10 毫秒）：一共约 5.1 KB，建好之后一直占着。
+        // 这块板没有外接内存。原来每块 240 帧（约 7.7 KB）是按空闲时 ~30 KB free heap
+        // 校准的（见提交 d5adb9a）；但手机蓝牙连上后实测 free heap 会掉到约 26.8 KB
+        // 且不会回升（NimBLE 连接本身占了约 11 KB），7.7 KB 在这个余量下申请不到，
+        // 报 ESP_ERR_NO_MEM。40 毫秒的余量对一直在读、每次读 20 毫秒（见
+        // VOICE_CHUNK_SAMPLES）的录音任务仍然够用。见
+        // docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md 第 10 节。
         .dma_desc_num = 4,
-        .dma_frame_num = 240,
+        .dma_frame_num = 160,
         .auto_clear_after_cb = true,
         .auto_clear_before_cb = false,
         .intr_priority = 0,
