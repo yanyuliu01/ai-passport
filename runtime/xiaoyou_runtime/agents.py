@@ -6,6 +6,7 @@
 
   claude_code   非交互模式驱动本机的 Claude Code 命令行
   codex         非交互模式驱动本机的 Codex 命令行（codex exec）
+  dsh           驱动本机的 DeepSeek Harness 命令行（dsh）
   command       任意命令：这一段话从标准输入送进去，标准输出就是结果
   remote        另一台电脑上的小幽 Runtime
   echo          原样复述，不调用任何模型，用来测试链路
@@ -904,6 +905,172 @@ class CodexAgent(Agent):
         return problem
 
 
+class DshAgent(Agent):
+    """驱动 DeepSeek Harness（dsh）命令行。两条路：
+
+    有遥控器时（后台的事）：`dsh --profile acp`，走 Agent Client Protocol，见
+    dsh_app.py。沙箱（spec.sandbox）内的操作它自己做；出了沙箱才可能来问主人。
+
+    没有遥控器时（小幽接话那一次，求的是快）：`dsh --profile headless --json`，
+    一次问答，不跟它聊起来也不会来问——沙箱不让做的就是做不了。模型和努力程度
+    通过临时的 --patch 文件传（headless 没有 --model 这种参数）。
+    """
+
+    PROVIDER = "deepseek-official"
+
+    def __init__(self, spec: AgentSpec, run=subprocess.run):
+        super().__init__(spec)
+        self._run = run
+
+    def _env(self) -> Optional[Dict[str, str]]:
+        env = dict(os.environ)
+        env.update(self.spec.env)
+        for key, path in self.spec.env_files.items():
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError as error:
+                raise AgentError("读不到 %s 用的文件 %s：%s" % (key, path, error.strerror or error))
+            if not value:
+                raise AgentError("%s 用的文件 %s 是空的" % (key, path))
+            env[key] = value
+        if self.spec.config_dir is not None:
+            # 让这台机器上的 dsh 用一套单独的 profile 和会话记录，
+            # 不受（也不影响）使用者平时那套 ~/.dsh 配置。
+            env["DSH_HOME"] = str(self.spec.config_dir)
+        env["DSH_PERMISSION_MODE"] = self.spec.sandbox or "workspace-write"
+        return env
+
+    def run(self, job: Job) -> Outcome:
+        if job.control is not None and self._run is subprocess.run:
+            from . import dsh_app  # 放在这里：dsh_app 要用这个模块里的东西
+            return dsh_app.run(self.spec, job, job.control, self._env(), self.tier(job))
+        return self._headless(job)
+
+    # 只要它说话、不让它动手时（job.plain）关掉的工具插件：bash、文件读写和搜索、
+    # 后台任务、技能。关了这些，它就只能直接答，不会像背着活儿那样先去翻仓库。
+    NO_TOOLS_PLUGINS = ("tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
+                       "tool-skill")
+
+    def _patch_file(self, folder: Path, model: Optional[str], plain: bool) -> Optional[Path]:
+        # 只说话这条线求的是几秒内答完：关掉思考，不然 DeepSeek 默认的 reasoningEffort
+        # 是 high，光思考就能花上十几二十秒，跟这条线的用途对不上。
+        if not model and not plain:
+            return None
+        folder.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(prefix="dsh-patch-", suffix=".yml", dir=str(folder))
+        lines: List[str] = []
+        effective_model = model or self.spec.model
+        if effective_model:
+            lines += ["- id: agent-default-model",
+                     "  name: '@deepseek-ai/dsh-agent-default-model'",
+                     "  config:", "    provider: %s" % self.PROVIDER,
+                     "    model: %s" % effective_model]
+            if plain:
+                lines.append('    reasoningEffort: "off"')
+        if plain:
+            for plugin in self.NO_TOOLS_PLUGINS:
+                lines += ["- id: %s" % plugin, "  disabled: true"]
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write("\n".join(lines) + "\n")
+        return Path(name)
+
+    @staticmethod
+    def _stale_session(stdout: str) -> bool:
+        """接不上这个会话编号（比如上一次是别的壳留下的）。"""
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (isinstance(event, dict) and event.get("type") == "error"
+                    and "does not exist" in str(event.get("message") or "")):
+                return True
+        return False
+
+    def _headless(self, job: Job) -> Outcome:
+        model, _ = self.tier(job)
+        text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
+        if job.schema:
+            text += ("\n\n请只输出一个 JSON 对象，不要代码围栏或额外说明。按以下 JSON Schema "
+                    "填写字段；reply 是对主人说的话。\n" + json.dumps(job.schema, ensure_ascii=False))
+        with tempfile.TemporaryDirectory(prefix="xiaoyou-dsh-") as folder:
+            patch = self._patch_file(Path(folder), model, job.plain)
+
+            def build(session_id: Optional[str]) -> List[str]:
+                # --patch 是 dsh 自己的参数，要写在 --profile 后面；--json 和任务文字是
+                # headless 这个 profile 自己的参数，写在 --patch 后面才认得出来。
+                command = list(self.spec.command) + ["--profile", "headless"]
+                if patch is not None:
+                    command += ["--patch", str(patch)]
+                command.append("--json")
+                if session_id:
+                    command += ["--session-id", session_id]
+                command.append("-")
+                return command
+
+            env = self._env()
+            timeout = job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS
+            done = run_command(build(job.session_id), text, self.spec.workdir, timeout, "dsh",
+                               env=env, run=self._run, control=job.control)
+            if job.session_id and self._stale_session(done.stdout):
+                # 当作新对话开始，不要因为接不上旧对话就让这一轮直接失败。
+                done = run_command(build(None), text, self.spec.workdir, timeout, "dsh",
+                                   env=env, run=self._run, control=job.control)
+        return self.parse(done.returncode, done.stdout, done.stderr, job.system is not None)
+
+    def parse(self, returncode: int, stdout: str, stderr: str, speaking: bool = False) -> Outcome:
+        session_id = None
+        said = ""
+        problem = ""
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            if kind == "session" and isinstance(event.get("sessionId"), str):
+                session_id = event["sessionId"]
+            elif kind == "text" and isinstance(event.get("text"), str):
+                said += event["text"]
+            elif kind == "final" and isinstance(event.get("text"), str):
+                said = event["text"]
+            elif kind == "status" and event.get("phase") == "turn_end":
+                reason = event.get("reason")
+                if isinstance(reason, dict) and reason.get("kind") == "error":
+                    error = reason.get("error")
+                    problem = (error.get("message") if isinstance(error, dict)
+                              else str(error or "")) or problem
+        said = said.strip()
+        if returncode != 0 or not said:
+            detail = problem or (stderr.strip().splitlines() or ["没有输出"])[-1]
+            raise AgentError("dsh 没有给出结果（退出码 %d）：%s" % (returncode, clip(detail, 200)))
+        return Outcome(said[:MAX_OUTPUT_CHARS], session_id,
+                       fields_from_text(said) if speaking else None)
+
+    def check(self) -> Optional[str]:
+        problem = self._command_problem()
+        if problem is None:
+            try:
+                self._env()
+            except AgentError as error:
+                return str(error)
+            for key, path in self.spec.env_files.items():
+                if os.name == "posix" and path.stat().st_mode & 0o077:
+                    return "%s 用的文件 %s 别人也能读：chmod 600 %s" % (key, path, path)
+        if problem is None and self._run is subprocess.run:
+            from . import dsh_app
+            problem = dsh_app.check(self.spec, self._env())
+        return problem
+
+
 class CommandAgent(Agent):
     """任意命令。这一段话从标准输入送进去；参数里写了 {prompt} 时改为替换进参数。
 
@@ -1007,6 +1174,7 @@ def create(spec: AgentSpec) -> Agent:
     kinds = {
         "claude_code": create_claude_agent,
         "codex": CodexAgent,
+        "dsh": DshAgent,
         "command": CommandAgent,
         "remote": RemoteAgent,
         "echo": EchoAgent,

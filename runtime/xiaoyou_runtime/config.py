@@ -51,18 +51,18 @@ class AgentSpec:
     effort: Optional[str] = None
     # 派活时可以选的努力程度；空的就是不能选，也不传
     efforts: List[str] = field(default_factory=list)
-    # claude_code
+    # claude_code / dsh
     config_dir: Optional[Path] = None
     # 后台做事时的权限模式。manual：该问的都问，问到主人那里
     permission_mode: str = "manual"
     allowed_tools: List[str] = field(default_factory=list)
     # 除了启动目录之外，还让它碰哪些目录
     add_dirs: List[Path] = field(default_factory=list)
-    # claude_code：启动命令时额外设置的环境变量（例如换一个兼容 Anthropic 接口的服务）
+    # claude_code / dsh：启动命令时额外设置的环境变量（例如换一个兼容接口的服务、放密钥）
     env: Dict[str, str] = field(default_factory=dict)
-    # claude_code：值从文件里读的环境变量（密钥放在 config.json 之外），每次启动命令时现读
+    # claude_code / dsh：值从文件里读的环境变量（密钥放在 config.json 之外），每次启动命令时现读
     env_files: Dict[str, Path] = field(default_factory=dict)
-    # codex
+    # codex / dsh：沙箱范围。dsh 没有单独的审批通道：沙箱内自己做，出了沙箱就做不了
     sandbox: Optional[str] = None
     # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
     codex_mode: str = "app_server"
@@ -136,19 +136,21 @@ class Config:
         return None
 
 
-AGENT_TYPES = ("claude_code", "codex", "command", "remote", "echo")
+AGENT_TYPES = ("claude_code", "codex", "dsh", "command", "remote", "echo")
 # 这些类型默认直接以小幽的身份回话；其余的默认只干活。
-SPEAKS_BY_DEFAULT = ("claude_code", "remote", "echo")
+SPEAKS_BY_DEFAULT = ("claude_code", "dsh", "remote", "echo")
 ROUTER_TYPES = ("mention", "command")
 CODEX_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 CODEX_MODES = ("app_server", "exec")
 CODEX_APPROVAL_POLICIES = ("untrusted", "on-request", "never")
 WORKSPACE_TYPES = ("none", "notion")
-# 努力程度，从省到费。各工具认的不一样：Claude Code 没有 minimal，Codex 没有 max。
-EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+# 努力程度，从省到费。各工具认的不一样：Claude Code 没有 minimal 和 off，Codex 没有 max 和 off，
+# dsh 没有 minimal、medium、xhigh。
+EFFORT_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 EFFORTS_BY_TYPE = {
     "claude_code": ("low", "medium", "high", "xhigh", "max"),
     "codex": ("minimal", "low", "medium", "high", "xhigh"),
+    "dsh": ("off", "low", "high", "max"),
 }
 DEFAULT_EFFORTS = ["low", "medium", "high"]
 DEFAULT_EFFORT = "medium"
@@ -299,7 +301,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             raise ConfigError("%s 是另一台小幽，本来就以小幽的身份回话；不要把 speaks 设成 false" % where)
         return AgentSpec(url=url.rstrip("/"), token=token, **common)
 
-    default_command = {"claude_code": ["claude"], "codex": ["codex"]}.get(kind, [])
+    default_command = {"claude_code": ["claude"], "codex": ["codex"], "dsh": ["dsh"]}.get(kind, [])
     command = _strings(raw.get("command", default_command), where + ".command")
     if not command:
         raise ConfigError("%s.command 不能为空" % where)
@@ -334,6 +336,27 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
                          config_dir=_path(codex_home, base) if codex_home else None,
                          **_tiers(raw, kind, where, shared["model"], shared["extra_args"], False),
                          **common, **shared)
+    if kind == "dsh":
+        for key in ("permission_mode", "allowed_tools", "add_dirs"):
+            if key in raw:
+                raise ConfigError(
+                    "%s 是 dsh 类型：没有 %s 这一项；用 sandbox 控制它能碰什么（dsh 没有单独的"
+                    "审批通道，沙箱内自己做，出了沙箱就做不了）" % (where, key))
+        sandbox = _expect(raw.get("sandbox", "workspace-write"), str, where + ".sandbox")
+        if sandbox not in CODEX_SANDBOXES:
+            raise ConfigError("%s.sandbox 只能是 %s 之一" % (where, "、".join(CODEX_SANDBOXES)))
+        dsh_home = _optional_string(raw.get("config_dir"), where + ".config_dir")
+        dsh_home = env.get("XIAOYOU_DSH_CONFIG_DIR") or dsh_home
+        extra_env = _env(raw.get("env", {}), where + ".env")
+        env_files = _env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files")
+        return AgentSpec(
+            sandbox=sandbox,
+            config_dir=_path(dsh_home, base) if dsh_home else None,
+            env=extra_env,
+            env_files=env_files,
+            **_tiers(raw, kind, where, shared["model"], shared["extra_args"], True),
+            **common, **shared,
+        )
 
     config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
     config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
@@ -360,8 +383,9 @@ def _tiers(raw: Dict[str, Any], kind: str, where: str, model: Optional[str],
            extra_args: List[str], elsewhere: bool) -> Dict[str, Any]:
     """读一个帮手的档位：平时的努力程度、派活时可以选的几档、可以换的模型。
 
-    elsewhere 表示这个 Claude Code 帮手指到了别的服务（比如 DeepSeek）：那边认不认努力程度
-    不一定，所以不写就不传；自己写了 efforts 才传。
+    elsewhere 为真时不写 efforts 就不传任何努力程度，要自己写了 efforts 才传：
+    Claude Code 帮手指到了别的服务（比如 DeepSeek）时，那边认不认努力程度不一定；
+    dsh 的档位名字和默认档（medium）本来就跟别的类型不一样，不该瞎套默认。
     """
     allowed = EFFORTS_BY_TYPE[kind]
     if "efforts" in raw:
