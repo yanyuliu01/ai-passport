@@ -68,8 +68,11 @@ class DeepSeekClaudeCodeAgent(ClaudeCodeAgent):
             raise AgentError("DeepSeek 的 ANTHROPIC_BASE_URL 必须是 " + DEEPSEEK_BASE_URL)
         if not self.spec.model or not self.spec.model.startswith("deepseek-"):
             raise AgentError("DeepSeek 的 model 必须明确填写 DeepSeek 模型，如 deepseek-v4-pro")
-        # Do not accept a Claude key merely inherited from the parent shell.
-        explicit = {name: resolve(self.spec.env.get(name, ""), env, "DeepSeek " + name)
+        # Do not accept a Claude key merely inherited from the parent shell:
+        # only a key written in `env`, or read from a file named in `env_files`
+        # (super()._env() has already put that file's content into env).
+        explicit = {name: (resolve(self.spec.env.get(name, ""), env, "DeepSeek " + name)
+                           if name not in self.spec.env_files else env.get(name, "").strip())
                     for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")}
         keys = {value for value in explicit.values() if value}
         if len(keys) != 1:
