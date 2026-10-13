@@ -79,4 +79,4 @@ Actual PNG dimensions, alpha statistics, hashes and selected/draft status are in
 
 The user supplied `reference-codex-elegant.png` as a character reference; original author and reuse license are unknown. `reference-xiaoyou-style.png` was rendered from this repository's `main/pocket_pet.c`. Other sheets were generated for this project, guided by community character conventions and the user's preferences. No third-party rights or official affiliation are asserted. No new artwork license is assigned by this entry; the repository code license does not establish rights to underlying character references.
 
-The root README's banners in `images/readme/` are composited from these sheets and from `reference-xiaoyou-style.png`; they carry the same status and rights notes.
+The root README's banners in `images/readme/` are composited from these sheets; the Xiaoyou sprite frames are rendered from `main/pocket_pet.c`. They carry the same status and rights notes.

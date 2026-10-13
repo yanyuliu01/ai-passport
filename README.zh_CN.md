@@ -5,19 +5,19 @@
 <h1 align="center">Claude Pocket</h1>
 
 <p align="center">
-  <strong>小幽是一只住在你手腕上的像素小幽灵。<br>
-  你只跟她说话，活儿由她交给帮手去做。</strong>
+  <strong>小幽是一只住在你手腕上的鲸鱼小女仆。<br>
+  你只跟她说话，大活儿由她交给 Claude 和 Codex。</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/MCU-ESP32--C3-14b8a6?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/ESP--IDF-5.5.3-2563eb?style=flat-square" alt="ESP-IDF 5.5.3">
-  <img src="https://img.shields.io/badge/link-BLE%20Secure-a78bfa?style=flat-square" alt="低功耗蓝牙安全连接">
+  <img src="https://img.shields.io/badge/Xiaoyou-DeepSeek%20%C2%B7%20dsh-7cc8f2?style=flat-square" alt="小幽经 dsh 跑在 DeepSeek 上">
 </p>
 
 <p align="center">
-  <img src="assets/images/readme/readme-hero.jpg" alt="白色像素小幽灵小幽带着一颗爱心，一串虚线连向三位 Q 版帮手：蓝发鲸鱼女仆、橙发学者、银发伙伴，都在挥手。" width="100%">
+  <img src="assets/images/readme/readme-hero.jpg" alt="蓝发鲸鱼女仆小幽在挥手，旁边是她带爱心的像素形象；一串虚线从她连向两位挥手的帮手：橙发学者 Claude 和银发伙伴 Codex。" width="100%">
 </p>
 
 **Claude Pocket** 是跑在 [FoloToy](https://ai-passport.folotoy.cn/) 一款开放式
@@ -30,27 +30,35 @@ ESP32-C3 小型可穿戴设备上的固件。按住按键说话，小幽在屏�
 
 ## 认识小幽
 
+小幽就是 DeepSeek 的那条鲸鱼——大肥鱼女仆。她是你唯一要对话的对象，Runtime
+通过 DeepSeek Harness 命令行（`dsh`）让她跑在 DeepSeek 上。
+
 <p align="center">
-  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="像素小幽灵小幽的六种表情：睡着、空闲、忙碌冒汗、感叹号找你、开心带爱心、失败叉叉眼。" width="560">
+  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="小幽的像素形象空闲时上下浮动。" width="160">
+  &nbsp;&nbsp;
+  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="小幽像素形象的六种表情：睡着、空闲、忙碌头顶跳点、感叹号找你、开心带爱心、失败叉叉眼。" width="480">
 </p>
 
-她在 [`main/pocket_pet.c`](main/pocket_pet.c) 里一格一格画出来。没连上时她在
-睡觉，空闲时轻轻上下浮动；忙的时候头顶跳着三个点，还挂着一滴汗。有事找你时
-会冒出感叹号，事情顺利会冒爱心，失败了就变成叉叉眼。
+在设备上她是一个 20 × 20 的像素小人。没连上时她在睡觉，空闲时轻轻上下浮动；
+忙的时候头顶跳着三个点。有事找你时会冒出感叹号，事情顺利会冒爱心，失败了就
+变成叉叉眼。
+
+> 像素形象正从原来的小幽灵换成大肥鱼。这几帧是从还在开发中的
+> `main/pocket_pet.c` 渲染出来的。
 
 ## 她的帮手
 
-重活不由小幽自己干。她会交给主机上配置好的 agent。每位帮手在设备上都有自己
-固定的颜色，在伴侣设计包里也有一个角色形象：
+小幽自己能答的直接答，要花时间的交给 agent 在后台做。每位帮手在设备上都有
+自己固定的颜色：
 
-| | 帮手 | 背后跑的是 |
+| | 是谁 | 背后跑的是 |
 | --- | --- | --- |
-| 🐋 | **DSH**：鲸鱼女仆 | DeepSeek Harness 命令行（`dsh`） |
+| 🐋 | **小幽**：大肥鱼女仆，你唯一对话的对象 | DeepSeek（经 `dsh`） |
 | 🧡 | **Claude**：橙发学者 | Claude Code（`claude`、`tailor`） |
 | 🌙 | **Codex**：银发伙伴 | Codex app-server |
 
 <p align="center">
-  <img src="assets/images/readme/readme-crew.jpg" alt="三行，每行一位帮手，各四个姿势：思考、在笔记本上敲代码、挥手等你批准、任务完成欢呼。" width="100%">
+  <img src="assets/images/readme/readme-crew.jpg" alt="三行：大肥鱼小幽、Claude、Codex，各四个姿势：思考、在笔记本上敲代码、挥手等你批准、任务完成欢呼。" width="100%">
 </p>
 
 <p align="center"><sub>思考中 · 干活中 · 等你点头 · 完成啦</sub></p>
@@ -58,11 +66,11 @@ ESP32-C3 小型可穿戴设备上的固件。按住按键说话，小幽在屏�
 还有适合小屏幕的像素头像版：
 
 <p align="center">
-  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="三位帮手的像素头像，每位八种表情：平静、开心、思考、专注、疑惑、惊讶、出错、睡觉。" width="100%">
+  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="小幽、Claude、Codex 的像素头像，每位八种表情：平静、开心、思考、专注、疑惑、惊讶、出错、睡觉。" width="100%">
 </p>
 
-> 帮手角色是非官方的同人风格概念图，固件目前还没有用上。全部图稿和各自的状态
-> 见[设计包](docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)。
+> Q 版角色是非官方的同人风格概念图。全部图稿和各自的状态见
+> [设计包](docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)。
 
 ## 整体由三部分组成
 
