@@ -18,6 +18,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .cards import Cards
 from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
+from .desktop_titles import DesktopTitles
+from .task_titles import select_title
 
 POLL_SECONDS = 2.0
 DISCOVERY_SECONDS = 10.0
@@ -102,6 +104,7 @@ class DesktopSync:
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
         self.roots = [("codex", (codex_dir or home / ".codex") / "sessions"),
                       ("claude", (claude_dir or home / ".claude") / "projects")]
+        self.titles = DesktopTitles(self.roots[0][1].parent, self.roots[1][1].parent)
         self.projects = {str(path.expanduser().resolve()) for path in projects or []}
         self.sessions: Dict[Tuple[str, str], Session] = {}
         self.cursors: Dict[Path, Cursor] = {}
@@ -438,20 +441,25 @@ class DesktopSync:
         project = _text(Path(session.cwd).name, 80) or "project"
         content = tuple((entry["id"], entry["role"], entry["text"], entry["at"])
                         for entry in session.entries)
+        existing = self.cards.get(session.card) if session.card else None
+        # A hook can restore status before its transcript becomes readable.
+        # Reuse the retained visible request for the fallback, without treating
+        # a previously imported name as an authoritative upstream rename.
+        entries = session.entries if session.content_loaded else (existing or {}).get("entries", [])
+        title = self._title(session.agent, session.session_id, project, entries)
         key = (status, project, session.model, session.tool, observed_at,
-               session.started_at, stale, content, session.content_truncated, tuple(session.progress))
-        if key == session.published and session.card and self.cards.get(session.card):
+               session.started_at, stale, content, session.content_truncated, tuple(session.progress),
+               title.title, title.source, title.truncated)
+        if key == session.published and existing:
             return
-        if session.card is None or self.cards.get(session.card) is None:
-            title = "%s %s %s" % (session.agent, project[:10], session.session_id[-6:])
-            card = self.cards.open(CONVERSATION, title, "unknown", session.agent)
+        if existing is None:
+            card = self.cards.open(CONVERSATION, title.title, "unknown", session.agent,
+                                   title_source=title.source)
             session.card = card["id"]
         label = LABELS[status]
         progress = [label] + session.progress
         if session.tool and status == "running":
             progress.append(session.tool)
-        latest_user = next((entry["text"] for entry in reversed(session.entries)
-                            if entry["role"] == "you"), "")
         latest_reply = ""
         for entry in reversed(session.entries):
             if entry["role"] == "you":
@@ -459,11 +467,9 @@ class DesktopSync:
             if entry["role"] == "xiaoyou":
                 latest_reply = entry["text"]
                 break
-        fields: Dict[str, Any] = {}
+        fields: Dict[str, Any] = title.fields()
         if session.content_loaded:
             fields.update(entries=[dict(entry) for entry in session.entries],
-                          title=_text(latest_user, 24) if latest_user else
-                          "%s %s %s" % (session.agent, project[:10], session.session_id[-6:]),
                           content_scope="recent", content_truncated=session.content_truncated)
         self.cards.update(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, monitoring_only=True, desktop_status=status,
@@ -473,6 +479,12 @@ class DesktopSync:
                           progress_lines=progress[-5:],
                           mood="busy" if status in ("running", "waiting") else "idle", **fields)
         session.published = key
+
+    def _title(self, agent: str, sid: str, project: str, entries: List[Dict[str, Any]]):
+        request = next((entry["text"] for entry in reversed(entries)
+                        if entry["role"] == "you"), "")
+        return select_title(upstream=self.titles.get(agent, sid), request=request,
+                            fallback="%s %s %s" % (agent, project[:10] or "project", sid[-6:]))
 
     def poll(self) -> None:
         now = self.clock()
@@ -502,7 +514,31 @@ class DesktopSync:
         # history, but cannot keep reopening pruned cards on every poll.
         newest = sorted(self.sessions.values(), key=lambda session: session.observed_at,
                         reverse=True)[:MAX_SESSIONS]
+        # Names can change independently of transcript activity (Codex WAL or
+        # sidebar index). Refresh every poll and include the name in the card's
+        # change key, so the normal feed wakes for a title-only update.
+        owned = self.owned()
+        observed = [card for card in self.cards.recent(None, 1000)
+                    if card.get("monitoring_only") and card.get("session_id") not in owned]
+        self.titles.refresh({agent: list(dict.fromkeys(
+            [session.session_id for session in newest
+             if session.agent == agent and not session.skip and session.session_id not in owned] +
+            [card["session_id"] for card in observed if card.get("agent") == agent]))
+            for agent in ("codex", "claude")})
         retained = {(session.agent, session.session_id) for session in newest}
+        publishing = {(session.agent, session.session_id) for session in newest
+                      if session.cwd and not session.skip and session.session_id not in owned}
+        # Retained history may have no recent transcript after a restart. Its
+        # sidebar name can still change; refresh only the title, preserving the
+        # existing content/status and never inventing a working directory.
+        for card in observed:
+            identity = (card.get("agent"), card.get("session_id"))
+            if identity in publishing or identity[0] not in ("codex", "claude"):
+                continue
+            fields = self._title(identity[0], identity[1], card.get("project", ""),
+                                 card.get("entries", [])).fields()
+            if any(card.get(key) != value for key, value in fields.items()):
+                self.cards.update(card["id"], **fields)
         for key, session in self.sessions.items():
             if key not in retained and session.card:
                 card = self.cards.get(session.card)

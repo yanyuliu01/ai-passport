@@ -555,6 +555,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         title.setPadding(0, dp(8), 0, dp(4));
         taskPane.addView(title);
         if (opened.monitoringOnly) {
+            if (!CardViews.titleNotice(opened).isEmpty()) {
+                taskPane.addView(text(CardViews.titleNotice(opened), 13, false));
+            }
             taskPane.addView(text("电脑端对话 · 只读同步内容与状态，请在电脑端继续、确认或中断。"
                     + (opened.state.equals("done") ? "\n本轮结束不代表项目已完成。" : "")
                     + (opened.state.equals("unknown") ? "\n连接或状态采集已中断，当前状态未知。" : "")

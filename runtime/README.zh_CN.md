@@ -74,6 +74,24 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
   --desktop-claude-dir /absolute/claude-config
 ```
 
+所有已集成代理统一使用 `card.title` 作为任务名称：优先采用电脑侧栏原题，其次是明确的
+本地任务名称，再其次是最近一次实际需求的短名称，最后是稳定的会话/任务标识。
+结果摘要或代理回复不会替换任务名称。侧栏原题和明确的任务名称保留原来的措辞及内部
+空格，只遮盖可识别的凭证，并限制为 200 字符；从需求生成的名称最多 24 字符。
+`title_source` 为 `upstream`、`task`、`request` 或 `fallback`，`title_truncated`
+标明名称是否因长度上限被截短。
+
+Codex 标题适配器以只读方式读取本机 SQLite 状态中的 `threads.name`，包括尚在 WAL
+中的实时修改；不会把 `threads.title` 中的最初提示词当成侧栏名称。已识别的会话索引和
+旧版侧栏名称元数据作为回退。Claude 适配器先读取明确的 `custom-title` 记录，再读取
+会话索引中的显示名称。即使没有新的对话事件，名称也会刷新，因此电脑端改名会更新同一
+张卡。目前自动观察本机会话的采集器只覆盖 Codex 和 Claude。其他代理集成同样遵循统一
+标题规则，但要显示侧栏原题，需要适配器提供上游名称；没有时使用相同的回退规则。
+
+App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史列表也使用这个名称，按
+现有 47 个 UTF-8 字节的上限截断，不额外添加项目或“电脑”前缀；来源、项目和状态各有
+自己的字段。
+
 观察器同步你实际提出的需求、可见的代理回复和进展说明，以及项目/会话元数据、模型标识、
 时间、状态和工具名称。系统/开发者指令、AGENTS 指令、注入的环境/浏览器上下文、推理、
 原始工具参数/结果和原始记录不会同步。可识别的凭证格式会在保存和发送前遮盖，但不保证
@@ -609,7 +627,9 @@ Claude）。`entries` 为空表示尚未采集到可见内容。这些卡没有 
   （交给了谁，`text` 是原因：`asked`、`mention`、`router`、`default`）或 `handoff`（交给了
   帮手，`text` 是小幽那一句话）。
 
-一张卡包含 `id`（`c1`、`c2`……）、`conversation`、`title`（最多 24 个字）、`state`、`agent`
+一张卡包含 `id`（`c1`、`c2`……）、`conversation`、`title`（统一任务名称：最多 200 字符，
+从需求生成时最多 24 字符）、`title_source`（`upstream`、`task`、`request` 或 `fallback`）、
+`title_truncated`、`state`、`agent`
 （谁在做或做的；小幽自己答的是 `null`）、`entries`（`[{"role": "you" 或 "xiaoyou", "text",
 "at"}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
 `started_at`、`edits`（补充或改过几次）、`approval`（正在等的那个授权的编号，没有是
@@ -981,5 +1001,7 @@ python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
 python3 runtime/tests/test_desktop_content.py
+python3 runtime/tests/test_desktop_titles.py
+python3 runtime/tests/test_task_titles.py
 python3 runtime/tests/test_desktop_hook.py
 ```

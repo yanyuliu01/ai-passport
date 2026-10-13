@@ -64,6 +64,24 @@ by the owner or originating agent. These sessions remain read-only: continue,
 stop, and approve them in the desktop app. Optional lifecycle hooks supply
 precise approval-wait states and record metadata/status only.
 
+Task names use one canonical `card.title` for every integrated agent: upstream
+desktop sidebar name, then an explicit local task name, then a short latest
+request, then a stable fallback. A result summary never replaces the task name.
+Sidebar and explicit names retain their wording, with recognizable credentials
+scrubbed and a 200-character limit; request-derived names have a 24-character
+limit. `title_source` identifies `upstream`, `task`, `request`, or `fallback`, and
+`title_truncated` identifies a shortened name. The App uses this name in its task
+list and details; hardware task/history names use the same name within the
+existing 47-byte UTF-8 limit, without an added project prefix.
+
+The current local collectors read Codex's sidebar name from `threads.name` in
+read-only SQLite state, with recognized index metadata as a fallback, and
+Claude's `custom-title` records/session index. Codex's `threads.title` is the
+original prompt and is not used as the sidebar name. A rename updates even
+without transcript activity. Automatic local collection still covers Codex and
+Claude only; other agent adapters must provide their upstream name or use the
+same canonical fallbacks.
+
 The observer excludes system/developer and AGENTS instructions, injected
 environment/browser context, reasoning, and raw tool arguments/results.
 Recognizable credential patterns are redacted; arbitrary private prose is not

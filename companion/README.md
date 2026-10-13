@@ -92,7 +92,16 @@ depends on that assistant's app and has not been verified.
 
 When desktop observation is enabled on the paired runtime, independently
 running Codex and Claude Code conversations appear on the Tasks page. Each
-shows its desktop source, project, current state and latest activity. Open one
+uses the conversation title shown in the desktop sidebar, together with its
+desktop source, project, current state and latest activity. The app preserves
+the runtime's title verbatim; desktop renames update the same task. If the
+desktop title is unavailable, the recent request or session identifier is
+shown with an explicit fallback notice. Titles longer than the runtime's
+200-character limit are marked as shortened. The hardware's task and history
+lists devote their 47-byte UTF-8 title field to that same title, clipping at a
+character boundary without prepending the project or source. All connected
+agents use this same title rule; the app does not generate another title or
+summary. Open one
 to read the recent user requests and visible Codex or Claude replies, with the
 actual assistant's name. The runtime supplies a recent window of at most 20
 messages, at most 4,000 characters per message and 32 KiB of UTF-8 content per

@@ -89,11 +89,34 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
   --desktop-claude-dir /absolute/claude-config
 ```
 
+Every integrated agent uses one canonical `card.title`: the upstream desktop
+sidebar name takes priority, followed by an explicit local task name, a short
+version of the latest human request, then a stable session/task fallback. A
+result summary or assistant reply never replaces the task name. Original sidebar
+and explicit task names retain their wording and internal spacing, with
+recognizable credentials scrubbed and a 200-character limit; a request-derived
+name is limited to 24 characters. `title_source` is `upstream`, `task`, `request`,
+or `fallback`, and `title_truncated` marks a name shortened to its limit.
+
+The Codex title adapter reads `threads.name` from its local SQLite state in
+read-only mode, including live WAL updates; it never treats the original prompt
+in `threads.title` as the sidebar name. Recognized session-index and legacy
+sidebar-name metadata provide a fallback. The Claude adapter reads explicit
+`custom-title` records, then the display name in its session index. Names refresh
+even when no conversation event arrives, so a desktop rename updates the same
+card. The current local collectors cover Codex and Claude only. Other agent
+integrations share the canonical title policy but need an adapter-provided
+upstream name to show their sidebar title; otherwise they use the same fallbacks.
+
+The App's lists and detail view use that same `card.title`. Hardware task/history
+names use it too, clipped to the existing 47-byte UTF-8 limit without an added
+project or computer prefix; the source, project, and status have their own fields.
+
 The observer synchronizes human requests, visible assistant replies and progress
 comments, together with project/session metadata, model identifiers, timestamps,
 status, and tool names. It excludes system/developer instructions, AGENTS
 instructions, injected environment/browser context, reasoning, raw tool
-arguments/results, and transcript records. Recognizable credential patterns are
+arguments/results, and raw transcript records. Recognizable credential patterns are
 redacted before storage and transmission; arbitrary private prose is not
 guaranteed to be detected.
 
@@ -764,8 +787,10 @@ The record also says who the sentence went to:
   `route` (who got it; `text` is the reason: `asked`, `mention`, `router`,
   `default`) or `handoff` (handed to a helper; `text` is what Xiaoyou said).
 
-A card has `id` (`c1`, `c2`, …), `conversation`, `title` (at most 24
-characters), `state`, `agent` (who is or was on it; `null` when Xiaoyou
+A card has `id` (`c1`, `c2`, …), `conversation`, `title` (the canonical name:
+at most 200 characters, or 24 when derived from a request), `title_source`
+(`upstream`, `task`, `request`, or `fallback`), `title_truncated`, `state`,
+`agent` (who is or was on it; `null` when Xiaoyou
 answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at"}]`,
 the latest 40), `brief`, `mood`, `progress` (the latest 5 lines of progress,
 starting over with each round), `started_at`, `edits` (how many times it was
@@ -1274,5 +1299,7 @@ python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
 python3 runtime/tests/test_desktop_content.py
+python3 runtime/tests/test_desktop_titles.py
+python3 runtime/tests/test_task_titles.py
 python3 runtime/tests/test_desktop_hook.py
 ```

@@ -55,6 +55,9 @@ final class Card {
 
     final String id;
     final String title;
+    /** upstream 是来源的原题；task 是 Runtime 任务题，request/fallback 是回退。旧版是空串。 */
+    final String titleSource;
+    final boolean titleTruncated;
     /** talking、working、waiting、done、failed、cancelled；电脑观察还可能是 unknown。 */
     final String state;
     /** 谁在做或做的；小幽自己答的是空串。 */
@@ -97,7 +100,10 @@ final class Card {
                  int edits, boolean queued, long seq, double finishedAt, String effort,
                  String model, long tokens, int spent5h, int spent7d, String source,
                  String project, String sessionId, boolean monitoringOnly, String desktopStatus,
-                 double observedAt, boolean stale, String contentScope, boolean contentTruncated) {
+                 double observedAt, boolean stale, String contentScope, boolean contentTruncated,
+                 String titleSource, boolean titleTruncated) {
+        this.titleSource = titleSource;
+        this.titleTruncated = titleTruncated;
         this.finishedAt = finishedAt;
         this.effort = effort;
         this.model = model;
@@ -166,7 +172,8 @@ final class Card {
                 Json.string(raw, "session_id"), Json.flag(raw, "monitoring_only"),
                 Json.string(raw, "desktop_status"), Json.number(raw, "observed_at"),
                 Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
-                Json.flag(raw, "content_truncated"));
+                Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
+                Json.flag(raw, "title_truncated"));
     }
 
     /** 档位给人看的说法：低档、中档、高档……不认识的原样，没有就是空串。 */
@@ -232,7 +239,7 @@ final class Card {
         return new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
                 startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
                 source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
-                contentScope, contentTruncated);
+                contentScope, contentTruncated, titleSource, titleTruncated);
     }
 
     /** 这件事的第一句话；电脑观察是当前最近一轮需求。 */

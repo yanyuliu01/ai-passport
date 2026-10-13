@@ -507,7 +507,7 @@ public final class ProtocolSelfTest {
         BuddyProtocol.Task item = CardViews.deviceTask(unknown, 1790000500L);
         check(item.state.equals("unknown") && item.seconds == 0 && item.p1.equals("读取配置")
                 && item.p2.equals("运行测试")
-                && item.title.equals("电脑 · my-app · 修复登录"), "unknown device task has no running timer");
+                && item.title.equals("修复登录"), "unknown device task has no running timer");
         check(BuddyProtocol.tasks(Arrays.asList(item)).contains("\"state\":\"unknown\"")
                 && CardViews.deviceTask(running, 1790000010L).seconds == 10,
                 "desktop state uses existing task protocol");
@@ -515,9 +515,9 @@ public final class ProtocolSelfTest {
                 && CardViews.deviceReply(running, true).contains("运行测试")
                 && CardViews.deviceReply(unknown, false).startsWith("状态未知"),
                 "device details explain observation-only status");
-        check(CardViews.deviceTitle(done).startsWith("电脑 · ")
+        check(CardViews.deviceTitle(done).equals("Codex 对话")
                 && card("{\"id\":\"c1\",\"state\":\"done\"}").stateLabel().equals("好了"),
-                "legacy cards preserve wording");
+                "untitled desktop sessions remain identifiable and legacy cards preserve wording");
         check(CardViews.deviceState(done).equals("idle")
                 && CardViews.deviceTask(done, 1790000500L).state.equals("idle")
                 && CardViews.devicePastItem(done, 1790000500L,
@@ -604,6 +604,66 @@ public final class ProtocolSelfTest {
                 && Json.parseObject(BuddyProtocol.card(bounded.id, "", "idle", bounded.agent, 0,
                         CardViews.deviceTitle(bounded), device)) != null,
                 "long CJK and emoji preserve both speakers within the existing device byte budget");
+
+        desktopTitles();
+    }
+
+    private static void desktopTitles() {
+        String title = "设备正在运行状态同步 😀 登录页与授权修复";
+        Card desktop = card("{\"id\":\"c98\",\"source\":\"desktop\",\"agent\":\"codex\","
+                + "\"project\":\"a-project-name-that-must-not-displace-the-title\",\"state\":\"working\","
+                + "\"title\":\"" + title + "\",\"title_source\":\"upstream\",\"title_truncated\":false,"
+                + "\"entries\":[{\"role\":\"you\",\"text\":\"原始需求和侧栏标题不同\"}]}");
+        check(desktop.title.equals(title) && desktop.titleSource.equals("upstream")
+                && !desktop.titleTruncated && CardViews.titleNotice(desktop).contains("电脑侧栏一致")
+                && CardViews.listItem(desktop).contains("\n" + title)
+                && CardViews.pointer(desktop).endsWith("\n" + title)
+                && CardViews.deviceTitle(desktop).equals(title)
+                && CardViews.deviceTask(desktop, 1).title.equals(title)
+                && CardViews.devicePastItem(desktop, 1, java.util.TimeZone.getTimeZone("UTC"))
+                        .title.equals(title),
+                "desktop list, pointer, task and history all use exact sidebar title rather than request or project prefix");
+        java.util.Map<String, Object> wire = Json.parseObject(BuddyProtocol.tasks(Arrays.asList(
+                CardViews.deviceTask(desktop, 1))));
+        String wireTitle = Json.string(Json.object(Json.list(wire, "list").get(0)), "title");
+        check(wireTitle.equals(BuddyProtocol.clip(title, BuddyProtocol.TASK_TITLE_MAX))
+                && BuddyProtocol.utf8Length(wireTitle) <= BuddyProtocol.TASK_TITLE_MAX
+                && wireTitle.startsWith("设备正在运行") && !wireTitle.contains("project")
+                && !wireTitle.contains("\uFFFD")
+                && !Character.isHighSurrogate(wireTitle.charAt(wireTitle.length() - 1)),
+                "small-screen title uses its byte budget for original title and preserves CJK and emoji boundaries");
+        Card lost = desktop.unknown();
+        check(lost.title.equals(title) && lost.titleSource.equals("upstream") && !lost.titleTruncated,
+                "lost connection retains exact sidebar title and provenance");
+        Card shortened = card("{\"id\":\"c99\",\"source\":\"desktop\",\"title_source\":\"desktop\","
+                + "\"title_truncated\":true}");
+        check(shortened.titleTruncated && CardViews.titleNotice(shortened).contains("已省略")
+                && shortened.unknown().titleTruncated,
+                "bounded upstream titles are clearly described and retained on disconnect");
+        Card request = card("{\"id\":\"c100\",\"source\":\"desktop\",\"title\":\"需求回退\","
+                + "\"title_source\":\"request\"}");
+        Card fallback = card("{\"id\":\"c101\",\"source\":\"desktop\",\"title_source\":\"fallback\"}");
+        check(CardViews.titleNotice(request).contains("最近需求")
+                && CardViews.titleNotice(fallback).contains("会话标识")
+                && CardViews.deviceTitle(request).equals("需求回退")
+                && CardViews.titleNotice(card("{\"id\":\"c102\",\"source\":\"desktop\"}")).isEmpty(),
+                "title fallbacks and older runtime do not pretend to supply an exact desktop title");
+        Card local = card("{\"id\":\"c103\",\"title\":\"小幽的任务\",\"title_source\":\"task\"}");
+        check(CardViews.deviceTitle(local).equals("小幽的任务")
+                && CardViews.titleNotice(local).isEmpty(), "runtime-owned task titles are unchanged");
+        for (String agent : Arrays.asList("claude", "Dsh", "remote-helper", "")) {
+            for (String source : Arrays.asList("desktop", "runtime", "")) {
+                Card other = card("{\"id\":\"c104\",\"agent\":\"" + agent + "\",\"source\":\""
+                        + source + "\",\"title\":\"" + title + "\",\"project\":\"other-project\"}");
+                check(CardViews.listItem(other).contains("\n" + title)
+                        && CardViews.pointer(other).endsWith("\n" + title)
+                        && CardViews.deviceTitle(other).equals(title)
+                        && CardViews.deviceTask(other, 1).title.equals(title)
+                        && CardViews.devicePastItem(other, 1, java.util.TimeZone.getTimeZone("UTC"))
+                                .title.equals(title),
+                        "every connected agent uses canonical title unchanged: " + agent + "/" + source);
+            }
+        }
     }
 
     private static void desktopResponseSize() {

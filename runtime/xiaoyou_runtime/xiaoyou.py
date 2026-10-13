@@ -640,7 +640,8 @@ class Xiaoyou:
             worker = helper.name
             if target is None:
                 target = self._cards.open(
-                    conversation, plan.get("title") or text, "working", helper.name)
+                    conversation, plan.get("title") or text, "working", helper.name,
+                    title_source="task" if plan.get("title") else "request")
             self._cards.update(target["id"], said=text, say=reply, state="working",
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._config.brief_max_chars))

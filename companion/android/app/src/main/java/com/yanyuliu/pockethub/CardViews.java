@@ -103,6 +103,24 @@ final class CardViews {
         return notice;
     }
 
+    /** 只在 Runtime 明确给了来源时说明原题或回退，旧版不假称已拿到侧栏标题。 */
+    static String titleNotice(Card card) {
+        if (!card.monitoringOnly) {
+            return "";
+        }
+        switch (card.titleSource) {
+            case "upstream":
+            case "desktop":
+                return card.titleTruncated ? "标题取自电脑侧栏，较长部分已省略。" : "标题与电脑侧栏一致。";
+            case "request":
+                return "电脑端标题暂未获取，显示最近需求。";
+            case "fallback":
+                return "电脑端标题暂未获取，显示会话标识。";
+            default:
+                return "";
+        }
+    }
+
     /** “c3 · codex 高档 · 在做（改过 1 次）”。 */
     static String status(Card card) {
         StringBuilder out = new StringBuilder(card.monitoringOnly ? "电脑" : card.id);
@@ -379,10 +397,12 @@ final class CardViews {
         return BuddyProtocol.clip(out.toString(), THREAD_BYTES);
     }
 
-    /** 电脑状态放在现有卡和任务协议里；项目名优先，长标题由协议按字节截断。 */
+    /** 设备任务、历史单子的 47 字节优先留给侧栏标题；来源、项目、状态在各自栏里显示。 */
     static String deviceTitle(Card card) {
-        return card.monitoringOnly ? "电脑 · "
-                + (card.project.isEmpty() ? "" : card.project + " · ") + card.title : card.title;
+        if (!card.monitoringOnly || !card.title.isEmpty()) {
+            return card.title;
+        }
+        return (card.project.isEmpty() ? "" : card.project + " · ") + assistantLabel(card) + " 对话";
     }
 
     /** 卡的需求栏优先放实际需求；旧 Runtime 无内容时仍显示电脑来源和项目。 */

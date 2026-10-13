@@ -106,6 +106,16 @@ def _credential_value(match: re.Match) -> str:
     return match.group("prefix") + quote + "[REDACTED]" + quote
 
 
+def redact_credentials(text: str) -> str:
+    """Scrub recognizable credentials without rewriting ordinary text."""
+    text = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", text)
+    text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _URL_SECRET.sub(lambda match: match.group("prefix") + "[REDACTED]", text)
+    text = _URL_PASSWORD.sub(lambda match: match.group("prefix") + "[REDACTED]@", text)
+    text = _SECRET_ASSIGNMENT.sub(_credential_value, text)
+    return _API_KEY.sub("[REDACTED]", text)
+
+
 def visible_text(text: str) -> str:
     """Strip injected contexts, scrub recognizable secrets and bound a message.
 
@@ -137,12 +147,7 @@ def visible_text(text: str) -> str:
             text = _strip_blocks(text, _AGENTS_TOKEN)
     text = _strip_blocks(text, _CONTEXT_TOKEN)
     text = _REQUEST_MARKER.sub("", text)
-    text = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", text)
-    text = _BEARER.sub("Bearer [REDACTED]", text)
-    text = _URL_SECRET.sub(lambda match: match.group("prefix") + "[REDACTED]", text)
-    text = _URL_PASSWORD.sub(lambda match: match.group("prefix") + "[REDACTED]@", text)
-    text = _SECRET_ASSIGNMENT.sub(_credential_value, text)
-    text = _API_KEY.sub("[REDACTED]", text).strip()
+    text = redact_credentials(text).strip()
     if len(text) > MAX_MESSAGE_CHARS:
         return text[:MAX_MESSAGE_CHARS - 1].rstrip() + "…"
     return text

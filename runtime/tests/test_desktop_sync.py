@@ -3,6 +3,7 @@
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -90,6 +91,109 @@ class DesktopTests(unittest.TestCase):
         self.append(path, [self.cevent("turn_aborted")])
         self.sync.poll()
         self.assertEqual(self.cards.get(cards["s-1"]["id"])["state"], "cancelled")
+
+    def test_codex_sidebar_rename_wakes_feed_without_transcript_changes(self):
+        path = self.codex()
+        self.append(path, [self.message("user", "original request"),
+                           self.cevent("task_started")])
+        db_path = self.root / ".codex/state_5.sqlite"
+        with sqlite3.connect(db_path) as db:
+            db.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, title TEXT)")
+            db.execute("INSERT INTO threads VALUES (?, ?, ?)",
+                       ("s-1", "Sidebar task name with more than twenty-four characters", "old prompt"))
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual(card["title_source"], "upstream")
+        self.assertGreater(len(card["title"]), 24)
+        self.assertNotEqual(card["title"], "old prompt")
+        original_stat = path.stat()
+        before = self.cards.changed("phone", include_desktop=True)["seq"]
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE threads SET name=? WHERE id=?", ("改名后的任务", "s-1"))
+        self.sync.poll()
+        changed = self.cards.changed("phone", before, include_desktop=True)
+        self.assertEqual([item["id"] for item in changed["cards"]], [card["id"]])
+        self.assertEqual(changed["cards"][0]["title"], "改名后的任务")
+        self.assertEqual(path.stat().st_mtime_ns, original_stat.st_mtime_ns)
+        self.now += 1
+        self.append(path, [self.message("user", "a later follow-up")])
+        self.sync.poll()
+        self.assertEqual(self.cards.get(card["id"])["title"], "改名后的任务")
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE threads SET name=NULL WHERE id=?", ("s-1",))
+        self.sync.poll()
+        fallback = self.cards.get(card["id"])
+        self.assertEqual((fallback["title"], fallback["title_source"]),
+                         ("a later follow-up", "request"))
+
+    def test_claude_custom_title_and_index_rename_use_same_card(self):
+        path = self.root / ".claude/projects/project/s-cc.jsonl"
+        self.append(path, [{"sessionId": "s-cc", "cwd": "/project/a", "type": "user",
+                            "message": {"content": "the visible user request"}},
+                           {"sessionId": "s-cc", "type": "custom-title", "customTitle": "Claude title"}])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual((card["title"], card["title_source"]), ("Claude title", "upstream"))
+        self.append(path, [{"sessionId": "s-cc", "type": "custom-title", "customTitle": "Renamed Claude title"}])
+        self.sync.poll()
+        self.assertEqual(self.cards.get(card["id"])["title"], "Renamed Claude title")
+        self.assertEqual(len(self.observed()), 1)
+        other = self.root / ".claude/projects/project/s-index.jsonl"
+        self.append(other, [{"sessionId": "s-index", "cwd": "/project/a", "type": "user",
+                             "message": {"content": "some request"}}])
+        index = path.parent / "sessions-index.json"
+        index.write_text(json.dumps({"entries": [{"sessionId": "s-index", "summary": "Index title"}]}))
+        self.now += 11
+        self.sync.poll()
+        second = next(item for item in self.observed() if item["session_id"] == "s-index")
+        index.write_text(json.dumps({"entries": [{"sessionId": "s-index", "summary": "Index renamed"}]}))
+        self.sync.poll()
+        self.assertEqual(self.cards.get(second["id"])["title"], "Index renamed")
+
+    def test_title_redaction_and_restore_with_hook_without_content(self):
+        path = self.codex()
+        self.append(path, [self.message("user", "retained request"), self.cevent("task_complete")])
+        index = self.root / ".codex/session_index.jsonl"
+        index.write_text(json.dumps({"id": "s-1", "thread_name": "Task password=EXAMPLESECRET"}) + "\n")
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual(card["title_source"], "upstream")
+        self.assertNotIn("EXAMPLESECRET", json.dumps(card))
+        reloaded = Cards(self.state / "cards.json")
+        self.sync = DesktopSync(reloaded, self.state, home=self.root, clock=lambda: self.now)
+        path.unlink()
+        index.unlink()
+        self.now += 1
+        self.hook({"agent": "codex", "session_id": "s-1", "cwd": "/project/a",
+                   "status": "waiting", "observed_at": self.now})
+        self.sync.poll()
+        restored = reloaded.get(card["id"])
+        self.assertEqual((restored["title"], restored["title_source"]), ("retained request", "request"))
+        self.assertEqual([(entry["role"], entry["text"], entry["at"])
+                          for entry in restored["entries"]],
+                         [(entry["role"], entry["text"], entry["at"])
+                          for entry in card["entries"]])
+
+    def test_retained_history_title_renames_without_reopening_transcript(self):
+        path = self.codex()
+        self.append(path, [self.message("user", "old visible request"), self.cevent("task_complete")])
+        index = self.root / ".codex/session_index.jsonl"
+        index.write_text(json.dumps({"id": "s-1", "thread_name": "Old sidebar name"}) + "\n")
+        self.sync.poll()
+        original = self.observed()[0]
+        reloaded = Cards(self.state / "cards.json")
+        self.sync = DesktopSync(reloaded, self.state, home=self.root, clock=lambda: self.now)
+        path.unlink()
+        index.write_text(json.dumps({"id": "s-1", "thread_name": "Renamed history"}) + "\n")
+        self.sync.poll()
+        card = reloaded.get(original["id"])
+        self.assertEqual((card["title"], card["title_source"]), ("Renamed history", "upstream"))
+        self.assertEqual((card["state"], card["desktop_status"], card["observed_at"]),
+                         (original["state"], original["desktop_status"], original["observed_at"]))
+        self.assertEqual(card["entries"][0]["text"], "old visible request")
+        before = card["seq"]
+        self.sync.poll()
+        self.assertEqual(reloaded.get(card["id"])["seq"], before)
 
     def test_claude_desktop_terminal_retry_and_interrupt(self):
         path = self.root / ".claude/projects/project/s-cc.jsonl"

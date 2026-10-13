@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .store import _write
+from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
 
 # talking 留给“小幽正在处理这句话”，现在 Runtime 自己不会把卡放在这个状态。
 STATES = ("talking", "working", "waiting", "done", "failed", "cancelled", "unknown")
@@ -28,7 +29,7 @@ MAX_CARDS = 50
 MAX_HISTORY = 15
 MAX_ENTRIES = 40
 MAX_ENTRY_CHARS = 8000
-MAX_TITLE_CHARS = 24
+MAX_TITLE_CHARS = MAX_REQUEST_TITLE_CHARS
 MAX_PROGRESS_LINES = 5
 MAX_PROGRESS_CHARS = 200
 RESTART_NOTE = "Runtime 重启了，这件事没做完"
@@ -40,7 +41,7 @@ Listener = Callable[[Dict[str, Any]], None]
 
 def title_from(text: str) -> str:
     """没有人起标题时，用这句话的开头当标题。"""
-    return " ".join(text.split())[:MAX_TITLE_CHARS] or "（没有标题）"
+    return select_title(request=text).title
 
 
 class Cards:
@@ -94,10 +95,13 @@ class Cards:
             and isinstance(entry.get("text"), str)
         ] if isinstance(card.get("entries"), list) else []
         state = text("state", "done")
+        title = canonical_title(text("title"), text("title_source", "task"))
         return {
             "id": card["id"],
             "conversation": text("conversation", "default"),
-            "title": text("title"),
+            "title": title.title,
+            "title_source": title.source,
+            "title_truncated": title.truncated or card.get("title_truncated") is True,
             "state": state if state in STATES else "done",
             "agent": card.get("agent") if isinstance(card.get("agent"), str) else None,
             "created_at": number("created_at"),
@@ -187,12 +191,15 @@ class Cards:
             del self._cards[card_id]
 
     def open(self, conversation: str, title: str, state: str = "done",
-             agent: Optional[str] = None) -> Dict[str, Any]:
+             agent: Optional[str] = None, *, title_source: str = "request") -> Dict[str, Any]:
         with self._changed:
             now = time.time()
+            name = canonical_title(title, title_source)
+            if not name.title:
+                name = select_title()
             card = {
                 "id": "c%d" % self._next, "conversation": conversation,
-                "title": title_from(title), "state": state, "agent": agent,
+                **name.fields(), "state": state, "agent": agent,
                 "created_at": now, "updated_at": now, "finished_at": None,
                 "entries": [], "brief": "", "mood": "idle",
                 "progress": [], "started_at": None, "edits": 0, "approval": None,
@@ -235,6 +242,11 @@ class Cards:
             if progress_lines is not None:
                 card["progress"] = [" ".join(line.split())[:MAX_PROGRESS_CHARS]
                                     for line in progress_lines[-MAX_PROGRESS_LINES:]]
+            if "title" in fields:
+                name = canonical_title(fields["title"],
+                                       fields.get("title_source", card.get("title_source", "task")))
+                fields.update(name.fields(), title_truncated=name.truncated or
+                              fields.get("title_truncated") is True)
             card.update(fields)
             # 交给过帮手的事走到结束：记下完成时间，好按天给第三屏分组。又接着做的
             # （补充、改要求）不算完，下次结束时再记。
