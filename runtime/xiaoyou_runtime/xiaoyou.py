@@ -324,9 +324,10 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         parts.append("还没有。")
     if focus is not None and pinned:
         parts.append(
-            "主人是打开 %s 这件事、在它里面说的这句话：这句话就归到它，card 写 %s，不要写 new。"
+            "主人是打开 %s 这件事、在它里面说的这句话：一般就归到它，card 写 %s。"
             "能直接答的直接答；要动手就接着这件事做（它还在做用 amend，已经结束了用 amend 或 "
-            "start，都会接着它原来的会话），不要另开一件事。" % (focus, focus))
+            "start，都会接着它原来的会话）。只有这句话明显是跟它无关的另一件新事时，才用 start "
+            "并把 card 写 new，另开一件，给它起自己的 title。" % (focus, focus))
     elif focus is not None:
         parts.append(
             "主人说这句话时正看着 %s。没有别的线索时，“这个”“它”“这件事”指的就是它。" % focus)
@@ -670,8 +671,9 @@ class Xiaoyou:
             target = self._cards.get(wanted)
             if target is None or target["conversation"] != conversation:
                 return None, "没有编号是 %s 的事" % clip(wanted, 20)
-        elif pinned or kind in ("amend", "cancel"):
-            # 没说是哪件：主人正看着的那件就是。主人在一件事里面说的话，写了 new 也归到它。
+        elif kind in ("amend", "cancel") or (pinned and not (wanted == "new" and kind == "start")):
+            # 没说是哪件：主人正看着的那件就是。主人在一件事里面说的话也归到它，
+            # 除非她明说这是另一件新事（start 并写了 new）：那就另开一件，不改动它。
             target = focus
             if target is None:
                 return None, "%s 要在 card 里写明是哪件事的编号" % kind

@@ -707,9 +707,11 @@ static void buddy_apply_permission_result(buddy_state_t *state,
     buddy_set_ui_refresh(action);
 }
 
-/* The thing a recording started now is about: on the conversation screen the
- * card that is showing (a hint: Xiaoyou still decides), on the third screen the
- * thing that is selected (*pin: it is said inside that thing and stays on it). */
+/* The thing a recording started now is about: inside an opened thing, that
+ * thing (*pin: it is said inside it and stays on it); on the third screen's
+ * list the thing that is selected, and on the conversation screen the card that
+ * is showing (hints only: Xiaoyou still decides, so a new request on the list
+ * becomes a thing of its own instead of piling onto the selected one). */
 static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, bool *pin)
 {
     id[0] = '\0';
@@ -719,7 +721,6 @@ static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, 
         *pin = id[0] != '\0';
     } else if (state->page == BUDDY_PAGE_TASKS) {
         buddy_cards_copy(id, size, buddy_list_id(state, state->task_selected));
-        *pin = id[0] != '\0';
     } else if (state->page == BUDDY_PAGE_TALK && !buddy_card_live(state)) {
         int index = buddy_card_index(state);
 

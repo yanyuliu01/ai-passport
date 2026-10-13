@@ -2468,8 +2468,8 @@ class XiaoyouTests(TempDirCase):
         self.assertEqual((turn.card, turn.started), ("c1", False))
         self.assertIn("在它里面说的", self.claude.jobs[-1].system)
         self.assertEqual(self.words("c1")[-2:], [("you", "结果在哪"), ("xiaoyou", "re:结果在哪")])
-        # Work she starts as "new" from inside the thing continues it, in its own session.
-        self.claude.script = [start("codex", "two")]
+        # Work she starts on it from inside the thing continues it, in its own session.
+        self.claude.script = [start("codex", "two", card="c1")]
         turn = self.say("再做一步", card="c1", pin=True)
         self.assertEqual((turn.card, turn.started), ("c1", True))
         self.settled("c1")
@@ -2485,6 +2485,27 @@ class XiaoyouTests(TempDirCase):
         self.assertGreaterEqual(len(self.claude.jobs), asked)
         # The same sentence only "on screen" (the device) still opens a thing of its own.
         self.assertEqual(self.say("@codex four", card="c1").card, "c2")
+
+    def test_a_new_thing_said_inside_another_gets_its_own_card_and_title(self):
+        self.codex.gate.clear()
+        self.claude.script = [start("codex", "查定时任务 slow", title="查日常任务")]
+        self.say("能设置日常任务吗")
+        self.assertTrue(until(lambda: self.codex.started))
+        # Said inside c1 while it is still going, but she says it is something new.
+        self.claude.script = [start("codex", "重出 App 方案", title="重出 App 交互方案")]
+        turn = self.say("App 交互重新出一版方案", card="c1", pin=True)
+        self.assertIn("才用 start 并把 card 写 new", self.claude.jobs[-1].system)
+        self.assertEqual((turn.card, turn.agent, turn.started), ("c2", "codex", True))
+        first, second = self.xiaoyou.cards.get("c1"), self.xiaoyou.cards.get("c2")
+        self.assertEqual((first["title"], first["edits"]), ("查日常任务", 0))
+        self.assertEqual(second["title"], "重出 App 交互方案")
+        self.assertNotIn(("you", "App 交互重新出一版方案"), self.words("c1"))
+        self.codex.gate.set()
+        self.settled("c1")
+        self.settled("c2")
+        # Each started in its own helper session.
+        self.assertEqual(sorted((job.text, job.session_id) for job in self.codex.jobs),
+                         [("查定时任务 slow", None), ("重出 App 方案", None)])
 
     def test_a_finished_thing_can_be_picked_up_again(self):
         self.settled(self.say("@codex one").card)

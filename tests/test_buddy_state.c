@@ -1910,10 +1910,11 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     buddy_state_snapshot(&state, &snapshot);
     assert(snapshot.card_index == 2);
 
-    /* Holding OK here talks inside the thing that is picked: it stays on it. */
+    /* Holding OK on the list names the picked thing as a hint only: a new
+     * request said here can still become a thing of its own. */
     buddy_state_reduce(&state, &long_ok, 120, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c7") == 0);
-    assert(action.voice_pin);
+    assert(!action.voice_pin);
     buddy_state_reduce(&state, &release, 121, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 122, &action);
@@ -1979,14 +1980,14 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
     buddy_state_snapshot(&state, &snapshot);
     assert(snapshot.task_count == 3 && snapshot.doing == 1U);
     assert(buddy_task_active(&snapshot.tasks[0]) && !buddy_task_active(&snapshot.tasks[1]));
-    /* One of those can be picked and talked into as well. */
+    /* One of those can be picked and named as well. */
     buddy_state_reduce(&state, &release, 251, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 252, &action);
     buddy_state_reduce(&state, &down, 253, &action);
     buddy_state_reduce(&state, &long_ok, 254, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "c5") == 0 &&
-           action.voice_pin);
+           !action.voice_pin);
     buddy_state_reduce(&state, &release, 255, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 256, &action);
@@ -2140,10 +2141,10 @@ static void test_the_third_screen_keeps_the_things_that_ended(void)
         buddy_state_reduce(&state, &up, 140 + index, &action);
     }
     assert(state.task_selected == 3);
-    /* Holding OK on one that ended talks inside it. */
+    /* Holding OK on one that ended names it, without talking inside it. */
     buddy_state_reduce(&state, &long_ok, 150, &action);
     assert(action.type == BUDDY_ACTION_VOICE_START && strcmp(action.voice_card, "p1") == 0 &&
-           action.voice_pin);
+           !action.voice_pin);
     buddy_state_reduce(&state, &release, 151, &action);
     event = voice_event(BUDDY_VOICE_TOO_SHORT, 7);
     buddy_state_reduce(&state, &event, 152, &action);
