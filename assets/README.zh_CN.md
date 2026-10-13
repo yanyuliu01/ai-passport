@@ -65,3 +65,13 @@
 - 与当前 BSP 音频路径匹配时优先采用 16 kHz、16 位单声道 PCM。
 - 嵌入音频前评估 Flash 与内部 RAM 成本；长录音应流式或分块。
 - 无再分发许可不提交媒体文件。
+
+### AI 伙伴形象设计素材包
+
+2026-10-12 使用内置图像生成工具生成，包含 DSH（大肥鱼女仆）、Claude 和用户选定的优雅 Codex 角色。[设计图库](../docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)记录推荐版本与姿态顺序。文件放在 `images/ai-companions/`：`app-*` 为 app 插画，`fw-*` 为固件全身角色概念，`avatar-*` 为小像素头像，含接近小幽质感的豆豆眼备选。
+
+实际 PNG 尺寸、透明通道统计、哈希和推荐/草稿状态见 [manifest.json](images/ai-companions/manifest.json)，生成提示词见 [prompts.json](images/ai-companions/prompts.json)。PNG 是静态高清源图集，不是已编译的 LVGL 资源或连续动画帧。固件接入前需切图、清理边缘和像素网格、转换调色板并实测 RAM/Flash，app 图集也需切图与检查边缘。
+
+用户提供 `reference-codex-elegant.png` 作为角色参考，原作者和再利用许可未知。`reference-xiaoyou-style.png` 从仓库的 `main/pocket_pet.c` 渲染。其他图集为本项目生成，参考社区角色约定与用户偏好，不声称取得第三方权利或官方身份。本条目不赋予新的美术许可；仓库代码许可不能证明底层角色参考的使用权。
+
+根目录 README 用的横幅图放在 `images/readme/`，由这些图稿和 `reference-xiaoyou-style.png` 拼合而成，状态与权利说明同上。
