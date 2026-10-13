@@ -467,7 +467,7 @@ three minutes.
 
 **Push-to-talk needs some twenty KB.** A recording takes a contiguous block of
 12 KB while it lasts, and the first one also creates the audio buffers, four
-blocks each way (about 7.7 KB, kept from then on). Measured on a device on
+blocks each way (kept from then on; now about 5.1 KB, see below). Measured on a device on
 2026-10-10: 31 KB free after the phone connected, 26 KB at the lowest, and
 with that version (six audio blocks each way, four receive slots, a history
 of fifteen) the audio buffers could not be allocated and the device said the
@@ -475,6 +475,15 @@ microphone was not ready. Since then the audio buffers are four blocks each
 way, the receive slots three and the history five, about 9 KB together; the
 widgets of the fourth screen are not built below 26 KB free, which leaves the
 room to the recording.
+
+That was still not enough while the phone was connected: a connected NimBLE
+session holds about 11 KB more, and free memory settles near 26.8 KB. Each
+audio block is now 160 frames instead of 240 (about 5.1 KB for the four blocks
+each way instead of 7.7 KB). Measured on a device on 2026-10-12 (`28119d8`,
+`firmware-build-19`): with the phone connected, push-to-talk records with no
+dropped frames. Re-test voice with the phone connected after any change that
+moves Bluetooth's memory or the audio buffers; see the
+[hardware guide](hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md).
 
 Replacing the firmware over Bluetooth keeps one task (a 5 KB stack) and two
 small queues at all times; the buffer for incoming image data (2.3 KB) is
@@ -582,8 +591,10 @@ on it later.
 
 ## On-device acceptance
 
-A successful build and the host preview are not device validation. This
-version (three screens plus the usage screen) has not run on hardware yet. Check:
+A successful build and the host preview are not device validation. On hardware
+so far: the three screens have been used and push-to-talk works with the phone
+connected (item 4); the usage screen and task history (items 3 and 7) have not
+been checked. Check:
 
 1. Startup shows Xiaoyou asleep; the top bar shows the link dot, the three
    small dots and the battery.
