@@ -43,9 +43,12 @@ it anything—from a pocket companion to something no one has imagined yet.
 | Open firmware and reusable examples give you room to shape your own experience. | Start from an idea and follow clear guides to make it real, even if this is your first build. | Make a companion, a tool, a game—or anything you can imagine. |
 
 > [!NOTE]
-> This branch carries the **Claude Pocket** application: a wearable companion for
-> the Claude desktop app with a Chinese interface. Start with
-> [Claude Pocket](claude-pocket.md). The sections below describe the baseline
+> This branch carries the **Claude Pocket** application: the wearable face of
+> Xiaoyou, with a Chinese interface, working together with the
+> [Pocket Hub](../companion/README.md) phone app and the
+> [Xiaoyou Runtime](../runtime/README.md) on a computer (it can also pair directly
+> with the Claude desktop app). Start with the [repository README](../README.md)
+> and [Claude Pocket](claude-pocket.md). The sections below describe the baseline
 > platform the application is built on; the baseline hardware-test menu and its
 > `main/demo_*.c` pages are not part of this branch.
 
