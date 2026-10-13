@@ -84,6 +84,25 @@ runtime-managed tasks, `pin` needs
 runtime 0.5.3; an older runtime ignores it, and then Xiaoyou still decides
 which thing a sentence said inside a task belongs to.
 
+### Usage, tiers and task history (0.9.x)
+
+- **"Usage" at the top of the settings page**: for each subscription the runtime
+  reports, how much of the five-hour and weekly windows is left, when each resets,
+  where the numbers came from, and the helpers running on it with their models.
+  When the device declares `usage`, the same goes to its fourth screen (whenever
+  it changes, and every 60 seconds to keep "updated N ago" right).
+- **Effort button**: next to the input box; each tap cycles "default / low /
+  medium / high". A sentence sent with a tier carries `effort` to the runtime,
+  and the button returns to default afterwards.
+- **Task details**: one line with who did it, which model, which tier, and roughly
+  how much of the quota it used.
+- **Task history for the device**: when the device declares `past`, recently
+  finished things (up to five, grouped by day) are sent separately (`past`); when
+  the device opens an old thing whose card it no longer has, it asks (`want`) and
+  the app sends that card.
+- **Device memory**: the free memory the device reports (`heap` and `low` in
+  `fw info`) is passed to the runtime and shows in `firmware status`.
+
 Only what a notification contains can be forwarded. Whether a given assistant
 posts notifications for cloud sessions, and whether they carry action buttons,
 depends on that assistant's app and has not been verified.
@@ -220,5 +239,9 @@ only, not run on a phone),
 the separate conversation and task pages and continuing inside a task
 (version 0.8.0; the split and the request body are unit tested, the screen
 was compiled in the build only and not run on a phone),
+usage, tiers and task history (version 0.9.x; the protocol and the usage
+summary are unit tested, the screens were compiled in the build only; the
+device shows its fourth screen only after the phone has received usage from
+the runtime during the current connection, and three screens otherwise),
 reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.

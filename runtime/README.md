@@ -18,7 +18,9 @@ at once when she can, and hands anything that takes time to a helper working in
 the background. So an unfinished thing does not hold up the next sentence,
 several things can be in progress at once, and a thing can be added to, changed
 or cancelled while it runs. Whatever Xiaoyou says comes as a full reply, a
-short brief for the Passport screen, and a mood for the pixel pet. A message
+short brief for the Passport screen, and a mood for the pixel pet; Markdown
+markup, code fences and emoji in a reply are turned into plain text first so
+the small screen and terminals show it cleanly. A message
 can be typed text or a voice recording; a recording is first turned into text
 by a speech recognition engine chosen in the configuration.
 
@@ -27,6 +29,7 @@ phone app / any client ──HTTP──> Xiaoyou Runtime
                                    │  persona · transcript · cards · routing · reporting back
                                    ├──> claude   (Claude Code command line; can answer as Xiaoyou)
                                    ├──> codex    (Codex command line; does work only)
+                                   ├──> dsh      (DeepSeek Harness command line; can answer as Xiaoyou)
                                    ├──> any command (a local model, for example)
                                    └──> Xiaoyou Runtime on another computer
 ```
@@ -217,7 +220,8 @@ Environment variables override the file, so a container or virtual machine can
 be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
 `XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`,
 `XIAOYOU_DEFAULT_AGENT`, `XIAOYOU_CODEX_CONFIG_DIR` (applied to every `codex`
-agent), `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent),
+agent), `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent), `XIAOYOU_DSH_CONFIG_DIR`
+(applied to every `dsh` agent),
 and `XIAOYOU_NOTION_TOKEN`.
 
 With `XIAOYOU_DEBUG` set (to anything), every sentence Xiaoyou takes adds one
@@ -236,13 +240,13 @@ and hyphens, at most 24 characters). Every agent has:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `type` | none | `claude_code`, `codex`, `command`, `remote`, or `echo`. |
+| `type` | none | `claude_code`, `codex`, `dsh`, `command`, `remote`, or `echo`. |
 | `enabled` | `true` | `false` makes the runtime treat it as absent. |
 | `description` | empty | One sentence on what it is good at. Xiaoyou reads it to decide whether to hand work over, and so does the router. |
 | `aliases` | `[]` | Other names it answers to when named in a message, for example how speech recognition tends to spell it. |
-| `speaks` | by type | Whether it may answer as Xiaoyou. `claude_code`, `remote` and `echo` do by default; `codex` and `command` only do work. |
+| `speaks` | by type | Whether it may answer as Xiaoyou. `claude_code`, `dsh`, `remote` and `echo` do by default; `codex` and `command` only do work. |
 | `timeout_seconds` | `turn_timeout_seconds` | How long one run of this agent may take from start to end; `0` means no limit. Ways of running that have no event stream (`command`, and `codex` in `exec` mode) use 3600 seconds when this is `0`. |
-| `idle_timeout_seconds`, `idle_timeout_command_seconds` | the top-level settings of the same name | How long this agent may be silent before it counts as possibly stuck. Only for ways of running that have an event stream: `claude_code`, and `codex` in `app_server` mode. |
+| `idle_timeout_seconds`, `idle_timeout_command_seconds` | the top-level settings of the same name | How long this agent may be silent before it counts as possibly stuck. Only for ways of running that have an event stream: `claude_code`, `dsh`, and `codex` in `app_server` mode. |
 
 Keys by type:
 
@@ -250,6 +254,7 @@ Keys by type:
 | --- | --- | --- |
 | `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` (see [Tiers](#tiers-model-and-effort)) |
 | `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args`, `models`, `effort`, `efforts` |
+| `dsh` | Runs the DeepSeek Harness command line (`dsh`); see [DeepSeek Harness](#deepseek-harness-dsh) below. | `command` (default `["dsh"]`), `workdir`, `config_dir`, `sandbox` (default `workspace-write`), `model`, `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
@@ -310,6 +315,53 @@ subscription login; that directory needs no login. Writing the key directly into
 Not verified: this follows DeepSeek's API documentation and the requests Claude
 Code actually sends, but no turn has been run with a real key. Claude Code's web
 search is a server-side Anthropic tool and may not work on another service.
+
+### DeepSeek Harness (dsh)
+
+The `dsh` type drives DeepSeek's own command line, `dsh`, without the Claude Code
+shell:
+
+- Background jobs use `dsh --profile acp` (the Agent Client Protocol, JSON-RPC
+  over standard input and output): progress lines, silence watching, and
+  interruption all work.
+- The one call in which Xiaoyou herself takes a sentence uses
+  `dsh --profile headless --json`: one question, one answer, with tools and
+  thinking switched off for speed.
+- There is no per-step approval channel like Claude Code's. Permissions follow
+  `sandbox` only (`read-only`, `workspace-write`, `danger-full-access`, passed as
+  `DSH_PERMISSION_MODE`): inside the sandbox it acts on its own; when it wants
+  to go outside, it asks, and that question becomes the usual approval prompt
+  on the device and phone. So `permission_mode`, `allowed_tools` and `add_dirs`
+  do not exist for it and are rejected.
+- Its effort levels are `off`, `low`, `high` and `max`. Without `efforts` the
+  list is `[]`: nothing is passed and dsh's own default applies.
+- `config_dir` becomes `DSH_HOME`, so it keeps its own profile and sessions and
+  leaves your usual `~/.dsh` alone.
+- Usage records only which model it used: it reports context use, not billed
+  tokens.
+
+Not tested and not tried for real: the protocol follows dsh 0.2.0-rc.2, and a
+handshake with an unexpected version or method name says so plainly.
+
+### Project brief
+
+`xiaoyou_runtime/project_brief.py` is a small script to use as a `command`
+helper for "what has been happening in this project": it reads this computer's
+`git log` / `git status` and the recent sessions Claude Code
+(`~/.claude/projects/<repo>/`) and Codex (`~/.codex/sessions/`, filtered by
+working directory) keep locally, prints a summary, and Xiaoyou relays it. It
+uses only the standard library and runs on its own as well:
+
+```json
+"brief": {
+  "type": "command",
+  "command": ["python3", "/Users/you/ai-passport/runtime/xiaoyou_runtime/project_brief.py", "~/ai-passport"],
+  "description": "What changed in this project lately, and what was discussed in Claude Code and Codex"
+}
+```
+
+Give the script an absolute path (the command runs in the helper's `workdir`); the repository path may use `~`. It reads local caches only: sessions on other computers and plain claude.ai
+chats are out of its reach.
 
 The example configuration ships a disabled `codex` agent; set `"enabled": true`
 after installing and logging in to the Codex command line on the same machine,
@@ -469,14 +521,15 @@ configuration directory share one quota. Only subscription logins count:
 and carry no key in `env`, and `codex` helpers. Other helpers have no quota;
 only their model is recorded.
 
-The numbers come from three places. The runtime reads no credentials itself;
-it asks the tools:
+The numbers come from these places. The runtime reads no credentials itself;
+it asks the tools, or reads the numbers they saved:
 
 | Source | When | What it gives |
 | --- | --- | --- |
 | Claude Code's event stream while it works (`rate_limit_event`) | every job given to it | how much of both windows is used and when they reset; said again whenever a number moves |
 | Claude Code's `get_usage` (`claude -p --input-format stream-json` with one control request; no model is called) | when the numbers are old; before a job starts; the `usage` command | the same numbers as `/usage` inside Claude Code |
 | Codex's app-server (`account/rateLimits/read`, and `account/rateLimits/updated` while it works) | at the start and end of every turn; when the numbers are old | how much of both windows is used and when they reset |
+| `cachedUsageUtilization` in Claude Code's own `.claude.json` | when `get_usage` carries no limits (newer Claude Code builds do this) | the same percentages; ignored once more than a day old |
 
 Claude Code marks `get_usage` as experimental and the two windows in the event
 stream as internal. If either stops matching, that login shows as unknown with

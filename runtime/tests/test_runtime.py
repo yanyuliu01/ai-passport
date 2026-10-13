@@ -1008,6 +1008,15 @@ class ClaudeCodeAgentTests(TempDirCase):
         agent.run(Job("x"))
         self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
 
+        # The DeepSeek binding accepts a key that only lives in a file named in env_files.
+        from xiaoyou_runtime import claude_gateway
+        deepseek = config_module.load(write_config(self.folder, agents={"deepseek": {
+            "type": "claude_code", "command": [sys.executable], "model": "deepseek-v4-pro",
+            "env": {"ANTHROPIC_BASE_URL": claude_gateway.DEEPSEEK_BASE_URL},
+            "env_files": {"ANTHROPIC_AUTH_TOKEN": "example.key"}}}), {}).agents[0]
+        env = claude_gateway.DeepSeekClaudeCodeAgent(deepseek, run=fake_run)._env()
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
+
         for bad in (agents({"A-B": "x"}), agents({"A": ""}), agents({"CLAUDE_CONFIG_DIR": "x"}),
                     agents({"ANTHROPIC_AUTH_TOKEN": "x"}, env={"ANTHROPIC_AUTH_TOKEN": ""})):
             with self.assertRaises(config_module.ConfigError):
