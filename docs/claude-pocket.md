@@ -55,6 +55,31 @@ the beginning of its latest reply. The second screen holds that latest reply
 and the third is empty. There is no talking in that mode, because the desktop
 protocol has no message for prompts or audio.
 
+## Desktop conversation sync through the phone
+
+Start the Runtime with `--desktop-sync` to synchronize existing local Codex and
+Claude conversations through the phone App to the device. The App shows human
+requests, visible replies, assistant progress comments, and task status, labeled
+by the owner or originating agent. These sessions remain read-only: continue,
+stop, and approve them in the desktop app. Optional lifecycle hooks supply
+precise approval-wait states and record metadata/status only.
+
+The observer excludes system/developer and AGENTS instructions, injected
+environment/browser context, reasoning, and raw tool arguments/results.
+Recognizable credential patterns are redacted; arbitrary private prose is not
+guaranteed to be detected. Each card contains a recent fragment of at most 20
+entries, 4,000 characters per entry, and 32 KiB of UTF-8 text. Initial discovery
+reads at most the latest 2 MiB of a transcript. `content_scope: "recent"` identifies
+this scope, and `content_truncated: true` marks omitted older or longer content.
+
+Open the session from screen 3 to read its latest request and reply. The phone
+forwards them with the existing `card` protocol: up to 159 UTF-8 bytes in `said`
+and 480 bytes in the App's desktop `reply`, within the device's shared 4 KiB text
+pool. The phone shows the retained recent fragment; the device keeps only the
+latest exchange. Firmware that already supports desktop cards needs no new flash
+for content sync. See [Runtime desktop synchronization](../runtime/README.md#sync-existing-desktop-conversations)
+for startup options and the adapter's limits.
+
 ## Pairing
 
 With the phone companion (the usual way): open the Pocket Hub app, start the

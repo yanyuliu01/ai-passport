@@ -264,7 +264,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         HubStore store = HubStore.get();
         if (store.monitoringOnly(recordingCard)) {
-            String explanation = "电脑端对话仅同步状态，请在电脑端操作";
+            String explanation = "电脑端对话只读同步，请在电脑端操作";
             // 设备已显示“发送中”：本地答复结束这一轮，不提交录音，也不改 Runtime 的聊天。
             link.send(BuddyProtocol.chat("failed", "", explanation, "", "", "oops"));
             lastChat = "";
@@ -366,7 +366,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             String line = BuddyProtocol.card(card.id,
                     card.createdAt > 0 ? clock.format(new Date((long) (card.createdAt * 1000))) : "",
                     CardViews.deviceState(card, deviceDesktop), card.agent, card.edits,
-                    card.monitoringOnly ? CardViews.deviceTitle(card) : card.said(),
+                    CardViews.deviceSaid(card),
                     CardViews.deviceReply(card, deviceThreads), deviceUsage ? card.effort : null);
             if (line == null) {
                 continue;

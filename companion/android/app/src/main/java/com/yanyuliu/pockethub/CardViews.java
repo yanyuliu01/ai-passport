@@ -62,16 +62,45 @@ final class CardViews {
         return null;
     }
 
-    /** 一张卡里说过的话，一句一行：“我：……”“小幽：……”。 */
+    /** 一张卡里可见的话：Runtime 是我/小幽，电脑观察是你/Codex 或 Claude。 */
     static String thread(Card card) {
         StringBuilder out = new StringBuilder();
         for (Card.Entry entry : card.entries) {
             if (out.length() > 0) {
                 out.append("\n\n");
             }
-            out.append(entry.role.equals("you") ? "我：" : "小幽：").append(entry.text);
+            out.append(entry.role.equals("you") ? (card.monitoringOnly ? "你：" : "我：")
+                    : assistantLabel(card) + "：").append(entry.text);
         }
         return out.toString();
+    }
+
+    static String assistantLabel(Card card) {
+        if (!card.monitoringOnly) {
+            return "小幽";
+        }
+        if (card.agent.equalsIgnoreCase("codex")) {
+            return "Codex";
+        }
+        if (card.agent.equalsIgnoreCase("claude")) {
+            return "Claude";
+        }
+        return card.agent.isEmpty() ? "助手" : card.agent;
+    }
+
+    /** 最近片段与完整历史分清楚；内容缺失不会被写成已经采集完了。 */
+    static String contentNotice(Card card) {
+        if (!card.monitoringOnly) {
+            return "";
+        }
+        if (card.entries.isEmpty()) {
+            return "尚未采集到可见对话内容。";
+        }
+        String notice = card.contentScope.equals("recent") ? "显示最近可见的对话片段。" : "";
+        if (card.contentTruncated) {
+            notice += "较早或较长内容已省略，请在电脑端查看完整对话。";
+        }
+        return notice;
     }
 
     /** “c3 · codex 高档 · 在做（改过 1 次）”。 */
@@ -291,16 +320,7 @@ final class CardViews {
      */
     static String deviceReply(Card card, boolean threads) {
         if (card.monitoringOnly) {
-            StringBuilder out = new StringBuilder(card.stateLabel());
-            out.append("\n仅同步状态，请在电脑端操作");
-            if (!card.progress.isEmpty()) {
-                out.append("\n").append(oneLine(card.progress.get(card.progress.size() - 1),
-                        THREAD_ENTRY_CHARS));
-            }
-            if (!card.brief.isEmpty()) {
-                out.append("\n").append(oneLine(card.brief, THREAD_ENTRY_CHARS));
-            }
-            return BuddyProtocol.clip(out.toString(), THREAD_BYTES);
+            return desktopReply(card);
         }
         if (threads && isTask(card)) {
             return deviceThread(card);
@@ -308,10 +328,74 @@ final class CardViews {
         return BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay());
     }
 
+    /** 小屏只放最近一轮可见来回，分别留空间给需求和回复，始终带上实际状态。 */
+    private static String desktopReply(Card card) {
+        String prefix = card.stateLabel() + "\n只读 · 电脑端操作";
+        int request = -1;
+        int reply = -1;
+        for (int index = 0; index < card.entries.size(); index++) {
+            if (card.entries.get(index).role.equals("you")) {
+                request = index;
+                reply = -1;
+            } else {
+                reply = index;
+            }
+        }
+        List<String> labels = new ArrayList<>();
+        List<String> snippets = new ArrayList<>();
+        if (request >= 0) {
+            labels.add("你：");
+            snippets.add(card.entries.get(request).text);
+        }
+        if (reply >= 0) {
+            labels.add(assistantLabel(card) + "：");
+            snippets.add(card.entries.get(reply).text);
+        }
+        if (snippets.isEmpty()) {
+            String latest = !card.progress.isEmpty()
+                    ? card.progress.get(card.progress.size() - 1) : card.brief;
+            if (!latest.isEmpty()) {
+                labels.add("最新：");
+                snippets.add(latest);
+            }
+        }
+        if (snippets.isEmpty()) {
+            return prefix;
+        }
+        int available = THREAD_BYTES - BuddyProtocol.utf8Length(prefix);
+        for (String label : labels) {
+            available -= BuddyProtocol.utf8Length(label) + 2; // 每段前空一行
+        }
+        int budget = Math.max(0, available / snippets.size());
+        StringBuilder out = new StringBuilder(prefix);
+        for (int index = 0; index < snippets.size(); index++) {
+            String flat = snippets.get(index).replace('\n', ' ').trim();
+            String clipped = BuddyProtocol.clip(flat, budget);
+            if (!clipped.equals(flat) && budget >= 3) {
+                clipped = BuddyProtocol.clip(flat, budget - 3) + "…";
+            }
+            out.append("\n\n").append(labels.get(index)).append(clipped);
+        }
+        return BuddyProtocol.clip(out.toString(), THREAD_BYTES);
+    }
+
     /** 电脑状态放在现有卡和任务协议里；项目名优先，长标题由协议按字节截断。 */
     static String deviceTitle(Card card) {
         return card.monitoringOnly ? "电脑 · "
                 + (card.project.isEmpty() ? "" : card.project + " · ") + card.title : card.title;
+    }
+
+    /** 卡的需求栏优先放实际需求；旧 Runtime 无内容时仍显示电脑来源和项目。 */
+    static String deviceSaid(Card card) {
+        if (card.monitoringOnly) {
+            for (Card.Entry entry : card.entries) {
+                if (entry.role.equals("you")) {
+                    return card.said();
+                }
+            }
+            return deviceTitle(card);
+        }
+        return card.said();
     }
 
     /** 电脑本轮结束与 Runtime 任务完成在设备上也分别显示。 */

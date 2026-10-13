@@ -326,7 +326,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         Card opened = CardViews.find(HubStore.get().cards(), openTask);
         if (tab == TAB_TASKS && opened != null && opened.monitoringOnly) {
-            HubStore.get().log("电脑端对话仅同步状态，请在电脑端继续操作");
+            HubStore.get().log("电脑端对话只读同步内容与状态，请在电脑端继续操作");
             return;
         }
         chatInput.setText("");
@@ -540,7 +540,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         taskPane.removeAllViews();
         if (opened == null) {
             taskPane.addView(text(tasks.isEmpty() ? "（还没有任务或电脑端对话）"
-                    : "点开查看经过。电脑端对话仅同步状态，需在电脑端操作。", 13, false));
+                    : "点开查看对话与经过。电脑端对话只读同步，需在电脑端操作。", 13, false));
             for (Card card : tasks) {
                 Button item = button(CardViews.listItem(card), view -> open(card.id));
                 item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -555,13 +555,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
         title.setPadding(0, dp(8), 0, dp(4));
         taskPane.addView(title);
         if (opened.monitoringOnly) {
-            taskPane.addView(text("电脑端对话 · 仅同步状态，请在电脑端继续、确认或中断。"
+            taskPane.addView(text("电脑端对话 · 只读同步内容与状态，请在电脑端继续、确认或中断。"
                     + (opened.state.equals("done") ? "\n本轮结束不代表项目已完成。" : "")
                     + (opened.state.equals("unknown") ? "\n连接或状态采集已中断，当前状态未知。" : "")
                     + (opened.observedAt > 0 ? "\n最近同步："
                     + new SimpleDateFormat("MM-dd HH:mm", Locale.US)
                             .format(new Date((long) (opened.observedAt * 1000))) : ""),
                     13, false));
+            taskPane.addView(text(CardViews.contentNotice(opened), 13, false));
         }
         if (!opened.spentLine().isEmpty()) {
             // 谁、用哪个模型、哪一档做的，花了多少。
@@ -574,7 +575,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 words.append(words.length() == 0 ? "" : "\n").append("› ").append(step);
             }
         }
-        if (opened.monitoringOnly && !opened.brief.isEmpty()) {
+        if (opened.monitoringOnly && opened.lastSay().isEmpty() && !opened.brief.isEmpty()) {
             words.append(words.length() == 0 ? "" : "\n\n").append(opened.brief);
         }
         TextView content = text(words.toString(), 15, false);

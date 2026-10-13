@@ -54,8 +54,8 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 ## 同步已有电脑端对话
 
 启动 Runtime 时加上 `--desktop-sync`，就可以显示你正在 Codex 桌面 App 或 Claude Code
-里使用的对话，也包括在本机记录的 Claude Desktop 会话。状态会加入手机 App 的卡片，
-并可通过现有的 App/蓝牙连接转发给 Passport：
+里使用的对话，也包括在本机记录的 Claude Desktop 会话。可见对话内容和状态会加入
+手机 App 的卡片，并可通过现有的 App/蓝牙连接转发给 Passport：
 
 ```bash
 cd runtime
@@ -74,9 +74,20 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
   --desktop-claude-dir /absolute/claude-config
 ```
 
-同步内容只有项目/会话元数据、模型标识、时间、状态和工具名称；提示词、回复、工具参数、
-输出和原始日志不会复制到卡片，也不会发给手机或硬件。手机和硬件只观察这些会话；继续、
-停止和确认操作仍在电脑端 App 中完成。“本轮结束”只表示这次响应结束，不代表整个项目
+观察器同步你实际提出的需求、可见的代理回复和进展说明，以及项目/会话元数据、模型标识、
+时间、状态和工具名称。系统/开发者指令、AGENTS 指令、注入的环境/浏览器上下文、推理、
+原始工具参数/结果和原始记录不会同步。可识别的凭证格式会在保存和发送前遮盖，但不保证
+能识别任意形式的私人文字。
+
+每张卡保存最近片段，不是完整记录：最多 20 条，每条最多 4,000 字符，每张卡的 UTF-8
+文本最多 32 KiB。首次发现会话时，最多读取记录末尾的 2 MiB。卡片带有
+`content_scope: "recent"`；`content_truncated: true` 表示较早或较长的内容已省略。
+手机显示保留下来的片段，分别标注“你”、Codex、Claude。硬件通过现有的 `card` 消息显示
+最近需求和回复：`said` 最多 159 个 UTF-8 字节，App 的电脑会话 `reply` 最多 480 字节，
+仍使用设备所有卡共用的 4 KiB 文本池。已经支持电脑卡片的固件不需要为内容同步重新刷写。
+
+手机和硬件只观察这些会话；继续、停止和确认操作仍在电脑端 App 中完成。
+“本轮结束”只表示这次响应结束，不代表整个项目
 已经完成。正在活动的会话连续五分钟没有来源事件，或记录文件变得不可用时，会显示
 `unknown`（状态未知）。
 
@@ -86,7 +97,8 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
 ### 用可选生命周期 Hook 同步等待确认
 
 可选 Hook 接收器把状态快照写入正在运行的 Runtime 所用的同一个 `state_dir`。
-它从标准输入读取一个有大小上限的 JSON 对象，不向标准输出打印内容。
+Hook 只记录元数据和状态，不记录需求、回复、工具参数或工具结果。
+接收器从标准输入读取一个有大小上限的 JSON 对象，不向标准输出打印内容。
 在 `runtime/` 目录下，接收器的命令是：
 
 ```bash
@@ -570,9 +582,11 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 
 启用[电脑端同步](#同步已有电脑端对话)时，`/v1/cards` 和 `/v1/feed` 还会在请求的对话里
 包含跨对话可见的电脑端观察卡。它们带有 `source: "desktop"`、`monitoring_only: true`、
-`project`、`session_id`、`desktop_status`、`observed_at` 和 `stale`。这些卡的 `entries`
-为空，也没有 Runtime 授权；电脑端的 `waiting` 只是状态信号，确认仍在原来的电脑端
-对话里完成。
+`project`、`session_id`、`desktop_status`、`observed_at` 和 `stale`，以及
+`content_scope: "recent"` 和 `content_truncated`。有大小上限的 `entries` 保存实际提出的
+需求（`role: "you"`）和来源代理的可见输出（`role: "xiaoyou"`，App 上标注 Codex 或
+Claude）。`entries` 为空表示尚未采集到可见内容。这些卡没有 Runtime 授权；电脑端的
+`waiting` 只是状态信号，确认仍在原来的电脑端对话里完成。
 
 消息记录说的是“这句话小幽接住了没有”，不是“这件事做完了没有”：小幽答完或者把活派出去，
 `status` 就是 `done`，后面的进展和结果在卡上，用 `/v1/feed` 等。只有别的 Runtime 转过来的
@@ -966,5 +980,6 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
 python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
+python3 runtime/tests/test_desktop_content.py
 python3 runtime/tests/test_desktop_hook.py
 ```

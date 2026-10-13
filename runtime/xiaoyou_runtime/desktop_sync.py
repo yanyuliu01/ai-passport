@@ -2,19 +2,22 @@
 
 Transcript formats are adapters, not public protocols. Unknown events cannot
 prove success or an approval wait. Optional lifecycle hooks supply exact waits.
-Only project/session metadata and tool names leave this adapter, not prompts,
-replies, arguments, tool output, credentials, or raw transcripts.
+Visible user requests and assistant replies join the observed status. System
+context, reasoning, tool arguments/results and raw transcripts are excluded;
+recognizable credentials are redacted before content is stored or sent.
 """
 
+import hashlib
 import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .cards import Cards
+from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 
 POLL_SECONDS = 2.0
 DISCOVERY_SECONDS = 10.0
@@ -23,6 +26,8 @@ STALE_SECONDS = 300
 MAX_SESSIONS = 32
 MAX_READ_BYTES = 2 * 1024 * 1024
 MAX_LINE_BYTES = 512 * 1024
+MAX_CONTENT_ENTRIES = 20
+MAX_CONTENT_BYTES = 32 * 1024
 CONVERSATION = "__desktop__"
 STATES = {"running": "working", "waiting": "waiting", "idle": "done",
           "interrupted": "cancelled", "failed": "failed", "unknown": "unknown"}
@@ -58,6 +63,11 @@ class Session:
     hook_at: float = 0.0
     skip: bool = False
     unavailable: bool = False
+    entries: List[Dict[str, Any]] = field(default_factory=list)
+    content_loaded: bool = False
+    content_truncated: bool = False
+    progress: List[str] = field(default_factory=list)
+    content_at: float = 0.0
 
     def transition(self, status: str, at: float, turn: str = "") -> None:
         if at < self.observed_at:
@@ -79,6 +89,7 @@ class Cursor:
     identity: Tuple[int, int] = (0, 0)
     session: Optional[Session] = None
     dropping: bool = False
+    record_offset: int = -1
 
 
 class DesktopSync:
@@ -136,6 +147,44 @@ class DesktopSync:
             self.sessions[key] = Session(agent, session_id)
         return self.sessions[key]
 
+    def _content(self, session: Session, role: str, content: Any, at: float,
+                 identity: str = "", commentary: bool = False) -> None:
+        raw = message_text(content)
+        text = visible_text(raw)
+        if not text:
+            return
+        session.content_loaded = True
+        session.content_at = max(session.content_at, at)
+        # Transcript UUIDs are stable across prefix/tail replay. A Claude API
+        # message can have several different visible blocks, so UUID/block index
+        # identifies a record; a later tool-only record never erases the text.
+        identity = identity or "%s:%s" % (at, text)
+        key = hashlib.sha256((role + "\0" + identity).encode("utf-8")).hexdigest()
+        entry = {"role": role, "text": text, "at": at, "id": key}
+        for index, previous in enumerate(session.entries):
+            if previous["id"] == key:
+                session.entries[index] = entry
+                break
+        else:
+            session.entries.append(entry)
+        session.entries.sort(key=lambda item: item["at"])
+        if len(session.entries) > MAX_CONTENT_ENTRIES:
+            del session.entries[:-MAX_CONTENT_ENTRIES]
+            session.content_truncated = True
+        # Independent byte bound keeps initial feeds and disk snapshots bounded,
+        # including Chinese text. Always retain the latest visible message.
+        while len(session.entries) > 1 and sum(
+                len(item["text"].encode("utf-8")) for item in session.entries) > MAX_CONTENT_BYTES:
+            del session.entries[0]
+            session.content_truncated = True
+        if len(raw) > MAX_MESSAGE_CHARS:
+            session.content_truncated = True
+        if commentary:
+            line = _text(text, 200)
+            if not session.progress or session.progress[-1] != line:
+                session.progress.append(line)
+                del session.progress[:-4]
+
     def _discover(self, now: float) -> None:
         candidates = []
         for agent, root in self.roots:
@@ -170,6 +219,10 @@ class DesktopSync:
                 sid = _text(payload.get("id"), 128)
                 if not sid:
                     return
+                # Forked/subagent rollouts can contain a copied parent meta
+                # after their own. Keep the file's first identity and skip flag.
+                if cursor.session is not None and cursor.session.session_id != sid:
+                    return
                 cursor.session = self._session("codex", sid)
                 session = cursor.session
                 source = payload.get("source")
@@ -179,7 +232,23 @@ class DesktopSync:
                 session.cwd = _text(payload.get("cwd"), 2048)
                 return
             session = cursor.session
-            if session is None or at < session.hook_at:
+            if session is None or session.skip:
+                return
+            if kind == "response_item" and payload.get("type") == "message":
+                role = payload.get("role")
+                phase, channel = payload.get("phase"), payload.get("channel")
+                visible_channels = (None, "", "commentary", "final", "final_answer")
+                if role == "user":
+                    self._content(session, "you", payload.get("content"), at,
+                                  _text(payload.get("id"), 256) or
+                                  "record:%s:user" % cursor.record_offset)
+                elif (role == "assistant" and phase in visible_channels
+                      and channel in visible_channels):
+                    self._content(session, "xiaoyou", payload.get("content"), at,
+                                  _text(payload.get("id"), 256) or
+                                  "record:%s:assistant" % cursor.record_offset,
+                                  commentary=phase == "commentary")
+            if at < session.hook_at:
                 return
             if kind == "turn_context":
                 session.cwd = _text(payload.get("cwd"), 2048) or session.cwd
@@ -201,11 +270,30 @@ class DesktopSync:
             if sid:
                 cursor.session = self._session("claude", sid)
             session = cursor.session
-            if session is None or at < session.hook_at:
+            if session is None:
                 return
             session.cwd = _text(event.get("cwd"), 2048) or session.cwd
             message = event.get("message")
             kind = event.get("type")
+            if (isinstance(message, dict) and not event.get("isMeta")
+                    and not event.get("isCompactSummary")):
+                content = message.get("content")
+                identity = _text(event.get("uuid"), 256)
+                block = event.get("apiBlockIndex")
+                if (not identity and isinstance(block, int) and not isinstance(block, bool)
+                        and 0 <= block <= 65535 and _text(message.get("id"), 256)):
+                    identity = "%s:%s" % (_text(message.get("id"), 256), block)
+                if not identity:
+                    identity = "record:%s:%s" % (cursor.record_offset, kind)
+                if kind == "user" and "toolUseResult" not in event:
+                    # The interruption marker describes state, not a new request.
+                    if message_text(content).strip() != "[Request interrupted by user]":
+                        self._content(session, "you", content, at, identity)
+                elif kind == "assistant":
+                    self._content(session, "xiaoyou", content, at, identity,
+                                  commentary=message.get("stop_reason") == "tool_use")
+            if at < session.hook_at:
+                return
             if kind == "system" and event.get("subtype") == "turn_duration":
                 session.transition("idle", at)
             elif isinstance(message, dict) and kind in ("user", "assistant"):
@@ -241,13 +329,16 @@ class DesktopSync:
                 cursor.identity = identity
                 # Session metadata sits at the beginning even in huge rollouts.
                 for _ in range(8):
+                    begin = handle.tell()
                     line = handle.readline(MAX_LINE_BYTES + 1)
                     if len(line) > MAX_LINE_BYTES or not line.endswith(b"\n"):
                         break
-                    self._line(cursor, line, stat.st_mtime)
+                    self._line(cursor, line, stat.st_mtime, begin)
                 if stat.st_size > MAX_READ_BYTES:
                     handle.seek(stat.st_size - MAX_READ_BYTES)
                     handle.readline(MAX_LINE_BYTES + 1)  # discard partial first record
+                    if cursor.session:
+                        cursor.session.content_truncated = True
                 else:
                     handle.seek(0)
                 cursor.offset = handle.tell()
@@ -272,16 +363,17 @@ class DesktopSync:
                     continue
                 if len(line) > MAX_LINE_BYTES:
                     continue
-                self._line(cursor, line, stat.st_mtime)
+                self._line(cursor, line, stat.st_mtime, begin)
         if cursor.session:
             cursor.session.unavailable = False
 
-    def _line(self, cursor: Cursor, line: bytes, fallback: float) -> None:
+    def _line(self, cursor: Cursor, line: bytes, fallback: float, offset: int = -1) -> None:
         try:
             event = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             return
         if isinstance(event, dict):
+            cursor.record_offset = offset
             self._event(cursor, event, fallback)
 
     def _read_hooks(self, now: float) -> None:
@@ -316,7 +408,7 @@ class DesktopSync:
                         or not 0 < at <= now + 10 or at < now - RECENT_SECONDS):
                     continue
                 session = self._session(agent, sid)
-                if at < session.observed_at:
+                if at < max(session.observed_at, session.content_at):
                     self.hooks[path] = stat.st_mtime_ns
                     continue
                 session.cwd = _text(event.get("cwd"), 2048) or session.cwd
@@ -339,11 +431,15 @@ class DesktopSync:
             return
         if self.projects and str(Path(session.cwd).expanduser().resolve()) not in self.projects:
             return
+        observed_at = max(session.observed_at, session.content_at)
         stale = session.status in ("running", "waiting", "unknown") and (
-            unavailable or session.unavailable or now - session.observed_at > STALE_SECONDS)
+            unavailable or session.unavailable or now - observed_at > STALE_SECONDS)
         status = "unknown" if stale else session.status
         project = _text(Path(session.cwd).name, 80) or "project"
-        key = (status, project, session.model, session.tool, session.observed_at, session.started_at, stale)
+        content = tuple((entry["id"], entry["role"], entry["text"], entry["at"])
+                        for entry in session.entries)
+        key = (status, project, session.model, session.tool, observed_at,
+               session.started_at, stale, content, session.content_truncated, tuple(session.progress))
         if key == session.published and session.card and self.cards.get(session.card):
             return
         if session.card is None or self.cards.get(session.card) is None:
@@ -351,15 +447,31 @@ class DesktopSync:
             card = self.cards.open(CONVERSATION, title, "unknown", session.agent)
             session.card = card["id"]
         label = LABELS[status]
-        progress = [label]
+        progress = [label] + session.progress
         if session.tool and status == "running":
             progress.append(session.tool)
+        latest_user = next((entry["text"] for entry in reversed(session.entries)
+                            if entry["role"] == "you"), "")
+        latest_reply = ""
+        for entry in reversed(session.entries):
+            if entry["role"] == "you":
+                break
+            if entry["role"] == "xiaoyou":
+                latest_reply = entry["text"]
+                break
+        fields: Dict[str, Any] = {}
+        if session.content_loaded:
+            fields.update(entries=[dict(entry) for entry in session.entries],
+                          title=_text(latest_user, 24) if latest_user else
+                          "%s %s %s" % (session.agent, project[:10], session.session_id[-6:]),
+                          content_scope="recent", content_truncated=session.content_truncated)
         self.cards.update(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, monitoring_only=True, desktop_status=status,
-                          observed_at=session.observed_at, stale=stale, model=session.model or None,
+                          observed_at=observed_at, stale=stale, model=session.model or None,
                           started_at=session.started_at, approval=None, queued=False,
-                          brief="%s · %s" % (project, label), progress_lines=progress,
-                          mood="busy" if status in ("running", "waiting") else "idle")
+                          brief=_text(latest_reply, 120) or "%s · %s" % (project, label),
+                          progress_lines=progress[-5:],
+                          mood="busy" if status in ("running", "waiting") else "idle", **fields)
         session.published = key
 
     def poll(self) -> None:

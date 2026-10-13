@@ -80,7 +80,7 @@ final class Card {
     final long tokens;
     final int spent5h;
     final int spent7d;
-    /** 电脑上独立运行的对话只同步状态，不能从手机或设备接着说、取消或授权。 */
+    /** 电脑上独立运行的对话只读同步内容与状态，不能从手机或设备接着说、取消或授权。 */
     final String source;
     final String project;
     final String sessionId;
@@ -88,13 +88,16 @@ final class Card {
     final String desktopStatus;
     final double observedAt;
     final boolean stale;
+    /** recent 表示最近的可见对话片段；旧 Runtime 不提供时是空串。 */
+    final String contentScope;
+    final boolean contentTruncated;
 
     private Card(String id, String title, String state, String agent, String brief, String mood,
                  List<Entry> entries, List<String> progress, double createdAt, double startedAt,
                  int edits, boolean queued, long seq, double finishedAt, String effort,
                  String model, long tokens, int spent5h, int spent7d, String source,
                  String project, String sessionId, boolean monitoringOnly, String desktopStatus,
-                 double observedAt, boolean stale) {
+                 double observedAt, boolean stale, String contentScope, boolean contentTruncated) {
         this.finishedAt = finishedAt;
         this.effort = effort;
         this.model = model;
@@ -108,6 +111,8 @@ final class Card {
         this.desktopStatus = desktopStatus;
         this.observedAt = observedAt;
         this.stale = stale;
+        this.contentScope = contentScope;
+        this.contentTruncated = contentTruncated;
         this.id = id;
         this.title = title;
         this.state = state;
@@ -160,7 +165,8 @@ final class Card {
                 Json.string(raw, "source"), Json.string(raw, "project"),
                 Json.string(raw, "session_id"), Json.flag(raw, "monitoring_only"),
                 Json.string(raw, "desktop_status"), Json.number(raw, "observed_at"),
-                Json.flag(raw, "stale"));
+                Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
+                Json.flag(raw, "content_truncated"));
     }
 
     /** 档位给人看的说法：低档、中档、高档……不认识的原样，没有就是空串。 */
@@ -225,11 +231,20 @@ final class Card {
     Card unknown() {
         return new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
                 startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
-                source, project, sessionId, monitoringOnly, "unknown", observedAt, true);
+                source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
+                contentScope, contentTruncated);
     }
 
-    /** 这件事的第一句话。 */
+    /** 这件事的第一句话；电脑观察是当前最近一轮需求。 */
     String said() {
+        if (monitoringOnly) {
+            for (int index = entries.size() - 1; index >= 0; index--) {
+                if (entries.get(index).role.equals("you")) {
+                    return entries.get(index).text;
+                }
+            }
+            return title;
+        }
         for (Entry entry : entries) {
             if (entry.role.equals("you")) {
                 return entry.text;

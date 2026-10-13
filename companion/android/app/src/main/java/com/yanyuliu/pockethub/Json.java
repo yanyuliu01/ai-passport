@@ -1,5 +1,9 @@
 package com.yanyuliu.pockethub;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +18,24 @@ import java.util.Map;
  */
 final class Json {
     private static final int MAX_DEPTH = 32;
+    /** 多个电脑会话各有最近内容时 feed 可超过旧版 512 KiB；响应仍有固定上限。 */
+    static final int RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
+    /** 先按 UTF-8 字节限流，再解析 JSON；断开和拒绝超长响应时也关闭流。 */
+    static String readResponse(InputStream stream) throws IOException {
+        try (InputStream in = stream) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int count;
+            while ((count = in.read(buffer)) > 0) {
+                if (count > RESPONSE_MAX_BYTES - out.size()) {
+                    throw new IOException("Runtime 返回的内容超过 8 MB");
+                }
+                out.write(buffer, 0, count);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
 
     private final String text;
     private int at;

@@ -130,6 +130,8 @@ class Cards:
             "desktop_status": text("desktop_status"),
             "observed_at": number("observed_at"),
             "stale": card.get("stale") is True,
+            "content_scope": text("content_scope"),
+            "content_truncated": card.get("content_truncated") is True,
         }
 
     @staticmethod

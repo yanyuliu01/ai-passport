@@ -55,6 +55,11 @@ class DesktopTests(unittest.TestCase):
     def cevent(self, kind, **payload):
         return {"type": "event_msg", "payload": dict(type=kind, **payload)}
 
+    def message(self, role, text, **fields):
+        return {"type": "response_item", "payload": dict(type="message", role=role,
+                content=[{"type": "input_text" if role == "user" else "output_text", "text": text}],
+                **fields)}
+
     def hook(self, event):
         path = record(self.state, event)
         os.utime(path, (self.now, self.now))
@@ -70,7 +75,7 @@ class DesktopTests(unittest.TestCase):
                            {"type": "response_item", "payload": {"type": "function_call",
                             "name": "exec", "arguments": "SECRET command"}},
                            {"type": "response_item", "payload": {"type": "message", "role": "user",
-                            "content": [{"type": "input_text", "text": "SECRET prompt"}]}}])
+                            "content": [{"type": "input_text", "text": "检查显示。password=SECRET"}]}}])
         self.append(other, [self.cevent("task_started"), self.cevent("task_complete")])
         self.sync.poll()
         cards = {card["session_id"]: card for card in self.observed()}
@@ -89,7 +94,7 @@ class DesktopTests(unittest.TestCase):
     def test_claude_desktop_terminal_retry_and_interrupt(self):
         path = self.root / ".claude/projects/project/s-cc.jsonl"
         base = {"sessionId": "s-cc", "cwd": "/project/a", "entrypoint": "claude-desktop"}
-        self.append(path, [dict(base, type="user", message={"content": "SECRET prompt"}),
+        self.append(path, [dict(base, type="user", message={"content": "检查电量。password=SECRET"}),
                            dict(base, type="assistant", message={"model": "claude-test",
                             "stop_reason": "tool_use", "content": [{"type": "tool_use",
                             "name": "Bash", "input": {"command": "SECRET command"}}]}),
@@ -99,7 +104,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(card["state"], "working")
         self.now += 1
         self.append(path, [dict(base, type="assistant", message={"stop_reason": "end_turn",
-                           "content": [{"type": "text", "text": "SECRET reply"}]})])
+                           "content": [{"type": "text", "text": "电量正常。password=SECRET"}]})])
         self.sync.poll()
         self.assertEqual(self.cards.get(card["id"])["desktop_status"], "idle")
         self.now += 1
@@ -275,6 +280,145 @@ class DesktopTests(unittest.TestCase):
         seq = self.cards.changed("phone", include_desktop=True)["seq"]
         self.sync.poll()
         self.assertEqual(seq, self.cards.changed("phone", include_desktop=True)["seq"])
+
+    def test_visible_content_and_progress_exclude_internal_records(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started"),
+            self.message("user", "# AGENTS.md instructions for /project/a\n<INSTRUCTIONS>internal rules</INSTRUCTIONS>"),
+            self.message("user", "<in-app-browser-context>hidden URL</in-app-browser-context>\n## My request:\n同步任务内容"),
+            self.message("developer", "hidden developer instructions"),
+            self.message("assistant", "hidden analysis", phase="analysis"),
+            self.message("assistant", "hidden channel", phase="commentary", channel="analysis"),
+            self.message("assistant", "hidden future phase", phase="internal_notes"),
+            self.message("assistant", "正在检查同步链路。", phase="commentary"),
+            {"type": "response_item", "payload": {"type": "function_call_output", "output": "hidden tool output"}},
+            self.message("assistant", "已把需求和回复接入同步。", phase="final_answer"),
+            self.cevent("task_complete")])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual(card["title"], "同步任务内容")
+        self.assertEqual([entry["role"] for entry in card["entries"]], ["you", "xiaoyou", "xiaoyou"])
+        self.assertEqual(card["brief"], "已把需求和回复接入同步。")
+        self.assertIn("正在检查同步链路。", card["progress"])
+        self.assertNotIn("hidden", json.dumps(card))
+        self.assertNotIn("internal rules", json.dumps(card))
+        self.assertEqual(card["content_scope"], "recent")
+        seq = self.cards.changed("phone", include_desktop=True)["seq"]
+        self.sync.poll()
+        self.assertEqual(seq, self.cards.changed("phone", include_desktop=True)["seq"])
+
+    def test_new_request_does_not_inherit_old_reply_as_its_brief(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started"), self.message("user", "第一个需求"),
+                           self.message("assistant", "第一个需求的结果", phase="final_answer"),
+                           self.cevent("task_complete")])
+        self.sync.poll()
+        self.now += 1
+        self.append(path, [self.cevent("task_started", turn_id="new"),
+                           self.message("user", "第二个需求")])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual(card["title"], "第二个需求")
+        self.assertNotIn("第一个需求的结果", card["brief"])
+        self.assertEqual(len(card["entries"]), 3)
+
+    def test_claude_multipart_id_does_not_erase_or_duplicate_visible_reply(self):
+        path = self.root / ".claude/projects/a/main.jsonl"
+        base = {"sessionId": "cc-main", "cwd": "/project/a"}
+        self.append(path, [dict(base, type="user", uuid="u1", message={"content": "检查按键"}),
+            dict(base, type="assistant", uuid="a-thinking", apiBlockIndex=0,
+                 message={"id": "response1", "content": [{"type": "thinking", "thinking": "hidden thinking"}]}),
+            dict(base, type="assistant", uuid="a-text", apiBlockIndex=1,
+                 message={"id": "response1", "content": [{"type": "text", "text": "正在读取按键状态"}]}),
+            dict(base, type="assistant", uuid="a-tool", apiBlockIndex=2,
+                 message={"id": "response1", "stop_reason": "tool_use", "content": [{"type": "tool_use", "name": "Read"}]}),
+            dict(base, type="user", uuid="tool-result", toolUseResult="hidden tool output",
+                 message={"content": [{"type": "tool_result", "content": "hidden tool output"}]}),
+            dict(base, type="user", isCompactSummary=True, message={"content": "hidden compact summary"})])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual([entry["text"] for entry in card["entries"]], ["检查按键", "正在读取按键状态"])
+        self.assertNotIn("hidden", json.dumps(card))
+        seq = self.cards.changed("phone", include_desktop=True)["seq"]
+        self.sync.poll()
+        self.assertEqual(seq, self.cards.changed("phone", include_desktop=True)["seq"])
+
+    def test_malformed_claude_block_identity_cannot_export_raw_metadata(self):
+        path = self.root / ".claude/projects/a/main.jsonl"
+        self.append(path, [{"sessionId": "cc-main", "cwd": "/project/a", "type": "assistant",
+            "apiBlockIndex": {"password": "hidden identity secret"},
+            "message": {"id": "hidden identity secret", "content": [{"type": "text", "text": "可见回复"}]}}])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual(card["entries"][0]["text"], "可见回复")
+        self.assertNotIn("hidden identity secret", json.dumps(card))
+        self.assertEqual(len(card["entries"][0]["id"]), 64)
+
+    def test_copied_parent_metadata_cannot_unskip_subagent(self):
+        path = self.codex("child", source={"subagent": "spawn"})
+        self.append(path, [{"type": "session_meta", "payload": {
+            "id": "parent", "cwd": "/project/a", "source": "vscode"}},
+            self.cevent("task_started"), self.message("user", "hidden inherited content"),
+            self.message("assistant", "hidden subagent content", phase="final_answer")])
+        self.sync.poll()
+        self.assertEqual(self.observed(), [])
+        cursor = next(iter(self.sync.cursors.values()))
+        self.assertEqual(cursor.session.session_id, "child")
+        self.assertTrue(cursor.session.skip)
+
+    def test_same_time_repeated_request_is_distinct_and_prefix_replay_dedupes(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started"), self.message("user", "继续"),
+                           self.message("assistant", "第一轮"), self.message("user", "继续"),
+                           self.message("assistant", "第二轮")])
+        self.sync.poll()
+        self.assertEqual([entry["text"] for entry in self.observed()[0]["entries"]],
+                         ["继续", "第一轮", "继续", "第二轮"])
+        self.assertEqual(len(Cards(self.state / "cards.json").recent(None)[0]["entries"]), 4)
+
+    def test_recent_content_is_bounded_by_count_characters_and_utf8_bytes(self):
+        path = self.codex()
+        events = [self.cevent("task_started")]
+        for index in range(30):
+            events.append(self.message("user" if index % 2 == 0 else "assistant",
+                                       str(index) + "测" * 5000))
+        self.append(path, events)
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertTrue(card["content_truncated"])
+        self.assertLessEqual(len(card["entries"]), 20)
+        self.assertLessEqual(sum(len(entry["text"].encode()) for entry in card["entries"]), 32 * 1024)
+        self.assertTrue(all(len(entry["text"]) <= 4000 for entry in card["entries"]))
+        self.assertTrue(card["entries"][-1]["text"].startswith("29"))
+
+    def test_restart_without_source_retains_last_visible_contents_as_unknown(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started"), self.message("user", "保留需求"),
+                           self.message("assistant", "保留回复", phase="commentary")])
+        self.sync.poll()
+        card = self.observed()[0]
+        path.unlink()
+        reloaded = Cards(self.state / "cards.json")
+        sync = DesktopSync(reloaded, self.state, home=self.root, clock=lambda: self.now)
+        sync.poll()
+        kept = reloaded.get(card["id"])
+        self.assertEqual(kept["state"], "unknown")
+        self.assertEqual([entry["text"] for entry in kept["entries"]], ["保留需求", "保留回复"])
+        self.assertEqual(kept["content_scope"], "recent")
+
+    def test_visible_progress_refreshes_activity_and_old_hook_cannot_roll_it_back(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started")])
+        self.sync.poll()
+        self.now += STALE_SECONDS + 1
+        self.append(path, [self.message("assistant", "仍在执行检查", phase="commentary")])
+        self.sync.poll()
+        self.assertEqual(self.observed()[0]["state"], "working")
+        self.hook({"agent": "codex", "session_id": "s-1", "cwd": "/wrong",
+                   "status": "waiting", "observed_at": self.now - 10})
+        self.sync.poll()
+        self.assertEqual(self.observed()[0]["state"], "working")
+        self.assertEqual(self.observed()[0]["project"], "a")
 
 
 if __name__ == "__main__":

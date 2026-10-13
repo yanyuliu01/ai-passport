@@ -468,6 +468,7 @@ public final class ProtocolSelfTest {
 
     /** 电脑对话仍是同一张任务卡；只观察，失联不当成结束。 */
     private static void desktopSessions() {
+        desktopResponseSize();
         Card running = card("{\"id\":\"c91\",\"title\":\"修复登录\",\"agent\":\"codex\","
                 + "\"state\":\"working\",\"source\":\"desktop\",\"project\":\"my-app\","
                 + "\"session_id\":\"thread-1\",\"monitoring_only\":true,"
@@ -510,7 +511,7 @@ public final class ProtocolSelfTest {
         check(BuddyProtocol.tasks(Arrays.asList(item)).contains("\"state\":\"unknown\"")
                 && CardViews.deviceTask(running, 1790000010L).seconds == 10,
                 "desktop state uses existing task protocol");
-        check(CardViews.deviceReply(running, true).contains("仅同步状态，请在电脑端操作")
+        check(CardViews.deviceReply(running, true).contains("只读 · 电脑端操作")
                 && CardViews.deviceReply(running, true).contains("运行测试")
                 && CardViews.deviceReply(unknown, false).startsWith("状态未知"),
                 "device details explain observation-only status");
@@ -539,6 +540,105 @@ public final class ProtocolSelfTest {
                 && CardViews.deviceReply(unknown, false).startsWith("状态未知")
                 && CardViews.deviceReply(done, false).startsWith("本轮结束"),
                 "old firmware uses stopped fallback states with actual status in reply and no timer");
+
+        Card content = card("{\"id\":\"c94\",\"agent\":\"codex\",\"source\":\"desktop\","
+                + "\"state\":\"working\",\"content_scope\":\"recent\",\"content_truncated\":true,"
+                + "\"entries\":[{\"role\":\"you\",\"text\":\"之前的需求\"},"
+                + "{\"role\":\"xiaoyou\",\"text\":\"之前的回复\"},"
+                + "{\"role\":\"you\",\"text\":\"修复登录\\n保留设置\"},"
+                + "{\"role\":\"xiaoyou\",\"text\":\"已修复\\n测试通过\"},"
+                + "{\"role\":\"analysis\",\"text\":\"不可见内容\"}]}");
+        check(content.contentScope.equals("recent") && content.contentTruncated
+                && content.entries.size() == 4
+                && running.contentScope.isEmpty() && !running.contentTruncated,
+                "desktop content metadata is optional and visible roles only are accepted");
+        check(CardViews.thread(content).equals("你：之前的需求\n\nCodex：之前的回复\n\n"
+                        + "你：修复登录\n保留设置\n\nCodex：已修复\n测试通过")
+                && !CardViews.thread(content).contains("小幽"),
+                "observed content names the actual desktop assistant and keeps visible text");
+        check(CardViews.thread(card("{\"id\":\"c95\",\"source\":\"desktop\",\"agent\":\"claude\","
+                        + "\"entries\":[{\"role\":\"xiaoyou\",\"text\":\"正在检查\"}]}"))
+                        .equals("Claude：正在检查"), "Claude desktop content label");
+        check(CardViews.contentNotice(content).contains("最近")
+                && CardViews.contentNotice(content).contains("已省略")
+                && CardViews.contentNotice(running).contains("尚未采集")
+                && CardViews.contentNotice(card("{\"id\":\"c1\"}")).isEmpty(),
+                "bounded desktop history and missing visible content are clearly described");
+        String exchange = CardViews.deviceReply(content, true);
+        check(CardViews.deviceSaid(content).equals("修复登录\n保留设置")
+                && content.said().equals("修复登录\n保留设置")
+                && CardViews.deviceSaid(running).equals(CardViews.deviceTitle(running))
+                && CardViews.deviceSaid(card("{\"id\":\"c1\",\"title\":\"原始需求\"}"))
+                        .equals("原始需求"),
+                "device request field uses latest desktop request with legacy metadata fallback");
+        check(exchange.startsWith("正在运行\n只读")
+                && exchange.contains("你：修复登录 保留设置")
+                && exchange.contains("Codex：已修复 测试通过")
+                && !exchange.contains("之前")
+                && CardViews.deviceReply(content, false).equals(exchange),
+                "both firmware generations receive latest visible request and reply through existing cards");
+        Card contentUnknown = content.unknown();
+        check(contentUnknown.contentTruncated && contentUnknown.contentScope.equals("recent")
+                && CardViews.thread(contentUnknown).equals(CardViews.thread(content))
+                && CardViews.deviceReply(contentUnknown, false).startsWith("状态未知")
+                && CardViews.deviceTask(contentUnknown, 1790000500L, false).seconds == 0,
+                "lost status retains content without inventing a running timer");
+        Card pending = card("{\"id\":\"c96\",\"source\":\"desktop\",\"agent\":\"codex\","
+                + "\"state\":\"working\",\"entries\":[{\"role\":\"xiaoyou\",\"text\":\"旧回复\"},"
+                + "{\"role\":\"you\",\"text\":\"最新需求\"}]}");
+        check(CardViews.deviceReply(pending, true).contains("你：最新需求")
+                && !CardViews.deviceReply(pending, true).contains("旧回复"),
+                "previous turn reply is never presented as answer to a newer request");
+        StringBuilder longVisible = new StringBuilder();
+        for (int index = 0; index < 1000; index++) {
+            longVisible.append("中😀");
+        }
+        Card bounded = card("{\"id\":\"c97\",\"source\":\"desktop\",\"agent\":\"claude\","
+                + "\"state\":\"done\",\"entries\":[{\"role\":\"you\",\"text\":\""
+                + longVisible + "\"},{\"role\":\"xiaoyou\",\"text\":\"" + longVisible + "\"}]}");
+        String device = CardViews.deviceReply(bounded, true);
+        check(BuddyProtocol.utf8Length(device) <= CardViews.THREAD_BYTES
+                && device.startsWith("本轮结束") && device.contains("你：")
+                && device.contains("Claude：") && device.contains("…")
+                && !device.contains("\uFFFD")
+                && Json.parseObject(BuddyProtocol.card(bounded.id, "", "idle", bounded.agent, 0,
+                        CardViews.deviceTitle(bounded), device)) != null,
+                "long CJK and emoji preserve both speakers within the existing device byte budget");
+    }
+
+    private static void desktopResponseSize() {
+        StringBuilder recentFeed = new StringBuilder("{\"cards\":[],\"visible\":\"");
+        for (int index = 0; index < 100000; index++) {
+            recentFeed.append("中😀");
+        }
+        recentFeed.append("\"}");
+        try {
+            String decoded = Json.readResponse(new java.io.ByteArrayInputStream(
+                    recentFeed.toString().getBytes(StandardCharsets.UTF_8)));
+            check(decoded.equals(recentFeed.toString()) && Json.parseObject(decoded) != null,
+                    "feed with desktop contents above the former 512 KiB cap preserves UTF-8");
+            byte[] atLimit = new byte[Json.RESPONSE_MAX_BYTES];
+            Arrays.fill(atLimit, (byte) 'x');
+            check(Json.readResponse(new java.io.ByteArrayInputStream(atLimit)).length()
+                    == Json.RESPONSE_MAX_BYTES, "response exactly at 8 MiB is accepted");
+            final boolean[] closed = {false};
+            java.io.ByteArrayInputStream excessive = new java.io.ByteArrayInputStream(
+                    new byte[Json.RESPONSE_MAX_BYTES + 1]) {
+                @Override
+                public void close() {
+                    closed[0] = true;
+                }
+            };
+            boolean rejected = false;
+            try {
+                Json.readResponse(excessive);
+            } catch (java.io.IOException expected) {
+                rejected = true;
+            }
+            check(rejected && closed[0], "oversized feed is rejected and its stream is closed");
+        } catch (java.io.IOException error) {
+            throw new AssertionError("bounded desktop response reader", error);
+        }
     }
 
     /** 做完的任务另列一张单子、用量和档位：发给设备的每一行，和它们是从卡里怎么算出来的。 */

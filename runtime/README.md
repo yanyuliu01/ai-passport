@@ -66,8 +66,9 @@ repeats it, and the configuration file stays as it is.
 
 Start the Runtime with `--desktop-sync` to show conversations you are already
 using in the Codex desktop app or Claude Code, including locally recorded Claude
-Desktop sessions. Their status joins the phone App's cards and can be forwarded
-to the Passport over the existing App/Bluetooth connection:
+Desktop sessions. Their visible conversation content and status join the phone
+App's cards and can be forwarded to the Passport over the existing
+App/Bluetooth connection:
 
 ```bash
 cd runtime
@@ -88,10 +89,26 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
   --desktop-claude-dir /absolute/claude-config
 ```
 
-Only project/session metadata, model identifiers, timestamps, status, and tool
-names are synchronized. Prompts, replies, tool arguments, output, and raw logs
-are not copied into cards or sent to the phone or hardware. The phone and hardware
-observe these sessions; continue, stop, and approve them in the desktop app.
+The observer synchronizes human requests, visible assistant replies and progress
+comments, together with project/session metadata, model identifiers, timestamps,
+status, and tool names. It excludes system/developer instructions, AGENTS
+instructions, injected environment/browser context, reasoning, raw tool
+arguments/results, and transcript records. Recognizable credential patterns are
+redacted before storage and transmission; arbitrary private prose is not
+guaranteed to be detected.
+
+Each card holds a recent fragment, not the full transcript: at most 20 entries,
+4,000 characters per entry, and 32 KiB of UTF-8 text per card. Initial discovery
+reads at most the latest 2 MiB of a transcript. Cards carry
+`content_scope: "recent"`; `content_truncated: true` indicates omitted older or
+longer content. The phone shows the retained fragment with separate owner,
+Codex, and Claude labels. The hardware shows the latest request and reply through
+the existing `card` message: `said` is limited to 159 UTF-8 bytes and the App's
+desktop `reply` to 480 bytes, within the device's shared 4 KiB text pool. Firmware
+that already supports desktop cards needs no new flash for content sync.
+
+The phone and hardware observe these sessions; continue, stop, and approve them
+in the desktop app.
 Ending a response means this turn ended, not that the whole project is complete.
 An active session becomes `unknown` after five minutes without source events,
 or when its transcript becomes unavailable.
@@ -104,8 +121,10 @@ not guaranteed to appear.
 ### Optional lifecycle hooks for approval waits
 
 The optional hook receiver records status snapshots in the same `state_dir` as
-the running Runtime. It reads one bounded JSON object from standard input and
-prints no standard output. From `runtime/`, the receiver command is:
+the running Runtime. Hooks record metadata and status only, without prompts,
+replies, tool arguments, or tool results. The receiver reads one bounded JSON
+object from standard input and prints no standard output. From `runtime/`, the
+receiver command is:
 
 ```bash
 python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
@@ -709,9 +728,13 @@ responses are JSON.
 With [desktop synchronization](#sync-existing-desktop-conversations) enabled,
 `/v1/cards` and `/v1/feed` also include desktop monitoring cards across the
 requested conversation. They carry `source: "desktop"`, `monitoring_only: true`,
-`project`, `session_id`, `desktop_status`, `observed_at`, and `stale`. These cards
-have empty `entries` and no Runtime approval; a desktop `waiting` state is a
-status signal, and confirmation stays in the originating desktop conversation.
+`project`, `session_id`, `desktop_status`, `observed_at`, and `stale`, plus
+`content_scope: "recent"` and `content_truncated`. Their bounded `entries` hold
+visible human requests (`role: "you"`) and originating assistant output
+(`role: "xiaoyou"`, labeled Codex or Claude in the App). Empty `entries` mean no
+visible content has been collected. These cards have no Runtime approval; a
+desktop `waiting` state is a status signal, and confirmation stays in the
+originating desktop conversation.
 
 A message record says whether Xiaoyou has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`
@@ -1250,5 +1273,6 @@ Known risks:
 python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
+python3 runtime/tests/test_desktop_content.py
 python3 runtime/tests/test_desktop_hook.py
 ```

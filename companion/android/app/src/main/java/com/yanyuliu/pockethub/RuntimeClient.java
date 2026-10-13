@@ -271,7 +271,7 @@ final class RuntimeClient {
         final Target target = selected(context.getApplicationContext());
         final HubStore store = HubStore.get();
         if (store.monitoringOnly(card)) {
-            store.log("电脑端对话仅同步状态，请在电脑端中断");
+            store.log("电脑端对话只读同步，请在电脑端中断");
             return;
         }
         if (target == null) {
@@ -473,7 +473,7 @@ final class RuntimeClient {
         final String url = target == null ? null : target.url;
         final String token = target == null ? null : target.token;
         if (store.monitoringOnly(card)) {
-            store.log("电脑端对话仅同步状态，请在电脑端继续操作");
+            store.log("电脑端对话只读同步，请在电脑端继续操作");
             return;
         }
         if (target == null) {
@@ -745,17 +745,6 @@ final class RuntimeClient {
     }
 
     private static String readAll(InputStream stream) throws IOException {
-        try (InputStream in = stream) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int count;
-            while ((count = in.read(buffer)) > 0) {
-                out.write(buffer, 0, count);
-                if (out.size() > 512 * 1024) {
-                    throw new IOException("Runtime 返回的内容太长");
-                }
-            }
-            return new String(out.toByteArray(), StandardCharsets.UTF_8);
-        }
+        return Json.readResponse(stream);
     }
 }
