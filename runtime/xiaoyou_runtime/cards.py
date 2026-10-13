@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .store import _write
 
 # talking 留给“小幽正在处理这句话”，现在 Runtime 自己不会把卡放在这个状态。
-STATES = ("talking", "working", "waiting", "done", "failed", "cancelled")
+STATES = ("talking", "working", "waiting", "done", "failed", "cancelled", "unknown")
 ACTIVE = ("talking", "working", "waiting")
 MAX_CARDS = 50
 # 做完的任务单独留这么多（最近的在前），不被别的卡挤掉：第三屏的历史靠它。
@@ -65,6 +65,11 @@ class Cards:
         interrupted = [card for card in self._cards.values() if card["state"] in ACTIVE]
         for card in interrupted:
             self._seq += 1
+            if card.get("monitoring_only"):
+                card.update(state="unknown", desktop_status="unknown", stale=True,
+                            brief="电脑会话状态尚未更新", approval=None, queued=False,
+                            updated_at=time.time(), finished_at=None, seq=self._seq)
+                continue
             card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time()})
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
@@ -119,6 +124,12 @@ class Cards:
                      and not isinstance(value, bool)}
             if isinstance(card.get("cost"), dict) else None,
             "seq": int(number("seq")),
+            "source": text("source"), "project": text("project"),
+            "session_id": text("session_id"),
+            "monitoring_only": card.get("monitoring_only") is True,
+            "desktop_status": text("desktop_status"),
+            "observed_at": number("observed_at"),
+            "stale": card.get("stale") is True,
         }
 
     @staticmethod
@@ -157,10 +168,14 @@ class Cards:
         if len(self._cards) <= MAX_CARDS:
             return
         finished = [card for card in self._cards.values()
-                    if card["agent"] and card["state"] not in ACTIVE]
+                    if card["agent"] and card["state"] not in ACTIVE + ("unknown",)]
         finished.sort(key=lambda card: card.get("finished_at") or card["updated_at"],
                       reverse=True)
         protected = {card["id"] for card in finished[:MAX_HISTORY]}
+        observed = [card for card in self._cards.values()
+                    if card.get("monitoring_only") and card["state"] == "unknown"]
+        observed.sort(key=lambda card: card.get("observed_at", 0), reverse=True)
+        protected.update(card["id"] for card in observed[:32])
         for card_id in list(self._cards):
             if len(self._cards) <= MAX_CARDS:
                 break
@@ -195,6 +210,7 @@ class Cards:
 
     def update(self, card_id: str, say: Optional[str] = None, said: Optional[str] = None,
                progress: Optional[str] = None, fresh: bool = False,
+               progress_lines: Optional[List[str]] = None,
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。"""
@@ -214,30 +230,40 @@ class Cards:
             if progress is not None:
                 card["progress"].append(" ".join(progress.split())[:MAX_PROGRESS_CHARS])
                 del card["progress"][:-MAX_PROGRESS_LINES]
+            if progress_lines is not None:
+                card["progress"] = [" ".join(line.split())[:MAX_PROGRESS_CHARS]
+                                    for line in progress_lines[-MAX_PROGRESS_LINES:]]
             card.update(fields)
             # 交给过帮手的事走到结束：记下完成时间，好按天给第三屏分组。又接着做的
             # （补充、改要求）不算完，下次结束时再记。
             if card["state"] in ACTIVE:
+                card["finished_at"] = None
+            elif card["state"] == "unknown":
                 card["finished_at"] = None
             elif card["agent"] and not card.get("finished_at"):
                 card["finished_at"] = now
             snapshot = self._touch(card)
         return self._tell(snapshot)
 
-    def recent(self, conversation: Optional[str], limit: int = 30) -> List[Dict[str, Any]]:
+    def recent(self, conversation: Optional[str], limit: int = 30,
+               include_desktop: bool = False) -> List[Dict[str, Any]]:
         """最近的卡，按开卡的先后。"""
         with self._changed:
             cards = [card for card in self._cards.values()
-                     if conversation is None or card["conversation"] == conversation]
+                     if conversation is None or card["conversation"] == conversation
+                     or (include_desktop and card.get("monitoring_only"))]
             return [self._copy(card) for card in cards[-limit:]]
 
-    def changed(self, conversation: str, after: int = 0, wait: float = 0.0) -> Dict[str, Any]:
+    def changed(self, conversation: str, after: int = 0, wait: float = 0.0,
+                include_desktop: bool = False) -> Dict[str, Any]:
         """序号比 after 大的卡；一张都没有时最多等 wait 秒。"""
         deadline = time.monotonic() + max(0.0, wait)
         with self._changed:
             while True:
                 cards = [self._copy(card) for card in self._cards.values()
-                         if card["conversation"] == conversation and card["seq"] > after]
+                         if (card["conversation"] == conversation
+                             or (include_desktop and card.get("monitoring_only")))
+                         and card["seq"] > after]
                 remaining = deadline - time.monotonic()
                 if cards or remaining <= 0:
                     cards.sort(key=lambda card: card["seq"])

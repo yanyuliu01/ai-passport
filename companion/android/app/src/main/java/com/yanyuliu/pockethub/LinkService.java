@@ -53,6 +53,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private boolean deviceUsage;
     /** 设备把做完的事另列一张单子（past），手里没有的卡会来要（want）。 */
     private boolean devicePast;
+    /** 设备明确声明认识电脑对话的 unknown 和 idle 状态。 */
+    private boolean deviceDesktop;
     private String lastPast = "";
     private String lastUsage = "";
     private long usageSentMs;
@@ -166,6 +168,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         deviceThreads = false;
         deviceUsage = false;
         devicePast = false;
+        deviceDesktop = false;
         lastPast = "";
         lastUsage = "";
         usageSentMs = 0;
@@ -222,6 +225,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             deviceThreads = deviceCards && BuddyProtocol.hubAckHasThreads(line);
             deviceUsage = deviceCards && BuddyProtocol.hubAckHasUsage(line);
             devicePast = deviceThreads && BuddyProtocol.hubAckHasPast(line);
+            deviceDesktop = deviceCards && BuddyProtocol.hubAckHasDesktop(line);
             HubStore.get().log(!hub ? "设备固件较旧，不支持按住说话"
                     : (devicePast ? "设备支持按住说话，四屏：形象、对话、任务（带做完的历史）、用量"
                     : deviceUsage ? "设备支持按住说话，四屏：形象、对话、任务、用量"
@@ -259,6 +263,14 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             return;
         }
         HubStore store = HubStore.get();
+        if (store.monitoringOnly(recordingCard)) {
+            String explanation = "电脑端对话仅同步状态，请在电脑端操作";
+            // 设备已显示“发送中”：本地答复结束这一轮，不提交录音，也不改 Runtime 的聊天。
+            link.send(BuddyProtocol.chat("failed", "", explanation, "", "", "oops"));
+            lastChat = "";
+            store.log(explanation);
+            return;
+        }
         store.log("收到语音 " + finished.millis() / 100 / 10.0 + " 秒，" + finished.frames()
                 + " 帧" + (finished.lostFrames() > 0 ? "，丢了 " + finished.lostFrames() + " 帧" : ""));
         if (finished.frames() == 0) {
@@ -278,6 +290,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         deviceThreads = false;
         deviceUsage = false;
         devicePast = false;
+        deviceDesktop = false;
         firmware.onClosed();
     }
 
@@ -339,7 +352,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         int room = BuddyProtocol.CARD_KEPT;
         for (int index = all.size() - 1; index >= 0; index--) {
             Card card = all.get(index);
-            if (card.active() || room > 0 || listed.contains(card) || wanted.contains(card.id)) {
+            if (card.outstanding() || room > 0 || listed.contains(card) || wanted.contains(card.id)) {
                 shown.add(0, card);
                 room--;
             }
@@ -352,7 +365,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         for (Card card : shown) {
             String line = BuddyProtocol.card(card.id,
                     card.createdAt > 0 ? clock.format(new Date((long) (card.createdAt * 1000))) : "",
-                    card.state, card.agent, card.edits, card.said(),
+                    CardViews.deviceState(card, deviceDesktop), card.agent, card.edits,
+                    card.monitoringOnly ? CardViews.deviceTitle(card) : card.said(),
                     CardViews.deviceReply(card, deviceThreads), deviceUsage ? card.effort : null);
             if (line == null) {
                 continue;
@@ -364,7 +378,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         tasksGoing = false;
         for (Card card : listed) {
-            BuddyProtocol.Task task = CardViews.deviceTask(card, now);
+            BuddyProtocol.Task task = CardViews.deviceTask(card, now, deviceDesktop);
             tasksGoing |= card.active();
             tasks.add(task);
             tasksKey.append(task.id).append('\u0001').append(task.agent).append('\u0001')
@@ -385,7 +399,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             // 过了半夜“今天”变成“昨天”，内容就变了。
             List<BuddyProtocol.Past> ended = new ArrayList<>();
             for (Card card : CardViews.devicePast(all, BuddyProtocol.PAST_COUNT)) {
-                ended.add(CardViews.devicePastItem(card, now, TimeZone.getDefault()));
+                ended.add(CardViews.devicePastItem(card, now, TimeZone.getDefault(), deviceDesktop));
             }
             List<String> parts = BuddyProtocol.past(ended);
             StringBuilder pastKey = new StringBuilder();

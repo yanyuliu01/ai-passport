@@ -35,7 +35,9 @@ int buddy_protocol_command_ack_json(char *json, size_t size, const char *command
  * is not on the device; the hub answers with that "card". */
 int buddy_protocol_want_json(char *json, size_t size, const char *card);
 /* {"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,
- *  "past":true}:
+ *  "past":true,"desktop":true}:
+ * "desktop" says card, tasks and past support explicit "unknown" and "idle"
+ * states: unavailable observation and an ended desktop turn respectively.
  * "past" says the third screen keeps the things that ended in a list of their
  * own ("past" messages, in parts) and asks for a card it lacks ("want"); the
  * "tasks" message then carries the things in progress only.

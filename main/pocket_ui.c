@@ -1717,6 +1717,13 @@ static bool thing_active(const thing_t *thing)
            thing->state == BUDDY_TASK_QUEUED;
 }
 
+/* A disconnected desktop observer still has the latest steps, but cannot say
+ * that they are running or that they are a final result. */
+static bool thing_has_progress(const thing_t *thing)
+{
+    return thing_active(thing) || thing->state == BUDDY_TASK_UNKNOWN;
+}
+
 // 做完的事怎么结束的；还在做的返回 NULL。
 static const char *thing_ended_text(const thing_t *thing, uint32_t *color)
 {
@@ -1724,6 +1731,9 @@ static const char *thing_ended_text(const thing_t *thing, uint32_t *color)
     case BUDDY_TASK_DONE:
         *color = C_DIM;
         return PT_TASK_DONE;
+    case BUDDY_TASK_IDLE:
+        *color = C_DIM;
+        return PT_STATUS_IDLE;
     case BUDDY_TASK_FAILED:
         *color = C_DANGER;
         return PT_CARD_FAILED;
@@ -1733,6 +1743,7 @@ static const char *thing_ended_text(const thing_t *thing, uint32_t *color)
     case BUDDY_TASK_WORKING:
     case BUDDY_TASK_WAITING:
     case BUDDY_TASK_QUEUED:
+    case BUDDY_TASK_UNKNOWN:
         break;
     }
     return NULL;
@@ -1981,6 +1992,15 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             reply_color = C_DIM;
             (void)snprintf(note, sizeof(note), "%s", PT_CARD_CANCELLED);
             break;
+        case BUDDY_CARD_UNKNOWN:
+            status = PT_STATUS_UNKNOWN;
+            reply_color = C_DIM;
+            (void)snprintf(note, sizeof(note), "%s", PT_STATUS_UNKNOWN);
+            break;
+        case BUDDY_CARD_IDLE:
+            status = PT_STATUS_IDLE;
+            (void)snprintf(note, sizeof(note), "%s", PT_STATUS_IDLE);
+            break;
         }
         if (working && task >= 0 && task < (int)snap->task_count && task < BUDDY_TASK_COUNT &&
             snap->tasks[task].state == BUDDY_TASK_WORKING) {
@@ -2049,6 +2069,8 @@ static void render_task_row(const buddy_ui_snapshot_t *snap, unsigned slot, int 
         right_color = C_WARN;
     } else if (thing->state == BUDDY_TASK_QUEUED) {
         right = PT_TASK_QUEUED;
+    } else if (thing->state == BUDDY_TASK_UNKNOWN) {
+        right = PT_STATUS_UNKNOWN;
     } else if (right == NULL) {
         elapsed[0] = '\0';
         if (thing->task != NULL) {
@@ -2148,10 +2170,10 @@ static void render_tasks(const buddy_ui_snapshot_t *snap)
         }
         set_text(s.task_place, place);
     }
-    set_visible(s.task_lines[0], thing_active(&thing));
-    set_visible(s.task_lines[1], thing_active(&thing));
-    set_visible(s.task_result, !thing_active(&thing));
-    if (!thing_active(&thing)) {
+    set_visible(s.task_lines[0], thing_has_progress(&thing));
+    set_visible(s.task_lines[1], thing_has_progress(&thing));
+    set_visible(s.task_result, !thing_has_progress(&thing));
+    if (!thing_has_progress(&thing)) {
         uint32_t color = C_DIM;
         const char *how = thing_ended_text(&thing, &color);
 

@@ -537,7 +537,7 @@ static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
 }
 
 /* {"cmd":"card","id":"c12","at":"14:02","state":"working|waiting|done|failed|
- *  cancelled|talking","agent":"codex","edits":1,"said":"...","reply":"..."}
+ *  cancelled|talking|unknown|idle","agent":"codex","edits":1,"said":"...","reply":"..."}
  * One thing: the first sentence the owner said and the latest thing Xiaoyou
  * said about it. A card that is already known is updated where it stands.
  * {"cmd":"card","clear":true} forgets every card. */
@@ -550,6 +550,8 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
         {"talking", BUDDY_CARD_TALKING}, {"working", BUDDY_CARD_WORKING},
         {"waiting", BUDDY_CARD_WAITING}, {"done", BUDDY_CARD_DONE},
         {"failed", BUDDY_CARD_FAILED},   {"cancelled", BUDDY_CARD_CANCELLED},
+        {"unknown", BUDDY_CARD_UNKNOWN},
+        {"idle", BUDDY_CARD_IDLE},
     };
     const char *state;
     size_t state_length;
@@ -599,7 +601,7 @@ static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
 }
 
 /* {"cmd":"tasks","list":[{"id":"c12","agent":"codex","title":"...",
- *  "state":"working|waiting|queued|done|failed|cancelled","secs":42,
+ *  "state":"working|waiting|queued|done|failed|cancelled|unknown|idle","secs":42,
  *  "p1":"...","p2":"..."}, ...]}
  * The things handed to helpers: those in progress and, from a hub that saw
  * "threads" in the ack, the latest that ended. Entries beyond BUDDY_TASK_COUNT
@@ -614,6 +616,8 @@ static buddy_task_state_t buddy_task_state_named(const char *state,
         {"working", BUDDY_TASK_WORKING},   {"waiting", BUDDY_TASK_WAITING},
         {"queued", BUDDY_TASK_QUEUED},     {"done", BUDDY_TASK_DONE},
         {"failed", BUDDY_TASK_FAILED},     {"cancelled", BUDDY_TASK_CANCELLED},
+        {"unknown", BUDDY_TASK_UNKNOWN},
+        {"idle", BUDDY_TASK_IDLE},
     };
     size_t index;
 
@@ -1283,7 +1287,7 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
 
     buddy_writer_init(&writer, json, size);
     buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                         "\"threads\":true,\"usage\":true,\"past\":true}\n");
+                         "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

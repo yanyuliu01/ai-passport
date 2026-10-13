@@ -135,6 +135,9 @@ class Service:
         if card is not None:
             # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
             card = _name(card, "card")
+            observed = self._xiaoyou.cards.get(card)
+            if observed is not None and observed.get("monitoring_only"):
+                raise RequestError("这是电脑端同步的会话，请在电脑端继续对话")
         if client_id is not None:
             client_id = _name(client_id, "client_id")
         if agent is not None:
@@ -254,7 +257,7 @@ class Service:
             remaining = deadline - time.monotonic()
             # 等卡的同时隔一会儿看一眼用量变没变。
             pause = remaining if usage is None else min(remaining, FEED_USAGE_SECONDS)
-            result = self._xiaoyou.cards.changed(conversation, after, pause)
+            result = self._xiaoyou.cards.changed(conversation, after, pause, include_desktop=True)
             if (result["cards"] or deadline - time.monotonic() <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
@@ -270,12 +273,16 @@ class Service:
         return self._xiaoyou.approvals.answer(approval_id, decision)
 
     def cards(self, conversation: Any = "default") -> List[Dict[str, Any]]:
-        return self._xiaoyou.cards.recent(_name(conversation, "conversation"), 30)
+        return self._xiaoyou.cards.recent(_name(conversation, "conversation"), 50,
+                                         include_desktop=True)
 
     def cancel(self, card_id: str) -> Optional[Dict[str, Any]]:
         """取消一件事。没有这张卡返回 None；它已经不在做了就原样返回。"""
-        if self._xiaoyou.cards.get(card_id) is None:
+        observed = self._xiaoyou.cards.get(card_id)
+        if observed is None:
             return None
+        if observed.get("monitoring_only"):
+            raise RequestError("这是电脑端同步的会话，请在电脑端停止任务")
         self._xiaoyou.cancel(card_id)
         return self._xiaoyou.cards.get(card_id)
 

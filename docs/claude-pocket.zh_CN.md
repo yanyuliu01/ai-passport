@@ -132,7 +132,7 @@ Anthropic 把这个蓝牙桥定位为面向创客的功能，不是正式支持�
 
 | 方向 | 消息 | 含义 |
 | --- | --- | --- |
-| 对端 → 设备 | `{"cmd":"hub","voice":true}` | 对端在这条连接上接收语音。设备回 `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true}`；`past` 表示固件把做完的事另列一张单子（`past`），手里没有的卡会来要（`want`）；`usage` 表示固件有第四屏，认识 `usage` 和 `eff`；`chat` 表示固件认识[对话](#对话)一节里的 `chat` 和 `helpers`，`cards` 表示它认识 `card` 和 `tasks`，`threads` 表示它把对话和任务分开显示（`tasks` 里可以带做完的事） |
+| 对端 → 设备 | `{"cmd":"hub","voice":true}` | 对端在这条连接上接收语音。设备回 `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true,"desktop":true}`；`past` 表示固件把做完的事另列一张单子（`past`），手里没有的卡会来要（`want`）；`usage` 表示固件有第四屏，认识 `usage` 和 `eff`；`chat` 表示固件认识[对话](#对话)一节里的 `chat` 和 `helpers`，`cards` 表示它认识 `card` 和 `tasks`，`threads` 表示它把对话和任务分开显示（`tasks` 里可以带做完的事） |
 | 设备 → 对端 | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | 一段录音开始。`card` 只在按下时屏幕上有一件事（第二屏上的那张卡、第三屏上选中的那件）时才有：这句话是对它说的。在第三屏按下时后面还有 `"pin":true`：这句话是在那件事里面说的，一定归到它 |
 | 设备 → 对端 | 语音帧 | 一条通知一帧，见下文 |
 | 设备 → 对端 | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | 录音完整结束 |
@@ -183,6 +183,13 @@ Anthropic 把这个蓝牙桥定位为面向创客的功能，不是正式支持�
 边界处截断。`reply` 达到 956 字节时已经放不下下一个字，当作对端截过，同样标注已截断。
 卡的 `id` 最多 11 字节，更长的不收（截断了就成了另一张卡）。这些消息不
 逐条应答；解析不了的那条会得到 `{"ack":"…","ok":false,…}`，并且不改变任何状态。
+
+固件在 `hub` 应答里报告 `"desktop":true` 时，还支持电脑端独立会话的 `unknown` 和
+`idle` 卡片／任务状态。`unknown` 保留最近的进展，不显示运行计时，也不声称已经完成。
+`idle` 只表示本轮结束，不代表整个项目完成，也可以出现在 `past` 中。手机只有收到这项
+能力声明后才发送新状态；对旧固件将 `unknown` 映射为零秒的 `cancelled`，将 `idle` 映射
+为 `done`，但回复和进展文字仍说明实际观测到的状态。这些会话不产生授权弹窗，继续对话、
+停止和授权都须在电脑端进行。
 
 授权弹窗不用新消息：对端把要确认的操作放进心跳的 `prompt`（`tool` 是“帮手 · 工具”，
 `hint` 是内容原文，最多显示 319 字节），设备的回答走原有的 `permission` 命令。

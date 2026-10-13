@@ -259,6 +259,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             openTask = null;
             applyTab();
         }
+        // 同步过来的电脑对话可能在打开后才收到其来源；每次更新都重新判断输入权限。
+        applyTab();
         int doing = CardViews.doing(cards);
         tabButtons[TAB_TASKS].setText(doing > 0 ? "任务 · 在做 " + doing : "任务");
         boolean atBottom = scroll.getScrollY() + scroll.getHeight() >= body.getHeight() - dp(48);
@@ -322,6 +324,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (message.isEmpty() || HubStore.get().busy()) {
             return;
         }
+        Card opened = CardViews.find(HubStore.get().cards(), openTask);
+        if (tab == TAB_TASKS && opened != null && opened.monitoringOnly) {
+            HubStore.get().log("电脑端对话仅同步状态，请在电脑端继续操作");
+            return;
+        }
         chatInput.setText("");
         String effort = effortChoice;
         setEffort(null);
@@ -377,7 +384,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
             tabButtons[index].setTypeface(index == tab ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         }
         boolean inTask = tab == TAB_TASKS && openTask != null;
-        composer.setVisibility(tab == TAB_CHAT || inTask ? View.VISIBLE : View.GONE);
+        Card opened = inTask ? CardViews.find(HubStore.get().cards(), openTask) : null;
+        composer.setVisibility(tab == TAB_CHAT || (inTask
+                && (opened == null || !opened.monitoringOnly)) ? View.VISIBLE : View.GONE);
         chatInput.setHint(inTask ? "接着 " + openTask + " 这件事说（只归到它）" : "想跟小幽说什么");
     }
 
@@ -473,7 +482,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         List<String> lines = cards.isEmpty() ? store.chatLines() : new ArrayList<>();
         StringBuilder key = new StringBuilder();
         for (int index = first; index < cards.size(); index++) {
-            key.append(cards.get(index).id).append('#').append(cards.get(index).seq).append('|');
+            Card card = cards.get(index);
+            key.append(card.id).append('#').append(card.seq).append(':').append(card.state).append('|');
         }
         key.append(lines.size()).append(lines.isEmpty() ? "" : lines.get(lines.size() - 1));
         if (key.toString().equals(chatKey)) {
@@ -517,10 +527,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Card opened = CardViews.find(cards, openTask);
         StringBuilder key = new StringBuilder(opened == null ? "" : opened.id).append('>');
         if (opened != null) {
-            key.append(opened.seq);
+            key.append(opened.seq).append(':').append(opened.state);
         } else {
             for (Card card : tasks) {
-                key.append(card.id).append('#').append(card.seq).append('|');
+                key.append(card.id).append('#').append(card.seq).append(':').append(card.state).append('|');
             }
         }
         if (key.toString().equals(taskKey)) {
@@ -529,8 +539,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         taskKey = key.toString();
         taskPane.removeAllViews();
         if (opened == null) {
-            taskPane.addView(text(tasks.isEmpty() ? "（还没有交给帮手的事）"
-                    : "点开一件看它的全部经过，在里面说的话只归到它。", 13, false));
+            taskPane.addView(text(tasks.isEmpty() ? "（还没有任务或电脑端对话）"
+                    : "点开查看经过。电脑端对话仅同步状态，需在电脑端操作。", 13, false));
             for (Card card : tasks) {
                 Button item = button(CardViews.listItem(card), view -> open(card.id));
                 item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -544,21 +554,33 @@ public class MainActivity extends Activity implements HubStore.Listener {
         TextView title = text(CardViews.status(opened) + when + "\n" + opened.title, 14, true);
         title.setPadding(0, dp(8), 0, dp(4));
         taskPane.addView(title);
+        if (opened.monitoringOnly) {
+            taskPane.addView(text("电脑端对话 · 仅同步状态，请在电脑端继续、确认或中断。"
+                    + (opened.state.equals("done") ? "\n本轮结束不代表项目已完成。" : "")
+                    + (opened.state.equals("unknown") ? "\n连接或状态采集已中断，当前状态未知。" : "")
+                    + (opened.observedAt > 0 ? "\n最近同步："
+                    + new SimpleDateFormat("MM-dd HH:mm", Locale.US)
+                            .format(new Date((long) (opened.observedAt * 1000))) : ""),
+                    13, false));
+        }
         if (!opened.spentLine().isEmpty()) {
             // 谁、用哪个模型、哪一档做的，花了多少。
             taskPane.addView(text(opened.spentLine(), 12, false));
         }
         StringBuilder words = new StringBuilder(CardViews.thread(opened));
-        if (opened.active()) {
+        if (opened.outstanding() || opened.monitoringOnly) {
             // 帮手最近的几步：工具名和命令原样显示。
             for (String step : opened.progress) {
                 words.append(words.length() == 0 ? "" : "\n").append("› ").append(step);
             }
         }
+        if (opened.monitoringOnly && !opened.brief.isEmpty()) {
+            words.append(words.length() == 0 ? "" : "\n\n").append(opened.brief);
+        }
         TextView content = text(words.toString(), 15, false);
         content.setTextIsSelectable(true);
         taskPane.addView(content);
-        if (opened.active()) {
+        if (opened.active() && !opened.monitoringOnly) {
             taskPane.addView(button("取消这件事", view -> RuntimeClient.cancel(this, opened.id)));
         }
         return true;

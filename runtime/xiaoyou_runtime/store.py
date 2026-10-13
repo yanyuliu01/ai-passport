@@ -78,6 +78,11 @@ class Store:
         with self._lock:
             return self._sessions.get(conversation, {}).get(agent)
 
+    def session_ids(self) -> set:
+        """Sessions owned by this runtime, excluded from desktop observation."""
+        with self._lock:
+            return {session for agents in self._sessions.values() for session in agents.values()}
+
     def remember(self, conversation: str, agent: str, session_id: Optional[str]) -> None:
         with self._lock:
             sessions = self._sessions.setdefault(conversation, {})

@@ -51,6 +51,99 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 想不调用任何模型先把整条链路跑通，启动时加上环境变量 `XIAOYOU_DEFAULT_AGENT=echo`：
 所有的话都交给一个原样复述的代理，不用改配置文件。
 
+## 同步已有电脑端对话
+
+启动 Runtime 时加上 `--desktop-sync`，就可以显示你正在 Codex 桌面 App 或 Claude Code
+里使用的对话，也包括在本机记录的 Claude Desktop 会话。状态会加入手机 App 的卡片，
+并可通过现有的 App/蓝牙连接转发给 Passport：
+
+```bash
+cd runtime
+python3 -m xiaoyou_runtime --config config.json --desktop-sync
+```
+
+观察器每两秒检查变化，每十秒发现新记录文件。它读取 `~/.codex/sessions` 和
+`~/.claude/projects` 下最近 24 小时发生变化的最新 32 个本机会话记录文件；子代理和
+已经由这台 Runtime 管理的会话会被排除。要只观察指定项目，可以重复添加
+`--desktop-project`；另外两项指定代理的配置目录，目录下应包含 `sessions/` 或 `projects/`：
+
+```bash
+python3 -m xiaoyou_runtime --config config.json --desktop-sync \
+  --desktop-project /absolute/project-a --desktop-project /absolute/project-b \
+  --desktop-codex-dir /absolute/codex-config \
+  --desktop-claude-dir /absolute/claude-config
+```
+
+同步内容只有项目/会话元数据、模型标识、时间、状态和工具名称；提示词、回复、工具参数、
+输出和原始日志不会复制到卡片，也不会发给手机或硬件。手机和硬件只观察这些会话；继续、
+停止和确认操作仍在电脑端 App 中完成。“本轮结束”只表示这次响应结束，不代表整个项目
+已经完成。正在活动的会话连续五分钟没有来源事件，或记录文件变得不可用时，会显示
+`unknown`（状态未知）。
+
+记录文件的格式可能随代理版本改变，观察器需要适配；仅凭日志不能可靠识别所有等待确认
+的情况。这个功能观察本机记录，没有本机会话记录的纯云端对话不保证能显示。
+
+### 用可选生命周期 Hook 同步等待确认
+
+可选 Hook 接收器把状态快照写入正在运行的 Runtime 所用的同一个 `state_dir`。
+它从标准输入读取一个有大小上限的 JSON 对象，不向标准输出打印内容。
+在 `runtime/` 目录下，接收器的命令是：
+
+```bash
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
+```
+
+要让 Hook 从任意项目启动，可以复用这个命令处理器。把两个绝对路径换成实际值；
+`runtime-state` 必须是 Runtime 解析后的 `state_dir`：
+
+```json
+{
+  "type": "command",
+  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
+  "timeout": 2
+}
+```
+
+把处理器放进每个事件的匹配组中的 `hooks` 列表，例如
+`"UserPromptSubmit": [{"hooks": [handler]}]`，其中 `handler` 指上面的 JSON 对象。
+Claude Code 复用同一个处理器，把参数改成 `--agent claude`。接收器的事件映射如下：
+
+| 事件 | 记录状态 | 代理 |
+| --- | --- | --- |
+| `SessionStart`、`SessionEnd` | `unknown` | 两者 |
+| `UserPromptSubmit`、`PostToolUse` | `running` | 两者 |
+| `PermissionRequest` | `waiting` | 两者 |
+| `Stop` | `idle`（本次响应结束） | 两者 |
+| `Interrupt` | `interrupted` | Codex |
+| `StopFailure` | `failed` | Claude Code |
+| 类型为 `permission_prompt` 的 `Notification` | `waiting` | Claude Code |
+
+Claude Code 的权限通知还覆盖一部分没有 `PermissionRequest` 事件的提示。
+可以添加下面的匹配组：
+
+```json
+{
+  "hooks": {
+    "Notification": [{
+      "matcher": "permission_prompt",
+      "hooks": [{
+        "type": "command",
+        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
+        "timeout": 2
+      }]
+    }]
+  }
+}
+```
+
+把这些匹配组合并到已有 Hook 配置里，保留原来的处理器。Codex 会发现
+`~/.codex/hooks.json` 或项目的 `.codex/hooks.json`，但执行前需要通过 `/hooks` 审阅并
+信任当前准确的 Hook 定义。Claude Code 的 Hook 放在它的设置文件里。
+配置位置和生命周期行为见官方 [Codex Hook 文档](https://learn.chatgpt.com/docs/hooks)
+和 [Claude Code Hook 文档](https://code.claude.com/docs/en/hooks)。Runtime 不会自动安装或
+修改全局 Hook 配置。构建和主机测试通过不代表已经验证手机接收、蓝牙转发和硬件显示；
+这条链路需要用已连接的 App 和设备实测。
+
 ## 配置
 
 相对路径都相对于配置文件所在的目录。
@@ -463,8 +556,8 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
 | `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：`usage` 是现在的用量（和 `GET /v1/usage` 一样，0.6.0 起每次都带）；请求里带上手里那份用量的 `rev` 时，用量变了也会提前返回。其余的：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`；`kind` 是 `tool`——这一步可以吗，或 `stall`——它很久没动静了、还等吗，0.5.4 起）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
-| `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 30 张卡。 |
-| `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`。 |
+| `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
+| `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`；电脑端观察卡返回 `400`，需要到电脑端停止。 |
 | `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权。没有这个授权（或 Runtime 重启过）返回 `404`；已经回答过、或者那件事已经停了，返回 `409`。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
@@ -474,6 +567,12 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `POST /v1/firmware?note=<备注>&push=1`，请求体是固件文件 | `201` 和这一版的记录；`push=1` 同时把它设为要推的。 |
 | `POST /v1/firmware/target`，请求体 `{"id": 版本或 null, "reason"?, "force"?}` | 指定（或取消）要推给设备的那一版；返回同 `GET /v1/firmware/target`。 |
 | `POST /v1/firmware/device`，请求体 `{"event", "build", "state", "prev", …}` | 手机 App 转告设备的情况。`event` 为 `connected`、`progress`、`installed`、`failed` 或 `unsupported`；返回同 `GET /v1/firmware/target`。 |
+
+启用[电脑端同步](#同步已有电脑端对话)时，`/v1/cards` 和 `/v1/feed` 还会在请求的对话里
+包含跨对话可见的电脑端观察卡。它们带有 `source: "desktop"`、`monitoring_only: true`、
+`project`、`session_id`、`desktop_status`、`observed_at` 和 `stale`。这些卡的 `entries`
+为空，也没有 Runtime 授权；电脑端的 `waiting` 只是状态信号，确认仍在原来的电脑端
+对话里完成。
 
 消息记录说的是“这句话小幽接住了没有”，不是“这件事做完了没有”：小幽答完或者把活派出去，
 `status` 就是 `done`，后面的进展和结果在卡上，用 `/v1/feed` 等。只有别的 Runtime 转过来的
@@ -866,4 +965,6 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
 ```bash
 python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
+python3 runtime/tests/test_desktop_sync.py
+python3 runtime/tests/test_desktop_hook.py
 ```

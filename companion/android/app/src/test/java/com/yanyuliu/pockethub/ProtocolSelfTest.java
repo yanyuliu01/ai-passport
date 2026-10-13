@@ -459,10 +459,86 @@ public final class ProtocolSelfTest {
         check(Json.parseObject(deep.toString()) == null, "deep nesting is refused, not a crash");
         check(Json.parseObject("{}").isEmpty(), "empty object");
         historyAndUsage();
+        desktopSessions();
     }
 
     private static Card card(String json) {
         return Card.from(Json.parseObject(json));
+    }
+
+    /** 电脑对话仍是同一张任务卡；只观察，失联不当成结束。 */
+    private static void desktopSessions() {
+        Card running = card("{\"id\":\"c91\",\"title\":\"修复登录\",\"agent\":\"codex\","
+                + "\"state\":\"working\",\"source\":\"desktop\",\"project\":\"my-app\","
+                + "\"session_id\":\"thread-1\",\"monitoring_only\":true,"
+                + "\"desktop_status\":\"running\",\"observed_at\":1790000001,\"started_at\":1790000000,"
+                + "\"progress\":[\"读取配置\",\"运行测试\"]}");
+        check(running.monitoringOnly && running.source.equals("desktop")
+                && running.project.equals("my-app") && running.sessionId.equals("thread-1")
+                && running.desktopStatus.equals("running") && running.observedAt == 1790000001d
+                && !running.stale, "desktop observation metadata");
+        check(CardViews.status(running).equals("电脑 · codex · my-app · 正在运行")
+                && CardViews.listItem(running).contains("运行测试"), "desktop card source and project");
+        check(card("{\"id\":\"c1\",\"source\":\"desktop\",\"monitoring_only\":false}").monitoringOnly,
+                "desktop source always remains observation only");
+        check(CardViews.isTask(card("{\"id\":\"c1\",\"monitoring_only\":true}")),
+                "observed session is a task even without an agent");
+        Card waiting = card("{\"id\":\"c92\",\"agent\":\"claude\",\"source\":\"desktop\","
+                + "\"state\":\"waiting\"}");
+        Card done = card("{\"id\":\"c93\",\"agent\":\"codex\",\"source\":\"desktop\","
+                + "\"state\":\"done\"}");
+        Card unknown = running.unknown();
+        check(waiting.stateLabel().equals("等待电脑端确认")
+                && done.stateLabel().equals("本轮结束")
+                && unknown.stateLabel().equals("状态未知") && !unknown.active()
+                && unknown.outstanding() && unknown.stale && unknown.seq == running.seq
+                && unknown.observedAt == running.observedAt && unknown.sessionId.equals(running.sessionId),
+                "waiting is answered on desktop, ended turn is not project completion, lost state is unknown");
+        List<Card> cards = Arrays.asList(done, unknown, waiting);
+        check(CardViews.doing(cards) == 1 && CardViews.tasks(cards, 5).get(0) == waiting
+                && CardViews.tasks(cards, 5).get(1) == unknown, "unknown retained without running count");
+        check(CardViews.deviceTasks(cards, 4, false).equals(Arrays.asList(waiting, unknown))
+                && CardViews.devicePast(cards, 5).equals(Arrays.asList(done)),
+                "unknown never moves into completed device history");
+        check(CardViews.tasks(Arrays.asList(waiting, unknown), 1).get(0) == waiting
+                && CardViews.deviceTasks(Arrays.asList(waiting, unknown), 1, false).get(0) == waiting,
+                "unknown sessions cannot displace known running tasks");
+        BuddyProtocol.Task item = CardViews.deviceTask(unknown, 1790000500L);
+        check(item.state.equals("unknown") && item.seconds == 0 && item.p1.equals("读取配置")
+                && item.p2.equals("运行测试")
+                && item.title.equals("电脑 · my-app · 修复登录"), "unknown device task has no running timer");
+        check(BuddyProtocol.tasks(Arrays.asList(item)).contains("\"state\":\"unknown\"")
+                && CardViews.deviceTask(running, 1790000010L).seconds == 10,
+                "desktop state uses existing task protocol");
+        check(CardViews.deviceReply(running, true).contains("仅同步状态，请在电脑端操作")
+                && CardViews.deviceReply(running, true).contains("运行测试")
+                && CardViews.deviceReply(unknown, false).startsWith("状态未知"),
+                "device details explain observation-only status");
+        check(CardViews.deviceTitle(done).startsWith("电脑 · ")
+                && card("{\"id\":\"c1\",\"state\":\"done\"}").stateLabel().equals("好了"),
+                "legacy cards preserve wording");
+        check(CardViews.deviceState(done).equals("idle")
+                && CardViews.deviceTask(done, 1790000500L).state.equals("idle")
+                && CardViews.devicePastItem(done, 1790000500L,
+                        java.util.TimeZone.getTimeZone("UTC")).state.equals("idle")
+                && BuddyProtocol.past(Arrays.asList(CardViews.devicePastItem(done, 1790000500L,
+                        java.util.TimeZone.getTimeZone("UTC")))).get(0).contains("\"state\":\"idle\"")
+                && CardViews.deviceState(card("{\"id\":\"c1\",\"state\":\"done\"}")).equals("done"),
+                "device cards/tasks/history distinguish ended desktop turns from completed tasks");
+        check(BuddyProtocol.hubAckHasDesktop("{\"ack\":\"hub\",\"ok\":true,\"cards\":true,"
+                        + "\"desktop\":true}")
+                && !BuddyProtocol.hubAckHasDesktop("{\"ack\":\"hub\",\"ok\":true,\"cards\":true}")
+                && !BuddyProtocol.hubAckHasDesktop("{\"ack\":\"hub\",\"ok\":true,\"desktop\":true}"),
+                "desktop states require firmware capability");
+        check(CardViews.deviceState(unknown, false).equals("cancelled")
+                && CardViews.deviceTask(unknown, 1790000500L, false).state.equals("cancelled")
+                && CardViews.deviceTask(unknown, 1790000500L, false).seconds == 0
+                && CardViews.deviceState(done, false).equals("done")
+                && CardViews.devicePastItem(done, 1790000500L,
+                        java.util.TimeZone.getTimeZone("UTC"), false).state.equals("done")
+                && CardViews.deviceReply(unknown, false).startsWith("状态未知")
+                && CardViews.deviceReply(done, false).startsWith("本轮结束"),
+                "old firmware uses stopped fallback states with actual status in reply and no timer");
     }
 
     /** 做完的任务另列一张单子、用量和档位：发给设备的每一行，和它们是从卡里怎么算出来的。 */

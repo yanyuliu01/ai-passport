@@ -168,7 +168,7 @@ understand:
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true}`; `past` says the firmware lists things that ended separately (`past`) and asks for a card it does not hold (`want`); `usage` says the firmware has the fourth screen and understands `usage` and `eff`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true,"desktop":true}`; `past` says the firmware lists things that ended separately (`past`) and asks for a card it does not hold (`want`); `usage` says the firmware has the fourth screen and understands `usage` and `eff`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
 | Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it. Pressed on screen 3 it is followed by `"pin":true`: the sentence is said inside that thing and is always filed on it |
 | Device → host | voice frames | One notification per frame; see below |
 | Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
@@ -235,6 +235,16 @@ marked as cut too. A card `id` is
 at most 11 bytes; a longer one is refused, because cut short it would be a
 different card. These messages are not acknowledged one by one; one that does
 not parse gets `{"ack":"…","ok":false,…}` and changes nothing.
+
+Firmware that reports `"desktop":true` in the `hub` acknowledgement also accepts
+`unknown` and `idle` card/task states for independently observed computer
+conversations. `unknown` retains the latest activity without a running timer or
+a completion claim. `idle` means the current turn ended, not that the project
+is complete; it may also appear in `past`. The phone sends these states only
+after that capability was announced. For older firmware it maps `unknown` to
+`cancelled` with zero seconds and `idle` to `done`, while the reply/progress text
+still describes the actual observed state. These observed conversations have
+no approval prompt and must be continued, stopped, or approved on the computer.
 
 Approval requests need no new message: the host puts the operation to confirm
 into the heartbeat's `prompt` (`tool` is the helper and the tool, `hint` is

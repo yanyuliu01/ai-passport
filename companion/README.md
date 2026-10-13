@@ -39,6 +39,7 @@ display label, and more can be added in the app.
 | A message sent to Xiaoyou from the chat box | Screen 1: what you said, Xiaoyou thinking, the agent she handed the work to, then a brief of a sentence or two |
 | The cards on the runtime | Screen 2 pages through conversation only (what Xiaoyou answered herself): the 8 most recent, plus every one still being worked on or on screen 3's list; on firmware that shows them apart a task's card carries that thing's latest exchange (at most 480 bytes), for the page opened from screen 3. Each holds the first sentence of the thing and the latest thing Xiaoyou said (the first 959 bytes; the full exchange stays on the phone) |
 | The things handed to helpers | Screen 3: at most four, those in progress first (who is doing it, for how long and the two latest steps, tool names and commands verbatim), followed on firmware that announced `threads` by the latest that ended (the brief of the conclusion); the count in the top bar. A sentence said while holding the key on screen 3 carries `pin`, which the app passes to the runtime as it is: it is always filed on the selected thing |
+| Independently running desktop conversations discovered by the runtime | The same task/card pages show the agent, project, state and latest activity; these sessions can only be operated on the computer |
 | An operation a helper wants confirmed | Xiaoyou asks, who wants what is shown verbatim; `OK` says yes, `DOWN` says no, and the answer goes back to the runtime |
 | A voice message recorded on the device | The same as a typed message; what was heard appears on the device and in the chat box once the runtime has transcribed it |
 | The agents of the selected runtime | The helpers page in the menu (the first four) |
@@ -77,14 +78,34 @@ The app has three pages, chosen with the row of buttons at the top:
   setup steps, sources, tests and the log.
 
 Operations waiting for consent are shown at the top of every page, with a
-button that opens the thing they belong to. The split only looks at whether a
-card has a helper: none means conversation, one means task. `pin` needs
+button that opens the thing they belong to. Cards with a helper and desktop
+observations are tasks; Xiaoyou's own answers are conversation. For
+runtime-managed tasks, `pin` needs
 runtime 0.5.3; an older runtime ignores it, and then Xiaoyou still decides
 which thing a sentence said inside a task belongs to.
 
 Only what a notification contains can be forwarded. Whether a given assistant
 posts notifications for cloud sessions, and whether they carry action buttons,
 depends on that assistant's app and has not been verified.
+
+### Conversations running on the computer
+
+When desktop observation is enabled on the paired runtime, independently
+running Codex and Claude Code conversations appear on the Tasks page. Each
+shows its desktop source, project, current state and latest activity, and uses
+the existing cards/tasks Bluetooth messages to reach the device. These cards
+are observation only: continue, cancel and approval controls stay on the
+computer, including when speaking from a selected desktop task on the device.
+An ended turn does not mean the project is complete.
+
+When observation or the phone's connection to the runtime is lost, the task
+stays in the current list as unknown, without a running timer; it does not
+move into completed history. After reconnecting the app refreshes the states
+from the runtime. Firmware announcing `desktop` displays unknown and ended
+turns distinctly. Older firmware receives a stopped-state fallback, with the
+actual status written in the card's reply and no running timer.
+The runtime's [desktop observation documentation](../runtime/README.md)
+describes which local sessions can be discovered and how to enable it.
 
 ## Install and set up
 

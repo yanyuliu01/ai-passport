@@ -128,6 +128,8 @@ typedef enum {
     BUDDY_CARD_DONE,
     BUDDY_CARD_FAILED,
     BUDDY_CARD_CANCELLED,
+    BUDDY_CARD_UNKNOWN, /* the desktop observer cannot confirm the current state */
+    BUDDY_CARD_IDLE, /* the observed desktop turn ended, not the entire project */
 } buddy_card_state_t;
 
 typedef enum {
@@ -138,6 +140,8 @@ typedef enum {
     BUDDY_TASK_DONE,
     BUDDY_TASK_FAILED,
     BUDDY_TASK_CANCELLED,
+    BUDDY_TASK_UNKNOWN, /* retained latest progress, neither active nor finished */
+    BUDDY_TASK_IDLE, /* the observed desktop turn ended, not the entire project */
 } buddy_task_state_t;
 
 /* How hard a helper works on a thing (the runtime's effort). */

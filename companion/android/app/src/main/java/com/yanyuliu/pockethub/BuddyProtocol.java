@@ -188,7 +188,8 @@ public final class BuddyProtocol {
 
     /**
      * 一件事的卡：at 是开始的“时:分”，state 是 working、waiting、done、failed、cancelled、
-     * talking 之一，said 是这件事的第一句话，reply 是小幽最新的话，edits 是补充或改过几次。
+     * talking 之一，声明 desktop 的固件还认识 unknown、idle。said 是这件事的第一句话，
+     * reply 是小幽最新的话，edits 是补充或改过几次。
      * 编号太长时返回 null（不发）。
      */
     public static String card(String id, String at, String state, String agent, int edits,
@@ -231,7 +232,7 @@ public final class BuddyProtocol {
         public final String id;
         public final String agent;
         public final String title;
-        /** working、waiting、queued；做完的是 done、failed、cancelled（只发给分开显示的固件）。 */
+        /** working、waiting、queued；结束的是 done、failed、cancelled；desktop 固件还认识 unknown、idle。 */
         public final String state;
         public final long seconds;
         /** 最近两步：p1 在前，p2 是最新的；只有一步时放在 p1。 */
@@ -300,7 +301,7 @@ public final class BuddyProtocol {
         public final String id;
         public final String agent;
         public final String title;
-        /** done、failed、cancelled。 */
+        /** done、failed、cancelled；desktop 固件还认识 idle（本轮结束）。 */
         public final String state;
         /** 今天、昨天、10-08：设备原样显示，同一天的排在一个小标题下面。 */
         public final String day;
@@ -350,6 +351,7 @@ public final class BuddyProtocol {
                 quote(out, clip(item.title, TASK_TITLE_MAX));
                 out.append(",\"state\":");
                 quote(out, "failed".equals(item.state) || "cancelled".equals(item.state)
+                        || "idle".equals(item.state)
                         ? item.state : "done");
                 out.append(",\"day\":");
                 quote(out, clip(item.day, DAY_MAX));
@@ -562,6 +564,12 @@ public final class BuddyProtocol {
     public static boolean hubAckHasPast(String line) {
         Map<String, String> fields = parseFlatObject(line);
         return hubAckHasThreads(line) && "true".equals(fields.get("past"));
+    }
+
+    /** 设备认识电脑对话的 unknown 与 idle；旧固件使用保守的兼容状态。 */
+    public static boolean hubAckHasDesktop(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return hubAckHasCards(line) && "true".equals(fields.get("desktop"));
     }
 
     /** 设备声明它把对话和任务分开显示：任务单子里可以带做完的事。 */

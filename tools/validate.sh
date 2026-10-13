@@ -32,6 +32,14 @@ cjson_dir() {
     fi
 }
 
+host_dead_strip_flag() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "-Wl,-dead_strip"
+    else
+        echo "-Wl,--gc-sections"
+    fi
+}
+
 run_app_host_tests() {
     local test_dir="$1"
     local cjson
@@ -84,7 +92,7 @@ run_app_host_tests() {
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Itests/test_shims -Imain -I"${cjson}" \
             "tests/test_buddy_${name}.c" main/buddy_protocol.c main/buddy_state.c \
             main/buddy_orchestrator.c main/pocket_update_core.c "${test_dir}/cJSON.o" -lm \
-            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -ffunction-sections -fdata-sections "$(host_dead_strip_flag)" \
             -o "${test_dir}/test_buddy_${name}"
         "${test_dir}/test_buddy_${name}"
     done
@@ -163,6 +171,8 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_project_brief.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_sync.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_hook.py
     echo "Runtime tests: PASS"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_repo.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py

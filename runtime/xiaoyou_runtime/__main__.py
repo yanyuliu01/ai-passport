@@ -19,6 +19,7 @@ from . import (__version__, agents as agent_module, firmware_cli, router as rout
                workspace as workspace_module)
 from .agents import AgentError
 from .config import ConfigError, load
+from .desktop_sync import DesktopSync
 from .firmware import FirmwareStore
 from .server import make_server
 from .service import Service
@@ -72,6 +73,14 @@ def main(argv=None) -> int:
         "--stt", metavar="WAV", help="不启动服务，只把一个 WAV 文件识别成文字并打印（检查语音识别配置）",
     )
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--desktop-sync", action="store_true",
+                        help="同步本机 Codex、Claude Code 会话状态到手机和硬件（只读）")
+    parser.add_argument("--desktop-project", action="append", default=[], metavar="PATH",
+                        help="只同步这个项目的电脑会话；可重复，不写则同步所有项目")
+    parser.add_argument("--desktop-codex-dir", type=Path, metavar="PATH",
+                        help="电脑端 Codex 配置目录（默认 ~/.codex）")
+    parser.add_argument("--desktop-claude-dir", type=Path, metavar="PATH",
+                        help="电脑端 Claude Code 配置目录（默认 ~/.claude）")
     commands = parser.add_subparsers(dest="command", metavar="子命令")
     firmware_cli.add_arguments(commands)
     usage_parser = commands.add_parser(
@@ -238,7 +247,19 @@ def main(argv=None) -> int:
         server = make_server(config, service, FirmwareStore(config.state_dir))
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
+        service.close()
         return 1
+    desktop = None
+    if args.desktop_sync:
+        desktop = DesktopSync(xiaoyou.cards, config.state_dir,
+                              codex_dir=args.desktop_codex_dir.expanduser()
+                              if args.desktop_codex_dir else None,
+                              claude_dir=args.desktop_claude_dir.expanduser()
+                              if args.desktop_claude_dir else None,
+                              projects=[Path(path) for path in args.desktop_project],
+                              owned=store.session_ids)
+        desktop.start()
+        print("电脑会话状态同步已开启（只读；不发送对话正文）", file=sys.stderr)
     print("小幽 Runtime %s「%s」已启动：http://%s:%d（代理 %s，默认交给 %s，语音识别 %s）" % (
         __version__, config.name, config.host, config.port, roster, config.default_agent,
         config.stt_engine), file=sys.stderr)
@@ -262,6 +283,8 @@ def main(argv=None) -> int:
         pass
     finally:
         server.server_close()
+        if desktop is not None:
+            desktop.close()
         service.close()
     return 0
 

@@ -62,6 +62,110 @@ To try the whole path without calling any model, start it with the environment
 variable `XIAOYOU_DEFAULT_AGENT=echo`: every message goes to an agent that
 repeats it, and the configuration file stays as it is.
 
+## Sync existing desktop conversations
+
+Start the Runtime with `--desktop-sync` to show conversations you are already
+using in the Codex desktop app or Claude Code, including locally recorded Claude
+Desktop sessions. Their status joins the phone App's cards and can be forwarded
+to the Passport over the existing App/Bluetooth connection:
+
+```bash
+cd runtime
+python3 -m xiaoyou_runtime --config config.json --desktop-sync
+```
+
+The observer checks changes every two seconds and discovers new transcript files
+every ten seconds. It reads the newest 32 local transcript files changed in the
+last 24 hours, under `~/.codex/sessions` and `~/.claude/projects`. Subagents and
+sessions already managed by this Runtime are excluded. To limit observation to
+specific projects, repeat `--desktop-project`; the other two options select the
+agent's configuration directory, which contains `sessions/` or `projects/`:
+
+```bash
+python3 -m xiaoyou_runtime --config config.json --desktop-sync \
+  --desktop-project /absolute/project-a --desktop-project /absolute/project-b \
+  --desktop-codex-dir /absolute/codex-config \
+  --desktop-claude-dir /absolute/claude-config
+```
+
+Only project/session metadata, model identifiers, timestamps, status, and tool
+names are synchronized. Prompts, replies, tool arguments, output, and raw logs
+are not copied into cards or sent to the phone or hardware. The phone and hardware
+observe these sessions; continue, stop, and approve them in the desktop app.
+Ending a response means this turn ended, not that the whole project is complete.
+An active session becomes `unknown` after five minutes without source events,
+or when its transcript becomes unavailable.
+
+The transcript adapters depend on formats that can change between agent
+versions. Logs alone cannot reliably identify every approval wait. This feature
+observes local records; cloud-only conversations without a local transcript are
+not guaranteed to appear.
+
+### Optional lifecycle hooks for approval waits
+
+The optional hook receiver records status snapshots in the same `state_dir` as
+the running Runtime. It reads one bounded JSON object from standard input and
+prints no standard output. From `runtime/`, the receiver command is:
+
+```bash
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
+```
+
+For a hook launched from any project, use this reusable command handler. Replace
+both absolute paths; `runtime-state` must be the Runtime's resolved `state_dir`:
+
+```json
+{
+  "type": "command",
+  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
+  "timeout": 2
+}
+```
+
+Put the handler in each event's `hooks` list, inside a matcher group, for example
+`"UserPromptSubmit": [{"hooks": [handler]}]` where `handler` means the JSON object
+above. Use the same handler with `--agent claude` for Claude Code. These are the
+receiver's event mappings:
+
+| Event | Recorded status | Agent |
+| --- | --- | --- |
+| `SessionStart`, `SessionEnd` | `unknown` | Both |
+| `UserPromptSubmit`, `PostToolUse` | `running` | Both |
+| `PermissionRequest` | `waiting` | Both |
+| `Stop` | `idle` (this response ended) | Both |
+| `Interrupt` | `interrupted` | Codex |
+| `StopFailure` | `failed` | Claude Code |
+| `Notification` with `permission_prompt` | `waiting` | Claude Code |
+
+Claude Code's permission notification also covers some prompts not represented
+by `PermissionRequest`. Its matching hook group can be added as follows:
+
+```json
+{
+  "hooks": {
+    "Notification": [{
+      "matcher": "permission_prompt",
+      "hooks": [{
+        "type": "command",
+        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
+        "timeout": 2
+      }]
+    }]
+  }
+}
+```
+
+Merge these groups into existing hook configuration, preserving other handlers.
+Codex discovers `~/.codex/hooks.json` or project `.codex/hooks.json`, and requires
+reviewing and trusting the exact current hook definition through `/hooks` before
+it runs. Claude Code accepts hooks in its settings files. See the official
+[Codex hook reference](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hook reference](https://code.claude.com/docs/en/hooks) for configuration
+locations and lifecycle behavior. The Runtime does not install or modify global
+hook configuration automatically. Build and host-test success do not establish
+phone delivery, Bluetooth forwarding, or hardware rendering; test that path with
+the connected App and device.
+
 ## Configuration
 
 Relative paths are resolved against the directory of the configuration file.
@@ -590,8 +694,8 @@ responses are JSON.
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: `usage` is the usage at this moment (as in `GET /v1/usage`; always present since 0.6.0), and a request that carries the `rev` of the usage it already has also returns early when usage changes. The rest: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
-| `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 30 cards. |
-| `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card. |
+| `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
+| `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card; `400` for a desktop monitoring card, which must be stopped on the desktop. |
 | `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
@@ -601,6 +705,13 @@ responses are JSON.
 | `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
 | `POST /v1/firmware/target` with `{"id": version or null, "reason"?, "force"?}` | Sets (or clears) the version the device should run; answers like `GET /v1/firmware/target`. |
 | `POST /v1/firmware/device` with `{"event", "build", "state", "prev", …}` | What the phone app says about the device. `event` is `connected`, `progress`, `installed`, `failed` or `unsupported`; answers like `GET /v1/firmware/target`. |
+
+With [desktop synchronization](#sync-existing-desktop-conversations) enabled,
+`/v1/cards` and `/v1/feed` also include desktop monitoring cards across the
+requested conversation. They carry `source: "desktop"`, `monitoring_only: true`,
+`project`, `session_id`, `desktop_status`, `observed_at`, and `stale`. These cards
+have empty `entries` and no Runtime approval; a desktop `waiting` state is a
+status signal, and confirmation stays in the originating desktop conversation.
 
 A message record says whether Xiaoyou has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`
@@ -1138,4 +1249,6 @@ Known risks:
 ```bash
 python3 runtime/tests/test_runtime.py
 python3 runtime/tests/test_firmware.py
+python3 runtime/tests/test_desktop_sync.py
+python3 runtime/tests/test_desktop_hook.py
 ```

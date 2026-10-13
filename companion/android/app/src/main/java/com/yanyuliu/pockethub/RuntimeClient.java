@@ -172,6 +172,7 @@ final class RuntimeClient {
                     continue;  // 是换 Runtime 时自己断开的
                 }
                 String detail = String.valueOf(error.getMessage());
+                store.desktopDisconnected();
                 boolean old = detail.contains(" 404");
                 if (!detail.equals(complained)) {
                     complained = detail;
@@ -238,6 +239,10 @@ final class RuntimeClient {
     static void approve(Context context, String approval, boolean allow) {
         final Target target = selected(context.getApplicationContext());
         final HubStore store = HubStore.get();
+        if (store.monitoringApproval(approval)) {
+            store.log("电脑端授权请在电脑端回答");
+            return;
+        }
         if (target == null) {
             store.approvalFailed(approval, "还没有设置 Runtime 的连接串");
             return;
@@ -265,6 +270,10 @@ final class RuntimeClient {
     static void cancel(Context context, String card) {
         final Target target = selected(context.getApplicationContext());
         final HubStore store = HubStore.get();
+        if (store.monitoringOnly(card)) {
+            store.log("电脑端对话仅同步状态，请在电脑端中断");
+            return;
+        }
         if (target == null) {
             return;
         }
@@ -463,6 +472,10 @@ final class RuntimeClient {
         final HubStore store = HubStore.get();
         final String url = target == null ? null : target.url;
         final String token = target == null ? null : target.token;
+        if (store.monitoringOnly(card)) {
+            store.log("电脑端对话仅同步状态，请在电脑端继续操作");
+            return;
+        }
         if (target == null) {
             store.chatFailed(text, "还没有设置 Runtime 的连接串");
             return;

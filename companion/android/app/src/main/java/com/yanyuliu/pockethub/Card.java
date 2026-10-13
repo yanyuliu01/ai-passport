@@ -55,7 +55,7 @@ final class Card {
 
     final String id;
     final String title;
-    /** talking、working、waiting、done、failed、cancelled 之一。 */
+    /** talking、working、waiting、done、failed、cancelled；电脑观察还可能是 unknown。 */
     final String state;
     /** 谁在做或做的；小幽自己答的是空串。 */
     final String agent;
@@ -80,17 +80,34 @@ final class Card {
     final long tokens;
     final int spent5h;
     final int spent7d;
+    /** 电脑上独立运行的对话只同步状态，不能从手机或设备接着说、取消或授权。 */
+    final String source;
+    final String project;
+    final String sessionId;
+    final boolean monitoringOnly;
+    final String desktopStatus;
+    final double observedAt;
+    final boolean stale;
 
     private Card(String id, String title, String state, String agent, String brief, String mood,
                  List<Entry> entries, List<String> progress, double createdAt, double startedAt,
                  int edits, boolean queued, long seq, double finishedAt, String effort,
-                 String model, long tokens, int spent5h, int spent7d) {
+                 String model, long tokens, int spent5h, int spent7d, String source,
+                 String project, String sessionId, boolean monitoringOnly, String desktopStatus,
+                 double observedAt, boolean stale) {
         this.finishedAt = finishedAt;
         this.effort = effort;
         this.model = model;
         this.tokens = tokens;
         this.spent5h = spent5h;
         this.spent7d = spent7d;
+        this.source = source;
+        this.project = project;
+        this.sessionId = sessionId;
+        this.monitoringOnly = monitoringOnly || source.equals("desktop");
+        this.desktopStatus = desktopStatus;
+        this.observedAt = observedAt;
+        this.stale = stale;
         this.id = id;
         this.title = title;
         this.state = state;
@@ -139,7 +156,11 @@ final class Card {
                 cost == null ? -1 : (long) (Json.number(cost, "in") + Json.number(cost, "out")
                         + Json.number(cost, "cached")),
                 cost != null && cost.get("d5") instanceof Double ? (int) Json.number(cost, "d5") : -1,
-                cost != null && cost.get("d7") instanceof Double ? (int) Json.number(cost, "d7") : -1);
+                cost != null && cost.get("d7") instanceof Double ? (int) Json.number(cost, "d7") : -1,
+                Json.string(raw, "source"), Json.string(raw, "project"),
+                Json.string(raw, "session_id"), Json.flag(raw, "monitoring_only"),
+                Json.string(raw, "desktop_status"), Json.number(raw, "observed_at"),
+                Json.flag(raw, "stale"));
     }
 
     /** 档位给人看的说法：低档、中档、高档……不认识的原样，没有就是空串。 */
@@ -196,6 +217,17 @@ final class Card {
         return state.equals("working") || state.equals("waiting") || state.equals("talking");
     }
 
+    /** 状态丢失的电脑对话仍留在当前列表；它没有结束，也不能算正在运行。 */
+    boolean outstanding() {
+        return active() || (monitoringOnly && state.equals("unknown"));
+    }
+
+    Card unknown() {
+        return new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
+                startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
+                source, project, sessionId, monitoringOnly, "unknown", observedAt, true);
+    }
+
     /** 这件事的第一句话。 */
     String said() {
         for (Entry entry : entries) {
@@ -230,6 +262,23 @@ final class Card {
 
     /** 给人看的状态。 */
     String stateLabel() {
+        if (monitoringOnly) {
+            switch (state) {
+                case "working":
+                case "talking":
+                    return "正在运行";
+                case "waiting":
+                    return "等待电脑端确认";
+                case "done":
+                    return "本轮结束";
+                case "cancelled":
+                    return "已中断";
+                case "failed":
+                    return "运行失败";
+                default:
+                    return "状态未知";
+            }
+        }
         switch (state) {
             case "working":
                 return queued ? "排队" : "在做";

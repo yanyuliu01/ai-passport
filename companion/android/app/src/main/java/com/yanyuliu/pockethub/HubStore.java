@@ -258,6 +258,41 @@ public final class HubStore {
         return new ArrayList<>(cards.values());
     }
 
+    public synchronized boolean monitoringOnly(String id) {
+        Long order = id == null ? null : cardOrder.get(id);
+        Card card = order == null ? null : cards.get(order);
+        return card != null && card.monitoringOnly;
+    }
+
+    public synchronized boolean monitoringApproval(String id) {
+        for (Card.Approval approval : approvals) {
+            if (approval.id.equals(id)) {
+                return monitoringOnly(approval.card);
+            }
+        }
+        return false;
+    }
+
+    /** 电脑状态失联时不能继续显示“在做”；重取完整 feed 后再恢复实际状态。 */
+    public void desktopDisconnected() {
+        boolean dirty = false;
+        synchronized (this) {
+            for (Map.Entry<Long, Card> entry : cards.entrySet()) {
+                Card card = entry.getValue();
+                if (card.monitoringOnly && !card.state.equals("unknown")) {
+                    entry.setValue(card.unknown());
+                    dirty = true;
+                }
+            }
+            if (dirty) {
+                feedSeq = 0;
+            }
+        }
+        if (dirty) {
+            notifyChanged();
+        }
+    }
+
     /** 后台还在做的事的件数。 */
     public synchronized int doing() {
         int count = 0;
@@ -309,7 +344,8 @@ public final class HubStore {
                 cards.put(order, card);
                 dirty = true;
                 // 后台的一件事有了结果：第一屏说这件事。正在等小幽回话时不打断那一轮。
-                if (previous != null && previous.active() && !card.active() && pending == 0) {
+                if (!card.monitoringOnly && previous != null && previous.active()
+                        && !card.active() && pending == 0) {
                     turnCard = card.id;
                 }
             }
@@ -358,7 +394,7 @@ public final class HubStore {
     public synchronized List<Card.Approval> approvals() {
         List<Card.Approval> open = new ArrayList<>();
         for (Card.Approval approval : approvals) {
-            if (!answered.contains(approval.id)) {
+            if (!answered.contains(approval.id) && !monitoringOnly(approval.card)) {
                 open.add(approval);
             }
         }
@@ -379,7 +415,7 @@ public final class HubStore {
         String found = null;
         synchronized (this) {
             for (Card.Approval approval : approvals) {
-                if (!answered.contains(approval.id)
+                if (!monitoringOnly(approval.card) && !answered.contains(approval.id)
                         && (approval.id.equals(id) || approvalAskId(approval).equals(id))) {
                     answered.add(approval.id);
                     found = approval.id;
@@ -648,7 +684,7 @@ public final class HubStore {
     public synchronized Ask currentAsk() {
         // 帮手停在那里等着，所以它的问题排在通知前面。
         for (Card.Approval approval : approvals) {
-            if (!answered.contains(approval.id)) {
+            if (!answered.contains(approval.id) && !monitoringOnly(approval.card)) {
                 return new Ask(approvalAskId(approval), approval.tool, approval.detail,
                         approval.id, null, null);
             }

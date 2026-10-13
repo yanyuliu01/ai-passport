@@ -1807,6 +1807,62 @@ static buddy_event_t tasks_event(unsigned count, uint32_t generation)
     return event;
 }
 
+static void test_unknown_desktop_observation_keeps_progress_without_running_or_approval(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t event;
+    buddy_event_t ok = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+
+    voice_ready_state(&state);
+    event = tasks_event(1, 7);
+    event.tasks[0].state = BUDDY_TASK_WAITING;
+    snprintf(event.tasks[0].line1, sizeof(event.tasks[0].line1), "%s", "git diff");
+    snprintf(event.tasks[0].line2, sizeof(event.tasks[0].line2), "%s", "waiting on computer");
+    buddy_state_reduce(&state, &event, 100, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.doing == 1U && !snapshot.confirmation_pending);
+
+    /* The observer lost contact. The same task and latest progress remain,
+     * but no live work or remote approval is inferred from the observation. */
+    event.tasks[0].state = BUDDY_TASK_UNKNOWN;
+    buddy_state_reduce(&state, &event, 200, &action);
+    event = card_event("c2", BUDDY_CARD_UNKNOWN, "codex", "desktop session", "git diff", 7);
+    buddy_state_reduce(&state, &event, 201, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.task_count == 1 && snapshot.past_count == 0 && snapshot.doing == 0U);
+    assert(snapshot.tasks[0].state == BUDDY_TASK_UNKNOWN && !buddy_task_active(&snapshot.tasks[0]));
+    assert(strcmp(snapshot.tasks[0].line2, "waiting on computer") == 0);
+    assert(snapshot.cards->cards[0].state == BUDDY_CARD_UNKNOWN &&
+           strcmp(buddy_cards_reply(snapshot.cards, 0), "git diff") == 0);
+    assert(!snapshot.confirmation_pending && snapshot.prompt_id[0] == '\0');
+
+    /* Opening it is ordinary navigation, not permission delivery. */
+    state.page = BUDDY_PAGE_TASKS;
+    buddy_state_reduce(&state, &ok, 202, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.card_thread && snapshot.card_index == 0);
+    assert(action.type != BUDDY_ACTION_PERMISSION && !snapshot.confirmation_pending);
+
+    /* Fresh evidence can resume the same session without losing selection. */
+    event = tasks_event(1, 7);
+    buddy_state_reduce(&state, &event, 300, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.tasks[0].state == BUDDY_TASK_WORKING && snapshot.doing == 1U &&
+           snapshot.task_selected == 0 && snapshot.card_thread);
+
+    event.tasks[0].state = BUDDY_TASK_IDLE;
+    buddy_state_reduce(&state, &event, 400, &action);
+    event = card_event("c2", BUDDY_CARD_IDLE, "codex", "desktop session", "turn ended", 7);
+    buddy_state_reduce(&state, &event, 401, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.tasks[0].state == BUDDY_TASK_IDLE && snapshot.doing == 0U &&
+           !buddy_task_active(&snapshot.tasks[0]));
+    assert(snapshot.cards->cards[0].state == BUDDY_CARD_IDLE &&
+           !snapshot.confirmation_pending && snapshot.prompt_id[0] == '\0');
+}
+
 static void test_the_third_screen_lists_the_things_in_progress(void)
 {
     buddy_state_t state;
@@ -2410,6 +2466,7 @@ int main(void)
     test_cards_are_kept_in_order_and_updated_in_place();
     test_the_conversation_screen_shows_one_card_at_a_time();
     test_the_third_screen_lists_the_things_in_progress();
+    test_unknown_desktop_observation_keeps_progress_without_running_or_approval();
     test_the_third_screen_keeps_the_things_that_ended();
     test_a_host_without_cards_still_shows_its_latest_reply();
     test_a_recording_on_its_way_is_not_wiped_by_an_idle_report();

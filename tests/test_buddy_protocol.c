@@ -600,7 +600,7 @@ static void test_chat_reports_the_conversation(void)
 
         assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
         assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                           "\"threads\":true,\"usage\":true,\"past\":true}\n") == 0);
+                           "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true}\n") == 0);
     }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }
@@ -631,6 +631,8 @@ static void test_card_carries_one_thing(void)
             {"talking", BUDDY_CARD_TALKING}, {"working", BUDDY_CARD_WORKING},
             {"waiting", BUDDY_CARD_WAITING}, {"done", BUDDY_CARD_DONE},
             {"failed", BUDDY_CARD_FAILED},   {"cancelled", BUDDY_CARD_CANCELLED},
+            {"unknown", BUDDY_CARD_UNKNOWN},
+            {"idle", BUDDY_CARD_IDLE},
         };
 
         for (index = 0; index < sizeof(states) / sizeof(states[0]); ++index) {
@@ -718,6 +720,24 @@ static void test_tasks_lists_the_things_in_progress(void)
            strcmp(event.tasks[0].line1, "ok") == 0);
     assert(event.tasks[1].state == BUDDY_TASK_FAILED &&
            event.tasks[2].state == BUDDY_TASK_CANCELLED);
+
+    /* Lost observation retains the last steps without claiming it is working
+     * or ended. The explicit unknown state is distinct from an omitted state. */
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"d1\",\"agent\":\"codex\","
+                 "\"state\":\"unknown\",\"secs\":42,\"p1\":\"git diff\","
+                 "\"p2\":\"connection lost\"}]}", &event) == BUDDY_EVENT_TASKS);
+    assert(event.task_count == 1 && event.tasks[0].state == BUDDY_TASK_UNKNOWN);
+    assert(event.tasks[0].seconds == 42U && strcmp(event.tasks[0].line1, "git diff") == 0 &&
+           strcmp(event.tasks[0].line2, "connection lost") == 0);
+
+    /* A desktop turn ending is distinguishable from a completed project, both
+     * on the current list and in the separately paged history. */
+    assert(parse("{\"cmd\":\"tasks\",\"list\":[{\"id\":\"d1\",\"state\":\"idle\"}]}",
+                 &event) == BUDDY_EVENT_TASKS);
+    assert(event.task_count == 1 && event.tasks[0].state == BUDDY_TASK_IDLE);
+    assert(parse("{\"cmd\":\"past\",\"at\":0,\"n\":1,\"list\":["
+                 "{\"id\":\"d1\",\"state\":\"idle\"}]}", &event) == BUDDY_EVENT_PAST);
+    assert(event.past_count == 1 && event.past[0].state == BUDDY_TASK_IDLE);
 
     assert(parse("{\"cmd\":\"tasks\",\"list\":[]}", &event) == BUDDY_EVENT_TASKS);
     assert(event.task_count == 0);

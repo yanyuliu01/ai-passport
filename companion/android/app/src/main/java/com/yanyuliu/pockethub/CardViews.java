@@ -22,16 +22,17 @@ final class CardViews {
 
     /** 交给过帮手的事是任务；小幽自己答的（包括没答成的）是对话。 */
     static boolean isTask(Card card) {
-        return !card.agent.isEmpty();
+        return card.monitoringOnly || !card.agent.isEmpty();
     }
 
     /** 任务：还在做的在前，然后是结束的；各自新的在前。最多 limit 件。 */
     static List<Card> tasks(List<Card> cards, int limit) {
         List<Card> out = new ArrayList<>();
-        for (int pass = 0; pass < 2; pass++) {
+        for (int pass = 0; pass < 3; pass++) {
             for (int index = cards.size() - 1; index >= 0; index--) {
                 Card card = cards.get(index);
-                if (isTask(card) && card.active() == (pass == 0) && out.size() < limit) {
+                int group = card.active() ? 0 : (card.outstanding() ? 1 : 2);
+                if (isTask(card) && group == pass && out.size() < limit) {
                     out.add(card);
                 }
             }
@@ -75,12 +76,15 @@ final class CardViews {
 
     /** “c3 · codex 高档 · 在做（改过 1 次）”。 */
     static String status(Card card) {
-        StringBuilder out = new StringBuilder(card.id);
+        StringBuilder out = new StringBuilder(card.monitoringOnly ? "电脑" : card.id);
         if (!card.agent.isEmpty()) {
             out.append(" · ").append(card.agent);
             if (!card.effort.isEmpty()) {
                 out.append(' ').append(Card.effortLabel(card.effort));
             }
+        }
+        if (card.monitoringOnly && !card.project.isEmpty()) {
+            out.append(" · ").append(card.project);
         }
         out.append(" · ").append(card.stateLabel());
         if (card.edits > 0) {
@@ -96,7 +100,7 @@ final class CardViews {
 
     /** 任务列表里的一项：状态、标题、最新的一句。 */
     static String listItem(Card card) {
-        String latest = card.active() && !card.progress.isEmpty()
+        String latest = card.outstanding() && !card.progress.isEmpty()
                 ? "› " + card.progress.get(card.progress.size() - 1)
                 : (card.brief.isEmpty() ? card.lastSay() : card.brief);
         latest = oneLine(latest, PREVIEW_CHARS);
@@ -129,9 +133,16 @@ final class CardViews {
         while (out.size() > limit) {
             out.remove(0);
         }
+        // 失联对话仍在当前列表，但不能把已知正在运行的任务挤出去。
+        for (int index = cards.size() - 1; index >= 0 && out.size() < limit; index--) {
+            Card card = cards.get(index);
+            if (isTask(card) && card.outstanding() && !card.active()) {
+                out.add(card);
+            }
+        }
         for (int index = cards.size() - 1; ended && index >= 0 && out.size() < limit; index--) {
             Card card = cards.get(index);
-            if (isTask(card) && !card.active()) {
+            if (isTask(card) && !card.outstanding()) {
                 out.add(card);
             }
         }
@@ -151,7 +162,7 @@ final class CardViews {
     static List<Card> devicePast(List<Card> cards, int limit) {
         List<Card> out = new ArrayList<>();
         for (Card card : cards) {
-            if (isTask(card) && !card.active()) {
+            if (isTask(card) && !card.outstanding()) {
                 out.add(card);
             }
         }
@@ -196,22 +207,41 @@ final class CardViews {
 
     /** 下半张单子上的一行。 */
     static BuddyProtocol.Past devicePastItem(Card card, long nowSeconds, TimeZone zone) {
-        return new BuddyProtocol.Past(card.id, card.agent, card.title, card.state,
+        return devicePastItem(card, nowSeconds, zone, true);
+    }
+
+    static BuddyProtocol.Past devicePastItem(Card card, long nowSeconds, TimeZone zone,
+                                            boolean desktop) {
+        return new BuddyProtocol.Past(card.id, card.agent, deviceTitle(card), deviceState(card, desktop),
                 dayLabel(endedAt(card), nowSeconds, zone), card.effort);
     }
 
     /** 单子上的一行。做完的事：状态是它怎么结束的，p1 是结论（设备上没有它的卡时用）。 */
     static BuddyProtocol.Task deviceTask(Card card, long nowSeconds) {
+        return deviceTask(card, nowSeconds, true);
+    }
+
+    static BuddyProtocol.Task deviceTask(Card card, long nowSeconds, boolean desktop) {
+        if (card.monitoringOnly && card.state.equals("unknown")) {
+            int steps = card.progress.size();
+            return new BuddyProtocol.Task(card.id, card.agent, deviceTitle(card),
+                    deviceState(card, desktop), 0L,
+                    steps >= 2 ? card.progress.get(steps - 2)
+                            : (steps == 1 ? card.progress.get(0) : card.stateLabel()),
+                    steps >= 2 ? card.progress.get(steps - 1) : "", card.effort);
+        }
         if (!card.active()) {
-            String state = card.state.equals("failed") || card.state.equals("cancelled")
-                    ? card.state : "done";
-            return new BuddyProtocol.Task(card.id, card.agent, card.title, state, 0L,
+            String state = card.monitoringOnly && card.state.equals("done")
+                    ? deviceState(card, desktop)
+                    : (card.state.equals("failed") || card.state.equals("cancelled")
+                            ? card.state : "done");
+            return new BuddyProtocol.Task(card.id, card.agent, deviceTitle(card), state, 0L,
                     oneLine(card.brief.isEmpty() ? card.lastSay() : card.brief, PREVIEW_CHARS), "",
                     card.effort);
         }
         int steps = card.progress.size();
         double since = card.startedAt > 0 ? card.startedAt : card.createdAt;
-        return new BuddyProtocol.Task(card.id, card.agent, card.title,
+        return new BuddyProtocol.Task(card.id, card.agent, deviceTitle(card),
                 card.state.equals("waiting") ? "waiting" : (card.queued ? "queued" : "working"),
                 since > 0 ? Math.max(0L, nowSeconds - (long) since) : 0L,
                 steps >= 2 ? card.progress.get(steps - 2) : (steps == 1 ? card.progress.get(0) : ""),
@@ -260,10 +290,41 @@ final class CardViews {
      * （threads）上有自己的页面，给的是它最近的来回。
      */
     static String deviceReply(Card card, boolean threads) {
+        if (card.monitoringOnly) {
+            StringBuilder out = new StringBuilder(card.stateLabel());
+            out.append("\n仅同步状态，请在电脑端操作");
+            if (!card.progress.isEmpty()) {
+                out.append("\n").append(oneLine(card.progress.get(card.progress.size() - 1),
+                        THREAD_ENTRY_CHARS));
+            }
+            if (!card.brief.isEmpty()) {
+                out.append("\n").append(oneLine(card.brief, THREAD_ENTRY_CHARS));
+            }
+            return BuddyProtocol.clip(out.toString(), THREAD_BYTES);
+        }
         if (threads && isTask(card)) {
             return deviceThread(card);
         }
         return BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay());
+    }
+
+    /** 电脑状态放在现有卡和任务协议里；项目名优先，长标题由协议按字节截断。 */
+    static String deviceTitle(Card card) {
+        return card.monitoringOnly ? "电脑 · "
+                + (card.project.isEmpty() ? "" : card.project + " · ") + card.title : card.title;
+    }
+
+    /** 电脑本轮结束与 Runtime 任务完成在设备上也分别显示。 */
+    static String deviceState(Card card) {
+        return deviceState(card, true);
+    }
+
+    static String deviceState(Card card, boolean desktop) {
+        if (card.monitoringOnly && card.state.equals("unknown")) {
+            return desktop ? "unknown" : "cancelled";
+        }
+        return card.monitoringOnly && card.state.equals("done")
+                ? (desktop ? "idle" : "done") : card.state;
     }
 
     /** 发一句话的请求体。card 不为 null 表示是在那件事里面说的：一定归到它。 */

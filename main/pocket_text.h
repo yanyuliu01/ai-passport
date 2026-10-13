@@ -53,6 +53,8 @@
 #define PT_CARD_DONE       "%s 做完"
 #define PT_CARD_FAILED     "没成"
 #define PT_CARD_CANCELLED  "取消了"
+#define PT_STATUS_UNKNOWN  "Unknown"
+#define PT_STATUS_IDLE     "Turn ended"
 #define PT_CARD_EDITS      "改过 %u 次"
 // 帮手的名字太长、那一行放不下时用这个代替
 #define PT_CARD_HELPER     "帮手"
