@@ -1,0 +1,482 @@
+{
+  "date": "2026-10-12",
+  "selected_sheet_count": 13,
+  "selected_drawn_pose_count": 176,
+  "note": "Pose count includes style variants; not unique moods or animation frames. Native grid and palette not certified.",
+  "assets": [
+    {
+      "file": "fw-whale-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 1877466,
+      "sha256": "69fc77fa15c9a1d632a7ed630ef841568a5de013c8e7f70c32f4837e81bc1e10",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.47939241781386405,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-claude-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 1626501,
+      "sha256": "f05fdda0850ac86dcbc3e5ef0ab5a0013a8c7be715a9ae9b2cfa2e2da6827b1c",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.46422384847837367,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-codex-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 1459114,
+      "sha256": "ac6b11222ccb4696766c0d85e642004bbd9b935bd8fc6f3efea6a98dc0818328",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.5402294903492975,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-whale-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2264658,
+      "sha256": "05a6206ac6d46fdf6f1d810a04dc7106472a1489f78426579cac5bb0316979d2",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.46240003357650866,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-claude-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2222979,
+      "sha256": "d39bde46dd317eb026a544587197dca8ce6f53124214be747f953fa669ed2568",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.4558195466153862,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-codex-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 1927188,
+      "sha256": "cd6881f54a483f37c2c77395a03fa6777ae7db5dc82eda8fe67746d54836aef1",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.5385277718425363,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-whale-emotions-v1.png",
+      "selected": false,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2471934,
+      "sha256": "19b66d6d18a8cff1b18a5842f31c67571fdf45ae1376e82398d6166f0434b23d",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.39731120844907053,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-whale-v1.png",
+      "selected": false,
+      "width": 1333,
+      "height": 1180,
+      "mode": "RGBA",
+      "bytes": 1585524,
+      "sha256": "a65788b97391806f309cf6039ae2ddb9b5a2d254749cb74d6ce20deacebdc14c",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3616851246709983,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-claude-v1.png",
+      "selected": false,
+      "width": 1261,
+      "height": 1247,
+      "mode": "RGBA",
+      "bytes": 1451675,
+      "sha256": "a6a83596eb1e1779037e1a2dc68250d9f62ad8fb210712f08eb8b0a087d48b98",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.373258071552535,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-codex-v1.png",
+      "selected": false,
+      "width": 1325,
+      "height": 1187,
+      "mode": "RGBA",
+      "bytes": 1716597,
+      "sha256": "637963b1b9471fcf44c42b7fd6bb53bc480659474abea97f19dbbee82a46f866",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3325885775142662,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-codex-elegant-v1.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2738201,
+      "sha256": "5022eb1754c5de19f8b0c6f86db96b4a958c5790915284d0dc333e516fb37de4",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3734146546198224,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-codex-elegant-v1.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2435744,
+      "sha256": "f1a1efd3530cf5a07bfd2b3b8bcec909633e15cc575d936a858209e2803c4f17",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3595160149771578,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-codex-elegant-v1.png",
+      "selected": true,
+      "width": 1312,
+      "height": 1199,
+      "mode": "RGBA",
+      "bytes": 2274368,
+      "sha256": "e5424a69cbd8f28e761afc5502f0ca5bce739a4676e6e19652c02a6e4ea79a09",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.21282852580402367,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-codex-dot-eyes-v1.png",
+      "selected": true,
+      "width": 1774,
+      "height": 887,
+      "mode": "RGBA",
+      "bytes": 1331104,
+      "sha256": "0c5ee82c301308ae4693509c6a9625dbebf960a37f6645105da31be71eca1351",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3737024463343116,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 2
+      },
+      "intended_pose_count": 8,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-dot-eyes-elegant-v1.png",
+      "selected": true,
+      "width": 2046,
+      "height": 768,
+      "mode": "RGBA",
+      "bytes": 1259775,
+      "sha256": "6516fca6094cb9ee0d1e2d2e69b08f8e11da65f0063638260bdb773a381206e4",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.4192351946888237,
+      "intended_grid": {
+        "columns": 8,
+        "rows": 3
+      },
+      "intended_pose_count": 24,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-whale-dot-eyes-v1.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 1053810,
+      "sha256": "2c72fd2a69635bccd6b280ce63257d4602106ba3d297cacf05c56b1dd405ad56",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.5164028875797442,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-whale-v2.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2621373,
+      "sha256": "85d47588981c1130d065dbfa7b569e03ed5970fcb7891f0c6a672d20a944e262",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.36448889940274515,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-claude-v2.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2823947,
+      "sha256": "af76daa01533aaa4ccc0b2d0925ecd6e5abe761a2c8088347aab30b8a1869569",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3223885361659697,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-whale-v2.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2370617,
+      "sha256": "091adfbd8217c0b4633d2661962bd4dd2fff32b80b8606f796d823ae8de972b3",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.4006383352156528,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "fw-claude-v2.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2442297,
+      "sha256": "40d3e879b0140b525144c4538b613129cdef7df11dd8cc2133dd4681abcab604",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.3678058514697354,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-whale-v2.png",
+      "selected": true,
+      "width": 1312,
+      "height": 1199,
+      "mode": "RGBA",
+      "bytes": 2422126,
+      "sha256": "067d1fb799f01960a6bc62d2cf120bae0dd1148a29a875c8e27d0ec8f0615858",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.23672737952358672,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-claude-v2.png",
+      "selected": true,
+      "width": 1312,
+      "height": 1199,
+      "mode": "RGBA",
+      "bytes": 2450414,
+      "sha256": "d87b49c78d21140f0ddb2f789950c4d3640a479938af9a60e1b55161ba4659d2",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.20293016029618177,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "app-whale-emotions-v2.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2812940,
+      "sha256": "b82776769851d87d23b5ce2ee30c5324ca2d4f4aefb8e3b6f24ceacf0af358f9",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.2801915132830703,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 3
+      },
+      "intended_pose_count": 12,
+      "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    }
+  ],
+  "references": [
+    {
+      "file": "reference-codex-elegant.png",
+      "width": 384,
+      "height": 542,
+      "sha256": "28adacac3874ed9928faddf07be264ae205bd29ce4f584faebdcec1dd6ab0c15"
+    },
+    {
+      "file": "reference-xiaoyou-style.png",
+      "width": 720,
+      "height": 480,
+      "sha256": "c458ef7c136d43f6730de50ff4762cf90ccea5854ce0135b3294a966f904a92d"
+    }
+  ]
+}

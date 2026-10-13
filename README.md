@@ -5,31 +5,70 @@
 <h1 align="center">Claude Pocket</h1>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/images/logo-wordmark-dark.png">
-    <img src="assets/images/logo-wordmark.png" alt="FoloToy wordmark" width="128">
-  </picture>
-</p>
-
-<p align="center">
-  <strong>Xiaoyou, worn on you: the one AI companion you talk to.</strong>
+  <strong>Xiaoyou, a tiny pixel ghost, lives on your wrist.<br>
+  You talk to her; she hands the work to her helpers.</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/MCU-ESP32--C3-14b8a6?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/ESP--IDF-5.5.3-2563eb?style=flat-square" alt="ESP-IDF 5.5.3">
+  <img src="https://img.shields.io/badge/link-BLE%20Secure-a78bfa?style=flat-square" alt="Bluetooth LE Secure Connections">
 </p>
 
 <p align="center">
-  <img src="assets/images/home.jpg" alt="The FoloToy AI Passport wearable, shown from the front, side, and back" width="100%">
+  <img src="assets/images/readme/readme-hero.jpg" alt="Xiaoyou, a white pixel ghost with a heart, passes a dotted trail to three chibi helpers: a blue-haired whale maid, an orange-haired scholar and a silver-haired companion, all waving." width="100%">
 </p>
 
-This repository turns the [FoloToy AI Passport](https://ai-passport.folotoy.cn/), an open,
-wearable ESP32-C3 device, into the face of **Xiaoyou**. Xiaoyou is a small pixel
-ghost and the only one you talk to: she answers what she can herself, hands longer work
-to agents such as Claude Code and Codex in the background, and relays their results.
-When an agent wants to do something that needs your approval, the device asks you.
+**Claude Pocket** is firmware for a small, open ESP32-C3 wearable from
+[FoloToy](https://ai-passport.folotoy.cn/en/). Hold the button and talk. Xiaoyou
+answers on the screen. When the job is bigger than a chat, she hands it to a
+coding agent, shows who is working and which step they're on, and asks you
+before anything that needs your say.
+
+The device talks over encrypted Bluetooth LE to a phone companion app. Without
+the app, it also works with the Claude desktop app in Developer Mode.
+
+## Meet Xiaoyou
+
+<p align="center">
+  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="Six moods of Xiaoyou, the pixel ghost: asleep, idle, busy with a sweat drop, asking with an exclamation mark, happy with a heart, and failed with crossed eyes." width="560">
+</p>
+
+She is drawn pixel by pixel in [`main/pocket_pet.c`](main/pocket_pet.c). She
+sleeps while nothing is connected and bobs gently when idle. When she's busy,
+three dots bounce over her head and a sweat drop shows. She raises an
+exclamation mark when she needs you, gets a heart when things go well, and
+crosses her eyes when something fails.
+
+## Her helpers
+
+Xiaoyou does not do the heavy lifting herself. She hands it to whichever agent
+the host has configured. Each helper has a colour of its own on the device and
+a character in the companion design pack:
+
+| | Helper | Runs as |
+| --- | --- | --- |
+| 🐋 | **DSH**: the whale maid | DeepSeek Harness CLI (`dsh`) |
+| 🧡 | **Claude**: the orange-haired scholar | Claude Code (`claude`, `tailor`) |
+| 🌙 | **Codex**: the silver-haired companion | Codex app-server |
+
+<p align="center">
+  <img src="assets/images/readme/readme-crew.jpg" alt="Three rows, one per helper, each in four poses: thinking, typing on a laptop, waving while waiting for your approval, and cheering when the task is done." width="100%">
+</p>
+
+<p align="center"><sub>Thinking · working · waiting for your OK · done</sub></p>
+
+And as pixel heads, sized for a small screen:
+
+<p align="center">
+  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="Pixel-art heads of the three helpers, eight expressions each: neutral, happy, thinking, focused, puzzled, surprised, error, and sleeping." width="100%">
+</p>
+
+> The helper characters are unofficial, fan-inspired concept art, and the
+> firmware does not use them yet. See the
+> [design pack](docs/reference/yanyuliu01/ai-companion-design.md) for every sheet
+> and its status.
 
 ## Three parts
 
@@ -98,4 +137,6 @@ number from `firmware list`).
 
 ## License
 
-[MIT](LICENSE). Third-party notices are in [NOTICE](NOTICE).
+Code: [MIT](LICENSE). See [NOTICE](NOTICE) for third-party attributions. The
+companion artwork has no separate art license yet; see
+[assets/README.md](assets/README.md#ai-companion-design-pack).

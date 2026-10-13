@@ -5,30 +5,64 @@
 <h1 align="center">Claude Pocket</h1>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/images/logo-wordmark-dark.png">
-    <img src="assets/images/logo-wordmark.png" alt="FoloToy 字标" width="128">
-  </picture>
-</p>
-
-<p align="center">
-  <strong>戴在身上的小幽——你唯一要对话的 AI 伙伴。</strong>
+  <strong>小幽是一只住在你手腕上的像素小幽灵。<br>
+  你只跟她说话，活儿由她交给帮手去做。</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/MCU-ESP32--C3-14b8a6?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/ESP--IDF-5.5.3-2563eb?style=flat-square" alt="ESP-IDF 5.5.3">
+  <img src="https://img.shields.io/badge/link-BLE%20Secure-a78bfa?style=flat-square" alt="低功耗蓝牙安全连接">
 </p>
 
 <p align="center">
-  <img src="assets/images/home.jpg" alt="FoloToy AI Passport 可穿戴设备，正面、侧面、背面展示" width="100%">
+  <img src="assets/images/readme/readme-hero.jpg" alt="白色像素小幽灵小幽带着一颗爱心，一串虚线连向三位 Q 版帮手：蓝发鲸鱼女仆、橙发学者、银发伙伴，都在挥手。" width="100%">
 </p>
 
-这个仓库把 [FoloToy AI Passport](https://ai-passport.folotoy.cn/)（一块开放、可穿戴的
-ESP32-C3 小设备）变成**小幽**随身的那张脸。小幽是一只像素小幽灵，也是你唯一要对话的
-对象：她自己能答的直接答，要花时间的交给 Claude Code、Codex 等 agent 在后台做，做完由
-她转述；agent 要做需要你确认的操作时，设备上弹出来问你。
+**Claude Pocket** 是跑在 [FoloToy](https://ai-passport.folotoy.cn/) 一款开放式
+ESP32-C3 小型可穿戴设备上的固件。按住按键说话，小幽在屏幕上回答你。遇到聊天
+解决不了的事，她会把活儿交给编程 agent：屏幕上能看到是谁在做、做到第几步；
+需要你点头的操作，她会先问你。
+
+设备通过加密的低功耗蓝牙连着手机伴侣 App。没装 App 时，也可以在开发者模式下
+直连 Claude 桌面端。
+
+## 认识小幽
+
+<p align="center">
+  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="像素小幽灵小幽的六种表情：睡着、空闲、忙碌冒汗、感叹号找你、开心带爱心、失败叉叉眼。" width="560">
+</p>
+
+她在 [`main/pocket_pet.c`](main/pocket_pet.c) 里一格一格画出来。没连上时她在
+睡觉，空闲时轻轻上下浮动；忙的时候头顶跳着三个点，还挂着一滴汗。有事找你时
+会冒出感叹号，事情顺利会冒爱心，失败了就变成叉叉眼。
+
+## 她的帮手
+
+重活不由小幽自己干。她会交给主机上配置好的 agent。每位帮手在设备上都有自己
+固定的颜色，在伴侣设计包里也有一个角色形象：
+
+| | 帮手 | 背后跑的是 |
+| --- | --- | --- |
+| 🐋 | **DSH**：鲸鱼女仆 | DeepSeek Harness 命令行（`dsh`） |
+| 🧡 | **Claude**：橙发学者 | Claude Code（`claude`、`tailor`） |
+| 🌙 | **Codex**：银发伙伴 | Codex app-server |
+
+<p align="center">
+  <img src="assets/images/readme/readme-crew.jpg" alt="三行，每行一位帮手，各四个姿势：思考、在笔记本上敲代码、挥手等你批准、任务完成欢呼。" width="100%">
+</p>
+
+<p align="center"><sub>思考中 · 干活中 · 等你点头 · 完成啦</sub></p>
+
+还有适合小屏幕的像素头像版：
+
+<p align="center">
+  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="三位帮手的像素头像，每位八种表情：平静、开心、思考、专注、疑惑、惊讶、出错、睡觉。" width="100%">
+</p>
+
+> 帮手角色是非官方的同人风格概念图，固件目前还没有用上。全部图稿和各自的状态
+> 见[设计包](docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)。
 
 ## 整体由三部分组成
 
@@ -95,4 +129,5 @@ Buddy（这时没有语音和卡）。
 
 ## 许可
 
-[MIT](LICENSE)。第三方版权信息见 [NOTICE](NOTICE)。
+代码：[MIT](LICENSE)。第三方版权信息见 [NOTICE](NOTICE)。伴侣角色图稿暂未单独
+指定美术许可，见 [assets/README.zh_CN.md](assets/README.zh_CN.md)。

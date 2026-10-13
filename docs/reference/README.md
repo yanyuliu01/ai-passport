@@ -92,3 +92,8 @@ and its Simplified Chinese peer in the same change.
 ## Related
 
 - Repository overview and demo branches: [`../README.md`](../README.md)
+
+### yanyuliu01
+
+- [AI Character Reference Collection](yanyuliu01/ai-character-references.md) — whale-maid, Claude, Codex and related character portraits, turnaround sheets, expressions and animation sources for work-state presentation.
+- [AI Companion Design Pack](yanyuliu01/ai-companion-design.md) — generated work-pose sheets, pixel head portraits and XiaoYou-style dot-eye alternatives, with an elegant Codex style shared by DSH and Claude.

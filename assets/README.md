@@ -70,3 +70,13 @@ Store reusable music and sound-effect sources in `music/`.
 - Prefer 16 kHz, 16-bit mono PCM when it matches the current BSP audio path.
 - Check Flash and internal-RAM cost before embedding audio; stream or chunk long recordings.
 - Do not commit media without redistribution permission.
+
+### AI companion design pack
+
+Generated source concepts for DSH (whale maid), Claude and the user-selected elegant Codex character, using the built-in image generation tool on 2026-10-12. The [design gallery](../docs/reference/yanyuliu01/ai-companion-design.md) identifies recommended variants and intended pose order. Files are under `images/ai-companions/`; `app-*` sheets target app illustration, `fw-*` sheets explore full-body firmware characters, and `avatar-*` sheets explore small pixel portraits including a dot-eye alternative matching XiaoYou.
+
+Actual PNG dimensions, alpha statistics, hashes and selected/draft status are in [manifest.json](images/ai-companions/manifest.json); generation prompts are retained in [prompts.json](images/ai-companions/prompts.json). PNGs are static high-resolution source sheets, not compiled LVGL resources or continuous animation frames. Firmware requires cell extraction, edge and pixel-grid cleanup, palette conversion and measured RAM/Flash budgets before integration; app sheets require extraction and edge inspection.
+
+The user supplied `reference-codex-elegant.png` as a character reference; original author and reuse license are unknown. `reference-xiaoyou-style.png` was rendered from this repository's `main/pocket_pet.c`. Other sheets were generated for this project, guided by community character conventions and the user's preferences. No third-party rights or official affiliation are asserted. No new artwork license is assigned by this entry; the repository code license does not establish rights to underlying character references.
+
+The root README's banners in `images/readme/` are composited from these sheets and from `reference-xiaoyou-style.png`; they carry the same status and rights notes.
