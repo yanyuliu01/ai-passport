@@ -1901,6 +1901,9 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             break;
         default:
             status = hub ? PT_HEAD_DONE : PT_DESKTOP_REPLY;
+            if (hub && mood == POCKET_PET_IDLE) {
+                mood = POCKET_PET_HAPPY;  // 说完啦：她没说别的表情，就是开心的
+            }
             reply = with_cut_note(text, sizeof(text), snap->reply, snap->reply_truncated);
             break;
         }
@@ -1969,6 +1972,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             break;
         case BUDDY_CARD_DONE:
             status = PT_HEAD_DONE;
+            mood = POCKET_PET_HAPPY;
             if (card->edits > 0U) {
                 (void)snprintf(note, sizeof(note), PT_CARD_EDITS, (unsigned)card->edits);
             } else if (agent[0] != '\0') {
