@@ -73,7 +73,7 @@ final class CompanionStage extends FrameLayout {
         restart();
     }
 
-    private boolean moving() {
+    boolean moving() {
         return getContext().getSharedPreferences("ds_ui", Context.MODE_PRIVATE).getBoolean("animate", true)
                 && Settings.Global.getFloat(getContext().getContentResolver(), Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0;
     }

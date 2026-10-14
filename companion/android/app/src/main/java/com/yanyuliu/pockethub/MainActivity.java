@@ -144,6 +144,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private final Set<String> activeDispatched = new HashSet<>();
     /** 帮手刚做完的时刻（role → 毫秒），首页把它的胶囊变绿一会儿。 */
     private final Map<String, Long> doneAt = new HashMap<>();
+    /** 帮手刚做完的那件事（role → 卡 id），点绿胶囊直接去看结果。 */
+    private final Map<String, String> doneCard = new HashMap<>();
+    /** 信还没送到的帮手：胶囊先保持空闲，信落下才开始转。 */
+    private final Set<String> letterFor = new HashSet<>();
+    /** 小幽话还没说完时先记下要送信给谁，说完再飞。 */
+    private String pendingLetter = null;
+    /** 首页常驻的帮手胶囊（role → 胶囊），状态变化时原地更新、不重建。 */
+    private final Map<String, HelperChip> helperChips = new HashMap<>();
     private FrameLayout frame;
     private LinearLayout agentPane;
     private LinearLayout usagePane;
@@ -819,7 +827,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             // Task ids may be reused on another computer; never carry the opened target across.
             openTask = null; openAgent = null; taskKey = null; chatKey = null; agentKey = null; drawerKey = null;
             if (tab == TAB_TASKS || tab == TAB_AGENT) tab = TAB_HOME;
-            seenDispatched = null; activeDispatched.clear(); doneAt.clear(); busyKey = null;
+            seenDispatched = null; activeDispatched.clear(); doneAt.clear(); doneCard.clear();
+            letterFor.clear(); pendingLetter = null; busyKey = null;
             lastRuntime = runtimeUrl;
             companionChoice = getSharedPreferences("ds_ui", MODE_PRIVATE)
                     .getString("companion_" + ArtifactDownload.key(runtimeUrl), "ds");
@@ -1554,9 +1563,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (card.outstanding()) nowActive.add(card.id);
             if (seenDispatched != null && !seenDispatched.contains(card.id) && card.outstanding()) flyTo = AppPresentation.owner(card);
             if (activeDispatched.contains(card.id) && !card.outstanding() && card.state.equals("done")) {
-                doneAt.put(AppPresentation.owner(card), System.currentTimeMillis());
+                String role = AppPresentation.owner(card);
+                doneAt.put(role, System.currentTimeMillis()); doneCard.put(role, card.id);
+                letterFor.remove(role); if (role.equals(pendingLetter)) pendingLetter = null;
                 if (tab == TAB_HOME) stage.hop();
-                uiHandler.postDelayed(() -> { busyKey = null; refreshHome(HubStore.get(), HubStore.get().cards()); }, 8200);
+                uiHandler.postDelayed(() -> refreshHome(HubStore.get(), HubStore.get().cards()), 8200);
             }
         }
         if (seenDispatched == null && store.cardsEpoch() > 0 && !cards.isEmpty()) seenDispatched = new HashSet<>();
@@ -1597,30 +1608,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
         stage.set(companionChoice, mood, state);
         if (!line.contentEquals(homeSpeech.getText())) homeSpeech.setText(line);
 
-        // 谁在忙：在做的转圈，刚做完的绿一会儿。没有就不显示这一行。
-        long now = System.currentTimeMillis();
-        StringBuilder key = new StringBuilder();
-        for (AppPresentation.Helper helper : roster) {
-            Card current = helper.current(connected);
-            Long done = doneAt.get(helper.role);
-            if (current != null) key.append(helper.role).append(':').append(current.id).append(DsState.state(current, connected)).append('|');
-            else if (done != null && now - done < 8000) key.append(helper.role).append(":done|");
+        // 谁在忙：每位帮手一个常驻胶囊，空闲白、在做转圈、等你确认橙、刚做完绿一会儿。
+        // 新交出去的事先等她把话说完，再飞一封信过去；信落下胶囊才开始转。
+        if (flyTo != null) {
+            if (tab == TAB_HOME && stage.moving()) { pendingLetter = flyTo; letterFor.add(flyTo); }
         }
-        if (!key.toString().equals(busyKey)) {
-            busyKey = key.toString(); busyRow.removeAllViews();
-            for (AppPresentation.Helper helper : roster) {
-                Card current = helper.current(connected);
-                Long done = doneAt.get(helper.role);
-                boolean fresh = done != null && now - done < 8000;
-                if (current == null && !fresh) continue;
-                busyRow.addView(helperChip(helper.role, current, connected));
-            }
-            busyRow.setVisibility(busyRow.getChildCount() == 0 ? View.GONE : View.VISIBLE);
-        }
-        if (flyTo != null && tab == TAB_HOME) {
-            final String role = flyTo;
+        if (pendingLetter != null && streaming.isEmpty() && (!store.busy() || !turn.agent.isEmpty())) {
+            final String role = pendingLetter; pendingLetter = null;
             busyRow.post(() -> flyLetter(role));
         }
+        refreshHelperRow(roster, connected);
 
         if (homeActions.getChildCount() == 0 || (target == null) != (homeActions.getTag() != null)) {
             homeActions.removeAllViews(); homeActions.setTag(target == null ? "setup" : null);
@@ -1645,67 +1642,165 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
     }
 
-    private View helperChip(String role, Card current, boolean connected) {
-        LinearLayout chip = new LinearLayout(this); chip.setGravity(Gravity.CENTER_VERTICAL);
-        chip.setPadding(dp(8), 0, dp(14), 0); chip.setTag(role);
-        boolean waiting = current != null && DsState.state(current, connected).equals("waiting");
-        chip.setBackground(pressable(current == null ? 0xffe6f5ec : waiting ? 0xfffff4e0 : 0xfff0eefb, 22));
-        FrameLayout face = new FrameLayout(this);
-        AvatarView portrait = new AvatarView(this, role, current == null ? "happy" : "focus");
-        portrait.setBackground(surface(AppPresentation.tint(role), AppPresentation.tint(role), 9));
-        face.addView(portrait, new FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER));
-        if (current != null && !waiting) {
-            NavIconView ring = new NavIconView(this, "spinner"); ring.color(0xff6a5fd0);
-            face.addView(ring, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER));
-            android.animation.ObjectAnimator spin = android.animation.ObjectAnimator.ofFloat(ring, "rotation", 0f, 360f);
-            spin.setDuration(900); spin.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-            spin.setInterpolator(new android.view.animation.LinearInterpolator()); spin.start();
+    /** 首页上一位帮手的胶囊：头像、转圈、一句状态。状态变了原地换颜色和字，不重建。 */
+    private final class HelperChip {
+        final String role;
+        final LinearLayout view;
+        final AvatarView portrait;
+        final NavIconView ring;
+        final TextView words;
+        final GradientDrawable fill = new GradientDrawable();
+        android.animation.ObjectAnimator spin;
+        String mode = "";
+        int color = Color.WHITE;
+
+        HelperChip(String role) {
+            this.role = role;
+            view = new LinearLayout(MainActivity.this); view.setGravity(Gravity.CENTER_VERTICAL);
+            view.setPadding(dp(8), 0, dp(14), 0); view.setTag(role);
+            fill.setCornerRadius(dp(22)); fill.setColor(color);
+            view.setBackground(new android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(0x1f2f6fe0), fill, null));
+            FrameLayout face = new FrameLayout(MainActivity.this);
+            portrait = new AvatarView(MainActivity.this, role, "idle");
+            portrait.setBackground(surface(AppPresentation.tint(role), AppPresentation.tint(role), 9));
+            face.addView(portrait, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER));
+            ring = new NavIconView(MainActivity.this, "spinner"); ring.color(0xff6a5fd0); ring.setAlpha(0f);
+            face.addView(ring, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
+            face.setClipChildren(false);
+            view.addView(face, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            words = text("", 13, false); words.setPadding(dp(6), 0, 0, 0);
+            view.addView(words);
+            view.setFocusable(true);
+            view.setOnClickListener(click -> {
+                Card now = null;
+                for (AppPresentation.Helper helper : AppPresentation.helpers(HubStore.get().cards(), offeredHelpers()))
+                    if (helper.role.equals(role)) now = helper.current(HubStore.get().runtimeConnected());
+                if (now != null) open(now.id);
+                else if (mode.equals("done") && doneCard.containsKey(role)) open(doneCard.get(role));
+                else openAgent(role);
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(44));
+            params.setMargins(dp(5), 0, dp(5), 0); view.setLayoutParams(params);
         }
-        chip.addView(face, new LinearLayout.LayoutParams(dp(36), dp(36)));
-        String label = AppPresentation.name(role) + (current == null ? " 好了 ✓" : waiting ? " 等你确认" : " 在做…");
-        TextView words = text(label, 13, false);
-        words.setTextColor(current == null ? GREEN : waiting ? AMBER : 0xff4e43b0);
-        words.setPadding(dp(6), 0, 0, 0); chip.addView(words);
-        chip.setOnClickListener(view -> { if (current != null) open(current.id); else openAgent(role); });
-        chip.setFocusable(true); chip.setContentDescription(label);
-        if (current == null) {
-            chip.setScaleX(.85f); chip.setScaleY(.85f);
-            chip.animate().scaleX(1f).scaleY(1f).setDuration(420).setInterpolator(new android.view.animation.OvershootInterpolator(3f)).start();
+
+        /** idle / working / waiting / done。 */
+        void show(String next, boolean animate) {
+            if (next.equals(mode)) return;
+            String before = mode; mode = next;
+            String name = AppPresentation.name(role);
+            String label = next.equals("working") ? name + " 在做…" : next.equals("waiting") ? name + " 等你确认"
+                    : next.equals("done") ? name + " 好了 ✓" : name + " 空闲";
+            int text = next.equals("working") ? 0xff4e43b0 : next.equals("waiting") ? AMBER
+                    : next.equals("done") ? GREEN : HINT;
+            int target = next.equals("working") ? 0xfff0eefb : next.equals("waiting") ? 0xfffff4e0
+                    : next.equals("done") ? 0xffe6f5ec : Color.WHITE;
+            words.setText(label); words.setTextColor(text); view.setContentDescription(label);
+            portrait.set(role, next.equals("idle") ? "idle" : next.equals("done") ? "happy" : "focus");
+            if (animate) {
+                android.animation.ValueAnimator tint = android.animation.ValueAnimator.ofArgb(color, target);
+                tint.setDuration(300); tint.addUpdateListener(a -> fill.setColor((int) a.getAnimatedValue())); tint.start();
+            } else fill.setColor(target);
+            color = target;
+            boolean spinning = next.equals("working");
+            if (spinning && spin == null) {
+                spin = android.animation.ObjectAnimator.ofFloat(ring, "rotation", 0f, 360f);
+                spin.setDuration(900); spin.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                spin.setInterpolator(new android.view.animation.LinearInterpolator()); spin.start();
+            }
+            ring.animate().alpha(spinning ? 1f : 0f).setDuration(animate ? 250 : 0).withEndAction(() -> {
+                if (!mode.equals("working") && spin != null) { spin.cancel(); spin = null; }
+            }).start();
+            // 开始干活、做完时弹一下；回到空闲只是安静地褪色。
+            if (animate && !before.isEmpty() && (next.equals("working") || next.equals("done"))) pop(next.equals("done") ? 1.18f : 1.12f);
         }
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(44));
-        params.setMargins(dp(5), 0, dp(5), 0); chip.setLayoutParams(params);
-        return chip;
+
+        void pop(float scale) {
+            view.animate().cancel();
+            view.animate().scaleX(scale).scaleY(scale).setDuration(140)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                    .withEndAction(() -> view.animate().scaleX(1f).scaleY(1f).setDuration(260)
+                            .setInterpolator(new android.view.animation.OvershootInterpolator(3f)).start()).start();
+        }
     }
 
-    /** 一封小信沿弧线从小幽飞到接活的帮手胶囊上。 */
+    private void refreshHelperRow(List<AppPresentation.Helper> roster, boolean connected) {
+        StringBuilder key = new StringBuilder();
+        for (AppPresentation.Helper helper : roster) key.append(helper.role).append('|');
+        boolean rebuilt = !key.toString().equals(busyKey);
+        if (rebuilt) {
+            busyKey = key.toString(); busyRow.removeAllViews();
+            Map<String, HelperChip> kept = new HashMap<>(helperChips); helperChips.clear();
+            for (AppPresentation.Helper helper : roster) {
+                HelperChip chip = kept.get(helper.role);
+                if (chip == null) chip = new HelperChip(helper.role);
+                helperChips.put(helper.role, chip); busyRow.addView(chip.view);
+            }
+            busyRow.setVisibility(roster.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        long now = System.currentTimeMillis();
+        boolean animate = tab == TAB_HOME && stage.moving();
+        for (AppPresentation.Helper helper : roster) {
+            Card current = helper.current(connected);
+            Long done = doneAt.get(helper.role);
+            String mode = letterFor.contains(helper.role) ? "idle"
+                    : current != null ? (DsState.state(current, connected).equals("waiting") ? "waiting" : "working")
+                    : done != null && now - done < 8000 ? "done" : "idle";
+            helperChips.get(helper.role).show(mode, animate);
+        }
+    }
+
+    /** 一封小信沿弧线从小幽飞到接活的帮手胶囊上；落下时胶囊弹一下开始转。 */
     private void flyLetter(String role) {
-        View target = busyRow.findViewWithTag(role);
-        if (target == null || frame == null) return;
+        HelperChip chip = helperChips.get(role);
+        if (chip == null || frame == null || tab != TAB_HOME || !chip.view.isShown()) {
+            letterFor.remove(role); refreshHome(HubStore.get(), HubStore.get().cards()); return;
+        }
+        View target = chip.view;
         int[] from = new int[2], to = new int[2], base = new int[2];
         stage.center(from); target.getLocationInWindow(to); frame.getLocationInWindow(base);
-        to[0] += dp(26); to[1] += target.getHeight() / 2;
-        LinearLayout letter = column(); letter.setGravity(Gravity.CENTER);
-        letter.setBackground(surface(Color.WHITE, BLUE, 17));
-        NavIconView icon = new NavIconView(this, "mail"); icon.color(BLUE);
-        letter.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(20)));
-        int size = dp(34);
-        frame.addView(letter, new FrameLayout.LayoutParams(size, size));
-        float x0 = from[0] - base[0] - size / 2f, y0 = from[1] - base[1] - size / 2f;
-        float x1 = to[0] - base[0] - size / 2f, y1 = to[1] - base[1] - size / 2f;
-        float cx = (x0 + x1) / 2 - dp(60), cy = Math.min(y0, y1) - dp(40);
+        to[0] += dp(28); to[1] += target.getHeight() / 2;
+        View letter = new View(this) {
+            final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                float w = getWidth(), h = getHeight(), line = dp(2), r = dp(3);
+                android.graphics.RectF box = new android.graphics.RectF(line / 2, line / 2, w - line / 2, h - line / 2);
+                paint.setStyle(android.graphics.Paint.Style.FILL); paint.setColor(Color.WHITE);
+                canvas.drawRoundRect(box, r, r, paint);
+                paint.setStyle(android.graphics.Paint.Style.STROKE); paint.setStrokeWidth(line); paint.setColor(BLUE);
+                paint.setStrokeJoin(android.graphics.Paint.Join.ROUND); paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                canvas.drawRoundRect(box, r, r, paint);
+                android.graphics.Path flap = new android.graphics.Path();
+                flap.moveTo(line * 1.5f, line * 2); flap.lineTo(w / 2, h * .58f); flap.lineTo(w - line * 1.5f, line * 2);
+                canvas.drawPath(flap, paint);
+            }
+        };
+        letter.setElevation(dp(3));
+        int width = dp(30), height = dp(22);
+        frame.addView(letter, new FrameLayout.LayoutParams(width, height));
+        float x0 = from[0] - base[0] - width / 2f, y0 = from[1] - base[1] - height / 2f;
+        float x1 = to[0] - base[0] - width / 2f, y1 = to[1] - base[1] - height / 2f;
+        // 先往反方向荡一下再落下，像被轻轻抛出去。
+        float cx = x0 + (x0 - x1) * .6f, cy = Math.min(y0, y1) - dp(70);
+        letter.setTranslationX(x0); letter.setTranslationY(y0);
+        letter.setAlpha(0f); letter.setScaleX(.4f); letter.setScaleY(.4f);
         android.animation.ValueAnimator path = android.animation.ValueAnimator.ofFloat(0f, 1f);
-        path.setDuration(850); path.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        path.setDuration(900); path.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
         path.addUpdateListener(animation -> {
             float t = (float) animation.getAnimatedValue(), u = 1 - t;
             letter.setTranslationX(u * u * x0 + 2 * u * t * cx + t * t * x1);
             letter.setTranslationY(u * u * y0 + 2 * u * t * cy + t * t * y1);
-            letter.setRotation(-20 * u);
+            letter.setRotation(x1 < x0 ? 18 * u - 6 * t : -18 * u + 6 * t);
+            float grow = Math.min(1f, t * 5f);
+            float land = t > .85f ? 1f - (t - .85f) / .15f * .5f : 1f;
+            letter.setAlpha(Math.min(grow, t > .85f ? land * 1.4f - .4f : 1f));
+            letter.setScaleX((.4f + .6f * grow) * land); letter.setScaleY((.4f + .6f * grow) * land);
         });
         path.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator animation) {
                 frame.removeView(letter);
-                target.animate().scaleX(1.12f).scaleY(1.12f).setDuration(140)
-                        .withEndAction(() -> target.animate().scaleX(1f).scaleY(1f).setDuration(200).start()).start();
+                letterFor.remove(role);
+                refreshHome(HubStore.get(), HubStore.get().cards());
             }
         });
         path.start();
