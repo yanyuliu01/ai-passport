@@ -74,7 +74,7 @@
 
 用户提供 `reference-codex-elegant.png` 作为角色参考，原作者和再利用许可未知。`reference-xiaoyou-style.png` 从仓库的 `main/pocket_pet.c` 渲染。其他图集为本项目生成，参考社区角色约定与用户偏好，不声称取得第三方权利或官方身份。本条目不赋予新的美术许可；仓库代码许可不能证明底层角色参考的使用权。
 
-根目录 README 用的横幅图放在 `images/readme/`，由这些图稿和 `reference-xiaoyou-style.png` 拼合而成，状态与权利说明同上。
+根目录 README 用的横幅图放在 `images/readme/`，由这些图稿拼合而成；小幽的像素帧从 `main/pocket_pet.c` 渲染。状态与权利说明同上。
 
 DS 固件与手机 App 现在使用之前的像素大头图集
 [`avatar-whale-v1.png`](images/ai-companions/avatar-whale-v1.png)，原 PNG 保持不变。睡眠表情另有修正版

@@ -42,7 +42,9 @@
 | 开放固件与可复用示例，为你的创意留出发挥空间。 | 从一个简单想法出发，跟随清晰指南把它变成现实。 | 打造随身伙伴、小工具、游戏，或任何你能想到的东西。 |
 
 > [!NOTE]
-> 本分支承载 **Claude Pocket** 应用：Claude 桌面端的随身伴侣，中文界面。请先阅读
+> 本分支承载 **Claude Pocket** 应用：小幽随身的那张脸，中文界面，和手机上的
+> [小幽中枢](../companion/README.zh_CN.md)、电脑上的[小幽 Runtime](../runtime/README.zh_CN.md)
+> 一起工作（也可以直连 Claude 桌面端）。请先阅读[仓库首页](../README.zh_CN.md)和
 > [Claude Pocket](claude-pocket.zh_CN.md)。下文描述的是该应用所基于的基线平台；
 > 基线硬件测试菜单及其 `main/demo_*.c` 页面不在本分支中。
 

@@ -13,7 +13,8 @@
 这张卡上。小幽自己只做快的事——听懂、能马上答的答掉、要花时间的交给帮手在后台做——
 所以一件事没做完不妨碍说下一句，几件事可以同时在做，做的过程中可以补充、改要求或
 取消。小幽每说一段话带三样东西：完整回复、给 Passport 小屏幕看的一两句简报、像素宠物
-此刻的表情。消息可以是打出来的文字，也可以是一段录音；录音先由配置里选定的语音识别
+此刻的表情；回复里的 Markdown 标记、代码围栏和表情符号会先整理成纯文字，小屏幕和终端
+都显示得干净。消息可以是打出来的文字，也可以是一段录音；录音先由配置里选定的语音识别
 引擎变成文字。
 
 ```text
@@ -21,6 +22,7 @@
                                   │  人设 · 对话记录 · 卡 · 路由 · 转述
                                   ├──> claude   （Claude Code 命令行，能以小幽的身份回话）
                                   ├──> codex    （Codex 命令行，只干活）
+                                  ├──> dsh      （DeepSeek Harness 命令行，能以小幽的身份回话）
                                   ├──> 任意命令 （本地模型等）
                                   └──> 另一台电脑上的小幽 Runtime
 ```
@@ -314,7 +316,8 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
 `XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
 `XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
-`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）、`XIAOYOU_NOTION_TOKEN`。
+`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）、`XIAOYOU_DSH_CONFIG_DIR`
+（作用于所有 `dsh` 类型的代理）、`XIAOYOU_NOTION_TOKEN`。
 
 设了 `XIAOYOU_DEBUG`（任意值）时，小幽每接一句话，标准错误里多一行：她把这句话归到了
 哪张卡、要 Runtime 做什么。
@@ -330,13 +333,13 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 
 | 配置项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `type` | 无 | `claude_code`、`codex`、`command`、`remote` 或 `echo`。 |
+| `type` | 无 | `claude_code`、`codex`、`dsh`、`command`、`remote` 或 `echo`。 |
 | `enabled` | `true` | `false` 时当它不存在。 |
 | `description` | 空 | 一句话说明它擅长什么。小幽决定要不要把活交给它、路由器做判断，看的都是这句话。 |
 | `aliases` | `[]` | 点名时除了名字之外还认的叫法，比如语音识别常写成的中文名。 |
-| `speaks` | 随类型 | 能不能直接以小幽的身份回话。`claude_code`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
+| `speaks` | 随类型 | 能不能直接以小幽的身份回话。`claude_code`、`dsh`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
 | `timeout_seconds` | `turn_timeout_seconds` | 这个代理做一件事从头到尾最多跑多久，`0` 是不限。看不到事件流的跑法（`command`、`codex` 的 `exec` 模式）写了 `0` 时按 3600 秒算。 |
-| `idle_timeout_seconds`、`idle_timeout_command_seconds` | 顶层的同名项 | 这个代理多久没动静算可能卡住。只对看得到事件流的跑法有用：`claude_code`，和 `codex` 的 `app_server` 模式。 |
+| `idle_timeout_seconds`、`idle_timeout_command_seconds` | 顶层的同名项 | 这个代理多久没动静算可能卡住。只对看得到事件流的跑法有用：`claude_code`、`dsh`，和 `codex` 的 `app_server` 模式。 |
 
 各类型另外认的配置项：
 
@@ -344,6 +347,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | --- | --- | --- |
 | `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts`（见[档位](#档位模型和努力程度)） |
 | `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args`、`models`、`effort`、`efforts` |
+| `dsh` | 运行 DeepSeek Harness 命令行（`dsh`），见下面的 [DeepSeek Harness](#deepseek-harnessdsh)。 | `command`（默认 `["dsh"]`）、`workdir`、`config_dir`、`sandbox`（默认 `workspace-write`）、`model`、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -394,6 +398,40 @@ chmod 600 ~/.config/xiaoyou/deepseek.key
 没有实测过：这一段是照 DeepSeek 的接口文档和 Claude Code 实际发出的请求写的，没有用
 真实的密钥跑过一轮。Claude Code 的网页搜索是 Anthropic 那边的服务端工具，换了服务后
 不一定可用。
+
+### DeepSeek Harness（dsh）
+
+`dsh` 类型直接驱动 DeepSeek 自己的命令行 `dsh`，不经过 Claude Code 外壳：
+
+- 后台的事走 `dsh --profile acp`（Agent Client Protocol，标准输入输出上的 JSON-RPC）：
+  有进展行、看动静、可以打断。
+- 小幽自己接话那一次走 `dsh --profile headless --json`：一问一答，关掉工具和思考，求快。
+- 没有 Claude Code 那种“每一步都问”的通道，权限只看 `sandbox`（`read-only`、
+  `workspace-write`、`danger-full-access`，作为 `DSH_PERMISSION_MODE` 传给它）：沙箱内它
+  自己做；越出沙箱时它来问，这一问照常变成设备和手机上的授权弹窗。所以没有
+  `permission_mode`、`allowed_tools`、`add_dirs` 这几项，写了会报错。
+- 档位是 `off`、`low`、`high`、`max`。`efforts` 不写就是 `[]`：不传，用 dsh 自己的默认。
+- `config_dir` 设成 `DSH_HOME`，让它用一套单独的配置和会话，不碰你平时的 `~/.dsh`。
+- 用量只记它用的是哪个模型：它报的是上下文占用，不是计费的 token。
+
+没有测试，也没有实测：协议是照 dsh 0.2.0-rc.2 写的，握手时版本或方法名对不上会直接说。
+
+### 项目简报
+
+`xiaoyou_runtime/project_brief.py` 是一个可以当 `command` 帮手用的小脚本，回答“这个项目
+最近在干什么”：读这台电脑上的 `git log` / `git status`，以及 Claude Code
+（`~/.claude/projects/<仓库>/`）和 Codex（`~/.codex/sessions/`，按工作目录过滤）留在本机的
+最近会话，打印一段摘要，小幽再转述。只用标准库，可以脱离 Runtime 单独跑：
+
+```json
+"brief": {
+  "type": "command",
+  "command": ["python3", "/Users/你/ai-passport/runtime/xiaoyou_runtime/project_brief.py", "~/ai-passport"],
+  "description": "说说这个项目最近的改动和在 Claude Code、Codex 里聊过什么"
+}
+```
+
+脚本要写绝对路径（命令在这个帮手的 `workdir` 里运行）；仓库路径可以用 `~`。只读本机的缓存：别的电脑上的会话、claude.ai 普通对话里聊的内容都查不到。
 
 示例配置里带了一个没启用的 `codex`；在同一台机器上装好并登录 Codex 命令行之后，把
 `"enabled"` 改成 `true`，再跑一次 `--check`。
@@ -548,13 +586,14 @@ URL 获取、App 内置 PDF 阅读或通用蓝牙文件传输。只观察电脑�
 只算订阅登录的：没有用 `env` 指到别的服务、也没有在 `env` 里放密钥的 `claude_code`
 帮手，和 `codex` 帮手。别的帮手没有额度，只记它用的模型。
 
-数从三处来。Runtime 自己不读任何登录凭据，问的都是工具本身：
+数从这几处来。Runtime 自己不读任何登录凭据，问的都是工具本身，或者工具自己存下的数：
 
 | 来源 | 什么时候 | 给什么 |
 | --- | --- | --- |
 | Claude Code 干活时的事件流（`rate_limit_event`） | 每件交给它的事 | 两个窗口各用了多少、什么时候重置；数一变它就说一次 |
 | Claude Code 的 `get_usage`（`claude -p --input-format stream-json` 加一个控制请求，不调用模型） | 太久没问过时；一件事开始前；`usage` 命令 | 和 Claude Code 里 `/usage` 同一份数 |
 | Codex 的 app-server（`account/rateLimits/read`，和干活时的 `account/rateLimits/updated`） | 每一轮开始和结束；太久没问过时 | 两个窗口各用了多少、什么时候重置 |
+| Claude Code 自己记下的 `.claude.json` 里的 `cachedUsageUtilization` | `get_usage` 没带额度时（较新的 Claude Code 会这样） | 同一份百分比；超过一天的不用 |
 
 `get_usage` 在 Claude Code 里标着“实验性”，事件流里两个窗口的那部分标着“内部”：哪天
 对不上了，那个账号就显示成“还不知道”，原因在 `note` 里，别的不受影响。
