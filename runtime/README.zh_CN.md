@@ -775,6 +775,8 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`：固件仓库的清单，版本从新到旧。见[设备固件](#设备固件)。 |
 | `GET /v1/firmware/target?wait=<秒>&rev=<n>` | 现在该推给设备的那一版，一层的对象：`id`（没有时是空串）、`seq`、`build`、`size`、`sha256`、`note`、`reason`、`attempts`、`notice`、`notice_at`、`rev`。带 `rev` 时清单一有变化就返回。 |
 | `GET /v1/firmware/<编号>/image` | 这一版的应用镜像（二进制）。 |
+| `GET /v1/app` | 这台电脑上发布的手机 App 更新：`available`、`version_code`、`version_name`、`sha256`、`size`、`published_at`、`note`。 |
+| `GET /v1/app/apk` | 这个更新的安装包。 |
 | `POST /v1/firmware?note=<备注>&push=1`，请求体是固件文件 | `201` 和这一版的记录；`push=1` 同时把它设为要推的。 |
 | `POST /v1/firmware/target`，请求体 `{"id": 版本或 null, "reason"?, "force"?}` | 指定（或取消）要推给设备的那一版；返回同 `GET /v1/firmware/target`。 |
 | `POST /v1/firmware/device`，请求体 `{"event", "build", "state", "prev", …}` | 手机 App 转告设备的情况。`event` 为 `connected`、`progress`、`installed`、`failed` 或 `unsupported`；返回同 `GET /v1/firmware/target`。 |
@@ -1016,6 +1018,20 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
    `tailscale funnel --https=443 off`。
 
 feed 会 gzip 压缩并按 48 KB 分批发，慢线路上也能一点点收完。
+
+### 经 Runtime 给手机 App 推更新
+
+电脑上留着最新发布的一版安装包；手机经 Runtime（任何地址，包括 Funnel）取走，校验
+SHA-256 后交给安卓安装，安装要主人在系统界面上点确认：
+
+```bash
+python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-debug.apk --note "改了什么"
+python3 -m xiaoyou_runtime app status
+```
+
+版本号从 apk 旁边 Gradle 写的 `output-metadata.json` 读（或用 `--version-code`）。版本号更大，
+或版本号相同但安装包不同、而且发布得比手机上那份装得晚时，App 提示更新。打开 App 时会问一次
+（最多十分钟一次），也可以在「连接与设置 → App 更新」里手动查。带这个功能的第一版要手动装。
 
 ## 一句话是怎么走的
 

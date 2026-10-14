@@ -525,8 +525,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean connected = store.runtimeConnected();
         boolean device = store.linkState().equals("已连接");
         boolean computer = RuntimeClient.selected(this) != null && connected;
-        drawerState.setText(device && computer ? "全部在线" : !computer ? "电脑离线" : "设备未连接");
-        drawerState.setTextColor(device && computer ? GREEN : AMBER);
+        if (AppUpdate.available != null) {
+            drawerState.setText("有新版 App"); drawerState.setTextColor(BLUE);
+        } else {
+            drawerState.setText(device && computer ? "全部在线" : !computer ? "电脑离线" : "设备未连接");
+            drawerState.setTextColor(device && computer ? GREEN : AMBER);
+        }
         if (!drawerOpen) return;
         Set<String> pinned = marks("pinned"), archived = marks("archived");
         List<Card> cards = store.cards();
@@ -672,8 +676,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean device = store.linkState().equals("已连接");
         int running = 0;
         for (Card card : store.cards()) if (card.active() || (card.monitoringOnly && card.state.equals("working"))) running++;
+        AppUpdate.Release update = AppUpdate.available;
         String key = store.linkState() + (target == null ? "" : target.name + target.url) + store.runtimeConnected()
-                + running + companionChoice;
+                + running + companionChoice + (update == null ? "" : update.sha256) + updateProgress;
         if (key.equals(mineKey)) return;
         mineKey = key;
         minePane.removeAllViews();
@@ -693,10 +698,61 @@ public class MainActivity extends Activity implements HubStore.Listener {
         settings.addView(groupRow(null, "用量", null, "›", HINT, view -> show(TAB_USAGE), true));
         settings.addView(groupRow(null, "设备固件", null, "›", HINT, view -> openSettings(0), true));
         settings.addView(groupRow(null, "通知", null, "›", HINT, view -> openSettings(1), true));
-        settings.addView(groupRow(null, "偏好与运行记录", null, "›", HINT, view -> openSettings(2), false));
+        settings.addView(groupRow(null, "偏好与运行记录", null, "›", HINT, view -> openSettings(2), true));
+        String installed = "";
+        try { installed = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        settings.addView(groupRow(null, "App 更新",
+                update == null ? "现在是 " + installed : update.label() + (update.note.isEmpty() ? "" : " · " + update.note),
+                updateProgress >= 0 ? "下载中 " + updateProgress + "%" : update != null ? "安装 ›" : "检查 ›",
+                update != null ? BLUE : HINT, view -> updateApp(), false));
         minePane.addView(settings);
         TextView note = text("FoloToy AI Passport", 11, false); note.setTextColor(HINT);
         note.setGravity(Gravity.CENTER); note.setPadding(0, dp(28), 0, dp(14)); minePane.addView(note);
+    }
+
+    /** 下载新版时的进度（0–99）；不在下载时是 -1。 */
+    private int updateProgress = -1;
+
+    /** 没有更新时去问一次；有更新时下载、校验，再交给系统安装（主人要在系统界面点确认）。 */
+    private void updateApp() {
+        RuntimeClient.Target target = RuntimeClient.selected(this);
+        if (target == null) { toast("先添加电脑"); return; }
+        if (updateProgress >= 0) return;
+        AppUpdate.Release update = AppUpdate.available;
+        if (update == null) {
+            toast("正在问电脑有没有新版…");
+            AppUpdate.check(this, target, (newer, error) -> {
+                if (error != null) toast("没问到：" + error);
+                else if (newer == null) toast("已经是最新的了");
+                else toast("有新版 " + newer.label() + "，再点一次安装");
+                mineKey = null; drawerKey = null; onHubChanged();
+            });
+            return;
+        }
+        updateProgress = 0; mineKey = null; refreshMine();
+        AppUpdate.download(this, target, update, percent -> {
+            updateProgress = percent; mineKey = null; refreshMine();
+        }, (apk, error) -> {
+            updateProgress = -1; mineKey = null; refreshMine();
+            if (error != null) { toast("没下载成：" + error); return; }
+            if (!AppUpdate.install(this, apk)) toast("请允许 Pocket Hub 安装应用，回来再点一次「安装」");
+        });
+    }
+
+    /** 打开 App 时顺便问一次电脑有没有新版，最多十分钟一次；发现新版只提示一回。 */
+    private void checkForUpdate() {
+        RuntimeClient.Target target = RuntimeClient.selected(this);
+        if (target == null || System.currentTimeMillis() - AppUpdate.checkedAt < 10 * 60 * 1000L) return;
+        AppUpdate.checkedAt = System.currentTimeMillis();
+        AppUpdate.check(this, target, (newer, error) -> {
+            if (newer == null) return;
+            android.content.SharedPreferences prefs = getSharedPreferences("ds_ui", MODE_PRIVATE);
+            if (!newer.sha256.equals(prefs.getString("update_told", ""))) {
+                prefs.edit().putString("update_told", newer.sha256).apply();
+                toast("电脑上有新版 App，去「连接与设置」更新");
+            }
+            mineKey = null; drawerKey = null; onHubChanged();
+        });
     }
 
     private TextView groupHeading(String label) {
@@ -793,6 +849,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         HubStore.get().addListener(this);
         refreshSources();
         onHubChanged();
+        checkForUpdate();
         uiHandler.removeCallbacks(tick);
         uiHandler.post(tick);
     }

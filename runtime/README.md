@@ -971,6 +971,8 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`: the firmware library, newest version first. See [Device firmware](#device-firmware). |
 | `GET /v1/firmware/target?wait=<seconds>&rev=<n>` | The version the device should run, as one flat object: `id` (empty when there is none), `seq`, `build`, `size`, `sha256`, `note`, `reason`, `attempts`, `notice`, `notice_at`, `rev`. With `rev`, returns as soon as the library changes. |
 | `GET /v1/firmware/<id>/image` | That version's application image (binary). |
+| `GET /v1/app` | The phone app update published on this computer: `available`, `version_code`, `version_name`, `sha256`, `size`, `published_at`, `note`. |
+| `GET /v1/app/apk` | That update's APK. |
 | `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
 | `POST /v1/firmware/target` with `{"id": version or null, "reason"?, "force"?}` | Sets (or clears) the version the device should run; answers like `GET /v1/firmware/target`. |
 | `POST /v1/firmware/device` with `{"event", "build", "state", "prev", …}` | What the phone app says about the device. `event` is `connected`, `progress`, `installed`, `failed` or `unsupported`; answers like `GET /v1/firmware/target`. |
@@ -1274,6 +1276,24 @@ Funnel gives the runtime a public HTTPS address without a server or domain:
    only by its token, over HTTPS; turn it off with `tailscale funnel --https=443 off`.
 
 The feed is gzipped and sent in 48 KB pages, so slow links still make progress.
+
+### Updating the phone app through the runtime
+
+The computer keeps the latest published APK; the phone downloads it through the
+runtime (any address, Funnel included), checks its SHA-256 and hands it to
+Android, which asks the owner to confirm:
+
+```bash
+python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-debug.apk --note "what changed"
+python3 -m xiaoyou_runtime app status
+```
+
+The version code is read from Gradle's `output-metadata.json` next to the APK
+(or `--version-code`). The app offers the update when the code is higher, or
+when it is the same but the package differs and was published after the phone
+installed its copy. It checks when opened (at most every ten minutes) and from
+Connections and settings → App update. The first version with this feature
+must be installed by hand.
 
 ## How a sentence is processed
 

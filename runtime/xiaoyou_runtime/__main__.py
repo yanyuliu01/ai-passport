@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import (__version__, agents as agent_module, firmware_cli, router as router_module, stt,
+from . import (__version__, agents as agent_module, app_release, firmware_cli, router as router_module, stt,
                workspace as workspace_module)
 from .agents import AgentError
 from .config import ConfigError, load
@@ -84,6 +84,7 @@ def main(argv=None) -> int:
                         help="电脑端 Claude Code 配置目录（默认 ~/.claude）")
     commands = parser.add_subparsers(dest="command", metavar="子命令")
     firmware_cli.add_arguments(commands)
+    app_release.add_arguments(commands)
     usage_parser = commands.add_parser(
         "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
         description="现在去问一次 Claude Code 和 Codex 的订阅额度并打印。不调用模型，不用先启动服务。")
@@ -103,6 +104,10 @@ def main(argv=None) -> int:
         # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
         return firmware_cli.run(config, Path(args.config), args,
                                 arguments[arguments.index("firmware") + 1:])
+    if args.command == "app":
+        if args.action is None:
+            parser.parse_args(["app", "--help"])
+        return app_release.run(config, args)
     if args.command == "usage":
         meter = Usage(config, enabled=True)
         meter.refresh()

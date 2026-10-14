@@ -31,6 +31,12 @@
   POST /v1/firmware/target              {"id": 编号、序号、latest、previous，或 null 取消, "force"?}
   POST /v1/firmware/device              手机转告设备的情况 {"event","build","state",…} → 同 target
 
+手机 App 更新（这台电脑上只留最新发布的一版，用 `python3 -m xiaoyou_runtime app publish` 发布）：
+
+  GET  /v1/app                          发布的那一版 {"available","version_code","version_name","sha256","size",
+                                         "published_at","note"}
+  GET  /v1/app/apk                      安装包本身
+
 除 /healthz 外都要带 Authorization: Bearer <令牌>。
 """
 
@@ -43,6 +49,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlsplit
 
 from . import __version__
+from .app_release import AppRelease, AppReleaseError
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
@@ -64,6 +71,7 @@ def make_server(config: Config, service: Service,
         firmware = FirmwareStore(config.state_dir)
     if artifacts is None:
         artifacts = getattr(service, "artifacts", None) or ArtifactStore(config)
+    release = AppRelease(config.state_dir)
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -183,6 +191,25 @@ def make_server(config: Config, service: Service,
                         break
                     self.wfile.write(chunk)
 
+        def _app_apk(self) -> None:
+            try:
+                stream, info, size = release.open()
+            except (AppReleaseError, OSError) as error:
+                self._fail(404, str(error))
+                return
+            with stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.android.package-archive")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "private, no-store")
+                self.send_header("ETag", '"' + info["sha256"] + '"')
+                self.end_headers()
+                while True:
+                    chunk = stream.read(COPY_CHUNK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+
         def _firmware_post(self, parts: Any, query: Dict[str, Any]) -> None:
             try:
                 if len(parts) == 2:
@@ -240,6 +267,12 @@ def make_server(config: Config, service: Service,
                 return
             if len(parts) == 4 and parts[:2] == ["v1", "artifacts"] and parts[3] in ("content", "thumbnail"):
                 self._artifact_get(parts[2], parts[3] == "thumbnail")
+                return
+            if parts == ["v1", "app"]:
+                self._send(200, release.info())
+                return
+            if parts == ["v1", "app", "apk"]:
+                self._app_apk()
                 return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})

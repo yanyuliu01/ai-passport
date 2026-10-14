@@ -13,15 +13,23 @@ import java.io.FileNotFoundException;
 
 /** Read-only grants for a single cached artifact; no paths or Runtime credentials are shared. */
 public final class ArtifactProvider extends ContentProvider {
+    /** App 自己的更新包放在这里，和任务附件分开，好整个清掉旧的。 */
+    static final String UPDATES = "updates";
     static Uri uri(Context context, File file, Attachment item) {
-        return new Uri.Builder().scheme("content").authority(context.getPackageName() + ".artifacts")
-                .appendPath(file.getName()).appendQueryParameter("name", item.label())
-                .appendQueryParameter("mime", item.mime).build();
+        return uri(context, file, item.label(), item.mime);
+    }
+    static Uri uri(Context context, File file, String name, String mime) {
+        Uri.Builder builder = new Uri.Builder().scheme("content").authority(context.getPackageName() + ".artifacts");
+        if (UPDATES.equals(file.getParentFile().getName())) builder.appendPath(UPDATES);
+        return builder.appendPath(file.getName()).appendQueryParameter("name", name)
+                .appendQueryParameter("mime", mime).build();
     }
     private File file(Uri uri) throws FileNotFoundException {
         String name = uri.getLastPathSegment();
-        if (name == null || !name.matches("[0-9a-f]{64}\\.bin")) throw new FileNotFoundException("Invalid artifact");
-        File file = new File(new File(getContext().getFilesDir(), "artifacts"), name);
+        java.util.List<String> segments = uri.getPathSegments();
+        boolean update = segments.size() == 2 && UPDATES.equals(segments.get(0));
+        if (name == null || (segments.size() != 1 && !update) || !name.matches("[0-9a-f]{64}\\.bin")) throw new FileNotFoundException("Invalid artifact");
+        File file = new File(new File(getContext().getFilesDir(), update ? UPDATES : "artifacts"), name);
         if (!file.isFile()) throw new FileNotFoundException("Artifact not cached");
         return file;
     }

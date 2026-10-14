@@ -18,6 +18,9 @@
     <!-- 手机上按住说话 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- 从电脑取来的新版 App 交给系统安装（每次都要主人在系统界面确认） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- 和小幽 Runtime 通信 -->
     <uses-permission android:name="android.permission.INTERNET" />
 

@@ -707,6 +707,11 @@ final class RuntimeClient {
 
     private static final int FIRMWARE_MAX_BYTES = 8 * 1024 * 1024;
 
+    /** 电脑上发布的 App 更新（一层的对象；没有时 available 是 false）。 */
+    static Map<String, String> appRelease(Target target) throws IOException {
+        return request("GET", target.url + "/v1/app", target.token, null, null, 15);
+    }
+
     /**
      * 现在该推给设备的是哪一版（一层的对象；没有时 id 是空串）。rev 不小于 0 时最多等 wait 秒，
      * 清单一有变化就返回。

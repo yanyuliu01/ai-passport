@@ -250,6 +250,15 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App updates
+
+When the computer has published a newer build (`python3 -m xiaoyou_runtime app
+publish`, see the runtime README), the app says so once and the sidebar footer
+shows that a new app is available. Connections and settings → App update downloads it through
+the runtime, checks its SHA-256 and opens Android's installer; the first time,
+Android asks you to allow Pocket Hub to install apps. Installing always needs
+your confirmation on the phone.
+
 ## Device firmware
 
 The matching firmware and App use the retained `avatar-whale-v1.png` pixel head

@@ -181,6 +181,12 @@ Codex 或 Claude 的可见回复，并使用实际助手名称。Runtime 提供�
 设备同一时间只接受一个蓝牙连接。连手机之前，先让它和 Claude 桌面端断开（或者
 离开那台电脑）。
 
+## App 更新
+
+电脑上发布了新版（`python3 -m xiaoyou_runtime app publish`，见 runtime 的说明）时，App 会提示一次，
+侧边栏底部显示“有新版 App”。在「连接与设置 → App 更新」里点安装：经 Runtime 下载、校验 SHA-256，
+再打开系统安装界面。第一次安卓会要你允许 Pocket Hub 安装应用；每次安装都要你在手机上确认。
+
 ## 设备固件
 
 配套固件和 App 使用原有 `avatar-whale-v1.png` 像素大头。固件将六种表情编译为
