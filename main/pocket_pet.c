@@ -90,6 +90,39 @@ pocket_pet_color_t pocket_pet_pixel(pocket_pet_mood_t mood, unsigned frame, int 
     return (pocket_pet_color_t)POCKET_WHALE_PIXELS[mood][by * POCKET_PET_GRID + x];
 }
 
+// Sway and float stay within the existing frame; the hop lands back at 0.
+static const int8_t LISTEN_DX[8] = {0, 1, 2, 1, 0, -1, -2, -1};
+static const int8_t THINK_DY[8] = {0, -1, -2, -3, -3, -2, -1, 0};
+static const int8_t HOP_DY[POCKET_PET_HOP_TICKS] = {-2, -5, -6, -5, -2, 1, 1, 0};
+
+void pocket_pet_offset(pocket_pet_motion_t motion, unsigned ticks, int *dx, int *dy)
+{
+    int x = 0;
+    int y = 0;
+
+    switch (motion) {
+    case POCKET_MOTION_LISTEN:
+        x = LISTEN_DX[ticks % 8U];
+        break;
+    case POCKET_MOTION_THINK:
+        y = THINK_DY[ticks % 8U];
+        break;
+    case POCKET_MOTION_HOP:
+        y = ticks < POCKET_PET_HOP_TICKS ? HOP_DY[ticks] : 0;
+        break;
+    case POCKET_MOTION_REST:
+        break;
+    }
+    if (dx != NULL) *dx = x;
+    if (dy != NULL) *dy = y;
+}
+
+bool pocket_pet_moving(pocket_pet_motion_t motion, unsigned ticks)
+{
+    return motion == POCKET_MOTION_LISTEN || motion == POCKET_MOTION_THINK ||
+           (motion == POCKET_MOTION_HOP && ticks < POCKET_PET_HOP_TICKS);
+}
+
 uint32_t pocket_pet_rgb(pocket_pet_color_t color)
 {
     static const uint32_t PALETTE[POCKET_PET_COLOR_COUNT] = {

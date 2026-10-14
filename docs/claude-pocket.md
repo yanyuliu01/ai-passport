@@ -52,7 +52,12 @@ busy, ask, happy, and oops. Nearest-neighbour drawing preserves the existing
 120, 40 and 60 display-pixel footprints. The atlas occupies 21,856 Flash bytes;
 no bitmap decode buffer is added. The sleeping head follows the approved rounded
 face with relaxed brows. Sleep, idle, ask and happy breathe over a 3.6-second loop,
-moving at most four display pixels on the home screen. App 0.10.0 uses the same
+moving at most four display pixels on the home screen. On top of that, her
+motion follows the real state, the same rule as the app's home screen: she sways
+while listening during push-to-talk, floats while thinking about what you said,
+and hops once when her answer arrives; the hand-off letter still carries the
+motion while a helper works. Motion runs on a 150 ms beat and redraws only the
+moving portrait between the existing 450 ms frames. App 0.10.0 uses the same
 source heads and supplies
 the richer attendance strip, task drawers, and file
 viewers described in the [companion guide](../companion/README.md#ds-first-iteration-0100).

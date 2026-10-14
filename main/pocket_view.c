@@ -318,6 +318,29 @@ int pocket_usage_cells(int left, int cells)
     return lit;
 }
 
+pocket_pet_motion_t pocket_motion_for(const buddy_ui_snapshot_t *snapshot)
+{
+    switch (pocket_view_for(snapshot)) {
+    case POCKET_VIEW_VOICE:
+        return snapshot->voice_phase == BUDDY_VOICE_LISTENING ? POCKET_MOTION_LISTEN
+                                                              : POCKET_MOTION_REST;
+    case POCKET_VIEW_PAGE:
+        break;
+    default:
+        return POCKET_MOTION_REST;
+    }
+    switch (pocket_home_for(snapshot)) {
+    case POCKET_HOME_SENT:
+    case POCKET_HOME_THINKING:
+        return POCKET_MOTION_THINK;
+    case POCKET_HOME_ANSWERED:
+        // 交给帮手的那一轮由信来动；说完了蹦一下。桌面端的回复不算她说完。
+        return snapshot->chat.phase == BUDDY_CHAT_DONE ? POCKET_MOTION_HOP : POCKET_MOTION_REST;
+    default:
+        return POCKET_MOTION_REST;
+    }
+}
+
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot)
 {
     switch (pocket_view_for(snapshot)) {

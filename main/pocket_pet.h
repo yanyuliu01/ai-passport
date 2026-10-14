@@ -1,6 +1,7 @@
 // DS pixel head portraits compiled from the retained avatar-whale-v1 artwork.
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define POCKET_PET_GRID 60
@@ -39,6 +40,23 @@ typedef enum {
     POCKET_PET_SOURCE_FIRST = 16,
     POCKET_PET_COLOR_COUNT = POCKET_PET_SOURCE_FIRST + 64,
 } pocket_pet_color_t;
+
+// 动作和表情分开：每种动作对应一个真实状态，和手机首页一致。
+typedef enum {
+    POCKET_MOTION_REST,    // 只有表情自带的呼吸
+    POCKET_MOTION_LISTEN,  // 在听你说：左右轻晃
+    POCKET_MOTION_THINK,   // 在想：上下浮
+    POCKET_MOTION_HOP,     // 刚说完：蹦一下，只蹦一次
+} pocket_pet_motion_t;
+// 动作的节拍；表情的呼吸、等待的点和递信仍是三拍一帧（450 ms）。
+#define POCKET_PET_MOTION_MS 150U
+#define POCKET_PET_TICKS_PER_FRAME 3U
+#define POCKET_PET_HOP_TICKS 8U
+
+// 动作开始后第 ticks 拍，头像整体挪多少（源图的 60 格坐标，y 向下为正）。
+void pocket_pet_offset(pocket_pet_motion_t motion, unsigned ticks, int *dx, int *dy);
+// 这个动作此刻还要不要每拍重画；蹦完了、或者只是呼吸，就跟着三拍一帧走。
+bool pocket_pet_moving(pocket_pet_motion_t motion, unsigned ticks);
 
 // (x, y) 处的调色板下标，坐标越界返回 POCKET_PET_CLEAR。frame 是动画帧号，
 // 任意无符号数都可以（内部取模）。

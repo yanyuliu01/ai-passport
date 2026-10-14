@@ -216,6 +216,31 @@ static void test_pet_mood(void)
     assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
 }
 
+static void test_motion_follows_the_real_state(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_REST);
+    snapshot.voice_phase = BUDDY_VOICE_LISTENING;
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_LISTEN);
+    snapshot.voice_phase = BUDDY_VOICE_SENDING;
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_REST);
+    snapshot.voice_phase = BUDDY_VOICE_IDLE;
+    snapshot.chat.phase = BUDDY_CHAT_SENT;
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_THINK);
+    snapshot.chat.phase = BUDDY_CHAT_HELPER;
+    snprintf(snapshot.chat.agent, sizeof(snapshot.chat.agent), "%s", "codex");
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_REST);
+    snapshot.chat.phase = BUDDY_CHAT_DONE;
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_HOP);
+    snapshot.chat.phase = BUDDY_CHAT_FAILED;
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_REST);
+    /* 有审批要点头时不乱动。 */
+    snapshot.chat.phase = BUDDY_CHAT_DONE;
+    snprintf(snapshot.prompt_id, sizeof(snapshot.prompt_id), "%s", "req-1");
+    assert(pocket_motion_for(&snapshot) == POCKET_MOTION_REST);
+}
+
 static void test_notice(void)
 {
     buddy_ui_snapshot_t snapshot = connected_snapshot();
@@ -572,6 +597,7 @@ int main(void)
     test_update_view();
     test_home_status();
     test_pet_mood();
+    test_motion_follows_the_real_state();
     test_notice();
     test_helper_colour();
     test_clock();

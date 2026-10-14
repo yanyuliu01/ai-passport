@@ -182,8 +182,33 @@ static void test_breathing_cycle_preserves_pixels_and_status_marks(void)
     }
 }
 
+static void test_motions_stay_small_and_the_hop_lands(void)
+{
+    int dx;
+    int dy;
+
+    for (unsigned tick = 0; tick < 32U; ++tick) {
+        pocket_pet_offset(POCKET_MOTION_LISTEN, tick, &dx, &dy);
+        assert(dy == 0 && dx >= -2 && dx <= 2);
+        pocket_pet_offset(POCKET_MOTION_THINK, tick, &dx, &dy);
+        assert(dx == 0 && dy <= 0 && dy >= -3);
+        pocket_pet_offset(POCKET_MOTION_REST, tick, &dx, &dy);
+        assert(dx == 0 && dy == 0);
+    }
+    pocket_pet_offset(POCKET_MOTION_HOP, 2, &dx, &dy);
+    assert(dy < -4);
+    pocket_pet_offset(POCKET_MOTION_HOP, POCKET_PET_HOP_TICKS, &dx, &dy);
+    assert(dx == 0 && dy == 0);
+    assert(pocket_pet_moving(POCKET_MOTION_HOP, 0));
+    assert(!pocket_pet_moving(POCKET_MOTION_HOP, POCKET_PET_HOP_TICKS));
+    assert(pocket_pet_moving(POCKET_MOTION_LISTEN, 100));
+    assert(!pocket_pet_moving(POCKET_MOTION_REST, 0));
+    assert(POCKET_PET_MOTION_MS * POCKET_PET_TICKS_PER_FRAME == 450U);
+}
+
 int main(void)
 {
+    test_motions_stay_small_and_the_hop_lands();
     test_out_of_range_is_clear();
     test_every_mood_preserves_the_whale_character();
     test_moods_are_distinguishable();

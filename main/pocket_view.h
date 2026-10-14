@@ -97,6 +97,8 @@ int pocket_usage_cells(int left, int cells);
 bool pocket_update_shown(pocket_update_phase_t phase);
 // 小幽此刻的表情：跟随当前视图（换固件、审批、配对、确认、说话）或第一屏的情形。
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot);
+// 小幽此刻的动作：在听时晃、在想时浮、刚说完蹦一下，其余只呼吸。和手机首页同一套。
+pocket_pet_motion_t pocket_motion_for(const buddy_ui_snapshot_t *snapshot);
 // message 里那行字现在要不要显示。连的是手机中枢时它只是一条提示，出现几秒就收起；
 // 连的是 Claude 桌面端时它是对面的状态行，一直显示。
 bool pocket_notice_visible(const buddy_ui_snapshot_t *snapshot);

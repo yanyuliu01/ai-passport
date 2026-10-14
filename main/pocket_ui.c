@@ -78,7 +78,7 @@ enum {
 #define PET_SOLO_SCALE  6
 #define PET_TALK_SCALE  2
 #define PET_CHAT_SCALE  3
-#define PET_FRAME_MS    450
+#define PET_FRAME_MS    POCKET_PET_MOTION_MS
 
 // 顶栏中间的四个小点：现在在第几屏；用量未同步时也保留第四屏。
 #define DOT_SIZE        5
@@ -181,6 +181,8 @@ enum {
 typedef struct {
     lv_obj_t *obj;
     pocket_pet_mood_t mood;
+    pocket_pet_motion_t motion;
+    unsigned motion_since;  // 这个动作从第几拍开始
     uint8_t scale;
 } pet_t;
 
@@ -241,6 +243,7 @@ static struct {
     // 小幽
     pet_t pets[PET_COUNT];
     unsigned pet_frame;
+    unsigned motion_tick;
     // 第一屏：形象
     lv_obj_t *home_title;
     lv_obj_t *home_row;
@@ -575,7 +578,11 @@ static void pet_draw_cb(lv_event_t *event)
     int x;
     int y;
     int size = POCKET_PET_LAYOUT_GRID * pet->scale;
+    int dx;
+    int dy;
 
+    // 动作是整只挪：取样时反着挪，框不变，挪出去的部分就不画。
+    pocket_pet_offset(pet->motion, s.motion_tick - pet->motion_since, &dx, &dy);
     lv_obj_get_coords(pet->obj, &coords);
     lv_draw_rect_dsc_init(&dsc);
     dsc.bg_opa = LV_OPA_COVER;
@@ -589,7 +596,7 @@ static void pet_draw_cb(lv_event_t *event)
         }
         for (x = 0; x < size;) {
             int sx = (2 * x + 1) * POCKET_PET_GRID / (2 * size);
-            pocket_pet_color_t color = pocket_pet_pixel(pet->mood, s.pet_frame, sx, sy);
+            pocket_pet_color_t color = pocket_pet_pixel(pet->mood, s.pet_frame, sx - dx, sy - dy);
             int run = 1;
 
             if (color == POCKET_PET_CLEAR) {
@@ -599,7 +606,8 @@ static void pet_draw_cb(lv_event_t *event)
             // 同色的相邻格子合并成一个矩形，减少绘制任务。
             while (x + run < size &&
                    pocket_pet_pixel(pet->mood, s.pet_frame,
-                                    (2 * (x + run) + 1) * POCKET_PET_GRID / (2 * size), sy) == color) {
+                                    (2 * (x + run) + 1) * POCKET_PET_GRID / (2 * size) - dx,
+                                    sy - dy) == color) {
                 ++run;
             }
             draw_block(layer, &dsc, coords.x1 + x, top, run, 1, pocket_pet_rgb(color));
@@ -614,6 +622,7 @@ static void make_pet(lv_obj_t *parent, int which, int x, int y, int scale)
 
     pet->scale = (uint8_t)scale;
     pet->mood = POCKET_PET_SLEEP;
+    pet->motion = POCKET_MOTION_REST;
     pet->obj = make_box(parent, x, y, POCKET_PET_LAYOUT_GRID * scale, POCKET_PET_LAYOUT_GRID * scale);
     lv_obj_add_event_cb(pet->obj, pet_draw_cb, LV_EVENT_DRAW_MAIN, pet);
 }
@@ -628,11 +637,33 @@ static void pet_set(int which, pocket_pet_mood_t mood)
     }
 }
 
+// 换了动作才从头算：同一个“说完了”一直在屏幕上时只蹦一次。
+static void pet_move(int which, pocket_pet_motion_t motion)
+{
+    pet_t *pet = &s.pets[which];
+
+    if (pet->motion != motion) {
+        pet->motion = motion;
+        pet->motion_since = s.motion_tick;
+        lv_obj_invalidate(pet->obj);
+    }
+}
+
 static void pet_timer_cb(lv_timer_t *timer)
 {
     int which;
 
     (void)timer;
+    ++s.motion_tick;
+    if (s.motion_tick % POCKET_PET_TICKS_PER_FRAME != 0U) {
+        // 两帧之间只重画正在晃、浮、蹦的那几只。
+        for (which = 0; which < PET_COUNT; ++which) {
+            if (pocket_pet_moving(s.pets[which].motion, s.motion_tick - s.pets[which].motion_since)) {
+                lv_obj_invalidate(s.pets[which].obj);
+            }
+        }
+        return;
+    }
     ++s.pet_frame;
     for (which = 0; which < PET_COUNT; ++which) {
         // 睡觉也随节拍呼吸；只有失败静止，隐藏的对象 LVGL 自己会忽略。
@@ -1617,6 +1648,7 @@ static void render_home(const buddy_ui_snapshot_t *snap)
     }
 
     pet_set(PET_SOLO, pocket_pet_for(snap));
+    pet_move(PET_SOLO, pocket_motion_for(snap));
     set_text(s.home_title, title);
     set_text_color(s.home_title, title_color);
     set_visible(s.home_row, helper);
@@ -2669,6 +2701,7 @@ static void render_voice(const buddy_ui_snapshot_t *snap, bool entered)
     char timer[12];
 
     pet_set(PET_VOICE, pocket_pet_for(snap));
+    pet_move(PET_VOICE, pocket_motion_for(snap));
     set_text(s.voice_title, listening ? PT_VOICE_LISTENING
                                       : (sending ? PT_VOICE_SENDING : PT_VOICE_PREPARING));
     set_text_color(s.voice_title, listening ? C_OK : (sending ? C_XIAOYOU : C_WARN));
