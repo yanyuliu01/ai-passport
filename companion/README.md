@@ -2,23 +2,23 @@
   <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Pocket Hub companion
+# DS companion (Pocket Hub)
 
-Pocket Hub is an Android app that sits between the phone's AI assistants and
+The Android companion is built around DS: you talk to her, she hands work to helpers, and a left sidebar shows every task and helper. It sits between the phone's AI assistants and
 the Claude Pocket device. It reads the notifications of registered apps
 (Claude and Codex by default), keeps the recent ones as a small feed, and sends
 that feed to the device over Bluetooth LE. The app speaks the same Hardware
 Buddy wire protocol that the Claude desktop app does, plus the hub extension
 described in the [firmware documentation](../docs/claude-pocket.md#the-conversation).
 
-The app also has a chat box for talking to Xiaoyou. A message typed there goes
-to the [Xiaoyou Runtime](../runtime/README.md) over HTTP. Every request you
+The app also has a chat box for talking to DS. A message typed there goes
+to the [Runtime](../runtime/README.md) over HTTP. Every request you
 make is one thing with a card on the runtime; the app keeps waiting for the
 runtime to say which cards changed (`/v1/feed`), shows them, and reports them
-to the device: what Xiaoyou is doing right now, the card of every thing, the
+to the device: what DS is doing right now, the card of every thing, the
 things being worked on and their two latest steps. When a helper wants to do
-something that needs your consent, who wants what is shown verbatim at the top
-of the app and on the device, and either side can answer. The app also tells
+something that needs your consent, the app shows a banner under the top bar and full
+operation detail; the device also shows its prompt, and either side can answer. The app also tells
 the device which agents the selected runtime has.
 
 Holding `OK` on the device records a voice message. The app receives the audio
@@ -32,25 +32,104 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Sidebar phone interface
+
+DS is the main thread: she keeps you company, takes requests and hands them to
+helpers. You only talk and watch, so the app offers no helper or effort picker;
+say "let Codex do it, carefully" and DS arranges it. The ☰ button at the top
+left opens a sidebar with every place in the app:
+
+- **Chat with DS** — DS's own conversation. A request she hands off leaves a
+  one-line receipt (helper portrait, title, current step) that opens the task.
+  Conversations started on the computer never appear here.
+- **Tasks** — work DS handed to a helper, newest first. A task's state never
+  changes its position, so nothing moves while you read; pinned tasks stay on
+  top. Long-press a task (or use ⋯ on its page) to pin, archive or stop it.
+  Pins and archives are kept on the phone per computer; archived tasks can be
+  restored from the "Archived" row. There is no rename: titles come from the
+  runtime so the device, phone and computer agree.
+- **Helpers** — one row per helper (Codex, Claude, then others) with its state.
+  A helper's page lists what DS handed to it, each linking back to its task, and
+  the conversations opened on the computer (read-only).
+- **Connection and settings** — the device and computer connection, companion
+  look, usage, firmware, notifications and preferences.
+
+A task's page shows its steps (DS splits the request, the helper works with its
+latest progress, DS reports back), then the task's conversation; messages sent
+there continue that task. Desktop conversations are read-only and say so.
+Status is written as one coloured word: blue in progress, amber waiting for
+you, nothing for ended tasks. The companion look only changes how DS appears in
+the chat; it does not decide which helper gets work. The plus button for
+attachments stays hidden until the runtime can receive files from the phone.
+Draft text is kept separately for each computer and task.
+
+DS, Codex and Claude portraits are transparent 256px crops from the retained
+source atlases. `android/tools/PreparePortraits.java` regenerates them with JDK 17.
+Claude/cc aliases share one image; other helpers get a named placeholder. Desktop
+messages show their observed author, while DS relay replies retain DS's portrait.
+Optional breathing animation stops for hidden/detached portraits.
+
+Pending approvals show one banner under the top bar, only while something is waiting.
+Their detail shows the original operation and source computer, with submission,
+success and retry feedback. A waiting task alone never fabricates allow/deny
+buttons. Desktop approvals require the live permission bridge; notification-only
+requests remain readonly. Runtime-managed tasks can be stopped after confirmation.
+
+Up to eight paired Runtimes are monitored for approvals simultaneously, including
+while the App is in the background with its watch service active. Android's
+approval notifications open the source request. Each answer returns to that
+request's originating Runtime even while another computer is selected. The task
+list, conversation, helpers, and firmware management continue to use the selected
+Runtime. A disconnected approval source loses its actionable requests until a
+fresh feed arrives. Grant Android notification permission to receive the alerts;
+notification access for other apps is a separate permission.
+
+Registered task images appear as previews. Tap an image for a full-screen view
+of the downloaded original, then save it to a location chosen through Android or
+open it in another app. File cards show the name, MIME type, and size, and offer
+the same save/open actions. Downloads use the originating Runtime and registered
+attachment ID, verify size and SHA-256, and cache the verified file. Failed
+downloads can be retried. This iteration does not upload phone files or import
+arbitrary paths or URLs mentioned in desktop transcripts; general attachments
+are viewed on the phone, not transferred to the device over BLE.
+
+The Runtime HTTP request and attachment fields are documented in
+[HTTP interface](../runtime/README.md#http-interface) and
+[task images and downloadable files](../runtime/README.md#task-images-and-downloadable-files).
+Their implementations are `runtime/xiaoyou_runtime/server.py`, `cards.py`, and
+`artifacts.py`; the agent reply schemas are `reply_schema()` and `lane_schema()`
+in `runtime/xiaoyou_runtime/xiaoyou.py`. Display branding does not rename Python
+modules, the Android package, JSON roles such as `xiaoyou`, or the BLE device name
+`Claude-XXXXXX`.
+
+Usage is available under Connection and settings. It shows the
+selected computer, connection state, subscription windows and reset times,
+helper models and tiers, and the age of the data. Missing values stay unknown;
+real 0% remains 0%. Offline values are explicitly labelled as cached. Refresh
+runs in the background and a result from a previously selected computer is
+discarded. On hardware that announces `usage`, the app also sends an empty list
+when the selected source has no data, clearing the previous computer's values.
+
 ## What reaches the device
 
 | On the phone | On the device |
 | --- | --- |
-| A message sent to Xiaoyou from the chat box | Screen 1: what you said, Xiaoyou thinking, the agent she handed the work to, then a brief of a sentence or two |
-| The cards on the runtime | Screen 2 pages through conversation only (what Xiaoyou answered herself): the 8 most recent, plus every one still being worked on or on screen 3's list; on firmware that shows them apart a task's card carries that thing's latest exchange (at most 480 bytes), for the page opened from screen 3. Each holds the first sentence of the thing and the latest thing Xiaoyou said (the first 959 bytes; the full exchange stays on the phone) |
+| A message sent to DS from the chat box | Screen 1: what you said, DS thinking, the agent she handed the work to, then a brief of a sentence or two |
+| The cards on the runtime | Screen 2 pages through conversation only (what DS answered herself): the 8 most recent, plus every one still being worked on or on screen 3's list; on firmware that shows them apart a task's card carries that thing's latest exchange (at most 480 bytes), for the page opened from screen 3. Each holds the first sentence of the thing and the latest thing DS said (the first 959 bytes; the full exchange stays on the phone) |
 | The things handed to helpers | Screen 3: at most four, those in progress first (who is doing it, for how long and the two latest steps, tool names and commands verbatim), followed on firmware that announced `threads` by the latest that ended (the brief of the conclusion); the count in the top bar. A sentence said while holding the key on screen 3 carries `pin`, which the app passes to the runtime as it is: it is always filed on the selected thing |
-| Independently running desktop conversations discovered by the runtime | The same task/card pages show the agent, project, state and latest activity; opening a task shows the latest visible request and reply excerpts (at most 480 bytes). These sessions can only be operated on the computer |
-| An operation a helper wants confirmed | Xiaoyou asks, who wants what is shown verbatim; `OK` says yes, `DOWN` says no, and the answer goes back to the runtime |
+| Independently running desktop conversations discovered by the runtime | The same task/card pages show the agent, project, state and latest activity; opening a task shows the latest visible request and reply excerpts (at most 480 bytes). Continuing or stopping these sessions stays on the computer; a live bridged approval is a separate response channel |
+| An operation a helper wants confirmed | DS asks, who wants what is shown verbatim; `OK` says yes, `DOWN` says no, and the answer goes back to the runtime |
 | A voice message recorded on the device | The same as a typed message; what was heard appears on the device and in the chat box once the runtime has transcribed it |
 | The agents of the selected runtime | The helpers page in the menu (the first four) |
-| A notification from a registered source | An entry on the notices page in the menu |
+| Usage from the selected runtime | Screen 4: subscription windows, reset times, helper models and tiers; the screen remains available before data arrives and after disconnect |
+| A native Android notification from a registered source | An entry on the notices page in the menu; this source is independent of desktop Runtime hooks |
 | Notifications not yet dismissed | The idle first screen says how many |
 | A notification with both an allow-like and a deny-like button | The pet asks; `OK` presses the allow button, `DOWN` the deny button |
 | Nothing new | A keepalive every 10 seconds so the device stays connected |
-| A version of the device firmware chosen on the computer | The device shows Xiaoyou "changing into something new" with a progress bar and restarts by itself when done; see [Device firmware](#device-firmware) below |
+| A version of the device firmware chosen on the computer | The device shows DS "changing into something new" with a progress bar and restarts by itself when done; see [Device firmware](#device-firmware) below |
 
 When the app introduces itself the device announces what it understands. One
-that announces `cards` runs the three-screen firmware and gets everything
+that announces `cards` supports card and task screens and gets everything
 above; one that announces only `chat` runs the previous version, and the app
 sends it the current turn without cards or tasks; an older one announces
 neither, and the app falls back to what it sent first: the summary line and
@@ -62,27 +141,9 @@ it is an old version, and the chat is listed line by line as before.
 
 ### Conversation and tasks apart (0.8.0)
 
-The app has three pages, chosen with the row of buttons at the top:
-
-- **Conversation**: what Xiaoyou answered herself, as one continuous
-  exchange. A thing handed to a helper takes a single line here (its number,
-  helper, state and title); tapping it goes to that thing's own page.
-- **Tasks**: the things that were handed to a helper, the ones still
-  going first. Opening one shows all of it (what you said, what Xiaoyou said,
-  the helper's latest steps). A sentence sent from inside an open task carries
-  that thing's number and `pin`, so the runtime always files it on that thing
-  and continues its own session; it does not show up in the conversation page
-  and does not open another thing. Tapping the tasks button again, or Back,
-  returns to the list.
-- **Settings**: which computer answers, device firmware, the three
-  setup steps, sources, tests and the log.
-
-Operations waiting for consent are shown at the top of every page, with a
-button that opens the thing they belong to. Cards with a helper and desktop
-observations are tasks; Xiaoyou's own answers are conversation. For
-runtime-managed tasks, `pin` needs
-runtime 0.5.3; an older runtime ignores it, and then Xiaoyou still decides
-which thing a sentence said inside a task belongs to.
+Messages sent from a task's page retain its task ID and `pin`, so they continue
+that task. Runtime 0.5.3 or later is needed for task-scoped `pin`; older
+Runtimes may decide the target themselves.
 
 Only what a notification contains can be forwarded. Whether a given assistant
 posts notifications for cloud sessions, and whether they carry action buttons,
@@ -91,7 +152,7 @@ depends on that assistant's app and has not been verified.
 ### Conversations running on the computer
 
 When desktop observation is enabled on the paired runtime, independently
-running Codex and Claude Code conversations appear on the Tasks page. Each
+running Codex and Claude Code conversations appear on their helper's page. Each
 uses the conversation title shown in the desktop sidebar, together with its
 desktop source, project, current state and latest activity. The app preserves
 the runtime's title verbatim; desktop renames update the same task. If the
@@ -108,8 +169,11 @@ messages, at most 4,000 characters per message and 32 KiB of UTF-8 content per
 session; the app identifies recent excerpts and reports omitted content.
 The latest request and reply excerpts, plus the state, reach the device through
 the existing cards/tasks Bluetooth messages within a 480-byte reply budget.
-These cards are read-only: continue, cancel and approval controls stay on the
-computer, including when speaking from a selected desktop task on the device.
+These cards are read-only: continue and cancel controls stay on the computer,
+including when speaking from a selected desktop task on the device. A live
+`PermissionRequest` from an installed and trusted Codex or Claude Code hook may
+be answered separately from the phone or device. A permission notification or
+status signal without that channel only asks you to confirm on the computer.
 An ended turn does not mean the project is complete. The app does not show
 private reasoning, tool output or a reply that has not yet been recorded as a
 visible message. This view is recent conversation content, rather than a
@@ -137,7 +201,7 @@ In the app, in order:
 2. Enable notification access for the app in system settings.
 3. Connect. When the device shows a six-digit passkey, type it on the phone.
 
-To talk to Xiaoyou, start the runtime on a computer on the same network, run
+To talk to DS, start the runtime on a computer on the same network, run
 `python3 -m xiaoyou_runtime --pair` there, paste the printed line
 (`http://<address>:<port>#<token>`) into the app, and add it. Several computers
 can be added; tap one to choose which answers, long-press to remove it. The
@@ -153,6 +217,23 @@ Claude desktop app (or move away from that computer) before connecting the
 phone.
 
 ## Device firmware
+
+The matching firmware and App use the retained `avatar-whale-v1.png` pixel head
+portraits. Firmware compiles six expressions into a 60 by 60 indexed atlas
+(21,856 Flash bytes, no decode buffer), keeping the existing 120, 40 and 60
+display-pixel sizes and sleep, idle, busy, ask, happy, and oops moods. The sleeping
+head follows the approved rounded face with relaxed brows. Sleep, idle, ask and
+happy breathe over a 3.6-second loop, moving at most four display pixels on the
+home screen.
+The `hub` acknowledgement announces `desktopApproval: true`. A heartbeat
+`prompt.actionable` defaults to `true` for compatibility; when `false`, new
+firmware shows a read-only confirm-on-phone-or-computer notice without approval
+actions. For
+firmware without `desktopApproval`, the App sends that notice as a text summary
+instead of an actionable prompt. Actual approvals continue to use the existing
+`permission` response and are routed by their originating request.
+A source or operation that does not fit is clipped and marked, and can still be
+answered on the device; only `actionable` decides that.
 
 The device is only connected to the phone, so the phone carries new firmware
 across. The computer (the runtime) keeps every version and records which one
@@ -205,18 +286,38 @@ the runtime can therefore have the app write any image to the device.
 | --- | --- |
 | `android/app/src/main/java/.../BuddyProtocol.java` | Wire format; plain Java, unit tested |
 | `.../Sources.java` | Registry of sources (package name, label, enabled) |
-| `.../HubStore.java` | In-memory feed, what Xiaoyou is doing right now, the runtime's cards and approvals, pending questions, log |
+| `.../HubStore.java` | In-memory feed, what DS is doing right now, the runtime's cards and approvals, pending questions, log |
 | `.../Card.java`, `.../Json.java` | The card of one thing and an approval, and the JSON parser that reads them; plain Java, unit tested |
 | `.../NotifyListener.java` | Notification listener service |
 | `.../BleLink.java`, `.../LinkService.java` | BLE central and the foreground service that keeps it alive |
 | `.../VoiceRecording.java` | Decodes voice frames from the device into a WAV recording; plain Java, unit tested |
-| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Xiaoyou Runtime, waits for cards to change, answers approvals, cancels a thing, and asks which agents and which firmware versions the runtime has |
+| `.../RuntimeClient.java` | Sends chat messages and voice recordings to the Runtime, waits for cards to change, answers approvals, cancels a thing, and asks which agents and which firmware versions the runtime has |
 | `.../FirmwarePush.java` | One transfer of a firmware image to the device: what to send, when, and where to resend from; plain Java, unit tested |
 | `.../FirmwareSync.java` | Keeps the device on the version the runtime names: asks the device, watches the runtime, fetches, transfers, confirms, reports |
 | `.../CardViews.java` | Which cards are conversation and which are tasks, and how they are worded on the phone; plain Java, unit tested |
-| `.../MainActivity.java` | Three pages: conversation, tasks (the list and the open one), settings; operations waiting for consent, the input box |
+| `.../MainActivity.java` | Sidebar, chat, task and helper pages, connection and settings, approval detail and composer |
+| `.../AppPresentation.java`, `.../AvatarView.java`, `.../NavIconView.java` | Tested role, sidebar order and helper rules, normalized portraits and native icons |
 
 ## Status
+
+The sidebar redesign passed `assembleDebug` and the unit tests. It has not been
+installed or visually accepted on a phone.
+
+The chat-first Android UI passed `assembleDebug`, 22 unit tests and Lint (zero
+errors). The complete repository gate also passed. It has not been installed or
+visually accepted on a phone; keyboard layout, navigation, companion selection
+and live approval round trips still need device acceptance.
+
+For 0.10.0, the Android build, host tests, and complete repository validation
+gate passed. DS attendance, task pinning, multi-Runtime approval routing, and
+attachment integrity have host coverage. On the development computer, the
+Codex and Claude Code hook handlers were merged while preserving existing
+configuration; Codex still requires the user to review and trust the current
+definition through `/hooks`. A live desktop approval round trip, Android
+background delivery, image/file saving and opening on a phone, and the new
+usage-page navigation and source-switch behavior remain device acceptance
+checks. The earlier sleeping-face revision was flashed and its face shape and
+breathing were confirmed by the user; that does not validate the new Usage page.
 
 The protocol layer is unit tested and its output is accepted by the firmware's
 parser. The app compiles against the Android 14 API, and its runtime request

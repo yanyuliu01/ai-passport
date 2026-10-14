@@ -77,7 +77,7 @@ final class CardViews {
 
     static String assistantLabel(Card card) {
         if (!card.monitoringOnly) {
-            return "小幽";
+            return "ds";
         }
         if (card.agent.equalsIgnoreCase("codex")) {
             return "Codex";
@@ -177,9 +177,11 @@ final class CardViews {
                 out.add(card);
             }
         }
-        while (out.size() > limit) {
-            out.remove(0);
-        }
+        // Select after sorting: an older approval must not disappear behind newer work.
+        out.sort(Comparator.comparingInt((Card card) -> card.state.equals("waiting") ? 0 : card.queued ? 2 : 1)
+                .thenComparingDouble(card -> card.startedAt > 0 ? card.startedAt : card.createdAt)
+                .thenComparing(card -> card.id));
+        if (out.size() > limit) out = new ArrayList<>(out.subList(0, limit));
         // 失联对话仍在当前列表，但不能把已知正在运行的任务挤出去。
         for (int index = cards.size() - 1; index >= 0 && out.size() < limit; index--) {
             Card card = cards.get(index);
@@ -300,7 +302,7 @@ final class CardViews {
     static final int THREAD_ENTRY_CHARS = 90;
 
     /**
-     * 一件任务在设备上的来回：第一句之后的每一句，“你：”“小幽：”各占一段，旧的在前；
+     * 一件任务在设备上的来回：第一句之后的每一句，“你：”“ds：”各占一段，旧的在前；
      * 放不下时丢掉旧的，留最新的。做完的事最后一句用简报（给小屏幕写的）。
      */
     static String deviceThread(Card card) {
@@ -316,7 +318,7 @@ final class CardViews {
             boolean last = index == card.entries.size() - 1;
             String text = !mine && last && !card.active() && !card.brief.isEmpty()
                     ? card.brief : entry.text;
-            lines.add((mine ? "你：" : "小幽：") + oneLine(text, THREAD_ENTRY_CHARS));
+            lines.add((mine ? "你：" : "ds：") + oneLine(text, THREAD_ENTRY_CHARS));
         }
         StringBuilder out = new StringBuilder();
         for (int index = lines.size() - 1; index >= 0; index--) {
@@ -438,6 +440,10 @@ final class CardViews {
 
     /** 同上；effort 不为空表示这句话让帮手用这一档做（Runtime 0.6.0 起认识）。 */
     static String messageJson(String text, String clientId, String card, String effort) {
+        return messageJson(text, clientId, card, effort, null);
+    }
+
+    static String messageJson(String text, String clientId, String card, String effort, String agent) {
         StringBuilder body = new StringBuilder("{\"text\":");
         BuddyProtocol.quote(body, text);
         body.append(",\"client_id\":\"").append(clientId).append('"');
@@ -446,6 +452,10 @@ final class CardViews {
         }
         if (BuddyProtocol.effort(effort)) {
             body.append(",\"effort\":\"").append(effort).append('"');
+        }
+        if (agent != null && !agent.isEmpty() && !BuddyProtocol.cardId(card)) {
+            body.append(",\"agent\":");
+            BuddyProtocol.quote(body, agent);
         }
         return body.append('}').toString();
     }

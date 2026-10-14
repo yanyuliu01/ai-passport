@@ -52,11 +52,22 @@ public final class BuddyProtocol {
         public final String id;
         public final String tool;
         public final String hint;
+        public final boolean actionable;
 
         public Prompt(String id, String tool, String hint) {
+            this(id, tool, hint, true);
+        }
+
+        public Prompt(String id, String tool, String hint, boolean actionable) {
             this.id = id;
             this.tool = tool;
-            this.hint = hint;
+            String detail = hint == null ? "" : hint;
+            boolean complete = utf8Length(detail) <= HINT_MAX
+                    && utf8Length(tool == null ? "" : tool) <= TOOL_MAX;
+            // 放不下只截短并注明，照样能在设备上回答：主人选择了不必看全也能点头。
+            String note = "\n（后面被截断，完整内容在手机看）";
+            this.hint = complete ? detail : clip(detail, HINT_MAX - utf8Length(note)) + note;
+            this.actionable = actionable;
         }
     }
 
@@ -98,6 +109,7 @@ public final class BuddyProtocol {
             quote(out, clip(prompt.tool, TOOL_MAX));
             out.append(",\"hint\":");
             quote(out, clip(prompt.hint, HINT_MAX));
+            if (!prompt.actionable) out.append(",\"actionable\":false");
             out.append('}');
         }
         out.append("}\n");
@@ -570,6 +582,11 @@ public final class BuddyProtocol {
     public static boolean hubAckHasDesktop(String line) {
         Map<String, String> fields = parseFlatObject(line);
         return hubAckHasCards(line) && "true".equals(fields.get("desktop"));
+    }
+
+    public static boolean hubAckHasDesktopApproval(String line) {
+        Map<String, String> fields = parseFlatObject(line);
+        return fields != null && "true".equals(fields.get("desktopApproval"));
     }
 
     /** 设备声明它把对话和任务分开显示：任务单子里可以带做完的事。 */

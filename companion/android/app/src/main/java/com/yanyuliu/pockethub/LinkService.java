@@ -55,9 +55,11 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private boolean devicePast;
     /** 设备明确声明认识电脑对话的 unknown 和 idle 状态。 */
     private boolean deviceDesktop;
+    private boolean deviceDesktopApproval;
     private String lastPast = "";
     private String lastUsage = "";
     private long usageSentMs;
+    private long usageEpochSent = -1;
     /** 设备打开过、手里没有卡的那几件事：它们的卡跟着别的卡一起发。 */
     private final LinkedHashSet<String> wanted = new LinkedHashSet<>();
     private boolean recordingPin;
@@ -169,9 +171,11 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         deviceUsage = false;
         devicePast = false;
         deviceDesktop = false;
+        deviceDesktopApproval = false;
         lastPast = "";
         lastUsage = "";
         usageSentMs = 0;
+        usageEpochSent = -1;
         wanted.clear();
         sentCards.clear();
         cardsEpochSent = -1;
@@ -226,6 +230,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             deviceUsage = deviceCards && BuddyProtocol.hubAckHasUsage(line);
             devicePast = deviceThreads && BuddyProtocol.hubAckHasPast(line);
             deviceDesktop = deviceCards && BuddyProtocol.hubAckHasDesktop(line);
+            deviceDesktopApproval = BuddyProtocol.hubAckHasDesktopApproval(line);
             HubStore.get().log(!hub ? "设备固件较旧，不支持按住说话"
                     : (devicePast ? "设备支持按住说话，四屏：形象、对话、任务（带做完的历史）、用量"
                     : deviceUsage ? "设备支持按住说话，四屏：形象、对话、任务、用量"
@@ -418,17 +423,19 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     /** 把用量告诉设备的第四屏：数变了就发，没变也隔一阵发一次（“多久之前更新的”要跟上）。 */
     private void pushUsage(HubStore store) {
         Usage usage = store.usage();
-        if (!deviceUsage || usage == null) {
+        if (!deviceUsage) {
             return;
         }
-        String key = BuddyProtocol.usage(usage.deviceEntries(-1));
+        String key = BuddyProtocol.usage(usage == null ? null : usage.deviceEntries(-1));
         long nowMs = System.currentTimeMillis();
-        if (key.equals(lastUsage) && nowMs - usageSentMs < USAGE_RESEND_MS) {
+        long epoch = store.cardsEpoch();
+        if (epoch == usageEpochSent && key.equals(lastUsage) && nowMs - usageSentMs < USAGE_RESEND_MS) {
             return;
         }
+        usageEpochSent = epoch;
         lastUsage = key;
         usageSentMs = nowMs;
-        link.send(BuddyProtocol.usage(usage.deviceEntries(store.usageAgeSeconds())));
+        link.send(BuddyProtocol.usage(usage == null ? null : usage.deviceEntries(store.usageAgeSeconds())));
     }
 
     private void pushState() {
@@ -446,12 +453,15 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         HubStore.Ask ask = store.currentAsk();
         BuddyProtocol.Prompt prompt = ask == null ? null
-                : new BuddyProtocol.Prompt(ask.id, ask.source, ask.text);
+                : new BuddyProtocol.Prompt(ask.id, ask.source, ask.text, ask.actionable);
+        boolean deviceCanAnswer = prompt != null && prompt.actionable;
+        if (prompt != null && !prompt.actionable && !deviceDesktopApproval) prompt = null;
         boolean busy = store.busy();
         // 旧界面的设备靠心跳里的这行字显示“在想：……”和最新一条消息；新界面不需要。
         String message = deviceChat ? ""
                 : (busy ? "在想：" + store.busyText()
                         : (recent.isEmpty() ? "" : recent.get(0).summary()));
+        if (!deviceChat && ask != null && !deviceCanAnswer) message = "有审批请求，请在手机或电脑确认：" + ask.text;
         String heartbeat = BuddyProtocol.heartbeat(Sources.enabledCount(this), busy ? 1 : 0,
                 store.waiting(),
                 message, entries, 0, store.todayCount(), prompt);
@@ -469,6 +479,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
                             turnCard != null && !turn.agent.isEmpty() ? turnCard.effort : null)
                     : BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
                             turn.stage, turn.mood);
+            if (ask != null && !deviceCanAnswer && !deviceDesktopApproval) {
+                chat = BuddyProtocol.chat("done", "", "有审批请求，请在手机或电脑确认：" + ask.text,
+                        "", ask.source, "ask");
+            }
             if (!chat.equals(lastChat)) {
                 lastChat = chat;
                 link.send(chat);

@@ -160,17 +160,9 @@ final class Usage {
         return null;
     }
 
-    /** 没有账号、也没有哪个帮手报了模型：没什么可看的。 */
+    /** 账号和帮手都没报过才是空；未知模型的帮手也保留。 */
     boolean empty() {
-        if (!accounts.isEmpty()) {
-            return false;
-        }
-        for (Agent agent : agents) {
-            if (!agent.model.isEmpty()) {
-                return false;
-            }
-        }
-        return true;
+        return accounts.isEmpty() && agents.isEmpty();
     }
 
     /**
@@ -200,6 +192,19 @@ final class Usage {
                 shortModel(agent.model, BuddyProtocol.MODEL_MAX), agent.effort, agent.running);
     }
 
+    /** 账号的显示名单与帮手自身的账号引用取并集，避免缺掉未列入名单的帮手。 */
+    private List<Agent> accountAgents(Account account) {
+        List<Agent> out = new ArrayList<>();
+        for (String name : account.agents) {
+            Agent helper = agent(name);
+            if (helper != null && !out.contains(helper)) out.add(helper);
+        }
+        for (Agent helper : agents) {
+            if (account.id.equals(helper.account) && !out.contains(helper)) out.add(helper);
+        }
+        return out;
+    }
+
     /**
      * 设备第四屏的内容：每个订阅账号一条（跑在它上面的帮手，最多两个），然后是按量计费、
      * 报了模型的帮手，各一条。extraSeconds 是这份用量到手之后又过了多久；小于 0 表示不带
@@ -209,12 +214,7 @@ final class Usage {
         List<BuddyProtocol.UsageEntry> out = new ArrayList<>();
         for (Account account : accounts) {
             List<BuddyProtocol.UsageWho> helpers = new ArrayList<>();
-            for (String name : account.agents) {
-                Agent agent = agent(name);
-                if (agent != null) {
-                    helpers.add(who(agent));
-                }
-            }
+            for (Agent agent : accountAgents(account)) helpers.add(who(agent));
             long age = -1;
             if (extraSeconds >= 0 && account.updatedAt > 0 && at >= account.updatedAt) {
                 age = (long) (at - account.updatedAt) + extraSeconds;
@@ -269,22 +269,19 @@ final class Usage {
     private static void window(StringBuilder out, String label, int left, long reset,
                                long nowSeconds, TimeZone zone) {
         String when = resetText(reset, nowSeconds, zone);
-        if (left < 0 && when.isEmpty()) {
-            return;
-        }
         out.append('\n').append(label);
         out.append(left < 0 ? "：还不知道剩多少" : " 剩 " + left + "%");
         if (!when.isEmpty()) {
             out.append("，").append(when);
-        }
+        } else out.append(reset <= 0 ? "，重置时间未知" : "，上次报告的重置时间已过");
     }
 
     private static String tier(Agent agent) {
         StringBuilder out = new StringBuilder(agent.name);
-        out.append("（").append(agent.model.isEmpty() ? "还没跑过" : agent.model);
+        out.append("（").append(agent.model.isEmpty() ? "模型未报告" : agent.model);
         if (!agent.effort.isEmpty()) {
             out.append(" · ").append(Card.effortLabel(agent.effort));
-        }
+        } else out.append(" · 档位未报告");
         out.append('）');
         if (agent.running > 0) {
             out.append(" 正在做 ").append(agent.running).append(" 件");
@@ -300,12 +297,8 @@ final class Usage {
         List<String> out = new ArrayList<>();
         for (Account account : accounts) {
             StringBuilder text = new StringBuilder();
-            for (String name : account.agents) {
-                Agent agent = agent(name);
-                if (agent != null) {
-                    text.append(text.length() == 0 ? "" : "\n").append(tier(agent));
-                }
-            }
+            for (Agent agent : accountAgents(account))
+                text.append(text.length() == 0 ? "" : "\n").append(tier(agent));
             if (text.length() == 0) {
                 text.append(account.id);
             }
@@ -315,15 +308,21 @@ final class Usage {
             if (account.updatedAt > 0 && at >= account.updatedAt) {
                 long minutes = ((long) (at - account.updatedAt) + Math.max(0L, extraSeconds)) / 60L;
                 text.append('\n').append(minutes <= 0 ? "刚刚更新" : minutes + " 分钟前更新");
-            }
+            } else text.append("\n更新时间未知");
             if (!account.note.isEmpty()) {
                 text.append('\n').append(account.note);
             }
             out.add(text.toString());
         }
         for (Agent agent : agents) {
-            if (agent.account.isEmpty() && !agent.model.isEmpty()) {
-                out.add(tier(agent) + " — 按量计费");
+            if (agent.account.isEmpty()) {
+                out.add(tier(agent) + (agent.model.isEmpty() ? " — 尚未报告用量" : " — 按量计费"));
+            } else {
+                boolean shown = false;
+                for (Account account : accounts) {
+                    if (accountAgents(account).contains(agent)) { shown = true; break; }
+                }
+                if (!shown) out.add(tier(agent) + " — 订阅额度尚未关联");
             }
         }
         return out;

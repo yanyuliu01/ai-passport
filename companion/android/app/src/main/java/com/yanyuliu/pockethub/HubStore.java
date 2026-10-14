@@ -86,6 +86,7 @@ public final class HubStore {
         public final String text;
         /** Runtime 那边的授权编号；通知来的是 null。 */
         public final String approval;
+        public final boolean actionable;
         final PendingIntent allow;
         final PendingIntent deny;
 
@@ -95,12 +96,18 @@ public final class HubStore {
 
         Ask(String id, String source, String text, String approval, PendingIntent allow,
             PendingIntent deny) {
+            this(id, source, text, approval, allow, deny, true);
+        }
+
+        Ask(String id, String source, String text, String approval, PendingIntent allow,
+            PendingIntent deny, boolean actionable) {
             this.id = id;
             this.source = source;
             this.text = text;
             this.approval = approval;
             this.allow = allow;
             this.deny = deny;
+            this.actionable = actionable;
         }
     }
 
@@ -169,10 +176,13 @@ public final class HubStore {
     private long feedSeq;
     /** 卡被整个换掉（换了 Runtime、Runtime 换了记录）一次加一：设备上的也要清掉重发。 */
     private long cardsEpoch;
+    private boolean runtimeConnected;
     /** 第一屏跟着的那张卡：我最近说的那句话归到的，或者刚刚有了结果的。 */
     private String turnCard;
     /** Runtime 上还在等回答的授权，早的在前。 */
     private List<Card.Approval> approvals = new ArrayList<>();
+    private final Map<String, List<Card.Approval>> approvalsByRuntime = new LinkedHashMap<>();
+    private String selectedRuntime = "";
     /** 已经回答、Runtime 还没确认收到的授权：不再拿去问。 */
     private final Set<String> answered = new HashSet<>();
     /** 回答没送到的次数：重新问的时候换一个请求编号，设备才会当成新的请求。 */
@@ -267,10 +277,50 @@ public final class HubStore {
     public synchronized boolean monitoringApproval(String id) {
         for (Card.Approval approval : approvals) {
             if (approval.id.equals(id)) {
-                return monitoringOnly(approval.card);
+                return approvalReadOnly(approval);
             }
         }
         return false;
+    }
+
+    private boolean approvalReadOnly(Card.Approval approval) {
+        return !approval.actionable((approval.runtimeUrl.isEmpty() || approval.runtimeUrl.equals(selectedRuntime))
+                && monitoringOnly(approval.card));
+    }
+
+    public synchronized Card.Approval approval(String id) {
+        for (Card.Approval approval : approvals) if (approval.id.equals(id)) return approval;
+        return null;
+    }
+
+    public synchronized void selectedRuntime(String url) { selectedRuntime = url; }
+
+    /** Independent origins are merged without changing the selected Runtime's task cards. */
+    public void applyApprovals(String runtime, List<Card.Approval> pending) {
+        boolean dirty;
+        synchronized (this) {
+            approvalsByRuntime.put(runtime, new ArrayList<>(pending));
+            List<Card.Approval> merged = new ArrayList<>();
+            for (List<Card.Approval> items : approvalsByRuntime.values()) merged.addAll(items);
+            merged.sort(java.util.Comparator.comparingLong((Card.Approval item) -> item.createdAt)
+                    .thenComparing(item -> item.runtimeUrl).thenComparing(item -> item.id));
+            Set<String> waiting = new HashSet<>();
+            for (Card.Approval item : merged) waiting.add(item.id);
+            answered.retainAll(waiting); attempts.keySet().retainAll(waiting);
+            dirty = !sameApprovals(approvals, merged);
+            if (dirty) approvals = merged;
+        }
+        if (dirty) notifyChanged();
+    }
+
+    public void dropApprovalRuntime(String runtime) { applyApprovals(runtime, java.util.Collections.emptyList()); }
+
+    public synchronized boolean runtimeConnected() { return runtimeConnected; }
+
+    public void runtimeConnected(boolean connected) {
+        boolean changed;
+        synchronized (this) { changed = runtimeConnected != connected; runtimeConnected = connected; }
+        if (changed) notifyChanged();
     }
 
     /** 电脑状态失联时不能继续显示“在做”；重取完整 feed 后再恢复实际状态。 */
@@ -308,10 +358,9 @@ public final class HubStore {
     public void resetCards() {
         synchronized (this) {
             cards.clear();
+            runtimeConnected = false;
             cardOrder.clear();
-            approvals = new ArrayList<>();
-            answered.clear();
-            attempts.clear();
+            // Approval origins have their own lifecycle; changing task Runtime must retain them.
             feedSeq = 0;
             turnCard = null;
             usage = null;
@@ -352,6 +401,7 @@ public final class HubStore {
             if (seq > feedSeq) {
                 feedSeq = seq;
             }
+            if (pendingApprovals != null) {
             Set<String> waiting = new HashSet<>();
             for (Card.Approval approval : pendingApprovals) {
                 waiting.add(approval.id);
@@ -371,6 +421,7 @@ public final class HubStore {
                 approvals = new ArrayList<>(pendingApprovals);
                 dirty = true;
             }
+            }
         }
         if (dirty) {
             notifyChanged();
@@ -383,7 +434,11 @@ public final class HubStore {
         }
         for (int index = 0; index < left.size(); index++) {
             if (!left.get(index).id.equals(right.get(index).id)
-                    || left.get(index).createdAt != right.get(index).createdAt) {
+                    || left.get(index).createdAt != right.get(index).createdAt
+                    || left.get(index).remoteActionable != right.get(index).remoteActionable
+                    || !left.get(index).tool.equals(right.get(index).tool)
+                    || !left.get(index).detail.equals(right.get(index).detail)
+                    || !left.get(index).runtimeName.equals(right.get(index).runtimeName)) {
                 return false;
             }
         }
@@ -394,7 +449,7 @@ public final class HubStore {
     public synchronized List<Card.Approval> approvals() {
         List<Card.Approval> open = new ArrayList<>();
         for (Card.Approval approval : approvals) {
-            if (!answered.contains(approval.id) && !monitoringOnly(approval.card)) {
+            if (!answered.contains(approval.id)) {
                 open.add(approval);
             }
         }
@@ -415,7 +470,7 @@ public final class HubStore {
         String found = null;
         synchronized (this) {
             for (Card.Approval approval : approvals) {
-                if (!monitoringOnly(approval.card) && !answered.contains(approval.id)
+                if (!approvalReadOnly(approval) && !answered.contains(approval.id)
                         && (approval.id.equals(id) || approvalAskId(approval).equals(id))) {
                     answered.add(approval.id);
                     found = approval.id;
@@ -684,9 +739,9 @@ public final class HubStore {
     public synchronized Ask currentAsk() {
         // 帮手停在那里等着，所以它的问题排在通知前面。
         for (Card.Approval approval : approvals) {
-            if (!answered.contains(approval.id) && !monitoringOnly(approval.card)) {
-                return new Ask(approvalAskId(approval), approval.tool, approval.detail,
-                        approval.id, null, null);
+            if (!answered.contains(approval.id)) {
+                return new Ask(approvalAskId(approval), (approval.runtimeName.isEmpty() ? "" : approval.runtimeName + " · ") + approval.tool, approval.detail,
+                        approval.id, null, null, !approvalReadOnly(approval));
             }
         }
         for (Ask ask : asks.values()) {
@@ -729,8 +784,14 @@ public final class HubStore {
 
     /** feed 里带来的用量。和手里的是同一份（编号没变）就不算变化。 */
     public void setUsage(Usage next) {
+        setUsage(next, -1);
+    }
+
+    /** 手动刷新必须属于仍在查看的来源世代；不能把迟到的用量写进另一台电脑。 */
+    public void setUsage(Usage next, long expectedEpoch) {
         synchronized (this) {
-            if (next == null || (usage != null && usage.rev == next.rev && usage.at == next.at)) {
+            if ((expectedEpoch >= 0 && cardsEpoch != expectedEpoch) || next == null
+                    || (usage != null && usage.rev == next.rev && usage.at == next.at)) {
                 return;
             }
             boolean same = usage != null && usage.rev == next.rev;

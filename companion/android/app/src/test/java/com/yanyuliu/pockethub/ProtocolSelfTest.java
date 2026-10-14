@@ -41,6 +41,19 @@ public final class ProtocolSelfTest {
                         new BuddyProtocol.Prompt(longId.toString(), "t", "h")).contains("prompt"),
                 "oversized prompt id must be dropped");
 
+        // 说明放不下：截短到固件收得下、注明后面被截断，照样能在设备上回答。
+        StringBuilder command = new StringBuilder();
+        for (int index = 0; index < 50; index++) {
+            command.append("gradle :app:assembleDebug ");
+        }
+        BuddyProtocol.Prompt cut = new BuddyProtocol.Prompt("a22", "codex · 命令", command.toString(), true);
+        check(cut.actionable, "a clipped prompt stays answerable");
+        check(BuddyProtocol.utf8Length(cut.hint) <= BuddyProtocol.HINT_MAX, "clipped hint fits firmware");
+        check(cut.hint.endsWith("完整内容在手机看）"), "clipped hint says so: " + cut.hint);
+        String cutBeat = BuddyProtocol.heartbeat(1, 0, 1, "m", null, 0, 0, cut);
+        check(cutBeat.contains("\"id\":\"a22\"") && !cutBeat.contains("\"actionable\""),
+                "clipped prompt is sent answerable: " + cutBeat);
+
         // 截断不切断汉字（每个 3 字节）。
         check(BuddyProtocol.clip("中文字", 7).equals("中文"), "clip on char boundary");
         check(BuddyProtocol.clip("a中", 3).equals("a"), "clip mixed");
@@ -399,7 +412,7 @@ public final class ProtocolSelfTest {
                 "a going task shows its latest step: " + CardViews.listItem(parsed));
         check(CardViews.listItem(finished).equals("c9 · claude · 好了\n写周报\n写好了 在桌面")
                 && CardViews.listItem(older).equals("c2 · codex · 没成\n旧的"), "list item");
-        check(CardViews.thread(finished).equals("我：写周报\n\n小幽：好了")
+        check(CardViews.thread(finished).equals("我：写周报\n\nds：好了")
                 && CardViews.thread(plain).isEmpty(), "thread");
         check(CardViews.oneLine("一二三四五", 3).equals("一二三…")
                 && CardViews.oneLine("ab\uD83D\uDE00c", 3).equals("ab…"), "preview is cut whole");
@@ -422,10 +435,10 @@ public final class ProtocolSelfTest {
                 && ended.p2.isEmpty() && CardViews.deviceTask(older, 0).state.equals("failed"),
                 "an ended task says how it ended");
         // 任务在设备上有自己的页面：第一句之后的来回，旧的在前，做完的最后一句是简报。
-        check(CardViews.deviceReply(finished, true).equals("小幽：写好了 在桌面")
+        check(CardViews.deviceReply(finished, true).equals("ds：写好了 在桌面")
                 && CardViews.deviceReply(finished, false).equals("写好了\n在桌面\n\n好了")
                 && CardViews.deviceReply(plain, true).isEmpty(), "a task sends its exchange");
-        check(CardViews.deviceThread(parsed).equals("小幽：好，交给 codex\n\n你：只看今天的"),
+        check(CardViews.deviceThread(parsed).equals("ds：好，交给 codex\n\n你：只看今天的"),
                 "thread of a going task: " + CardViews.deviceThread(parsed));
         StringBuilder many = new StringBuilder("{\"id\":\"c3\",\"state\":\"working\",\"agent\":\"codex\","
                 + "\"entries\":[{\"role\":\"you\",\"text\":\"开头\"}");
@@ -435,7 +448,7 @@ public final class ProtocolSelfTest {
         }
         String tail = CardViews.deviceThread(Card.from(Json.parseObject(many + "]}")));
         check(tail.getBytes(StandardCharsets.UTF_8).length <= CardViews.THREAD_BYTES
-                && tail.startsWith("小幽：第") && tail.contains("第19句") && !tail.contains("第0句"),
+                && tail.startsWith("ds：第") && tail.contains("第19句") && !tail.contains("第0句"),
                 "a long thread keeps its newest end");
         String pinned = "{\"cmd\":\"voice\",\"state\":\"start\",\"rate\":16000,\"card\":\"c12\",\"pin\":true}";
         check(BuddyProtocol.parseVoicePin(pinned) && "c12".equals(BuddyProtocol.parseVoiceCard(pinned))
@@ -913,15 +926,17 @@ public final class ProtocolSelfTest {
 
         // ---- 用量：给人看的几段 ----
         List<String> said = usage.describe(now, 40, zone);
-        check(said.size() == 3, "one paragraph per account, then pay as you go");
+        check(said.size() == 4, "one paragraph per account, then all unlinked helpers including unknown models");
         check(said.get(0).equals("codex（gpt-6.1-mini · 中档） 正在做 2 件 — 正常\n"
                 + "5 小时 剩 58%，16:20 重置\n本周 剩 81%，周三 09:00 重置\n2 分钟前更新"),
                 "account: " + said.get(0));
-        check(said.get(1).equals("claude（claude-sonnet-5-5-20260301 · 中档）\ntailor（还没跑过 · 高档）"
-                + " — 快用完了\n5 小时 剩 12%\n本周：还不知道剩多少，周三 09:00 重置\n精确的数取不到"),
+        check(said.get(1).equals("claude（claude-sonnet-5-5-20260301 · 中档）\ntailor（模型未报告 · 高档）"
+                + " — 快用完了\n5 小时 剩 12%，重置时间未知\n本周：还不知道剩多少，周三 09:00 重置\n更新时间未知\n精确的数取不到"),
                 "account without numbers: " + said.get(1));
-        check(said.get(2).equals("deepseek（deepseek-v4-pro） 正在做 1 件 — 按量计费"),
+        check(said.get(2).equals("deepseek（deepseek-v4-pro · 档位未报告） 正在做 1 件 — 按量计费"),
                 "pay as you go: " + said.get(2));
+        check(said.get(3).equals("echo（模型未报告 · 档位未报告） — 尚未报告用量"),
+                "unknown helper remains visible without claiming billing or quota");
         check(Usage.resetText(0, now, zone).isEmpty() && Usage.resetText(now - 1, now, zone).isEmpty()
                 && Usage.resetText(now + 60, now, zone).equals("15:01 重置"), "when a window resets");
     }

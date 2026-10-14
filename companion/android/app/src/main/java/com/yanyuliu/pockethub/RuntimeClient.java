@@ -30,6 +30,7 @@ final class RuntimeClient {
     private static final String KEY_TOKEN = "token";
     private static final String KEY_COUNT = "rt_count";
     private static final int TURNS_KEPT = 20;
+    static final int MAX_TARGETS = 8;
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
@@ -41,6 +42,7 @@ final class RuntimeClient {
     private static volatile HttpURLConnection feedConnection;
     /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小幽回话，不能排在它后面。 */
     private static final ExecutorService FIRMWARE_WORKER = Executors.newSingleThreadExecutor();
+    private static final ExecutorService AGENTS_WORKER = Executors.newSingleThreadExecutor();
 
     private RuntimeClient() {
     }
@@ -126,6 +128,7 @@ final class RuntimeClient {
         store(context, targets(context), url);
         // 手里的卡是上一台的：马上清掉，不等盯着卡的那一路发现。
         HubStore.get().resetCards();
+        HubStore.get().selectedRuntime(url);
         HubStore.get().helpersChanged();
         HttpURLConnection waiting = feedConnection;
         if (waiting != null) {
@@ -141,6 +144,8 @@ final class RuntimeClient {
             return;
         }
         final Context app = context.getApplicationContext();
+        ApprovalNotifications.start(app);
+        ApprovalMonitor.start(app);
         watcher = new Thread(() -> watchLoop(app), "xiaoyou-feed");
         watcher.setDaemon(true);
         watcher.start();
@@ -173,6 +178,7 @@ final class RuntimeClient {
                 }
                 String detail = String.valueOf(error.getMessage());
                 store.desktopDisconnected();
+                store.runtimeConnected(false);
                 boolean old = detail.contains(" 404");
                 if (!detail.equals(complained)) {
                     complained = detail;
@@ -224,36 +230,46 @@ final class RuntimeClient {
                 cards.add(card);
             }
         }
-        List<Card.Approval> approvals = new ArrayList<>();
-        for (Object item : Json.list(feed, "approvals")) {
-            Card.Approval approval = Card.Approval.from(Json.object(item));
-            if (approval != null) {
-                approvals.add(approval);
-            }
-        }
-        store.applyFeed(seq, cards, approvals);
-        store.setUsage(Usage.from(feed.get("usage")));
+        store.selectedRuntime(target.url);
+        store.applyFeed(seq, cards, null);
+        store.setUsage(Usage.from(feed.get("usage")), epoch);
+        store.runtimeConnected(true);
     }
 
     /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
+    interface ActionCallback { void onResult(String problem); }
+
+    private static void actionResult(ActionCallback callback, String problem) {
+        if (callback != null) new android.os.Handler(android.os.Looper.getMainLooper())
+                .post(() -> callback.onResult(problem));
+    }
+
     static void approve(Context context, String approval, boolean allow) {
-        final Target target = selected(context.getApplicationContext());
+        approve(context, approval, allow, null);
+    }
+
+    static void approve(Context context, String approval, boolean allow, ActionCallback callback) {
         final HubStore store = HubStore.get();
+        final Card.Approval request = store.approval(approval);
+        final Target target = request == null ? null : target(context, request.runtimeUrl);
         if (store.monitoringApproval(approval)) {
             store.log("电脑端授权请在电脑端回答");
+            actionResult(callback, "请在电脑端确认这次操作");
             return;
         }
         if (target == null) {
             store.approvalFailed(approval, "还没有设置 Runtime 的连接串");
+            actionResult(callback, "来源电脑已移除，请重新连接");
             return;
         }
         store.log((allow ? "回答：可以" : "回答：不行") + "（" + approval + "）");
         QUICK.execute(() -> {
             try {
-                requestText("POST", target.url + "/v1/approvals/" + approval, target.token,
+                requestText("POST", target.url + "/v1/approvals/" + java.net.URLEncoder.encode(request.remoteId, "UTF-8"), target.token,
                         ("{\"decision\":\"" + (allow ? "allow" : "deny") + "\"}")
                                 .getBytes(StandardCharsets.UTF_8),
                         "application/json; charset=utf-8", 15, false);
+                actionResult(callback, null);
             } catch (IOException | RuntimeException error) {
                 String detail = String.valueOf(error.getMessage());
                 if (detail.contains(" 404") || detail.contains(" 409")) {
@@ -262,6 +278,8 @@ final class RuntimeClient {
                 } else {
                     store.approvalFailed(approval, detail);
                 }
+                actionResult(callback, detail.contains(" 404") || detail.contains(" 409")
+                        ? "请求已结束或已在其他端处理" : "提交失败：" + detail);
             }
         });
     }
@@ -303,7 +321,7 @@ final class RuntimeClient {
         if (target == null) {
             return;
         }
-        WORKER.execute(() -> {
+        AGENTS_WORKER.execute(() -> {
             try {
                 String body = requestText("GET", target.url + "/v1/agents", target.token, null,
                         null, 8);
@@ -323,6 +341,49 @@ final class RuntimeClient {
         });
     }
 
+    interface UsageCallback {
+        void onUsage(String problem, boolean applied);
+    }
+
+    /** 手动现问额度，不排在对话后面；来源或记录世代变了就丢弃这次结果。 */
+    static void fetchUsage(Context context, UsageCallback callback) {
+        final Context app = context.getApplicationContext();
+        final Target target;
+        final long epoch;
+        synchronized (RuntimeClient.class) {
+            target = selected(app);
+            epoch = HubStore.get().cardsEpoch();
+        }
+        if (target == null) {
+            callback.onUsage("还没有登记电脑", false);
+            return;
+        }
+        QUICK.execute(() -> {
+            String problem = null;
+            Usage next = null;
+            try {
+                String body = requestText("GET", target.url + "/v1/usage?refresh=1", target.token,
+                        null, null, 90);
+                next = Usage.from(Json.parseObject(body));
+                if (next == null) throw new IOException("Runtime 返回的用量看不懂");
+            } catch (IOException | RuntimeException error) {
+                problem = String.valueOf(error.getMessage());
+            }
+            boolean applied = false;
+            synchronized (RuntimeClient.class) {
+                Target current = selected(app);
+                if (current != null && target.url.equals(current.url) && target.token.equals(current.token)
+                        && HubStore.get().cardsEpoch() == epoch) {
+                    if (next != null) {
+                        HubStore.get().setUsage(next, epoch);
+                        applied = true;
+                    }
+                } else problem = null;
+            }
+            callback.onUsage(problem, applied);
+        });
+    }
+
     static synchronized void remove(Context context, String url) {
         List<Target> list = targets(context);
         Target current = selected(context);
@@ -332,6 +393,16 @@ final class RuntimeClient {
             }
         }
         store(context, list, current == null ? null : current.url);
+        HubStore.get().dropApprovalRuntime(url);
+        if (current != null && current.url.equals(url)) HubStore.get().resetCards();
+        ApprovalMonitor.reconcile(context.getApplicationContext());
+        if (list.isEmpty()) context.stopService(new android.content.Intent(context, RuntimeWatchService.class));
+    }
+
+    static synchronized Target target(Context context, String url) {
+        if (url.isEmpty()) return selected(context);
+        for (Target item : targets(context)) if (item.url.equals(url)) return item;
+        return null;
     }
 
     private static synchronized void rename(Context context, String url, String name) {
@@ -369,6 +440,9 @@ final class RuntimeClient {
         }
         synchronized (RuntimeClient.class) {
             List<Target> list = targets(context);
+            boolean registered = false;
+            for (Target item : list) if (item.url.equals(url)) registered = true;
+            if (list.size() >= MAX_TARGETS && !registered) return "最多登记 8 台电脑，请先移除不再使用的电脑";
             String name = hostOf(url);
             for (int index = list.size() - 1; index >= 0; index--) {
                 if (list.get(index).url.equals(url)) {
@@ -379,6 +453,7 @@ final class RuntimeClient {
             list.add(new Target(name, url, token));
             store(context, list, url);
         }
+        select(context, url);
         // 问一下这台电脑叫什么，列表里好认；问不到就先用地址当名字。
         final String address = url;
         final Context app = context.getApplicationContext();
@@ -393,6 +468,8 @@ final class RuntimeClient {
                 HubStore.get().log("已登记 " + address + "，但现在连不上它");
             }
         });
+        ApprovalMonitor.reconcile(app);
+        RuntimeWatchService.start(context);
         return null;
     }
 
@@ -456,6 +533,10 @@ final class RuntimeClient {
         submit(context, text, null, card, card != null, effort);
     }
 
+    static void send(Context context, String text, String card, String effort, String agent) {
+        submit(context, text, null, card, card != null, effort, agent);
+    }
+
     /**
      * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
      * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
@@ -467,6 +548,11 @@ final class RuntimeClient {
 
     private static void submit(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort) {
+        submit(context, text, wav, card, pin, effort, null);
+    }
+
+    private static void submit(Context context, String text, byte[] wav, String card,
+                               boolean pin, String effort, String agent) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -504,7 +590,7 @@ final class RuntimeClient {
                             wav, "audio/wav", 30);
                 } else {
                     message = request("POST", url + "/v1/messages", token,
-                            CardViews.messageJson(text, clientId, card, effort)
+                            CardViews.messageJson(text, clientId, card, effort, agent)
                                     .getBytes(StandardCharsets.UTF_8),
                             "application/json; charset=utf-8", 20);
                 }
@@ -707,6 +793,7 @@ final class RuntimeClient {
                                       boolean feed)
             throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        connection.setInstanceFollowRedirects(false);
         if (feed) {
             feedConnection = connection;
         }
@@ -730,7 +817,7 @@ final class RuntimeClient {
             if (code == 401) {
                 throw new IOException("令牌不对（401）");
             }
-            if (code >= 400) {
+            if (code >= 300) {
                 Map<String, String> fields = BuddyProtocol.parseFlatObject(text);
                 String error = fields == null ? null : fields.get("error");
                 throw new IOException("Runtime 返回 " + code + (error == null ? "" : "：" + error));

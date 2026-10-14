@@ -15,10 +15,16 @@ final class Card {
     static final class Entry {
         final String role;
         final String text;
+        final List<Attachment> attachments;
 
         Entry(String role, String text) {
+            this(role, text, Collections.emptyList());
+        }
+
+        Entry(String role, String text, List<Attachment> attachments) {
             this.role = role;
             this.text = text;
+            this.attachments = attachments;
         }
     }
 
@@ -32,14 +38,44 @@ final class Card {
         /** 要做的内容原文（命令、文件路径……）。 */
         final String detail;
         final long createdAt;
+        final String source;
+        final boolean remoteActionable;
+        final String runtimeUrl, runtimeName, remoteId;
+        final double expiresAt;
 
         Approval(String id, String card, String agent, String tool, String detail, long createdAt) {
+            this(id, card, agent, tool, detail, createdAt, "", false);
+        }
+
+        Approval(String id, String card, String agent, String tool, String detail, long createdAt,
+                 String source, boolean remoteActionable) {
+            this(id, card, agent, tool, detail, createdAt, source, remoteActionable, "", "", id, 0);
+        }
+
+        private Approval(String id, String card, String agent, String tool, String detail, long createdAt,
+                 String source, boolean remoteActionable, String runtimeUrl, String runtimeName,
+                 String remoteId, double expiresAt) {
             this.id = id;
             this.card = card;
             this.agent = agent;
             this.tool = tool;
             this.detail = detail;
             this.createdAt = createdAt;
+            this.source = source;
+            this.remoteActionable = remoteActionable;
+            this.runtimeUrl = runtimeUrl; this.runtimeName = runtimeName; this.remoteId = remoteId;
+            this.expiresAt = expiresAt;
+        }
+
+        boolean actionable(boolean monitoringCard) {
+            return (expiresAt <= 0 || expiresAt > System.currentTimeMillis() / 1000.0)
+                    && (source.equals("desktop") ? remoteActionable : !monitoringCard);
+        }
+
+        Approval origin(String url, String name) {
+            String scoped = ArtifactDownload.key(url + "\n" + remoteId + "\n" + createdAt);
+            return new Approval(scoped, card, agent, tool, detail, createdAt, source, remoteActionable,
+                    url, name, remoteId, expiresAt);
         }
 
         static Approval from(Map<String, Object> raw) {
@@ -49,7 +85,8 @@ final class Card {
             }
             return new Approval(id, Json.string(raw, "card"), Json.string(raw, "agent"),
                     Json.string(raw, "tool"), Json.string(raw, "detail"),
-                    (long) Json.number(raw, "created_at"));
+                    (long) Json.number(raw, "created_at"), Json.string(raw, "source"),
+                    Json.flag(raw, "remote_actionable"), "", "", id, Json.number(raw, "expires_at"));
         }
     }
 
@@ -94,6 +131,7 @@ final class Card {
     /** recent 表示最近的可见对话片段；旧 Runtime 不提供时是空串。 */
     final String contentScope;
     final boolean contentTruncated;
+    final List<Attachment> attachments;
 
     private Card(String id, String title, String state, String agent, String brief, String mood,
                  List<Entry> entries, List<String> progress, double createdAt, double startedAt,
@@ -101,7 +139,8 @@ final class Card {
                  String model, long tokens, int spent5h, int spent7d, String source,
                  String project, String sessionId, boolean monitoringOnly, String desktopStatus,
                  double observedAt, boolean stale, String contentScope, boolean contentTruncated,
-                 String titleSource, boolean titleTruncated) {
+                 String titleSource, boolean titleTruncated, List<Attachment> attachments) {
+        this.attachments = Collections.unmodifiableList(attachments);
         this.titleSource = titleSource;
         this.titleTruncated = titleTruncated;
         this.finishedAt = finishedAt;
@@ -145,7 +184,7 @@ final class Card {
             Map<String, Object> entry = Json.object(item);
             String role = Json.string(entry, "role");
             if (role.equals("you") || role.equals("xiaoyou")) {
-                entries.add(new Entry(role, Json.string(entry, "text")));
+                entries.add(new Entry(role, Json.string(entry, "text"), Attachment.parse(entry)));
             }
         }
         List<String> progress = new ArrayList<>();
@@ -173,7 +212,14 @@ final class Card {
                 Json.string(raw, "desktop_status"), Json.number(raw, "observed_at"),
                 Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
                 Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
-                Json.flag(raw, "title_truncated"));
+                Json.flag(raw, "title_truncated"), allAttachments(raw, entries));
+    }
+
+    private static List<Attachment> allAttachments(Map<String, Object> raw, List<Entry> entries) {
+        Map<String, Attachment> items = new java.util.LinkedHashMap<>();
+        for (Attachment item : Attachment.parse(raw)) items.put(item.id, item);
+        for (Entry entry : entries) for (Attachment item : entry.attachments) items.put(item.id, item);
+        return new ArrayList<>(items.values());
     }
 
     /** 档位给人看的说法：低档、中档、高档……不认识的原样，没有就是空串。 */
@@ -239,7 +285,7 @@ final class Card {
         return new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
                 startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
                 source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
-                contentScope, contentTruncated, titleSource, titleTruncated);
+                contentScope, contentTruncated, titleSource, titleTruncated, attachments);
     }
 
     /** 这件事的第一句话；电脑观察是当前最近一轮需求。 */
