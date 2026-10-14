@@ -328,7 +328,7 @@ Relative paths are resolved against the directory of the configuration file.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `server.host` | `127.0.0.1` | Address to listen on. `tailscale` (since 0.5.6) means only this machine's Tailscale address (100.x.y.z): it is looked up at start, so the configuration does not change when the address does, and `--pair` prints the pairing string with it; with Tailscale off the runtime refuses to start. The LAN address and `127.0.0.1` then do not reach this runtime. |
+| `server.host` | `127.0.0.1` | Address to listen on. `tailscale` (since 0.5.6) means only this machine's Tailscale address (100.x.y.z): it is looked up at start, so the configuration does not change when the address does, and `--pair` prints the pairing string with it; with Tailscale off the runtime refuses to start. The LAN address does not reach this runtime; it also listens on `127.0.0.1` (same port) for local forwarders such as Tailscale Funnel, which other hosts cannot reach. |
 | `server.port` | `8765` | Port to listen on. |
 | `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
@@ -1255,6 +1255,25 @@ treat it like a password. The phone must be on the same network as this
 machine, and the traffic is unencrypted HTTP, so do this only on a network you
 trust. `--pair` guesses the machine's local address; if the machine has several
 network interfaces, check that the address is the one the phone can reach.
+
+### Reaching the runtime from anywhere (Tailscale Funnel)
+
+When the computer and phone cannot connect directly over Tailscale (for example
+the computer's network exits abroad and the phone is on mobile data), traffic
+falls back to a distant relay and the app keeps dropping offline. Tailscale
+Funnel gives the runtime a public HTTPS address without a server or domain:
+
+1. Enable Funnel and HTTPS certificates for the tailnet (the first
+   `tailscale funnel` run prints the link).
+2. With `server.host` set to `tailscale`, run
+   `tailscale funnel --bg http://127.0.0.1:8765`. Funnel on macOS cannot
+   forward to the node's own tailnet address, so it targets the runtime's
+   loopback listener.
+3. Add `https://<machine>.<tailnet>.ts.net#<token>` in the app. The phone then
+   needs no Tailscale. The runtime is reachable from the internet and protected
+   only by its token, over HTTPS; turn it off with `tailscale funnel --https=443 off`.
+
+The feed is gzipped and sent in 48 KB pages, so slow links still make progress.
 
 ## How a sentence is processed
 

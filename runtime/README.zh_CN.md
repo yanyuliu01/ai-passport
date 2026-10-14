@@ -272,7 +272,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 
 | 配置项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `server.host` | `127.0.0.1` | 监听地址。写 `tailscale`（0.5.6 起）表示只在这台机器的 Tailscale 地址（100.x.y.z）上监听：启动时自己找，地址变了不用改配置，`--pair` 打印的连接串也用它；Tailscale 没开时启动会报错。这时局域网地址和 `127.0.0.1` 都连不上这台 Runtime。 |
+| `server.host` | `127.0.0.1` | 监听地址。写 `tailscale`（0.5.6 起）表示只在这台机器的 Tailscale 地址（100.x.y.z）上监听：启动时自己找，地址变了不用改配置，`--pair` 打印的连接串也用它；Tailscale 没开时启动会报错。这时局域网地址连不上这台 Runtime；它同时在 `127.0.0.1`（同一端口）上监听，给 Tailscale Funnel 这类本机转发用，别的机器连不到。 |
 | `server.port` | `8765` | 监听端口。 |
 | `server.name` | 这台机器的主机名 | 手机 App 里怎么称呼这台 Runtime，最多 40 个字符。 |
 | `server.token` | 无 | 共享令牌，至少 16 个字符；示例里的占位值会被拒绝。 |
@@ -1001,6 +1001,21 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
 密码一样对待。手机要和这台机器在同一个网络里，而且传输是不加密的 HTTP，只在你信任的
 网络里这样用。`--pair` 给出的本机地址是猜的；机器有多块网卡时，确认一下那是手机连得到
 的地址。
+
+### 在任何网络下连上 Runtime（Tailscale Funnel）
+
+电脑和手机经 Tailscale 打不通直连时（比如电脑所在网络从海外出口、手机用移动数据），
+流量会绕远处的中继，App 时常掉线。Tailscale Funnel 不用服务器、不用域名，就能给 Runtime
+一个公网 HTTPS 地址：
+
+1. 给这个 tailnet 开启 Funnel 和 HTTPS 证书（第一次运行 `tailscale funnel` 会打印链接）。
+2. `server.host` 写 `tailscale` 时，运行 `tailscale funnel --bg http://127.0.0.1:8765`。
+   macOS 上的 Funnel 转不进本机自己的 Tailscale 地址，所以转给 Runtime 的本机监听。
+3. 在 App 里添加 `https://<机器名>.<tailnet>.ts.net#<令牌>`，手机不用再开 Tailscale。
+   这样 Runtime 能从公网访问，只靠令牌保护，传输是 HTTPS；关掉用
+   `tailscale funnel --https=443 off`。
+
+feed 会 gzip 压缩并按 48 KB 分批发，慢线路上也能一点点收完。
 
 ## 一句话是怎么走的
 
