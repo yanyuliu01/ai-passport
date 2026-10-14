@@ -59,8 +59,11 @@ she breathes while idle, tilts her head with rings while listening, floats with
 three dots while thinking, bounces lightly while her streamed reply appears,
 and hops when a helper finishes. Tap her and she answers locally. A handed-off
 request sends a small letter flying to the helper's chip, which spins while the
-helper works and turns green when it is done. Hold the big microphone to talk
-(the phone records 16 kHz mono and sends it like the device's push-to-talk);
+helper works and turns green when it is done. Hold the big microphone to talk: the
+phone's own speech recognition turns it into text while you speak (the words
+appear in her bubble) and sends the text on release; a phone without a
+recognition service records 16 kHz mono and lets the runtime transcribe it,
+like the device's push-to-talk. Typing can use the keyboard's own voice input;
 the keyboard opens the conversation history for typing. With no computer added
 yet, the home screen offers to connect one. The device page mirrors the wrist
 screen, connects or disconnects it, links to firmware, and keeps a placeholder

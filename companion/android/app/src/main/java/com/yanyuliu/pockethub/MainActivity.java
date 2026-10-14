@@ -29,6 +29,9 @@ import android.view.Gravity;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -129,6 +132,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String busyKey = null;
     private final PhoneMic mic = new PhoneMic();
     private boolean listening;
+    /** 松开之后、手机识别的最后结果还没到。 */
+    private boolean transcribing;
+    /** 手机识别到目前为止听到的字。 */
+    private String heard = "";
+    private SpeechRecognizer recognizer;
     /** 被摸一下时她回的那句，显示到下一次状态变化。 */
     private String pokeLine = null;
     /** 见过的、交给帮手的事：新出现的才飞信。null 表示这台电脑的卡还没认过一遍。 */
@@ -786,9 +794,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         HubStore.get().removeListener(this);
         uiHandler.removeCallbacks(tick);
         if (approvalDialog != null) approvalDialog.dismiss();
-        if (listening) {
+        if (listening || transcribing) {
             // 切走了就不算说完：丢掉这段，不发出去。
-            listening = false; mic.stop();
+            listening = false; transcribing = false; heard = "";
+            if (mic.recording()) mic.stop();
+            if (recognizer != null) recognizer.cancel();
             micButton.setBackground(surface(BLUE, BLUE, 42)); micButton.setScaleX(1); micButton.setScaleY(1);
             micHint.setText("按住说话");
         }
@@ -1410,18 +1420,31 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return box;
     }
 
-    /** 按下就开始录；没权限先要权限，没连电脑、她还在回上一句时说明原因。 */
+    /**
+     * 按下就开始听。手机自带语音识别时直接在手机上转成文字，边说边显示；
+     * 手机没有识别服务时才录音交给电脑识别。没权限先要权限，没连电脑、她还在回上一句时说明原因。
+     */
     private void startListening() {
         if (RuntimeClient.selected(this) == null) { toast("先连上电脑，小幽才能回答"); show(TAB_MINE); return; }
-        if (HubStore.get().busy()) { toast(companionName() + "还在回上一句"); return; }
+        if (HubStore.get().busy() || transcribing) { toast(companionName() + "还在回上一句"); return; }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 4); return;
         }
-        boolean started = mic.start(level -> runOnUiThread(() -> {
-            if (!listening) return;
-            float scale = 1.12f + .08f * level; micButton.setScaleX(scale); micButton.setScaleY(scale);
-        }));
-        if (!started) { toast("麦克风暂时用不了"); return; }
+        heard = "";
+        if (SpeechRecognizer.isRecognitionAvailable(this)) {
+            if (recognizer == null) {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+                recognizer.setRecognitionListener(new Heard());
+            }
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+            recognizer.startListening(intent);
+        } else {
+            boolean started = mic.start(level -> runOnUiThread(() -> micLevel(level)));
+            if (!started) { toast("麦克风暂时用不了"); return; }
+        }
         listening = true; pokeLine = null;
         micButton.setBackground(surface(0xffe2564a, 0xffe2564a, 42));
         micButton.animate().scaleX(1.12f).scaleY(1.12f).setDuration(150).start();
@@ -1429,16 +1452,70 @@ public class MainActivity extends Activity implements HubStore.Listener {
         refreshHome(HubStore.get(), HubStore.get().cards());
     }
 
-    private void stopListening() {
-        if (!listening) return;
+    private void releaseMic() {
         listening = false;
-        byte[] wav = mic.stop();
         micButton.setBackground(surface(BLUE, BLUE, 42));
         micButton.animate().scaleX(1f).scaleY(1f).setDuration(150).start();
         micHint.setText("按住说话");
-        if (wav == null) toast("按住久一点再说");
-        else RuntimeClient.sendVoice(this, wav, null, false);
+    }
+
+    private void micLevel(float level) {
+        if (!listening) return;
+        float scale = 1.12f + .08f * level; micButton.setScaleX(scale); micButton.setScaleY(scale);
+    }
+
+    /** 松开：手机识别的等最后的文字到了再发；录音的直接交给电脑。 */
+    private void stopListening() {
+        if (!listening) return;
+        releaseMic();
+        if (mic.recording()) {
+            byte[] wav = mic.stop();
+            if (wav == null) toast("按住久一点再说");
+            else RuntimeClient.sendVoice(this, wav, null, false);
+        } else if (recognizer != null) {
+            transcribing = true;
+            recognizer.stopListening();
+        }
         refreshHome(HubStore.get(), HubStore.get().cards());
+    }
+
+    /** 手机识别的结果：边说边把听到的字给首页，最后一句发给小幽。 */
+    private final class Heard implements RecognitionListener {
+        @Override public void onReadyForSpeech(Bundle params) { }
+        @Override public void onBeginningOfSpeech() { }
+        @Override public void onRmsChanged(float rms) { micLevel(Math.max(0f, Math.min(1f, rms / 10f))); }
+        @Override public void onBufferReceived(byte[] buffer) { }
+        @Override public void onEndOfSpeech() { }
+        @Override public void onEvent(int type, Bundle params) { }
+        @Override public void onPartialResults(Bundle partial) {
+            String text = best(partial);
+            if (!text.isEmpty()) { heard = text; refreshHome(HubStore.get(), HubStore.get().cards()); }
+        }
+        @Override public void onResults(Bundle results) {
+            String text = best(results);
+            if (text.isEmpty()) text = heard;
+            // 还按着时识别自己停了（说完一句停顿）：按钮也一起松开。
+            if (listening) releaseMic();
+            transcribing = false; heard = "";
+            if (text.isEmpty()) toast("没听清，再说一次？");
+            else RuntimeClient.send(MainActivity.this, text);
+            refreshHome(HubStore.get(), HubStore.get().cards());
+        }
+        @Override public void onError(int error) {
+            String text = heard;
+            // 还按着时识别自己停了（说完一句停顿）：按钮也一起松开。
+            if (listening) releaseMic();
+            transcribing = false; heard = "";
+            // 识别还没出最终结果就断了，已经听到的字照样发出去。
+            if (!text.isEmpty()) RuntimeClient.send(MainActivity.this, text);
+            else if (error != SpeechRecognizer.ERROR_CLIENT) toast("没听清，再说一次？");
+            refreshHome(HubStore.get(), HubStore.get().cards());
+        }
+        private String best(Bundle bundle) {
+            java.util.ArrayList<String> found = bundle == null ? null
+                    : bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            return found == null || found.isEmpty() || found.get(0) == null ? "" : found.get(0).trim();
+        }
     }
 
     /** 摸她一下：蹦一下，回一句。只在这台手机上，不发给电脑。 */
@@ -1494,7 +1571,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
             state = "idle"; mood = "happy";
             line = "你好呀，我是" + name + "。\n先让我住进你的电脑，\n我就能帮你安排事情啦。";
         } else if (listening) {
-            state = "listening"; mood = "happy"; line = "我在听…";
+            state = "listening"; mood = "happy"; line = heard.isEmpty() ? "我在听…" : heard;
+        } else if (transcribing) {
+            state = "thinking"; mood = "think"; line = heard.isEmpty() ? "嗯…" : heard;
         } else if (!streaming.isEmpty()) {
             state = "talking"; mood = "happy"; line = streaming + " ▍";
         } else if (store.busy()) {
@@ -1667,6 +1746,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         dashed.setStroke(dp(1), 0xffd5dde8, dp(5), dp(4)); later.setBackground(dashed);
         LinearLayout.LayoutParams laterParams = new LinearLayout.LayoutParams(-1, -2); laterParams.setMargins(0, dp(18), 0, 0);
         devicePane.addView(later, laterParams);
+    }
+
+    @Override protected void onDestroy() {
+        if (recognizer != null) { recognizer.destroy(); recognizer = null; }
+        super.onDestroy();
     }
 
     @Override protected void onNewIntent(Intent intent) {
