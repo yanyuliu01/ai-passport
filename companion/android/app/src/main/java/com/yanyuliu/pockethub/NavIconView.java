@@ -41,6 +41,25 @@ final class NavIconView extends View {
             Path path = new Path(); path.moveTo(5, 17); path.lineTo(7, 13); path.lineTo(7, 9);
             path.cubicTo(7, 2, 17, 2, 17, 9); path.lineTo(17, 13); path.lineTo(19, 17); path.close();
             canvas.drawPath(path, paint); canvas.drawLine(10, 21, 14, 21, paint);
+        } else if (icon.equals("mail")) {
+            canvas.drawRoundRect(new RectF(3, 6, 21, 18), 2.5f, 2.5f, paint);
+            canvas.drawLine(4, 7, 12, 13, paint); canvas.drawLine(20, 7, 12, 13, paint);
+        } else if (icon.equals("spinner")) {
+            paint.setStrokeWidth(2.2f);
+            paint.setAlpha(60); canvas.drawCircle(12, 12, 9, paint);
+            paint.setAlpha(255); canvas.drawArc(new RectF(3, 3, 21, 21), -90, 100, false, paint);
+        } else if (icon.equals("keyboard")) {
+            canvas.drawRoundRect(new RectF(3, 6, 21, 18), 2.5f, 2.5f, paint);
+            canvas.drawLine(7, 10, 8, 10, paint); canvas.drawLine(11, 10, 12, 10, paint); canvas.drawLine(15, 10, 16, 10, paint);
+            canvas.drawLine(8, 14, 16, 14, paint);
+        } else if (icon.equals("mic")) {
+            paint.setStrokeWidth(1.9f);
+            canvas.drawRoundRect(new RectF(9, 3, 15, 14), 3, 3, paint);
+            canvas.drawArc(new RectF(5.5f, 4.5f, 18.5f, 17.5f), 0, 180, false, paint);
+            canvas.drawLine(12, 17.5f, 12, 21, paint);
+        } else if (icon.equals("history")) {
+            canvas.drawCircle(12, 12, 8.5f, paint);
+            canvas.drawLine(12, 7.5f, 12, 12, paint); canvas.drawLine(12, 12, 15, 14, paint);
         } else if (icon.equals("menu")) {
             canvas.drawLine(4, 7, 20, 7, paint); canvas.drawLine(4, 12, 15, 12, paint); canvas.drawLine(4, 17, 20, 17, paint);
         } else if (icon.equals("more")) {

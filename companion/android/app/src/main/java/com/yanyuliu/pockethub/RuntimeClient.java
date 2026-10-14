@@ -639,6 +639,9 @@ final class RuntimeClient {
                     }
                     // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
                     store.chatProgress(message.get("helper"), message.get("stage"));
+                    // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
+                    // 旧版 Runtime 没有这一项，就照旧等整段。
+                    store.chatStreaming(message.get("partial"));
                     // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
                     // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
                     String rev = message.get("rev");

@@ -82,6 +82,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private static final int TAB_COMPANIONS = 5;
     /** One helper's page; openAgent names it. */
     private static final int TAB_AGENT = 6;
+    /** 首页：小幽本人。打开 App 先到这里。 */
+    private static final int TAB_HOME = 7;
+    private static final int TAB_DEVICE = 8;
     private static final int INK = 0xff1f3149;
     private static final int MUTED = 0xff5f6f84;
     private static final int HINT = 0xff6b7a8f;
@@ -92,7 +95,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private static final int LINE = 0xffeef1f6;
     private static final int BACKGROUND = 0xfff6f8fb;
     private static final int CARDS_SHOWN = 30;
-    private int tab = TAB_CHAT;
+    private int tab = TAB_HOME;
     /** 打开的那件事；null 时任务页回到聊天。 */
     private String openTask = null;
     /** 打开的那位帮手（role）。 */
@@ -108,7 +111,32 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String pendingTask;
     private LinearLayout chatPane;
     private LinearLayout chatList;
+    /** 还在说的那一轮（见 refreshLive）和其中小幽那个气泡的字；没有就是 null。 */
+    private LinearLayout live;
+    private TextView liveWords;
     private LinearLayout taskPane;
+    private LinearLayout homePane;
+    private LinearLayout homeBar;
+    private CompanionStage stage;
+    private TextView homeSpeech;
+    private LinearLayout busyRow;
+    private LinearLayout homeActions;
+    private View micButton;
+    private TextView micHint;
+    private View devicePill;
+    private LinearLayout devicePane;
+    private String deviceKey = null;
+    private String busyKey = null;
+    private final PhoneMic mic = new PhoneMic();
+    private boolean listening;
+    /** 被摸一下时她回的那句，显示到下一次状态变化。 */
+    private String pokeLine = null;
+    /** 见过的、交给帮手的事：新出现的才飞信。null 表示这台电脑的卡还没认过一遍。 */
+    private Set<String> seenDispatched = null;
+    private final Set<String> activeDispatched = new HashSet<>();
+    /** 帮手刚做完的时刻（role → 毫秒），首页把它的胶囊变绿一会儿。 */
+    private final Map<String, Long> doneAt = new HashMap<>();
+    private FrameLayout frame;
     private LinearLayout agentPane;
     private LinearLayout usagePane;
     private LinearLayout settingsPane;
@@ -189,6 +217,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         header.addView(connectionTitle, new LinearLayout.LayoutParams(0, -2, 1));
         moreButton = iconAction("more", "这件事的操作", view -> taskActions(CardViews.find(HubStore.get().cards(), openTask)));
         header.addView(moreButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        devicePill = devicePill();
+        LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(-2, dp(34));
+        pillParams.setMargins(0, 0, dp(6), 0);
+        header.addView(devicePill, pillParams);
         page.addView(header);
         // 只有等你确认的事才会出现在这里：它是唯一需要你马上处理的东西。
         approvalBar = new LinearLayout(this); approvalBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -298,6 +330,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
         body = column();
         body.setPadding(dp(16), dp(4), dp(16), dp(18));
+        homePane = buildHome(); devicePane = column();
+        body.addView(homePane); body.addView(devicePane);
         body.addView(chatPane); body.addView(taskPane); body.addView(agentPane); body.addView(minePane);
         body.addView(companionPane); body.addView(usagePane); body.addView(settingsPane);
         scroll = new ScrollView(this); scroll.setFillViewport(true);
@@ -328,6 +362,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(44), dp(44));
         sendParams.setMargins(dp(8), 0, 0, 0); row.addView(sendButton, sendParams);
         composer.addView(row); page.addView(composer);
+        homeBar = buildHomeBar(); page.addView(homeBar);
         chatInput.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             public void onTextChanged(CharSequence value, int start, int before, int count) { updateSendState(); }
@@ -354,12 +389,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         drawerState = text("", 12, false); footer.addView(drawerState);
         footer.setOnClickListener(view -> { setDrawer(false); show(TAB_MINE); });
         drawer.addView(footer, new LinearLayout.LayoutParams(-1, -2));
-        FrameLayout frame = new FrameLayout(this);
+        frame = new FrameLayout(this);
         frame.addView(page, new FrameLayout.LayoutParams(-1, -1));
         frame.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
         frame.addView(drawer, new FrameLayout.LayoutParams(dp(312), -1));
         if (savedInstanceState != null) {
-            tab = savedInstanceState.getInt("tab", TAB_CHAT);
+            tab = savedInstanceState.getInt("tab", TAB_HOME);
             settingsSection = savedInstanceState.getInt("settingsSection", 0);
             openTask = savedInstanceState.getString("openTask");
             openAgent = savedInstanceState.getString("openAgent");
@@ -481,7 +516,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         List<Card> cards = store.cards();
         List<Card> tasks = AppPresentation.sidebarTasks(cards, pinned, archived);
         List<AppPresentation.Helper> roster = AppPresentation.helpers(cards, offeredHelpers());
-        StringBuilder key = new StringBuilder().append(tab).append(openTask).append(openAgent).append(connected)
+        StringBuilder key = new StringBuilder().append(tab).append(openTask).append(openAgent).append(connected).append(store.linkState())
                 .append(companionChoice).append(pinned).append(archived.size());
         for (Card card : tasks) key.append(card.id).append(':').append(card.state).append(card.queued).append(card.title).append('|');
         for (AppPresentation.Helper helper : roster) key.append(helper.role).append(helper.status(connected)).append('|');
@@ -489,10 +524,19 @@ public class MainActivity extends Activity implements HubStore.Listener {
         drawerKey = key.toString();
         drawerList.removeAllViews();
 
-        LinearLayout chat = listRow(52, tab == TAB_CHAT);
-        chat.addView(avatar(companionChoice, "happy", 32));
-        TextView chatLabel = text("和" + companionName() + "聊天", 15, true);
-        chatLabel.setPadding(dp(12), 0, 0, 0);
+        LinearLayout home = listRow(52, tab == TAB_HOME);
+        home.addView(avatar(companionChoice, "happy", 32));
+        TextView homeLabel = text(companionName(), 15, true);
+        homeLabel.setPadding(dp(12), 0, 0, 0);
+        home.addView(homeLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        home.setOnClickListener(view -> { setDrawer(false); show(TAB_HOME); });
+        drawerList.addView(home);
+        LinearLayout chat = listRow(44, tab == TAB_CHAT);
+        NavIconView history = new NavIconView(this, "history"); history.color(MUTED);
+        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(dp(20), dp(20));
+        historyParams.setMargins(dp(6), 0, dp(6), 0); chat.addView(history, historyParams);
+        TextView chatLabel = text("对话记录", 14, false); chatLabel.setTextColor(INK);
+        chatLabel.setPadding(dp(10), 0, 0, 0);
         chat.addView(chatLabel, new LinearLayout.LayoutParams(0, -2, 1));
         chat.setOnClickListener(view -> { setDrawer(false); show(TAB_CHAT); });
         drawerList.addView(chat);
@@ -546,6 +590,20 @@ public class MainActivity extends Activity implements HubStore.Listener {
             row.setContentDescription(AppPresentation.name(helper.role) + "，" + state);
             drawerList.addView(row);
         }
+
+        drawerList.addView(drawerHeading("设备"));
+        LinearLayout deviceRow = listRow(48, tab == TAB_DEVICE);
+        NavIconView deviceIcon = new NavIconView(this, "device"); deviceIcon.color(INK);
+        LinearLayout.LayoutParams deviceParams = new LinearLayout.LayoutParams(dp(22), dp(22));
+        deviceParams.setMargins(dp(4), 0, dp(4), 0); deviceRow.addView(deviceIcon, deviceParams);
+        TextView deviceLabel = text("随身小幽", 14, false); deviceLabel.setTextColor(INK);
+        deviceLabel.setPadding(dp(10), 0, dp(6), 0);
+        deviceRow.addView(deviceLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        boolean near = device;
+        TextView deviceState = text(near ? "在身边" : "未连接", 12, false); deviceState.setTextColor(near ? GREEN : HINT);
+        deviceRow.addView(deviceState);
+        deviceRow.setOnClickListener(view -> { setDrawer(false); show(TAB_DEVICE); });
+        drawerList.addView(deviceRow);
     }
 
     private TextView drawerHeading(String label) {
@@ -568,7 +626,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                     if (index == 0) mark("pinned", card.id, !pinned);
                     else if (index == 1) {
                         mark("archived", card.id, true); mark("pinned", card.id, false);
-                        if (card.id.equals(openTask)) show(TAB_CHAT);
+                        if (card.id.equals(openTask)) show(TAB_HOME);
                         toast("已归档，可在侧边栏「已归档」找回");
                     } else confirmStop(card);
                 }).show();
@@ -728,6 +786,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         HubStore.get().removeListener(this);
         uiHandler.removeCallbacks(tick);
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (listening) {
+            // 切走了就不算说完：丢掉这段，不发出去。
+            listening = false; mic.stop();
+            micButton.setBackground(surface(BLUE, BLUE, 42)); micButton.setScaleX(1); micButton.setScaleY(1);
+            micHint.setText("按住说话");
+        }
         super.onPause();
     }
 
@@ -744,7 +808,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (!lastRuntime.equals(runtimeUrl)) {
             // Task ids may be reused on another computer; never carry the opened target across.
             openTask = null; openAgent = null; taskKey = null; chatKey = null; agentKey = null; drawerKey = null;
-            if (tab == TAB_TASKS || tab == TAB_AGENT) tab = TAB_CHAT;
+            if (tab == TAB_TASKS || tab == TAB_AGENT) tab = TAB_HOME;
+            seenDispatched = null; activeDispatched.clear(); doneAt.clear(); busyKey = null;
             lastRuntime = runtimeUrl;
             companionChoice = getSharedPreferences("ds_ui", MODE_PRIVATE)
                     .getString("companion_" + ArtifactDownload.key(runtimeUrl), "ds");
@@ -769,15 +834,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (openTask != null && CardViews.find(cards, openTask) == null) {
             // 打开的那件事没了（换了一台电脑，或者它那边的记录换了）：回到聊天。
             openTask = null;
-            if (tab == TAB_TASKS) tab = TAB_CHAT;
+            if (tab == TAB_TASKS) tab = TAB_HOME;
         }
         // 同步过来的电脑对话可能在打开后才收到其来源；每次更新都重新判断输入权限。
         applyTab();
         boolean atBottom = scroll.getScrollY() + scroll.getHeight() >= body.getHeight() - dp(48);
         refreshAsks(store.approvals());
         boolean grew = refreshChat(cards, store) && tab == TAB_CHAT;
+        grew |= refreshLive(store);
         grew |= refreshTasks(cards) && tab == TAB_TASKS;
         refreshAgent(cards);
+        refreshHome(store, cards);
+        refreshDevice(store);
         refreshDrawer();
         if (tab == TAB_MINE) refreshMine();
         if (grew && atBottom) {
@@ -793,7 +861,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (!turn.stage.isEmpty()) {
                 talk.append(turn.stage).append("\n");
             }
-            talk.append(turn.agent.isEmpty() ? name + "正在想…" : name + "在等 " + AppPresentation.name(turn.agent) + " 做完…");
+            talk.append(!turn.agent.isEmpty() ? name + "在等 " + AppPresentation.name(turn.agent) + " 做完…"
+                    : store.streaming().isEmpty() ? name + "正在想…" : name + "正在说…");
         } else if (!cards.isEmpty() && turn.phase.equals("failed") && turn.card.isEmpty()) {
             // 没能变成卡的那一句（连不上、没收到声音）：原因写在这里。
             talk.append("没发出去：").append(turn.reply);
@@ -842,12 +911,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void show(int next) {
         saveUiContext();
-        if (next == TAB_TASKS && openTask == null) next = TAB_CHAT;
-        if (next == TAB_AGENT && openAgent == null) next = TAB_CHAT;
+        if (next == TAB_TASKS && openTask == null) next = TAB_HOME;
+        if (next == TAB_AGENT && openAgent == null) next = TAB_HOME;
         tab = next;
         taskKey = null; agentKey = null; drawerKey = null; mineKey = null;
         if (next == TAB_MINE) refreshMine();
         applyTab(); onHubChanged();
+        if (next == TAB_HOME) pokeLine = null;
         restoreScroll(next == TAB_CHAT || next == TAB_TASKS);
     }
 
@@ -887,6 +957,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private void applyTab() {
+        homePane.setVisibility(tab == TAB_HOME ? View.VISIBLE : View.GONE);
+        homeBar.setVisibility(tab == TAB_HOME ? View.VISIBLE : View.GONE);
+        devicePane.setVisibility(tab == TAB_DEVICE ? View.VISIBLE : View.GONE);
         chatPane.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
         taskPane.setVisibility(tab == TAB_TASKS ? View.VISIBLE : View.GONE);
         agentPane.setVisibility(tab == TAB_AGENT ? View.VISIBLE : View.GONE);
@@ -914,7 +987,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         lead.setVisibility(chat ? View.VISIBLE : View.GONE);
         Card opened = tab == TAB_TASKS ? CardViews.find(HubStore.get().cards(), openTask) : null;
         moreButton.setVisibility(opened != null ? View.VISIBLE : View.GONE);
-        String title = chat ? companionName()
+        devicePill.setVisibility(tab == TAB_HOME ? View.VISIBLE : View.GONE);
+        String title = tab == TAB_HOME ? "" : tab == TAB_DEVICE ? "随身小幽" : chat ? "对话记录"
                 : opened != null ? opened.title
                 : tab == TAB_AGENT ? "" : tab == TAB_MINE ? "连接与设置"
                 : tab == TAB_COMPANIONS ? "伴侣形象" : tab == TAB_USAGE ? "用量"
@@ -992,8 +1066,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             setDrawer(false);
         } else if (tab == TAB_COMPANIONS || tab == TAB_USAGE || tab == TAB_SETTINGS) {
             show(TAB_MINE);
-        } else if (tab != TAB_CHAT) {
-            show(TAB_CHAT);
+        } else if (tab != TAB_HOME) {
+            show(TAB_HOME);
         } else {
             super.onBackPressed();
         }
@@ -1257,6 +1331,344 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
     }
 
+    // ---- 首页：小幽本人 ----
+
+    private View devicePill() {
+        LinearLayout pill = new LinearLayout(this); pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setPadding(dp(12), 0, dp(12), 0);
+        pill.setBackground(pressable(Color.WHITE, 17));
+        View dot = new View(this); dot.setTag("dot");
+        pill.addView(dot, new LinearLayout.LayoutParams(dp(7), dp(7)));
+        TextView label = text("", 12, false); label.setTag("label"); label.setTextColor(0xff33465e);
+        label.setPadding(dp(6), 0, 0, 0); pill.addView(label);
+        pill.setOnClickListener(view -> show(TAB_DEVICE)); pill.setFocusable(true);
+        return pill;
+    }
+
+    private LinearLayout buildHome() {
+        LinearLayout pane = column(); pane.setGravity(Gravity.CENTER_HORIZONTAL);
+        stage = new CompanionStage(this, 210);
+        stage.setOnClickListener(view -> poke()); stage.setFocusable(true);
+        stage.setContentDescription("摸摸" + companionName());
+        LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(-2, -2);
+        stageParams.setMargins(0, dp(8), 0, dp(4));
+        pane.addView(stage, stageParams);
+        homeSpeech = text("", 16, false); homeSpeech.setTextColor(INK);
+        homeSpeech.setGravity(Gravity.CENTER); homeSpeech.setLineSpacing(dp(4), 1f);
+        homeSpeech.setPadding(dp(18), dp(14), dp(18), dp(14));
+        homeSpeech.setBackground(surface(Color.WHITE, Color.WHITE, 20));
+        homeSpeech.setMaxLines(8); homeSpeech.setEllipsize(TextUtils.TruncateAt.END);
+        homeSpeech.setOnClickListener(view -> show(TAB_CHAT));
+        LinearLayout.LayoutParams speechParams = new LinearLayout.LayoutParams(-2, -2);
+        speechParams.setMargins(dp(16), dp(8), dp(16), dp(14));
+        pane.addView(homeSpeech, speechParams);
+        busyRow = new LinearLayout(this); busyRow.setGravity(Gravity.CENTER);
+        pane.addView(busyRow, new LinearLayout.LayoutParams(-1, -2));
+        homeActions = new LinearLayout(this); homeActions.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(-1, -2);
+        actionParams.setMargins(0, dp(24), 0, dp(8));
+        pane.addView(homeActions, actionParams);
+        return pane;
+    }
+
+    private LinearLayout buildHomeBar() {
+        LinearLayout bar = new LinearLayout(this); bar.setGravity(Gravity.BOTTOM);
+        bar.setPadding(dp(28), dp(6), dp(28), dp(22)); bar.setBackgroundColor(BACKGROUND);
+        View keyboard = roundIcon("keyboard", "打字", view -> { show(TAB_CHAT); chatInput.requestFocus();
+            InputMethodManager keys = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (keys != null) keys.showSoftInput(chatInput, InputMethodManager.SHOW_IMPLICIT); });
+        LinearLayout.LayoutParams side = new LinearLayout.LayoutParams(dp(48), dp(48)); side.setMargins(0, 0, 0, dp(24));
+        bar.addView(keyboard, side);
+        LinearLayout middle = column(); middle.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout button = column(); button.setGravity(Gravity.CENTER);
+        button.setBackground(surface(BLUE, BLUE, 42));
+        NavIconView icon = new NavIconView(this, "mic"); icon.color(Color.WHITE);
+        button.addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
+        button.setContentDescription("按住说话"); button.setFocusable(true); button.setClickable(true);
+        button.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN: startListening(); return true;
+                case android.view.MotionEvent.ACTION_UP: case android.view.MotionEvent.ACTION_CANCEL: stopListening(); return true;
+                default: return true;
+            }
+        });
+        micButton = button;
+        middle.addView(button, new LinearLayout.LayoutParams(dp(84), dp(84)));
+        micHint = text("按住说话", 12, false); micHint.setPadding(0, dp(8), 0, 0);
+        middle.addView(micHint);
+        bar.addView(middle, new LinearLayout.LayoutParams(0, -2, 1));
+        bar.addView(roundIcon("history", "对话记录", view -> show(TAB_CHAT)), side);
+        return bar;
+    }
+
+    private View roundIcon(String icon, String label, View.OnClickListener action) {
+        LinearLayout box = column(); box.setGravity(Gravity.CENTER);
+        box.setBackground(pressable(Color.WHITE, 24)); box.setContentDescription(label);
+        box.setFocusable(true); box.setOnClickListener(action);
+        NavIconView view = new NavIconView(this, icon); view.color(INK);
+        box.addView(view, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        return box;
+    }
+
+    /** 按下就开始录；没权限先要权限，没连电脑、她还在回上一句时说明原因。 */
+    private void startListening() {
+        if (RuntimeClient.selected(this) == null) { toast("先连上电脑，小幽才能回答"); show(TAB_MINE); return; }
+        if (HubStore.get().busy()) { toast(companionName() + "还在回上一句"); return; }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 4); return;
+        }
+        boolean started = mic.start(level -> runOnUiThread(() -> {
+            if (!listening) return;
+            float scale = 1.12f + .08f * level; micButton.setScaleX(scale); micButton.setScaleY(scale);
+        }));
+        if (!started) { toast("麦克风暂时用不了"); return; }
+        listening = true; pokeLine = null;
+        micButton.setBackground(surface(0xffe2564a, 0xffe2564a, 42));
+        micButton.animate().scaleX(1.12f).scaleY(1.12f).setDuration(150).start();
+        micHint.setText("松开发送");
+        refreshHome(HubStore.get(), HubStore.get().cards());
+    }
+
+    private void stopListening() {
+        if (!listening) return;
+        listening = false;
+        byte[] wav = mic.stop();
+        micButton.setBackground(surface(BLUE, BLUE, 42));
+        micButton.animate().scaleX(1f).scaleY(1f).setDuration(150).start();
+        micHint.setText("按住说话");
+        if (wav == null) toast("按住久一点再说");
+        else RuntimeClient.sendVoice(this, wav, null, false);
+        refreshHome(HubStore.get(), HubStore.get().cards());
+    }
+
+    /** 摸她一下：蹦一下，回一句。只在这台手机上，不发给电脑。 */
+    private void poke() {
+        stage.hop();
+        HubStore store = HubStore.get();
+        if (listening || store.busy() || !store.streaming().isEmpty()) return;
+        String[] lines = {"嘿嘿，在呢～", "别戳啦，痒～", "今天也一起加油！", "有事就按住麦克风跟我说"};
+        pokeLine = lines[(int) (System.currentTimeMillis() / 1000 % lines.length)];
+        refreshHome(store, store.cards());
+    }
+
+    private String greeting() {
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        return hour < 5 ? "这么晚还没睡呀" : hour < 11 ? "早呀～" : hour < 14 ? "中午好～" : hour < 18 ? "下午好～" : "晚上好～";
+    }
+
+    /**
+     * 首页跟着真实状态变：听、想、说、等帮手、刚做完各有自己的样子。派活时一封信飞到帮手那里，
+     * 帮手做完它的胶囊变绿、小幽蹦一下。
+     */
+    private void refreshHome(HubStore store, List<Card> cards) {
+        if (homePane == null) return;
+        boolean device = store.linkState().equals("已连接");
+        ((View) devicePill.findViewWithTag("dot")).setBackground(surface(device ? 0xff2f9a5b : 0xffc3ccd8, device ? 0xff2f9a5b : 0xffc3ccd8, 4));
+        ((TextView) devicePill.findViewWithTag("label")).setText(device ? "随身小幽在身边" : "随身小幽没连上");
+        boolean connected = store.runtimeConnected();
+        RuntimeClient.Target target = RuntimeClient.selected(this);
+        List<AppPresentation.Helper> roster = AppPresentation.helpers(cards, offeredHelpers());
+
+        // 新交出去的事飞信；做完的事让帮手变绿。第一次认卡时只记下，不飞。
+        Set<String> nowActive = new HashSet<>();
+        String flyTo = null;
+        for (Card card : cards) {
+            if (!AppPresentation.dispatched(card)) continue;
+            if (card.outstanding()) nowActive.add(card.id);
+            if (seenDispatched != null && !seenDispatched.contains(card.id) && card.outstanding()) flyTo = AppPresentation.owner(card);
+            if (activeDispatched.contains(card.id) && !card.outstanding() && card.state.equals("done")) {
+                doneAt.put(AppPresentation.owner(card), System.currentTimeMillis());
+                if (tab == TAB_HOME) stage.hop();
+                uiHandler.postDelayed(() -> { busyKey = null; refreshHome(HubStore.get(), HubStore.get().cards()); }, 8200);
+            }
+        }
+        if (seenDispatched == null && store.cardsEpoch() > 0 && !cards.isEmpty()) seenDispatched = new HashSet<>();
+        if (seenDispatched != null) for (Card card : cards) if (AppPresentation.dispatched(card)) seenDispatched.add(card.id);
+        activeDispatched.clear(); activeDispatched.addAll(nowActive);
+
+        String streaming = store.streaming();
+        HubStore.Turn turn = store.turn();
+        String name = companionName();
+        String state, mood, line;
+        if (target == null) {
+            state = "idle"; mood = "happy";
+            line = "你好呀，我是" + name + "。\n先让我住进你的电脑，\n我就能帮你安排事情啦。";
+        } else if (listening) {
+            state = "listening"; mood = "happy"; line = "我在听…";
+        } else if (!streaming.isEmpty()) {
+            state = "talking"; mood = "happy"; line = streaming + " ▍";
+        } else if (store.busy()) {
+            boolean waiting = !turn.agent.isEmpty();
+            state = waiting ? "working" : "thinking"; mood = waiting ? "focus" : "think";
+            line = waiting ? "等 " + AppPresentation.name(turn.agent) + " 做完…" : "嗯…";
+        } else if (pokeLine != null) {
+            state = "happy"; mood = "happy"; line = pokeLine;
+        } else if (turn.phase.equals("failed")) {
+            state = "idle"; mood = "idle"; line = "刚才那句没发出去：" + CardViews.oneLine(turn.reply, 60);
+        } else if (turn.phase.equals("done") && !turn.reply.isEmpty()) {
+            state = "idle"; mood = "happy"; line = CardViews.oneLine(turn.reply, 180);
+        } else {
+            Card busy = null;
+            for (AppPresentation.Helper helper : roster) if (busy == null) busy = helper.current(connected);
+            state = "idle"; mood = connected ? "happy" : "idle";
+            line = !connected ? greeting() + "电脑那边好像没连上。"
+                    : busy != null ? greeting() + AppPresentation.name(AppPresentation.owner(busy)) + " 在忙「" + CardViews.oneLine(busy.title, 16) + "」，我帮你盯着。"
+                    : greeting() + "今天想先做点什么？";
+        }
+        stage.set(companionChoice, mood, state);
+        if (!line.contentEquals(homeSpeech.getText())) homeSpeech.setText(line);
+
+        // 谁在忙：在做的转圈，刚做完的绿一会儿。没有就不显示这一行。
+        long now = System.currentTimeMillis();
+        StringBuilder key = new StringBuilder();
+        for (AppPresentation.Helper helper : roster) {
+            Card current = helper.current(connected);
+            Long done = doneAt.get(helper.role);
+            if (current != null) key.append(helper.role).append(':').append(current.id).append(DsState.state(current, connected)).append('|');
+            else if (done != null && now - done < 8000) key.append(helper.role).append(":done|");
+        }
+        if (!key.toString().equals(busyKey)) {
+            busyKey = key.toString(); busyRow.removeAllViews();
+            for (AppPresentation.Helper helper : roster) {
+                Card current = helper.current(connected);
+                Long done = doneAt.get(helper.role);
+                boolean fresh = done != null && now - done < 8000;
+                if (current == null && !fresh) continue;
+                busyRow.addView(helperChip(helper.role, current, connected));
+            }
+            busyRow.setVisibility(busyRow.getChildCount() == 0 ? View.GONE : View.VISIBLE);
+        }
+        if (flyTo != null && tab == TAB_HOME) {
+            final String role = flyTo;
+            busyRow.post(() -> flyLetter(role));
+        }
+
+        if (homeActions.getChildCount() == 0 || (target == null) != (homeActions.getTag() != null)) {
+            homeActions.removeAllViews(); homeActions.setTag(target == null ? "setup" : null);
+            if (target == null) {
+                Button setup = button("连接电脑", view -> openSettings(0));
+                setup.setBackground(pressable(BLUE, 24)); setup.setTextColor(Color.WHITE);
+                homeActions.addView(setup, new LinearLayout.LayoutParams(dp(200), dp(48)));
+            } else {
+                for (String said : new String[] {"今天要做什么", "大家在忙什么", "陪我聊会儿"}) {
+                    TextView chip = text(said, 13, false); chip.setTextColor(INK);
+                    chip.setGravity(Gravity.CENTER); chip.setPadding(dp(14), 0, dp(14), 0);
+                    chip.setBackground(pressable(Color.WHITE, 18, 0xffe3e9f1));
+                    chip.setOnClickListener(view -> {
+                        if (HubStore.get().busy()) { toast(companionName() + "还在回上一句"); return; }
+                        pokeLine = null; RuntimeClient.send(this, said);
+                    });
+                    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(36));
+                    params.setMargins(dp(4), 0, dp(4), 0);
+                    homeActions.addView(chip, params);
+                }
+            }
+        }
+    }
+
+    private View helperChip(String role, Card current, boolean connected) {
+        LinearLayout chip = new LinearLayout(this); chip.setGravity(Gravity.CENTER_VERTICAL);
+        chip.setPadding(dp(8), 0, dp(14), 0); chip.setTag(role);
+        boolean waiting = current != null && DsState.state(current, connected).equals("waiting");
+        chip.setBackground(pressable(current == null ? 0xffe6f5ec : waiting ? 0xfffff4e0 : 0xfff0eefb, 22));
+        FrameLayout face = new FrameLayout(this);
+        AvatarView portrait = new AvatarView(this, role, current == null ? "happy" : "focus");
+        portrait.setBackground(surface(AppPresentation.tint(role), AppPresentation.tint(role), 9));
+        face.addView(portrait, new FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER));
+        if (current != null && !waiting) {
+            NavIconView ring = new NavIconView(this, "spinner"); ring.color(0xff6a5fd0);
+            face.addView(ring, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER));
+            android.animation.ObjectAnimator spin = android.animation.ObjectAnimator.ofFloat(ring, "rotation", 0f, 360f);
+            spin.setDuration(900); spin.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            spin.setInterpolator(new android.view.animation.LinearInterpolator()); spin.start();
+        }
+        chip.addView(face, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        String label = AppPresentation.name(role) + (current == null ? " 好了 ✓" : waiting ? " 等你确认" : " 在做…");
+        TextView words = text(label, 13, false);
+        words.setTextColor(current == null ? GREEN : waiting ? AMBER : 0xff4e43b0);
+        words.setPadding(dp(6), 0, 0, 0); chip.addView(words);
+        chip.setOnClickListener(view -> { if (current != null) open(current.id); else openAgent(role); });
+        chip.setFocusable(true); chip.setContentDescription(label);
+        if (current == null) {
+            chip.setScaleX(.85f); chip.setScaleY(.85f);
+            chip.animate().scaleX(1f).scaleY(1f).setDuration(420).setInterpolator(new android.view.animation.OvershootInterpolator(3f)).start();
+        }
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(44));
+        params.setMargins(dp(5), 0, dp(5), 0); chip.setLayoutParams(params);
+        return chip;
+    }
+
+    /** 一封小信沿弧线从小幽飞到接活的帮手胶囊上。 */
+    private void flyLetter(String role) {
+        View target = busyRow.findViewWithTag(role);
+        if (target == null || frame == null) return;
+        int[] from = new int[2], to = new int[2], base = new int[2];
+        stage.center(from); target.getLocationInWindow(to); frame.getLocationInWindow(base);
+        to[0] += dp(26); to[1] += target.getHeight() / 2;
+        LinearLayout letter = column(); letter.setGravity(Gravity.CENTER);
+        letter.setBackground(surface(Color.WHITE, BLUE, 17));
+        NavIconView icon = new NavIconView(this, "mail"); icon.color(BLUE);
+        letter.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(20)));
+        int size = dp(34);
+        frame.addView(letter, new FrameLayout.LayoutParams(size, size));
+        float x0 = from[0] - base[0] - size / 2f, y0 = from[1] - base[1] - size / 2f;
+        float x1 = to[0] - base[0] - size / 2f, y1 = to[1] - base[1] - size / 2f;
+        float cx = (x0 + x1) / 2 - dp(60), cy = Math.min(y0, y1) - dp(40);
+        android.animation.ValueAnimator path = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        path.setDuration(850); path.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        path.addUpdateListener(animation -> {
+            float t = (float) animation.getAnimatedValue(), u = 1 - t;
+            letter.setTranslationX(u * u * x0 + 2 * u * t * cx + t * t * x1);
+            letter.setTranslationY(u * u * y0 + 2 * u * t * cy + t * t * y1);
+            letter.setRotation(-20 * u);
+        });
+        path.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                frame.removeView(letter);
+                target.animate().scaleX(1.12f).scaleY(1.12f).setDuration(140)
+                        .withEndAction(() -> target.animate().scaleX(1f).scaleY(1f).setDuration(200).start()).start();
+            }
+        });
+        path.start();
+    }
+
+    // ---- 随身小幽 ----
+
+    private void refreshDevice(HubStore store) {
+        if (devicePane == null) return;
+        boolean near = store.linkState().equals("已连接");
+        HubStore.Turn turn = store.turn();
+        String screen = store.busy() ? (turn.stage.isEmpty() ? "在想…" : CardViews.oneLine(turn.stage, 10)) : near ? "在身边" : "睡着了";
+        String key = store.linkState() + "|" + store.firmwareLine() + "|" + screen;
+        if (key.equals(deviceKey)) return;
+        deviceKey = key; devicePane.removeAllViews();
+        LinearLayout mirror = column(); mirror.setGravity(Gravity.CENTER_HORIZONTAL); mirror.setPadding(0, dp(8), 0, dp(18));
+        LinearLayout shell = column(); shell.setGravity(Gravity.CENTER);
+        shell.setBackground(surface(0xffdfe6ef, 0xffdfe6ef, 36));
+        LinearLayout lcd = column(); lcd.setGravity(Gravity.CENTER);
+        lcd.setBackground(surface(0xff14243a, 0xff14243a, 18));
+        lcd.addView(new AvatarView(this, "ds", near ? "happy" : "idle"), new LinearLayout.LayoutParams(dp(64), dp(64)));
+        TextView line = text(screen, 11, false); line.setTextColor(0xffcfe0ff); line.setPadding(0, dp(4), 0, 0); lcd.addView(line);
+        shell.addView(lcd, new LinearLayout.LayoutParams(dp(124), dp(124)));
+        mirror.addView(shell, new LinearLayout.LayoutParams(dp(156), dp(196)));
+        TextView status = text(near ? "● 在身边 · 屏幕和手机同步" : "● " + store.linkState(), 13, false);
+        status.setTextColor(near ? GREEN : AMBER); status.setPadding(0, dp(12), 0, 0); mirror.addView(status);
+        devicePane.addView(mirror);
+        LinearLayout list = group();
+        list.addView(groupRow("device", near ? "断开设备" : "连接设备", null, "›", HINT, view -> {
+            if (near) { rememberConnect(false); LinkService.stop(this); } else connect();
+        }, true));
+        list.addView(groupRow(null, "固件", CardViews.oneLine(store.firmwareLine(), 30), "›", HINT, view -> openSettings(0), false));
+        devicePane.addView(list);
+        TextView later = text("更多玩法 · 随固件更新到来\n按键怎么用、提醒、表盘……设备能做什么，这里就会多出什么。", 12, false);
+        later.setTextColor(HINT); later.setLineSpacing(dp(3), 1f);
+        later.setPadding(dp(16), dp(14), dp(16), dp(14));
+        GradientDrawable dashed = new GradientDrawable(); dashed.setCornerRadius(dp(18));
+        dashed.setStroke(dp(1), 0xffd5dde8, dp(5), dp(4)); later.setBackground(dashed);
+        LinearLayout.LayoutParams laterParams = new LinearLayout.LayoutParams(-1, -2); laterParams.setMargins(0, dp(18), 0, 0);
+        devicePane.addView(later, laterParams);
+    }
+
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
@@ -1415,12 +1827,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private Set<String> addBubble(LinearLayout parent, Card card, Card.Entry entry) {
         Set<String> rendered = new HashSet<>();
         boolean mine = entry.role.equals("you");
-        LinearLayout bubble = column(); bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
-        GradientDrawable shape = surface(mine ? BLUE : Color.WHITE, mine ? BLUE : Color.WHITE, 18);
-        float big = dp(18), small = dp(6);
-        shape.setCornerRadii(mine ? new float[] {big, big, big, big, small, small, big, big}
-                : new float[] {small, small, big, big, big, big, big, big});
-        bubble.setBackground(shape);
+        LinearLayout bubble = bubbleShell(mine);
         String author = AppPresentation.author(card, entry);
         if (!mine && !AppPresentation.role(author).equals("ds")) {
             LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
@@ -1430,15 +1837,65 @@ public class MainActivity extends Activity implements HubStore.Listener {
             name.setPadding(dp(6), 0, 0, 0); heading.addView(name);
             bubble.addView(heading);
         }
-        TextView words = text(entry.text.length() > 16000 ? entry.text.substring(0, 16000) + "\n\n较长内容已折叠，请打开完整方案附件。" : entry.text, 15, false);
-        words.setTextColor(mine ? Color.WHITE : INK); words.setLineSpacing(dp(3), 1f);
+        TextView words = bubbleWords(mine, entry.text.length() > 16000 ? entry.text.substring(0, 16000) + "\n\n较长内容已折叠，请打开完整方案附件。" : entry.text);
         words.setTextIsSelectable(true); bubble.addView(words);
         for (Attachment item : entry.attachments) { bubble.addView(attachmentView(item)); rendered.add(item.id); }
+        parent.addView(bubble, bubbleParams(mine));
+        return rendered;
+    }
+
+    /** 气泡的底：你说的蓝底、尖角在右下，对方说的白底、尖角在左上。 */
+    private LinearLayout bubbleShell(boolean mine) {
+        LinearLayout bubble = column(); bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
+        GradientDrawable shape = surface(mine ? BLUE : Color.WHITE, mine ? BLUE : Color.WHITE, 18);
+        float big = dp(18), small = dp(6);
+        shape.setCornerRadii(mine ? new float[] {big, big, big, big, small, small, big, big}
+                : new float[] {small, small, big, big, big, big, big, big});
+        bubble.setBackground(shape);
+        return bubble;
+    }
+
+    private TextView bubbleWords(boolean mine, String value) {
+        TextView words = text(value, 15, false);
+        words.setTextColor(mine ? Color.WHITE : INK); words.setLineSpacing(dp(3), 1f);
+        return words;
+    }
+
+    private LinearLayout.LayoutParams bubbleParams(boolean mine) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
         params.gravity = mine ? Gravity.END : Gravity.START;
         params.setMargins(mine ? dp(48) : 0, dp(5), mine ? 0 : dp(40), dp(5));
-        parent.addView(bubble, params);
-        return rendered;
+        return params;
+    }
+
+    /**
+     * 还在说的那一轮：你刚说的话，和小幽已经说出来的部分，接在聊天最下面。之后每来一段只换
+     * 那一个气泡里的字，不重建聊天；说完了卡到了，它就让位给卡上的完整回复。返回长高了没有。
+     */
+    private boolean refreshLive(HubStore store) {
+        String said = store.streaming();
+        if (tab != TAB_CHAT || said.isEmpty()) {
+            if (live != null) { chatList.removeView(live); live = null; liveWords = null; }
+            return false;
+        }
+        boolean grew = false;
+        if (live == null) {
+            live = column();
+            String asked = store.busyText();
+            if (!asked.isEmpty() && !RuntimeClient.VOICE_PLACEHOLDER.equals(asked)) {
+                LinearLayout mine = bubbleShell(true); mine.addView(bubbleWords(true, asked));
+                live.addView(mine, bubbleParams(true));
+            }
+            LinearLayout reply = bubbleShell(false); liveWords = bubbleWords(false, "");
+            reply.addView(liveWords); live.addView(reply, bubbleParams(false));
+        }
+        if (live.getParent() == null) {
+            chatList.addView(live); grew = true;  // 聊天刚重建过：接回最下面
+        } else if (chatList.indexOfChild(live) != chatList.getChildCount() - 1) {
+            chatList.removeView(live); chatList.addView(live); grew = true;
+        }
+        if (!said.contentEquals(liveWords.getText())) { liveWords.setText(said); grew = true; }
+        return grew;
     }
 
     private View attachmentView(Attachment item) {

@@ -165,6 +165,10 @@ public final class HubStore {
     /** 已经发给 Runtime、还没等到结果的消息数。 */
     private int pending;
     private String busyText = "";
+    /** 小幽正在说、还没说完的那段回复（Runtime 流式给的）；没有就是空串。只给 App 画，不发设备。 */
+    private String streaming = "";
+    /** 这一轮的卡已经到了：之后晚到的片段不再画，免得和卡上的回复重复。 */
+    private boolean streamSettled;
     private long sequence;
     private Turn turn = new Turn("idle", "", "", "", "", "idle");
     /** 换了一台 Runtime，或者别的原因让“小幽有哪些帮手”需要重新问一次。 */
@@ -392,6 +396,11 @@ public final class HubStore {
                 }
                 cards.put(order, card);
                 dirty = true;
+                if (pending > 0 && !card.monitoringOnly && busyText.equals(card.said())) {
+                    // 正在说的这句话已经落到卡上：卡上的就是完整回复，不再画还在说的那段。
+                    streaming = "";
+                    streamSettled = true;
+                }
                 // 后台的一件事有了结果：第一屏说这件事。正在等小幽回话时不打断那一轮。
                 if (!card.monitoringOnly && previous != null && previous.active()
                         && !card.active() && pending == 0) {
@@ -551,6 +560,8 @@ public final class HubStore {
         synchronized (this) {
             ++pending;
             busyText = text;
+            streaming = "";
+            streamSettled = false;
             turnCard = null;
             appendChat("我：" + text);
             turn = new Turn("thinking", RuntimeClient.VOICE_PLACEHOLDER.equals(text) ? "" : text,
@@ -577,6 +588,26 @@ public final class HubStore {
             turn = new Turn(phase, turn.said, "", agent, text, "busy");
         }
         notifyChanged();
+    }
+
+    /**
+     * 小幽这句回复已经生成出来的部分（整段，不是增量）。空串或 null 表示收回。
+     * 没在等回复、卡已经到了、或者内容没变时不通知。
+     */
+    public void chatStreaming(String text) {
+        synchronized (this) {
+            String next = text == null ? "" : text;
+            if (pending <= 0 || streamSettled || next.equals(streaming)) {
+                return;
+            }
+            streaming = next;
+        }
+        notifyChanged();
+    }
+
+    /** 正在生成的那段回复；没有就是空串。 */
+    public synchronized String streaming() {
+        return pending > 0 ? streaming : "";
     }
 
     public synchronized Turn turn() {
@@ -651,6 +682,7 @@ public final class HubStore {
     public void chatAnswered(String brief, String reply, String mood, String card) {
         synchronized (this) {
             pending = Math.max(0, pending - 1);
+            streaming = "";
             turnCard = card;
             String shown = reply.isEmpty() ? brief : reply;
             turn = new Turn("done", turn.said, BuddyProtocol.chatReply(brief, reply), "", "",
@@ -675,6 +707,7 @@ public final class HubStore {
                 }
             } else {
                 pending = Math.max(0, pending - 1);
+                streaming = "";
                 turnCard = null;
                 turn = new Turn("failed", turn.said, error, "", "", "oops");
             }

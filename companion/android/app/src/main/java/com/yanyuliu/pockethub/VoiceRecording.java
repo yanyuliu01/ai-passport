@@ -105,7 +105,11 @@ final class VoiceRecording {
 
     /** 16 位单声道 WAV 文件的全部字节。 */
     byte[] toWav() {
-        byte[] data = pcm.toByteArray();
+        return wav(pcm.toByteArray());
+    }
+
+    /** 把 16 kHz、16 位单声道的 PCM 包成 WAV；手机自己录的音也走这里。 */
+    static byte[] wav(byte[] data) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(data.length + 44);
         ascii(out, "RIFF");
         int32(out, 36 + data.length);
