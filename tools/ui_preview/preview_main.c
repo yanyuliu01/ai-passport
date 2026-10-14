@@ -305,6 +305,19 @@ int main(int argc, char **argv)
 
     pocket_ui_init();
 
+    if (argc > 2 && strcmp(argv[2], "--sleep-animation") == 0) {
+        snap = base_snapshot();
+        pocket_ui_render(&snap);
+        for (index = 0; index < 16; ++index) {
+            char name[48];
+            (void)snprintf(name, sizeof(name), "sleep_%02d", index);
+            run(410);
+            save(name); /* Total frame time is the firmware's 450 ms tick. */
+        }
+        puts("ui_preview: sleep animation frames complete");
+        return 0;
+    }
+
     /* ---- not connected, pairing ---- */
     snap = base_snapshot();
     show("01_home_waiting", &snap);
@@ -855,6 +868,14 @@ int main(int argc, char **argv)
     put_task(&snap, "c19", "tailor", "把字调大一号", BUDDY_TASK_DONE, 0, "改好了，已经推到设备上", "");
     snap.tasks[3].effort = (uint8_t)BUDDY_EFFORT_LOW;
     show("99_tier_tasks", &snap);
+
+    snap = hub_snapshot();
+    set_text_field(snap.prompt_id, sizeof(snap.prompt_id), "desktop-notice-preview");
+    set_text_field(snap.prompt_tool, sizeof(snap.prompt_tool), "codex · Bash");
+    set_text_field(snap.prompt_hint, sizeof(snap.prompt_hint),
+                   "这个来源不收设备的回答。\n请在手机或电脑上确认。");
+    snap.prompt_notification_only = true;
+    show("100_approval_computer_only", &snap);
 
     {
         lv_mem_monitor_t monitor;

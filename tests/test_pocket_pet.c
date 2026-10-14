@@ -41,21 +41,36 @@ static void test_out_of_range_is_clear(void)
     assert(pocket_pet_pixel(POCKET_PET_IDLE, 0, 5, POCKET_PET_GRID) == POCKET_PET_CLEAR);
     assert(pocket_pet_pixel(POCKET_PET_MOOD_COUNT, 0, 9, 9) == POCKET_PET_CLEAR);
     assert(pocket_pet_rgb(POCKET_PET_COLOR_COUNT) == 0);
-    assert(pocket_pet_rgb(POCKET_PET_BODY) == 0xF0EEE6);
+    assert(pocket_pet_rgb(POCKET_PET_BODY) == 0xF6F8FF);
 }
 
-static void test_every_mood_is_a_whole_ghost_with_a_face(void)
+static void test_every_mood_preserves_the_whale_character(void)
 {
     int mood;
 
     for (mood = 0; mood < POCKET_PET_MOOD_COUNT; ++mood) {
         unsigned frame;
 
-        for (frame = 0; frame < 6; ++frame) {
-            /* 身体和轮廓一直都在，眼睛至少有 4 个格子。 */
-            assert(count((pocket_pet_mood_t)mood, frame, POCKET_PET_OUTLINE) >= 40);
-            assert(count((pocket_pet_mood_t)mood, frame, POCKET_PET_BODY) >= 100);
-            assert(count((pocket_pet_mood_t)mood, frame, POCKET_PET_EYE) >= 4);
+        for (frame = 0; frame < POCKET_PET_BREATH_FRAMES; ++frame) {
+            unsigned source_pixels = 0;
+            unsigned blue_pixels = 0;
+            unsigned skin_pixels = 0;
+            for (int y = 0; y < POCKET_PET_GRID; ++y) {
+                for (int x = 0; x < POCKET_PET_GRID; ++x) {
+                    pocket_pet_color_t colour = pocket_pet_pixel((pocket_pet_mood_t)mood, frame, x, y);
+                    assert(colour < POCKET_PET_COLOR_COUNT);
+                    if (colour < POCKET_PET_SOURCE_FIRST) continue;
+                    ++source_pixels;
+                    uint32_t rgb = pocket_pet_rgb(colour);
+                    unsigned red = rgb >> 16, green = (rgb >> 8) & 255, blue = rgb & 255;
+                    if (blue > red + 30 && blue > green) ++blue_pixels;
+                    if (red > 180 && green > 120 && red > blue + 15) ++skin_pixels;
+                }
+            }
+            /* A complete blue-haired, peach-faced source portrait in every mood. */
+            assert(source_pixels > 1200);
+            assert(blue_pixels > 500);
+            assert(skin_pixels > 150);
         }
     }
 }
@@ -75,10 +90,10 @@ static void test_moods_are_distinguishable(void)
         }
     }
     /* 每种情绪的标志性符号。 */
-    assert(count(POCKET_PET_SLEEP, 0, POCKET_PET_GRAY) == 10);
-    assert(count(POCKET_PET_ASK, 0, POCKET_PET_ALERT) == 10);
-    assert(count(POCKET_PET_HAPPY, 0, POCKET_PET_HEART) == 11);
-    assert(count(POCKET_PET_OOPS, 0, POCKET_PET_WATER) == 3);
+    assert(count(POCKET_PET_SLEEP, 0, POCKET_PET_GRAY) == 90);
+    assert(count(POCKET_PET_ASK, 0, POCKET_PET_ALERT) == 0);  /* 感叹号已拿掉 */
+    assert(count(POCKET_PET_HAPPY, 0, POCKET_PET_HEART) == 99);
+    assert(count(POCKET_PET_OOPS, 0, POCKET_PET_WATER) == 27);
     assert(count(POCKET_PET_IDLE, 0, POCKET_PET_ALERT) == 0);
     assert(count(POCKET_PET_IDLE, 0, POCKET_PET_HEART) == 0);
 }
@@ -89,35 +104,91 @@ static void test_animation(void)
     unsigned char odd[POCKET_PET_GRID * POCKET_PET_GRID];
 
     /* 忙碌：头顶的点 1→2→3 个依次点亮，然后循环。 */
-    assert(count(POCKET_PET_BUSY, 0, POCKET_PET_ACCENT) == 1);
-    assert(count(POCKET_PET_BUSY, 1, POCKET_PET_ACCENT) == 2);
-    assert(count(POCKET_PET_BUSY, 2, POCKET_PET_ACCENT) == 3);
-    assert(count(POCKET_PET_BUSY, 3, POCKET_PET_ACCENT) == 1);
-    assert(count(POCKET_PET_BUSY, 0, POCKET_PET_GRAY) == 2);
+    assert(count(POCKET_PET_BUSY, 0, POCKET_PET_ACCENT) == 9);
+    assert(count(POCKET_PET_BUSY, 1, POCKET_PET_ACCENT) == 18);
+    assert(count(POCKET_PET_BUSY, 2, POCKET_PET_ACCENT) == 27);
+    assert(count(POCKET_PET_BUSY, 3, POCKET_PET_ACCENT) == 9);
+    assert(count(POCKET_PET_BUSY, 0, POCKET_PET_GRAY) == 18);
 
-    /* 待命：奇数帧整体上移一格，但格子总数不变。 */
-    snapshot(POCKET_PET_IDLE, 0, even);
-    snapshot(POCKET_PET_IDLE, 1, odd);
-    assert(memcmp(even, odd, sizeof(even)) != 0);
-    assert(memcmp(even + POCKET_PET_GRID, odd, sizeof(even) - POCKET_PET_GRID) == 0);
-    snapshot(POCKET_PET_IDLE, 2, odd);
-    assert(memcmp(even, odd, sizeof(even)) == 0);
-
-    /* 睡觉和失败不动。 */
-    snapshot(POCKET_PET_SLEEP, 0, even);
-    snapshot(POCKET_PET_SLEEP, 1, odd);
-    assert(memcmp(even, odd, sizeof(even)) == 0);
+    /* 失败保持稳定，忙碌头像也不浮动。 */
     snapshot(POCKET_PET_OOPS, 0, even);
-    snapshot(POCKET_PET_OOPS, 5, odd);
-    assert(memcmp(even, odd, sizeof(even)) == 0);
+    for (unsigned frame = 1; frame < 2 * POCKET_PET_BREATH_FRAMES; ++frame) {
+        snapshot(POCKET_PET_OOPS, frame, odd);
+        assert(memcmp(even, odd, sizeof(even)) == 0);
+    }
+    snapshot(POCKET_PET_BUSY, 0, even);
+    for (unsigned frame = 1; frame < 3; ++frame) {
+        snapshot(POCKET_PET_BUSY, frame, odd);
+        for (unsigned pixel = 0; pixel < sizeof(even); ++pixel) {
+            if (even[pixel] >= POCKET_PET_SOURCE_FIRST) {
+                assert(even[pixel] == odd[pixel]);
+            }
+        }
+    }
+}
+
+static void test_breathing_cycle_preserves_pixels_and_status_marks(void)
+{
+    static const pocket_pet_mood_t moods[] = {
+        POCKET_PET_SLEEP, POCKET_PET_IDLE, POCKET_PET_ASK, POCKET_PET_HAPPY,
+    };
+    unsigned char baseline[POCKET_PET_GRID * POCKET_PET_GRID];
+    unsigned char current[POCKET_PET_GRID * POCKET_PET_GRID];
+
+    assert(POCKET_PET_BREATH_FRAMES * 450U == 3600U);
+    for (unsigned mood = 0; mood < sizeof(moods) / sizeof(moods[0]); ++mood) {
+        unsigned reference_counts[POCKET_PET_COLOR_COUNT] = {0};
+        int baseline_top = POCKET_PET_GRID;
+        int highest_top = POCKET_PET_GRID;
+
+        snapshot(moods[mood], 0, baseline);
+        for (unsigned pixel = 0; pixel < sizeof(baseline); ++pixel) {
+            ++reference_counts[baseline[pixel]];
+            if (baseline[pixel] >= POCKET_PET_SOURCE_FIRST &&
+                (int)(pixel / POCKET_PET_GRID) < baseline_top) {
+                baseline_top = (int)(pixel / POCKET_PET_GRID);
+            }
+        }
+        for (unsigned frame = 0; frame < 2 * POCKET_PET_BREATH_FRAMES; ++frame) {
+            unsigned current_counts[POCKET_PET_COLOR_COUNT] = {0};
+            int top = POCKET_PET_GRID;
+
+            snapshot(moods[mood], frame, current);
+            for (unsigned pixel = 0; pixel < sizeof(current); ++pixel) {
+                ++current_counts[current[pixel]];
+                if (current[pixel] >= POCKET_PET_SOURCE_FIRST &&
+                    (int)(pixel / POCKET_PET_GRID) < top) {
+                    top = (int)(pixel / POCKET_PET_GRID);
+                }
+                /* Zz, exclamation and heart marks stay at exactly the same coordinates. */
+                if ((baseline[pixel] > POCKET_PET_CLEAR &&
+                     baseline[pixel] < POCKET_PET_SOURCE_FIRST) ||
+                    (current[pixel] > POCKET_PET_CLEAR &&
+                     current[pixel] < POCKET_PET_SOURCE_FIRST)) {
+                    assert(baseline[pixel] == current[pixel]);
+                }
+            }
+            assert(memcmp(reference_counts, current_counts, sizeof(reference_counts)) == 0);
+            assert(top <= baseline_top && baseline_top - top <= 2);
+            if (top < highest_top) highest_top = top;
+            if (frame % POCKET_PET_BREATH_FRAMES == 0) {
+                assert(memcmp(baseline, current, sizeof(baseline)) == 0);
+            }
+            if (frame % POCKET_PET_BREATH_FRAMES == 3) {
+                assert(memcmp(baseline, current, sizeof(baseline)) != 0);
+            }
+        }
+        assert(baseline_top - highest_top == 2);
+    }
 }
 
 int main(void)
 {
     test_out_of_range_is_clear();
-    test_every_mood_is_a_whole_ghost_with_a_face();
+    test_every_mood_preserves_the_whale_character();
     test_moods_are_distinguishable();
     test_animation();
+    test_breathing_cycle_preserves_pixels_and_status_marks();
     puts("pocket_pet: PASS");
     return 0;
 }

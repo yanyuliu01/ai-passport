@@ -278,6 +278,8 @@ typedef struct {
     bool tool_truncated;
     bool hint_truncated;
     bool connected;
+    /* An observed desktop prompt without a live response channel. */
+    bool notification_only;
 } buddy_prompt_t;
 
 typedef struct {
@@ -547,8 +549,8 @@ typedef struct {
      * state, like cards: a copy would be another kilobyte and a half of RAM. */
     const buddy_past_t *past;
     unsigned past_count;
-    /* The usage screen: usage_known says the hub sends usage at all (the screen
-     * is then in the round), usage_since_ms when the list arrived. */
+    /* The fourth screen is always in the round. usage_known says the current
+     * session has supplied a list (even empty); usage_since_ms is its arrival. */
     buddy_usage_t usage[BUDDY_USAGE_COUNT];
     unsigned usage_count;
     uint64_t usage_since_ms;
@@ -565,6 +567,7 @@ typedef struct {
     /* When the text in message last changed. */
     uint64_t message_since_ms;
     bool prompt_hint_truncated;
+    bool prompt_notification_only;
     uint64_t approval_count;
     uint64_t denial_count;
     uint64_t uptime_ms;

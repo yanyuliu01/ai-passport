@@ -171,7 +171,7 @@ static void test_pet_mood(void)
     snapshot.character = BUDDY_CHARACTER_HEART;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
 
-    /* 和小幽的对话：在等的时候忙，答完时是她自己说的表情，没成是沮丧。 */
+    /* 和小幽的对话：在等的时候忙，答完时一律开心，没成是沮丧。 */
     snapshot = connected_snapshot();
     snapshot.chat.phase = BUDDY_CHAT_SENT;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
@@ -179,12 +179,15 @@ static void test_pet_mood(void)
     snprintf(snapshot.chat.agent, sizeof(snapshot.chat.agent), "%s", "codex");
     assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
     snapshot.chat.phase = BUDDY_CHAT_DONE;
+    /* 说完啦：不管模型挑了什么表情，都是开心的。 */
     snapshot.chat.mood = BUDDY_MOOD_HAPPY;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
     snapshot.chat.mood = BUDDY_MOOD_ASK;
-    assert(pocket_pet_for(&snapshot) == POCKET_PET_ASK);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
+    snapshot.chat.mood = BUDDY_MOOD_BUSY;
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
     snapshot.chat.mood = BUDDY_MOOD_IDLE;
-    assert(pocket_pet_for(&snapshot) == POCKET_PET_IDLE);
+    assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
     snapshot.chat.phase = BUDDY_CHAT_FAILED;
     snapshot.chat.mood = BUDDY_MOOD_HAPPY;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_OOPS);
@@ -465,8 +468,8 @@ static void test_which_screen(void)
 {
     buddy_ui_snapshot_t snapshot = connected_snapshot();
 
-    /* 三屏；中枢发过用量就多一屏。 */
-    assert(pocket_screen_count(NULL) == 3 && pocket_screen_count(&snapshot) == 3);
+    /* 四屏始终可达；用量未同步和断线只影响内容。 */
+    assert(pocket_screen_count(NULL) == 4 && pocket_screen_count(&snapshot) == 4);
     assert(pocket_screen_index(NULL) == -1 && pocket_screen_index(&snapshot) == 0);
     snapshot.page = BUDDY_PAGE_TALK;
     assert(pocket_screen_index(&snapshot) == 1);
@@ -478,12 +481,36 @@ static void test_which_screen(void)
     snapshot.usage_known = true;
     snapshot.page = BUDDY_PAGE_USAGE;
     assert(pocket_screen_count(&snapshot) == 4 && pocket_screen_index(&snapshot) == 3);
+    snapshot.usage_known = false;
+    snapshot.ble_connected = false;
+    assert(pocket_screen_count(&snapshot) == 4 && pocket_screen_index(&snapshot) == 3);
     snapshot.page = BUDDY_PAGE_MENU;
     assert(pocket_screen_index(&snapshot) == -1);
     /* 有别的东西占着屏幕时不在任何一屏上。 */
     snapshot.page = BUDDY_PAGE_USAGE;
     snapshot.voice_phase = BUDDY_VOICE_LISTENING;
     assert(pocket_screen_index(&snapshot) == -1);
+}
+
+static void test_usage_placeholders_do_not_hide_the_page_or_invent_quota(void)
+{
+    buddy_ui_snapshot_t snapshot = connected_snapshot();
+    snapshot.page = BUDDY_PAGE_USAGE;
+    assert(pocket_usage_view_for(&snapshot, false) == POCKET_USAGE_WAITING);
+    snapshot.usage_known = true;
+    assert(pocket_usage_view_for(&snapshot, false) == POCKET_USAGE_EMPTY);
+    snapshot.usage_count = 1;
+    snapshot.usage[0].state = BUDDY_QUOTA_UNKNOWN;
+    snapshot.usage[0].left_short = snapshot.usage[0].left_week = -1;
+    assert(pocket_usage_view_for(&snapshot, false) == POCKET_USAGE_DATA);
+    assert(pocket_usage_cells(snapshot.usage[0].left_short, 12) == -1);
+    assert(pocket_usage_view_for(&snapshot, true) == POCKET_USAGE_LOW_MEMORY);
+    snapshot.heartbeat_stale = true;
+    assert(pocket_usage_view_for(&snapshot, false) == POCKET_USAGE_OFFLINE);
+    assert(pocket_screen_index(&snapshot) == 3 && pocket_screen_count(&snapshot) == 4);
+    snapshot.heartbeat_stale = false;
+    snapshot.ble_connected = false;
+    assert(pocket_usage_view_for(&snapshot, false) == POCKET_USAGE_OFFLINE);
 }
 
 static void test_usage_times_and_bars(void)
@@ -539,6 +566,7 @@ int main(void)
     test_the_task_list_as_lines();
     test_which_screen();
     test_usage_times_and_bars();
+    test_usage_placeholders_do_not_hide_the_page_or_invent_quota();
     test_view_priority();
     test_voice_view();
     test_update_view();

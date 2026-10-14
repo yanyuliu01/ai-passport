@@ -65,8 +65,17 @@ unsigned pocket_task_window(const pocket_task_line_t *lines, unsigned count,
                             unsigned selected, unsigned top, int row, int header,
                             int window);
 
-// 一共几屏轮着切：中枢发过用量就是四屏（多一屏用量），否则三屏。
+// 四屏始终保留；用量是否同步只改变第四屏的内容，不改变导航。
 int pocket_screen_count(const buddy_ui_snapshot_t *snapshot);
+typedef enum {
+    POCKET_USAGE_DATA,
+    POCKET_USAGE_WAITING,
+    POCKET_USAGE_EMPTY,
+    POCKET_USAGE_OFFLINE,
+    POCKET_USAGE_LOW_MEMORY,
+} pocket_usage_view_t;
+// 未同步、断线、空列表和内存不足各有占位；未知额度仍保留账号信息。
+pocket_usage_view_t pocket_usage_view_for(const buddy_ui_snapshot_t *snapshot, bool low_memory);
 // 现在在第几屏（0 起）；不在这几屏上（菜单之类）是 -1。从第三屏进到一件任务里时
 // 仍算第三屏。
 int pocket_screen_index(const buddy_ui_snapshot_t *snapshot);
@@ -95,7 +104,7 @@ bool pocket_notice_visible(const buddy_ui_snapshot_t *snapshot);
 // 颜色只回答一个问题：现在是谁在做事。小幽自己一个颜色，每个帮手一个颜色。
 // 认识的名字有固定的颜色，其余按名字算出来，同一个名字永远同一个颜色。
 // 名字不分大小写；空名字返回小幽自己的颜色。返回 0xRRGGBB。
-#define POCKET_COLOR_XIAOYOU 0xB9A7FFu
+#define POCKET_COLOR_XIAOYOU 0x7CC8F2u
 uint32_t pocket_helper_color(const char *name);
 
 // 以下格式化函数都保证 out 以 NUL 结尾（size 为 0 时除外），返回写入的字节数。

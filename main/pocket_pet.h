@@ -1,15 +1,16 @@
-// main/pocket_pet.h —— 像素宠物“小幽”的造型数据（纯逻辑，不依赖 LVGL）。
-//
-// 小幽是一只 16×16 的小幽灵，画在 20×20 的格子里（四周留给 Zz、感叹号、
-// 爱心这些小符号）。界面按整数倍放大绘制，每个格子就是一个方块。
+// DS pixel head portraits compiled from the retained avatar-whale-v1 artwork.
 #pragma once
 
 #include <stdint.h>
 
-#define POCKET_PET_GRID 20
+#define POCKET_PET_GRID 60
+// Existing screen footprints remain 120, 40 and 60 display pixels.
+#define POCKET_PET_LAYOUT_GRID 20
+// Eight existing 450 ms timer ticks form a gentle 3.6 second breathing cycle.
+#define POCKET_PET_BREATH_FRAMES 8U
 
 typedef enum {
-    POCKET_PET_SLEEP,  // 闭眼 + Zz：没连上
+    POCKET_PET_SLEEP,  // 闭眼 + Zz，轻轻呼吸：没连上
     POCKET_PET_IDLE,   // 睁眼，轻轻上下浮动
     POCKET_PET_BUSY,   // 低头 + 头顶跳动的三个点 + 汗滴
     POCKET_PET_ASK,    // 大眼睛 + 感叹号：有事找你
@@ -32,7 +33,11 @@ typedef enum {
     POCKET_PET_WATER,   // 汗滴
     POCKET_PET_ALERT,   // 感叹号
     POCKET_PET_HEART,
-    POCKET_PET_COLOR_COUNT,
+    POCKET_PET_SKIN,
+    POCKET_PET_DRESS,
+    POCKET_PET_FIN,
+    POCKET_PET_SOURCE_FIRST = 16,
+    POCKET_PET_COLOR_COUNT = POCKET_PET_SOURCE_FIRST + 64,
 } pocket_pet_color_t;
 
 // (x, y) 处的调色板下标，坐标越界返回 POCKET_PET_CLEAR。frame 是动画帧号，

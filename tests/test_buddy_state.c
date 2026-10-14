@@ -609,7 +609,9 @@ static void test_double_ok_opens_the_menu(void)
     buddy_event_t long_ok = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_OK};
     buddy_event_t long_down = {.type = BUDDY_EVENT_KEY_LONG, .key = BUDDY_KEY_DOWN};
     buddy_event_t prompt = test_prompt_event("req-double", "Bash", "ls", 0, 1);
-    static const buddy_page_t screens[] = {BUDDY_PAGE_HOME, BUDDY_PAGE_TALK, BUDDY_PAGE_TASKS};
+    static const buddy_page_t screens[] = {
+        BUDDY_PAGE_HOME, BUDDY_PAGE_TALK, BUDDY_PAGE_TASKS, BUDDY_PAGE_USAGE,
+    };
     static const buddy_page_t under_the_menu[] = {
         BUDDY_PAGE_MENU, BUDDY_PAGE_NOTICES, BUDDY_PAGE_HELPERS, BUDDY_PAGE_MORE,
         BUDDY_PAGE_GUIDE,
@@ -623,7 +625,7 @@ static void test_double_ok_opens_the_menu(void)
     buddy_state_reduce(&state, &long_down, 999, &action);
     assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
 
-    /* Two quick presses on OK open the menu from each of the three screens... */
+    /* Two quick presses on OK open the menu from each of the four screens... */
     for (index = 0; index < sizeof(screens) / sizeof(screens[0]); ++index) {
         state.page = screens[index];
         state.menu_selection = BUDDY_MENU_BACK;
@@ -816,7 +818,7 @@ static void test_talking_needs_a_voice_capable_host(void)
     assert(!state.host_voice);
 }
 
-static void test_ok_goes_round_the_three_screens(void)
+static void test_ok_goes_round_the_four_screens(void)
 {
     buddy_state_t state;
     buddy_action_t action = {0};
@@ -831,7 +833,7 @@ static void test_ok_goes_round_the_three_screens(void)
     buddy_state_reduce(&state, &up, 6, &action);
     assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_NONE);
 
-    /* A short press on OK: the conversation, the tasks, and round again. */
+    /* A short press on OK: conversation, tasks, usage, and home again. */
     buddy_state_reduce(&state, &ok, 7, &action);
     assert(state.page == BUDDY_PAGE_TALK && action.type == BUDDY_ACTION_UI_REFRESH);
     /* On the conversation UP and DOWN move within the thing on screen. */
@@ -846,6 +848,8 @@ static void test_ok_goes_round_the_three_screens(void)
     buddy_state_reduce(&state, &down, 11, &action);
     assert(state.page == BUDDY_PAGE_TASKS && action.type == BUDDY_ACTION_NONE);
     buddy_state_reduce(&state, &ok, 12, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && action.type == BUDDY_ACTION_UI_REFRESH);
+    buddy_state_reduce(&state, &ok, 13, &action);
     assert(state.page == BUDDY_PAGE_HOME && action.type == BUDDY_ACTION_UI_REFRESH);
 }
 
@@ -869,7 +873,7 @@ static buddy_event_t usage_event(unsigned count, uint32_t generation)
     return event;
 }
 
-static void test_usage_adds_a_fourth_screen_to_the_round(void)
+static void test_usage_stays_in_the_round_without_current_data(void)
 {
     buddy_state_t state;
     buddy_ui_snapshot_t snapshot;
@@ -884,6 +888,13 @@ static void test_usage_adds_a_fourth_screen_to_the_round(void)
     voice_ready_state(&state);
     buddy_state_snapshot(&state, &snapshot);
     assert(!snapshot.usage_known && snapshot.usage_count == 0U);
+    /* Reach usage before the first report. */
+    buddy_state_reduce(&state, &ok, 10, &action);
+    buddy_state_reduce(&state, &ok, 11, &action);
+    buddy_state_reduce(&state, &ok, 12, &action);
+    assert(state.page == BUDDY_PAGE_USAGE && !state.usage_known);
+    buddy_state_reduce(&state, &ok, 13, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
     /* Usage from another connection is not taken. */
     event = usage_event(2, 6);
     buddy_state_reduce(&state, &event, 100, &action);
@@ -931,9 +942,24 @@ static void test_usage_adds_a_fourth_screen_to_the_round(void)
     event = usage_event(0, 7);
     buddy_state_reduce(&state, &event, 130, &action);
     assert(state.usage_known && state.usage_count == 0U && state.page == BUDDY_PAGE_USAGE);
-    /* When the connection goes the numbers go with it, and so does the screen. */
+    /* Disconnect clears old numbers while keeping the current fourth screen. */
     buddy_state_reduce(&state, &gone, 140, &action);
-    assert(!state.usage_known && state.usage_count == 0U && state.page == BUDDY_PAGE_HOME);
+    assert(!state.usage_known && state.usage_count == 0U && state.page == BUDDY_PAGE_USAGE);
+    buddy_state_reduce(&state, &ok, 141, &action);
+    assert(state.page == BUDDY_PAGE_HOME);
+
+    /* A lost heartbeat has the same data expiry, without changing the page. */
+    voice_ready_state(&state);
+    state.page = BUDDY_PAGE_USAGE;
+    state.connected = true;
+    state.heartbeat_stale = false;
+    state.last_heartbeat_ms = 150;
+    event = usage_event(1, 7);
+    buddy_state_reduce(&state, &event, 151, &action);
+    event.type = BUDDY_EVENT_TICK;
+    buddy_state_reduce(&state, &event, 150 + 31000, &action);
+    assert(state.heartbeat_stale && !state.usage_known && state.usage_count == 0U &&
+           state.usage_since_ms == 0U && state.page == BUDDY_PAGE_USAGE);
 }
 
 static void test_guide_scrolls_and_returns_to_more(void)
@@ -1164,6 +1190,53 @@ static void test_parsed_heartbeat_approval_serializes_permission(void)
     assert(strcmp(output,
                   "{\"cmd\":\"permission\",\"id\":\"req-e2e\",\"decision\":\"once\"}\n") ==
            0);
+}
+
+static void test_parsed_truncated_operations_can_still_be_answered(void)
+{
+    size_t field;
+    size_t utf8;
+
+    for (field = 0; field < 2; ++field) {
+        for (utf8 = 0; utf8 < 2; ++utf8) {
+            buddy_state_t state;
+            buddy_ui_snapshot_t snapshot;
+            buddy_event_t heartbeat = {0};
+            buddy_event_t key = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_UP};
+            buddy_action_t action = {0};
+            char value[BUDDY_HINT_MAX + 1];
+            char json[BUDDY_JSON_LINE_MAX];
+            size_t length = field == 0 ? BUDDY_TOOL_MAX : BUDDY_HINT_MAX;
+
+            memset(value, 'a', length);
+            if (utf8 != 0) {
+                memcpy(value + length - 3, "\xe4\xb8\xad", 3);
+            }
+            value[length] = '\0';
+            snprintf(json, sizeof(json),
+                     "{\"total\":1,\"running\":1,\"waiting\":1,\"msg\":\"\","
+                     "\"entries\":[],\"tokens\":0,\"tokens_today\":0,\"prompt\":{"
+                     "\"id\":\"truncated-operation\",\"tool\":\"%s\",\"hint\":\"%s\"%s}}",
+                     field == 0 ? value : "Bash", field == 1 ? value : "ls",
+                     utf8 == 0 ? "" : ",\"actionable\":true");
+            assert(buddy_protocol_parse(json, strlen(json), &heartbeat) == BUDDY_EVENT_HEARTBEAT);
+            buddy_state_init(&state, NULL);
+            buddy_state_reduce(&state, &heartbeat, 1000, &action);
+            buddy_state_snapshot(&state, &snapshot);
+            /* Cut text is marked for display, but the owner may still answer. */
+            assert(!snapshot.prompt_notification_only);
+            assert(snapshot.prompt_hint_truncated == (field == 1));
+            key.key = BUDDY_KEY_UP;
+            buddy_state_reduce(&state, &key, 1001, &action);
+            assert(action.type == BUDDY_ACTION_UI_SCROLL && !state.approval_locked);
+            key.key = utf8 == 0 ? BUDDY_KEY_OK : BUDDY_KEY_DOWN;
+            buddy_state_reduce(&state, &key, 1002, &action);
+            assert(action.type == BUDDY_ACTION_PERMISSION && state.approval_locked);
+            assert(strcmp(action.permission.id, "truncated-operation") == 0);
+            assert(action.permission.decision ==
+                   (utf8 == 0 ? BUDDY_PERMISSION_ONCE : BUDDY_PERMISSION_DENY));
+        }
+    }
 }
 
 static void test_normal_navigation_and_approval_scroll_are_distinct(void)
@@ -2027,10 +2100,12 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
         event = tasks_event(2, 7);
         buddy_state_reduce(&state, &event, 268, &action);
         assert(state.page == BUDDY_PAGE_TASKS && state.task_selected == 1);
-        /* OK from inside a thing goes on to the first screen; from there the
+        /* OK from inside a thing goes on to usage, then home; from there the
          * second screen is the conversation again. */
         buddy_state_reduce(&state, &ok, 269, &action);
         assert(state.page == BUDDY_PAGE_TALK);
+        buddy_state_reduce(&state, &ok, 270, &action);
+        assert(state.page == BUDDY_PAGE_USAGE);
         buddy_state_reduce(&state, &ok, 270, &action);
         assert(state.page == BUDDY_PAGE_HOME);
         buddy_state_reduce(&state, &ok, 271, &action);
@@ -2038,9 +2113,11 @@ static void test_the_third_screen_lists_the_things_in_progress(void)
         assert(state.page == BUDDY_PAGE_TALK && !snapshot.card_thread && snapshot.card_index == 2);
         buddy_state_reduce(&state, &ok, 272, &action);
         assert(state.page == BUDDY_PAGE_TASKS);
-        /* With nothing on the list, OK on the third screen leads straight home. */
+        /* With nothing on the list, OK on the third screen still leads to usage. */
         event = tasks_event(0, 7);
         buddy_state_reduce(&state, &event, 273, &action);
+        buddy_state_reduce(&state, &ok, 274, &action);
+        assert(state.page == BUDDY_PAGE_USAGE);
         buddy_state_reduce(&state, &ok, 274, &action);
         assert(state.page == BUDDY_PAGE_HOME);
         state.page = BUDDY_PAGE_TASKS;
@@ -2415,9 +2492,78 @@ static void test_a_notice_remembers_when_it_appeared(void)
     assert(snapshot.message_since_ms == 12000);
 }
 
+static void test_desktop_notice_wakes_screen_without_granting(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t prompt = test_prompt_event("desktop-notice", "Codex", "on computer", 1, 1);
+    buddy_event_t key = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+    prompt.prompt.notification_only = true;
+    buddy_state_init(&state, NULL);
+    state.screen_off = true;
+    buddy_state_reduce(&state, &prompt, 100, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(!snapshot.screen_off && snapshot.prompt_notification_only);
+    assert(strcmp(snapshot.prompt_id, "desktop-notice") == 0);
+    key.key = BUDDY_KEY_DOWN;
+    buddy_state_reduce(&state, &key, 101, &action);
+    assert(action.type == BUDDY_ACTION_UI_SCROLL && action.scroll_delta > 0);
+    assert(!state.approval_locked);
+    /* OK neither answers nor dismisses: the source still waits for a decision. */
+    key.key = BUDDY_KEY_OK;
+    action = (buddy_action_t){0};
+    buddy_state_reduce(&state, &key, 102, &action);
+    assert(action.type != BUDDY_ACTION_PERMISSION && !state.approval_locked);
+    assert(strcmp(state.prompt.id, "desktop-notice") == 0);
+    assert(state.last_attempted_prompt_id[0] == '\0');
+}
+
+static void test_desktop_notice_stays_until_source_withdraws(void)
+{
+    buddy_state_t state;
+    buddy_ui_snapshot_t snapshot;
+    buddy_action_t action = {0};
+    buddy_event_t heartbeat = test_heartbeat_event(0, 1);
+    buddy_event_t key = {.type = BUDDY_EVENT_KEY_CLICK, .key = BUDDY_KEY_OK};
+    int i;
+
+    heartbeat.heartbeat.prompt = test_prompt_event("desktop-wait", "Codex", "on computer", 1, 1).prompt;
+    heartbeat.heartbeat.prompt.notification_only = true;
+    buddy_state_init(&state, NULL);
+    buddy_state_reduce(&state, &heartbeat, 100, &action);
+    for (i = 0; i < 3; ++i) {
+        action = (buddy_action_t){0};
+        buddy_state_reduce(&state, &key, 101 + (uint64_t)i * 2U, &action);
+        assert(action.type != BUDDY_ACTION_PERMISSION);
+        buddy_state_reduce(&state, &heartbeat, 102 + (uint64_t)i * 2U, &action);
+        buddy_state_snapshot(&state, &snapshot);
+        assert(strcmp(snapshot.prompt_id, "desktop-wait") == 0);
+        assert(snapshot.prompt_notification_only && !snapshot.approval_locked);
+        assert(snapshot.approval_count == 0 && snapshot.denial_count == 0);
+    }
+    /* The source answered or withdrew: the next heartbeat carries no prompt. */
+    memset(&heartbeat.heartbeat.prompt, 0, sizeof(heartbeat.heartbeat.prompt));
+    buddy_state_reduce(&state, &heartbeat, 200, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.prompt_id[0] == '\0');
+
+    /* A lost link clears it as well. */
+    heartbeat.heartbeat.prompt = test_prompt_event("desktop-wait-2", "Codex", "on computer", 1, 1).prompt;
+    heartbeat.heartbeat.prompt.notification_only = true;
+    buddy_state_reduce(&state, &heartbeat, 300, &action);
+    assert(strcmp(state.prompt.id, "desktop-wait-2") == 0);
+    heartbeat.heartbeat.connected = false;
+    buddy_state_reduce(&state, &heartbeat, 301, &action);
+    buddy_state_snapshot(&state, &snapshot);
+    assert(snapshot.prompt_id[0] == '\0');
+}
+
 int main(void)
 {
     test_offline_initialization();
+    test_desktop_notice_wakes_screen_without_granting();
+    test_desktop_notice_stays_until_source_withdraws();
     test_heartbeat_mapping();
     test_character_priority();
     test_timeout_clears_prompt();
@@ -2444,8 +2590,8 @@ int main(void)
     test_double_ok_opens_the_menu();
     test_hold_ok_talks_and_release_sends();
     test_talking_needs_a_voice_capable_host();
-    test_ok_goes_round_the_three_screens();
-    test_usage_adds_a_fourth_screen_to_the_round();
+    test_ok_goes_round_the_four_screens();
+    test_usage_stays_in_the_round_without_current_data();
     test_guide_scrolls_and_returns_to_more();
     test_screen_off_wakes_on_key_and_on_attention();
     test_assistant_turn_is_kept_only_while_connected();
@@ -2455,6 +2601,7 @@ int main(void)
     test_unpair_confirmation_ok_emits_explicit_action();
     test_unpair_confirmation_down_cancels_without_action();
     test_parsed_heartbeat_approval_serializes_permission();
+    test_parsed_truncated_operations_can_still_be_answered();
     test_normal_navigation_and_approval_scroll_are_distinct();
     test_settings_actions_have_separate_confirmations();
     test_menu_surface_is_complete_and_bounded();

@@ -4,8 +4,8 @@
 
 # Claude Pocket
 
-Claude Pocket turns the FoloToy AI Passport into the wearable face of Xiaoyou,
-a small ghost that is the one voice you talk to. The device connects over
+Claude Pocket turns the FoloToy AI Passport into the wearable face of DS,
+a sea-blue whale-maid companion that is the one voice you talk to. The device connects over
 encrypted Bluetooth LE to the phone companion; you hold a button, speak, and
 her answer appears on the screen. When she hands the work to another agent,
 the screen shows who is doing it and which step it is on; when an agent wants
@@ -21,29 +21,44 @@ feature, not a supported product feature).
 
 ## What it does
 
-Three screens, and a fourth once the host has reported usage; a click on `OK`
-goes round them. The small dots in the middle of the top bar (three or four)
-show which one you are on.
+Four permanent screens; a click on `OK` goes round them. The four small dots in
+the middle of the top bar show which one you are on. Usage remains reachable
+before the first report and after a disconnect, with a waiting or connection
+message instead of stale numbers.
 
 | Screen | What it shows |
 | --- | --- |
-| 1 Mascot | Xiaoyou, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from Xiaoyou to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
-| 2 Conversation | Conversation only, that is what Xiaoyou answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing Xiaoyou said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
-| 3 Tasks | The things handed to helpers, as one list: those in progress first (at most four), then the latest that ended (at most five), grouped by the day they ended on, each group under a line that says today, yesterday (in the host's words) or a date. Every line says who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). The list is a window five lines high that follows the selection; when the list is longer than the window, the right end of the title line below says which one of how many. Under that is the selected thing: for one in progress its two latest steps, with tool names and commands shown verbatim; for one that ended, on which day and how. A short press on `OK` opens the selected thing's own page (when the card of a thing that ended is not on the device, the device asks the phone for it and shows how the thing ended until it arrives): its latest exchange (what you said later and what Xiaoyou answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
-| 4 Usage | Shown only after the host sent `usage`. One block per subscription account: the name tags of the helpers that run on it (filled while that helper is working, with the effort tier inside the tag) and the model each one last ran, then how much of the 5-hour and of the weekly allowance is left (a bar and a percentage; amber below 20 %, red when used up) and when each resets. Helpers billed per call come after, marked as such. The last line says how old the numbers are |
+| 1 Mascot | DS, large, and what she is doing right now: transcribing, thinking, having handed the work to someone (a letter travels from DS to that agent's name tag, next to a timer), done (a brief of a sentence or two), failed (the reason). When idle it says how many things are running in the background |
+| 2 Conversation | Conversation only, that is what DS answered herself; things handed to a helper are not paged through here (when the sentence just said went to a helper, this screen only says who it went to and that it is on the next screen). One thing per screen, with a card of its own, holding what you said and the latest thing DS said about it. The strip at the top says how that thing stands; the small line below says which one it is, when it began and who did it |
+| 3 Tasks | The things handed to helpers, as one list: those in progress first (at most four), then the latest that ended (at most five), grouped by the day they ended on, each group under a line that says today, yesterday (in the host's words) or a date. Every line says who is doing it, the title, for how long (or that it waits for your consent, is queued, is done, failed or was cancelled). The list is a window five lines high that follows the selection; when the list is longer than the window, the right end of the title line below says which one of how many. Under that is the selected thing: for one in progress its two latest steps, with tool names and commands shown verbatim; for one that ended, on which day and how. A short press on `OK` opens the selected thing's own page (when the card of a thing that ended is not on the device, the device asks the phone for it and shows how the thing ended until it arrives): its latest exchange (what you said later and what DS answered, opened at the newest end), paged with `UP` and `DOWN`, which at the ends go to the previous / next thing on the list; another short press on `OK` goes to screen 1 |
+| 4 Usage | Always reachable. One block per subscription account: the name tags of the helpers that run on it (filled while that helper is working, with the effort tier inside the tag) and the model each one last ran, then how much of the 5-hour and of the weekly allowance is left (a bar and a percentage; amber below 20 %, red when used up) and when each resets. Unknown allowance stays unknown. Helpers billed per call come after, marked as such. The last line says how old the numbers are; missing data shows a connection or waiting message |
 
 | Capability | Behavior |
 | --- | --- |
 | Push-to-talk | Hold `OK` to record; the audio goes to the phone companion over Bluetooth; see [Push-to-talk](#push-to-talk). Held on screen 2 or 3, the sentence is addressed to the thing on screen (or the selected one): an addition, a change of the request, or a cancellation |
-| Approvals | When an agent wants to do something that needs consent, Xiaoyou asks; who wants what is shown verbatim; say yes or no on the device. The request covers whichever screen is showing |
+| Approvals | When an agent wants to do something that needs consent, DS asks; who wants what is shown verbatim; say yes or no on the device. The request covers whichever screen is showing |
 | Notices | The four most recent entries sent by the host, in the menu. While any are waiting, the idle first screen says how many |
-| Helpers | The agents Xiaoyou can hand work to, as the host lists them, in the menu |
+| Helpers | The agents DS can hand work to, as the host lists them, in the menu |
 | Pairing | LE Secure Connections with a six-digit passkey shown on the device |
 | Firmware updates | New firmware arrives from the phone companion over Bluetooth, no cable; a version that is never confirmed is rolled back by itself. See [Replacing the firmware over Bluetooth](#replacing-the-firmware-over-bluetooth) |
 
-Colour answers one question: who is doing the work. Xiaoyou is lavender; every
+Colour answers one question: who is doing the work. DS is sea blue; every
 helper has a colour of its own, fixed for a given name. Green, red and yellow
 mean yes, no and "look at this", and nothing else.
+
+The matching DS firmware uses the retained `avatar-whale-v1.png` pixel heads,
+compiled into a 60 by 60 indexed atlas with six existing moods: sleep, idle,
+busy, ask, happy, and oops. Nearest-neighbour drawing preserves the existing
+120, 40 and 60 display-pixel footprints. The atlas occupies 21,856 Flash bytes;
+no bitmap decode buffer is added. The sleeping head follows the approved rounded
+face with relaxed brows. Sleep, idle, ask and happy breathe over a 3.6-second loop,
+moving at most four display pixels on the home screen. App 0.10.0 uses the same
+source heads and supplies
+the richer attendance strip, task drawers, and file
+viewers described in the [companion guide](../companion/README.md#ds-first-iteration-0100).
+Device navigation and task selection retain their existing controls. The BLE
+name `Claude-XXXXXX`, protocol fields and `xiaoyou` role, Android package, and
+Runtime module names remain unchanged.
 
 The screen never switches by itself: when an answer arrives you stay on the
 screen you were reading. The count in the top bar is the number of things
@@ -60,9 +75,29 @@ protocol has no message for prompts or audio.
 Start the Runtime with `--desktop-sync` to synchronize existing local Codex and
 Claude conversations through the phone App to the device. The App shows human
 requests, visible replies, assistant progress comments, and task status, labeled
-by the owner or originating agent. These sessions remain read-only: continue,
-stop, and approve them in the desktop app. Optional lifecycle hooks supply
-precise approval-wait states and record metadata/status only.
+by the owner or originating agent. These sessions retain read-only conversation
+and cancellation controls. Optional lifecycle hooks supply precise approval-wait
+states; a live official `PermissionRequest` hook can separately wait for a
+one-shot allow/deny response from the phone or device. Without that decision
+channel, the request is a computer-confirmation notice and has no remote approval
+actions. See the [Runtime permission bridge](../runtime/README.md#optional-desktop-permission-bridge).
+
+The phone watches approvals from up to eight paired Runtimes at the same time,
+labels each with its source computer and agent, and sends an answer back to that
+source. Changing the selected Runtime still changes only the conversation,
+task list, helpers, and firmware source. Native Android assistant notifications
+are a separate feed: their buttons invoke the originating Android notification
+action, while desktop Hook decisions return through the Runtime. The two sources
+must not be treated as interchangeable approval channels.
+
+Desktop permission records include the actual tool and operation description;
+recognizable credentials are redacted. A waiting state alone, an incomplete
+operation description, or a notification with no response channel cannot grant
+an operation. Request identities, expiry, live-hook leases, and single-use
+responses protect against late or duplicate answers. A missing answer restores
+the original desktop permission flow. Installing a Codex handler also requires
+the user to review and trust its definition with `/hooks`; host tests are not a
+live desktop permission test.
 
 Task names use one canonical `card.title` for every integrated agent: upstream
 desktop sidebar name, then an explicit local task name, then a short latest
@@ -109,7 +144,7 @@ With Claude desktop:
 1. Choose **Help → Troubleshooting → Enable Developer Mode**.
 2. Choose **Developer → Open Hardware Buddy…** and click **Connect**.
 3. Pick the device named `Claude-XXXXXX`; the same name is shown on the
-   first screen while Xiaoyou sleeps and in the connection guide.
+   first screen while DS sleeps and in the connection guide.
 4. Type the six digits shown on the device into the operating system's
    Bluetooth prompt.
 
@@ -125,7 +160,7 @@ always shows what the keys do right now.
 | --- | --- | --- | --- | --- |
 | Screen 1, mascot | — | To screen 2 | Open the menu | Talk; release to send |
 | Screen 2, conversation | Scroll seven lines within this thing; at the end, one more press goes to the previous / next thing | To screen 3 | Open the menu | Talk, addressed to the thing on screen |
-| Screen 3, tasks | Select the previous / next one | To screen 4 when there is one, otherwise to screen 1 | Open the menu | Talk, addressed to the selected thing |
+| Screen 3, tasks | Select the previous / next one | To screen 4 | Open the menu | Talk, addressed to the selected thing |
 | Screen 4, usage | Scroll when it does not fit | To screen 1 | Open the menu | Talk |
 | Menu, More settings | Move the selection (wraps) | Run the selected item | Return to screen 1 | Return to screen 1 |
 | Notices, Helpers | — | Back to the menu | Return to screen 1 | Return to screen 1 |
@@ -151,7 +186,7 @@ one decision, and a failed send is shown as failed, never as approved. Two
 quick presses of `OK` on a request count as one yes: they are neither ignored
 nor counted twice.
 
-Xiaoyou only phrases the question. Who is asking and what for come straight
+DS only phrases the question. Who is asking and what for come straight
 from the host and are never paraphrased; a name too long for the bubble is
 repeated in full at the top of the details card.
 
@@ -162,7 +197,7 @@ from there, is said inside the selected thing
 (one that has ended too): it is always filed on that thing and continues its
 own session instead of becoming a new sentence in the conversation. What you
 say on screen 2 is ordinary conversation, and the card on screen is only a
-hint for Xiaoyou. After you say something new, screen 2 follows that sentence: while it
+hint for DS. After you say something new, screen 2 follows that sentence: while it
 has no card yet the screen shows the turn itself (what you said, that she is
 thinking), and once the card arrives it shows the card. After you page to
 another card yourself, it stays on that card until you speak again.
@@ -182,7 +217,7 @@ All fixed interface text is Simplified Chinese and lives in
 Sans SC by [`tools/gen_pocket_fonts.py`](../tools/gen_pocket_fonts.py); see the
 [assets documentation](../assets/README.md#fonts).
 
-Text that arrives from the host (what you said, Xiaoyou's words, helper names,
+Text that arrives from the host (what you said, DS's words, helper names,
 notices, who is asking and for what) is drawn with a font that covers printable
 ASCII and all 6,763 GB2312 hanzi plus common punctuation. Anything outside
 that set, such as emoji, traditional-only characters, or other scripts, is
@@ -193,7 +228,7 @@ rules, so a wrapped line can begin with a punctuation mark.
 
 ## Push-to-talk
 
-Hold `OK` on any of the screens. Xiaoyou says to wait a moment, then
+Hold `OK` on any of the screens. DS says to wait a moment, then
 says she is listening: the level bars move with your voice, which is how you
 know the microphone is live. Speak, and release to send. Screens 1 and 2 then
 show that the recording is on its way until the host says what it heard. A
@@ -201,7 +236,7 @@ press shorter than about a third of a second sends nothing. A recording stops
 by itself at 30 seconds and is sent as it is.
 
 The device only records and transmits. Turning speech into text and answering
-is done by the host: the phone companion forwards the recording to the Xiaoyou
+is done by the host: the phone companion forwards the recording to the DS
 Runtime (see [`companion/README.md`](../companion/README.md) and
 [`runtime/README.md`](../runtime/README.md)).
 
@@ -211,7 +246,7 @@ understand:
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true,"desktop":true}`; `past` says the firmware lists things that ended separately (`past`) and asks for a card it does not hold (`want`); `usage` says the firmware has the fourth screen and understands `usage` and `eff`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
+| Host → device | `{"cmd":"hub","voice":true}` | The host accepts voice on this connection. Acknowledged with `{"ack":"hub","ok":true,"chat":true,"cards":true,"threads":true,"usage":true,"past":true,"desktop":true,"desktopApproval":true}`; `past` says the firmware lists things that ended separately (`past`) and asks for a card it does not hold (`want`); `usage` says the firmware has the fourth screen and understands `usage` and `eff`; `chat` says the firmware understands `chat` and `helpers` under [The conversation](#the-conversation), `cards` says it understands `card` and `tasks`, and `threads` says it shows conversation and tasks apart (so `tasks` may carry things that ended) |
 | Device → host | `{"cmd":"voice","state":"start","rate":16000,"codec":"ima-adpcm","card":"c12"}` | A recording begins. `card` is present only when a thing was on screen at the press (the card on screen 2, the selected one on screen 3): the sentence is addressed to it. Pressed on screen 3 it is followed by `"pin":true`: the sentence is said inside that thing and is always filed on it |
 | Device → host | voice frames | One notification per frame; see below |
 | Device → host | `{"cmd":"voice","state":"end","frames":N,"dropped":D,"ms":M}` | The recording is complete |
@@ -232,7 +267,7 @@ after every recording.
 
 ## The conversation
 
-A host that introduced itself with `hub` reports the conversation with Xiaoyou
+A host that introduced itself with `hub` reports the conversation with DS
 in the messages below. They are part of the same extension, so the Claude
 desktop app never sends them, and an older firmware answers them with an error
 ack that the host ignores. A host sends `card` and `tasks` only after it saw
@@ -240,13 +275,13 @@ ack that the host ignores. A host sends `card` and `tasks` only after it saw
 
 | Direction | Message | Meaning |
 | --- | --- | --- |
-| Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | What Xiaoyou is doing right now: this is what **screen 1** shows. Only `phase` is required |
+| Host → device | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | What DS is doing right now: this is what **screen 1** shows. Only `phase` is required |
 | Host → device | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | Adds or updates the card of one thing: **screen 2**. `id` and `state` are required |
 | Host → device | `{"cmd":"card","clear":true}` | Forget every card (the host is about to send them again) |
-| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, and the `reply` of that thing's `card` is its latest exchange, one paragraph per sentence of the owner and of Xiaoyou, at most 480 bytes). At most four are kept; an empty list means there are none. To firmware that announced `past` only the things in progress are sent here; the ones that ended go in the next message |
+| Host → device | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | The things handed to helpers: **screen 3**. `T` is `working`, `waiting` or `queued`, and for one that ended `done`, `failed` or `cancelled` (the host sends those only to firmware that announced `threads`; `p1` is then the conclusion, and the `reply` of that thing's `card` is its latest exchange, one paragraph per sentence of the owner and of DS, at most 480 bytes). At most four are kept; an empty list means there are none. To firmware that announced `past` only the things in progress are sent here; the ones that ended go in the next message |
 | Host → device | `{"cmd":"past","at":0,"n":12,"list":[{"id":"c41","agent":"…","title":"…","state":"done","day":"10-08","eff":"high"}]}` | The things that ended: the lower part of the list on **screen 3**, the latest to end first. Sent only to firmware that announced `past`, and in parts: at most five in one message, `at` says where in the list these go and `n` how long the list is (five at most); the parts come in order from the top, and the device takes the new list once the last part is in. `state` is `done`, `failed` or `cancelled`; `day` is the day it ended on (at most 11 bytes, shown as it is, with the things of one day under one heading). No steps and no conclusion: the device has no memory to spare, so it keeps the title only. `n` of 0 clears the list |
 | Device → host | `{"evt":"want","card":"c41"}` | The owner opened a thing that ended and its card is not on the device (which keeps twelve): the host is asked to send it. The host answers with that `card` and keeps sending it with the others from then on |
-| Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents Xiaoyou can hand work to; at most four are kept. An empty list clears them |
+| Host → device | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | The agents DS can hand work to; at most four are kept. An empty list clears them |
 | Host → device | `{"cmd":"usage","list":[{"st":"ok","w5":58,"r5":1760000000,"w7":81,"r7":1760400000,"age":40,"who":[{"n":"codex","m":"gpt-6.1-sol","eff":"medium","run":1}]}]}` | Subscription allowance and who runs on it: **screen 4**. Sent only to firmware that announced `usage`. `st` is `ok`, `warn` (under 20 % left), `out`, `unknown`, or `na` (billed per call, no allowance); `w5` / `w7` are the percentages left of the 5-hour and weekly windows (omitted when unknown), `r5` / `r7` when they reset (Unix seconds), `age` how many seconds old the numbers are. `who` lists at most two helpers: name, model (at most 19 bytes), effort tier, and whether it is working right now. At most four entries are kept; an empty list keeps the screen and says there is no data yet |
 
 `chat`: `phase` is `idle` (nothing is being said), `thinking`, `helper` (she
@@ -259,8 +294,8 @@ filed under; `doing` is the number of things still running in the background.
 
 `card`: `state` is `working` (a helper is on it), `waiting` (it waits for your
 consent), `done`, `failed`, `cancelled` or `talking`. `agent` is who is doing
-or did it, empty when Xiaoyou answered herself. `said` is the first sentence
-of the thing, `reply` is the latest thing Xiaoyou said, `edits` is how many
+or did it, empty when DS answered herself. `said` is the first sentence
+of the thing, `reply` is the latest thing DS said, `edits` is how many
 times it was added to or changed, and `at` is when it began (hours and
 minutes). A card that arrives again under the same `id` is updated in place;
 the order of the cards does not change.
@@ -286,13 +321,38 @@ a completion claim. `idle` means the current turn ended, not that the project
 is complete; it may also appear in `past`. The phone sends these states only
 after that capability was announced. For older firmware it maps `unknown` to
 `cancelled` with zero seconds and `idle` to `done`, while the reply/progress text
-still describes the actual observed state. These observed conversations have
-no approval prompt and must be continued, stopped, or approved on the computer.
+still describes the actual observed state. Continuing or stopping these observed
+conversations stays on the computer. A live desktop permission bridge can expose
+a separate approval request without making its conversation card writable.
 
 Approval requests need no new message: the host puts the operation to confirm
 into the heartbeat's `prompt` (`tool` is the helper and the tool, `hint` is
 the content verbatim, of which up to 319 bytes are shown), and the device
 answers with the existing `permission` command.
+
+New firmware announces `"desktopApproval":true` in the `hub` acknowledgement.
+The heartbeat's `prompt` accepts an optional boolean `actionable`: omitted or
+`true` preserves the existing approval behavior, while `false` shows the operation
+with a confirm-on-phone-or-computer notice and blocks allow/deny actions. Pressing
+`OK` neither answers nor dismisses it; the notice stays until the source answers,
+withdraws it, or disconnects. `UP`/`DOWN` scroll its explanation. Non-boolean
+values are rejected. For an older firmware without this capability, App 0.10.0
+sends a notification-only request as a text summary and omits its actionable
+prompt. A real actionable request continues to use the normal `permission`
+response, whose ID is mapped back to its source Runtime and approval.
+If an operation or source name exceeds the device's text budget, the phone clips
+it and notes that the full content is on the phone; the device can still answer
+it. Only the source's `actionable` decides whether a prompt can be answered.
+Firmware likewise clips and marks an oversized description without making the
+prompt read-only.
+
+Runtime HTTP and attachment fields are documented in the
+[HTTP interface](../runtime/README.md#http-interface) and
+[task output guide](../runtime/README.md#task-images-and-downloadable-files).
+HTTP handlers live in `runtime/xiaoyou_runtime/server.py`; agent reply schemas
+are `reply_schema()` and `lane_schema()` in `runtime/xiaoyou_runtime/xiaoyou.py`.
+The wearable remains a text and state display; full-screen images, attachment
+downloads, Android file saving, and opening in other apps belong to the phone.
 
 `chat`, `card` and each item of `tasks` may carry `"eff"`: the effort tier the
 helper was asked to work at (`minimal`, `low`, `medium`, `high`, `xhigh` or
@@ -303,11 +363,11 @@ or missing value shows nothing.
 
 Cards stay in RAM in the order they were opened: up to 12 cards and 4,096
 bytes of text. When a new one does not fit, the oldest are dropped. A card
-holds two pieces of text only, the first sentence and the latest thing Xiaoyou
+holds two pieces of text only, the first sentence and the latest thing DS
 said; the additions in between appear as a count, and the full exchange is on
 the phone.
 
-A lost link does not clear the cards: Xiaoyou is asleep and what was said
+A lost link does not clear the cards: DS is asleep and what was said
 stays readable. The turn on screen 1 and the task list on screen 3 are
 cleared, because nobody is reporting them any more. After reconnecting, the
 host first sends `card clear` and then the most recent cards again.
@@ -321,7 +381,7 @@ latest reply only.
 A hub that sends `chat` leaves `msg` empty in its heartbeats and does not send
 `turn` events. Once a hub has sent `chat` on a connection, the firmware ignores
 its `turn` events and reads the heartbeat counters as notifications only, not
-as Xiaoyou being busy. A hub that never sends `chat` is shown the way the
+as DS being busy. A hub that never sends `chat` is shown the way the
 desktop app is: busy while the counters are non-zero, and the reply from
 `turn`.
 
@@ -376,7 +436,7 @@ carries too little), `memory`, `flash`, `sha256`, `image` (the image itself does
 not check out), `restarting`, `busy`, `no previous` and `previous invalid`
 (nothing to switch back to).
 
-During a transfer the screen shows Xiaoyou and a progress bar; keys do nothing,
+During a transfer the screen shows DS and a progress bar; keys do nothing,
 a request that needs an answer does not interrupt, and a dark screen lights up.
 After a failure the usual page returns and the line at the bottom says so.
 
@@ -583,21 +643,24 @@ on it later.
 ## On-device acceptance
 
 A successful build and the host preview are not device validation. This
-version (three screens plus the usage screen) has not run on hardware yet. Check:
+usage-page revision has not completed the device matrix below. Check:
 
-1. Startup shows Xiaoyou asleep; the top bar shows the link dot, the three
-   small dots and the battery.
+1. Startup shows DS asleep; the top bar shows the link dot, the three
+   four small dots and the battery.
 2. Pairing: the passkey page appears, the passkey is accepted, and the device
    reconnects without a passkey after a restart of either side.
-3. A click on `OK` goes round the three screens and the dots in the top bar
+3. A click on `OK` goes round the four screens and the dots in the top bar
    follow; a double press opens the menu, and a double press in the menu
    returns to screen 1. Judge whether the short delay of the click is
    acceptable.
-   With a host that sends `usage`: a fourth dot appears; the fourth screen
+   Before the first `usage` report, screen 4 is present with a waiting message.
+   With a host that sends `usage`, the fourth screen
    shows each account with bars, percentages and reset times that match the
    phone; the tag of a working helper is filled and carries its effort tier;
    `UP` / `DOWN` scroll; the age line counts up. After a disconnect the
-   fourth screen is gone again.
+   fourth screen remains available, its old numbers are cleared, and it shows
+   the connection state. Reconnect and switch the source computer to verify
+   that numbers belong to the current source.
 4. Hold `OK`, speak, release: the level bars move while speaking; screen 1
    shows transcribing, then thinking and what you said, then the brief or that
    the work was handed over.
@@ -606,7 +669,7 @@ version (three screens plus the usage screen) has not run on hardware yet. Check
    beginning, `DOWN` scrolls seven lines at a time with no half lines at the
    top or bottom, and one more press at the end goes to the next thing; `UP`
    likewise.
-6. When Xiaoyou hands work over, the letter moves, the helper's name is in its
+6. When DS hands work over, the letter moves, the helper's name is in its
    colour, and the timer counts; the count of running things appears in the
    top bar.
 7. Screen 3: several things running at once are all listed, each with its own
@@ -630,7 +693,7 @@ version (three screens plus the usage screen) has not run on hardware yet. Check
     including long mixed Chinese/Latin text.
 11. Unpair and factory reset ask for confirmation and behave as described
     above.
-12. Dropping the link puts Xiaoyou to sleep within 30 seconds; the cards stay
+12. Dropping the link puts DS to sleep within 30 seconds; the cards stay
     readable, and after reconnecting no card appears twice.
 13. The minimum in the `heap:` log line keeps a comfortable margin with about
     ten cards and four running things, and during a recording; free heap is

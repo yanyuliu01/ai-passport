@@ -201,15 +201,27 @@ static bool buddy_parse_prompt(const cJSON *prompt_json, unsigned running, buddy
         return false;
     }
     prompt->connected = true;
+    {
+        const cJSON *actionable = cJSON_GetObjectItemCaseSensitive(prompt_json, "actionable");
+        if (actionable != NULL && !cJSON_IsBool(actionable)) {
+            return false;
+        }
+        prompt->notification_only = actionable != NULL && cJSON_IsFalse(actionable);
+    }
     prompt->running = running;
     prompt->id_length = id_length;
     prompt->id_truncated = false;
-    return buddy_copy_utf8(prompt->id, sizeof(prompt->id), id, id_length,
-                           &prompt->id_truncated) &&
-           buddy_copy_utf8(prompt->tool, sizeof(prompt->tool), tool, tool_length,
-                           &prompt->tool_truncated) &&
-           buddy_copy_utf8(prompt->hint, sizeof(prompt->hint), hint, hint_length,
-                           &prompt->hint_truncated);
+    if (!buddy_copy_utf8(prompt->id, sizeof(prompt->id), id, id_length,
+                         &prompt->id_truncated) ||
+        !buddy_copy_utf8(prompt->tool, sizeof(prompt->tool), tool, tool_length,
+                         &prompt->tool_truncated) ||
+        !buddy_copy_utf8(prompt->hint, sizeof(prompt->hint), hint, hint_length,
+                         &prompt->hint_truncated)) {
+        return false;
+    }
+    /* Only the source decides whether a prompt is answerable. A description
+     * that does not fit is shown cut, with a note, and can still be answered. */
+    return true;
 }
 
 static bool buddy_parse_heartbeat(const cJSON *object, buddy_event_t *event)
@@ -1287,7 +1299,8 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
 
     buddy_writer_init(&writer, json, size);
     buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                         "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true}\n");
+                         "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true,"
+                         "\"desktopApproval\":true}\n");
     return buddy_writer_finish(&writer);
 }
 

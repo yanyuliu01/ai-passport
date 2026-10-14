@@ -1,11 +1,11 @@
 // main/pocket_ui.c —— 小幽界面实现（240×320 竖屏，三键操作）。
 //
-// 三屏，确认键短按轮着切：
+// 四屏，确认键短按轮着切：
 //   第一屏 形象：大的小幽和她此刻在干什么。
 //   第二屏 对话：一屏一件事——你说的那句和小幽最新的话；上下键在这件事里翻，翻到头
 //               再按就换到上一件 / 下一件。
 //   第三屏 任务：正在做的事，和选中那件的最近两步。
-//   第四屏 用量：每个订阅账号还剩多少、每个帮手用的是哪个模型。中枢发过用量才有这一屏。
+//   第四屏 用量：每个订阅账号还剩多少、每个帮手用的是哪个模型；未同步时保留占位。
 // 低频的东西（通知、帮手、设置）都收在双击确认键的菜单里。
 //
 // 结构：一块屏幕上常驻三层——顶栏、内容区、底部按键提示。内容区里每个页面和每个
@@ -31,8 +31,8 @@
 #include "pocket_text.h"
 #include "pocket_view.h"
 
-// ---- 配色：夜色。小幽是住在口袋里的小幽灵，底色是夜空的墨蓝，她自己是月白。
-// 彩色只回答一个问题——现在是谁在做事：小幽是淡紫，每个帮手有自己的颜色
+// ---- 配色：夜色。DS 使用蓝白鲸鱼大头，底色是夜空的墨蓝。
+// 彩色只回答一个问题——现在是谁在做事：DS 是海蓝，每个帮手有自己的颜色
 // （pocket_helper_color）。绿、红、黄只表示可以、不行、要你留意。
 #define C_BG       0x15172A
 #define C_CARD     0x232646
@@ -80,7 +80,7 @@ enum {
 #define PET_CHAT_SCALE  3
 #define PET_FRAME_MS    450
 
-// 顶栏中间的小点：现在在第几屏。三屏三个；有用量那一屏时四个。
+// 顶栏中间的四个小点：现在在第几屏；用量未同步时也保留第四屏。
 #define DOT_SIZE        5
 #define DOT_GAP         5
 #define DOT_MAX         4
@@ -283,6 +283,7 @@ static struct {
     // 第四屏：用量
     lv_obj_t *usage_scroll;
     lv_obj_t *usage_empty;
+    lv_obj_t *usage_empty_sub;
     lv_obj_t *usage_age;
     usage_block_t usage_blocks[BUDDY_USAGE_COUNT];
     // 通知
@@ -306,6 +307,7 @@ static struct {
     lv_obj_t *guide_scroll;
     // 审批
     lv_obj_t *approval;
+    lv_obj_t *approval_question;
     lv_obj_t *approval_tool;
     lv_obj_t *approval_scroll;
     lv_obj_t *approval_hint;
@@ -561,7 +563,7 @@ static void draw_block(lv_layer_t *layer, lv_draw_rect_dsc_t *dsc, int x, int y,
 }
 
 // ---------------------------------------------------------------------------
-// 小幽：把 20×20 的像素造型按整数倍画成方块
+// DS: nearest-neighbour source pixels, kept in the existing screen footprints.
 // ---------------------------------------------------------------------------
 
 static void pet_draw_cb(lv_event_t *event)
@@ -572,19 +574,22 @@ static void pet_draw_cb(lv_event_t *event)
     lv_area_t coords;
     int x;
     int y;
+    int size = POCKET_PET_LAYOUT_GRID * pet->scale;
 
     lv_obj_get_coords(pet->obj, &coords);
     lv_draw_rect_dsc_init(&dsc);
     dsc.bg_opa = LV_OPA_COVER;
-    for (y = 0; y < POCKET_PET_GRID; ++y) {
-        int top = coords.y1 + y * pet->scale;
+    for (y = 0; y < size; ++y) {
+        int top = coords.y1 + y;
+        int sy = (2 * y + 1) * POCKET_PET_GRID / (2 * size);
 
         // 屏幕是一条一条刷新的：这一行不在本次刷新范围里就不用画。
-        if (top + pet->scale - 1 < layer->_clip_area.y1 || top > layer->_clip_area.y2) {
+        if (top < layer->_clip_area.y1 || top > layer->_clip_area.y2) {
             continue;
         }
-        for (x = 0; x < POCKET_PET_GRID;) {
-            pocket_pet_color_t color = pocket_pet_pixel(pet->mood, s.pet_frame, x, y);
+        for (x = 0; x < size;) {
+            int sx = (2 * x + 1) * POCKET_PET_GRID / (2 * size);
+            pocket_pet_color_t color = pocket_pet_pixel(pet->mood, s.pet_frame, sx, sy);
             int run = 1;
 
             if (color == POCKET_PET_CLEAR) {
@@ -592,12 +597,12 @@ static void pet_draw_cb(lv_event_t *event)
                 continue;
             }
             // 同色的相邻格子合并成一个矩形，减少绘制任务。
-            while (x + run < POCKET_PET_GRID &&
-                   pocket_pet_pixel(pet->mood, s.pet_frame, x + run, y) == color) {
+            while (x + run < size &&
+                   pocket_pet_pixel(pet->mood, s.pet_frame,
+                                    (2 * (x + run) + 1) * POCKET_PET_GRID / (2 * size), sy) == color) {
                 ++run;
             }
-            draw_block(layer, &dsc, coords.x1 + x * pet->scale, top, run * pet->scale,
-                       pet->scale, pocket_pet_rgb(color));
+            draw_block(layer, &dsc, coords.x1 + x, top, run, 1, pocket_pet_rgb(color));
             x += run;
         }
     }
@@ -609,7 +614,7 @@ static void make_pet(lv_obj_t *parent, int which, int x, int y, int scale)
 
     pet->scale = (uint8_t)scale;
     pet->mood = POCKET_PET_SLEEP;
-    pet->obj = make_box(parent, x, y, POCKET_PET_GRID * scale, POCKET_PET_GRID * scale);
+    pet->obj = make_box(parent, x, y, POCKET_PET_LAYOUT_GRID * scale, POCKET_PET_LAYOUT_GRID * scale);
     lv_obj_add_event_cb(pet->obj, pet_draw_cb, LV_EVENT_DRAW_MAIN, pet);
 }
 
@@ -630,8 +635,8 @@ static void pet_timer_cb(lv_timer_t *timer)
     (void)timer;
     ++s.pet_frame;
     for (which = 0; which < PET_COUNT; ++which) {
-        // 睡觉和失败的造型不动，不用重画；隐藏的对象 LVGL 自己会忽略。
-        if (s.pets[which].mood != POCKET_PET_SLEEP && s.pets[which].mood != POCKET_PET_OOPS) {
+        // 睡觉也随节拍呼吸；只有失败静止，隐藏的对象 LVGL 自己会忽略。
+        if (s.pets[which].mood != POCKET_PET_OOPS) {
             lv_obj_invalidate(s.pets[which].obj);
         }
     }
@@ -878,7 +883,7 @@ static void build_home(lv_obj_t *page)
 {
     lv_obj_t *name;
 
-    make_pet(page, PET_SOLO, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 6,
+    make_pet(page, PET_SOLO, (SCREEN_W - POCKET_PET_LAYOUT_GRID * PET_SOLO_SCALE) / 2, 6,
              PET_SOLO_SCALE);
     s.home_title = make_label(page, &pocket_font_22, C_TEXT, PT_HOME_WAITING);
     lv_obj_set_width(s.home_title, INNER_W);
@@ -1053,7 +1058,8 @@ static void build_usage(lv_obj_t *page)
     lv_obj_set_width(label, INNER_W);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(label, SIDE, 84);
-    label = make_label(s.usage_empty, &pocket_font_16, C_DIM, PT_USAGE_EMPTY_SUB);
+    label = make_label(s.usage_empty, &pocket_font_16, C_DIM, PT_USAGE_WAITING);
+    s.usage_empty_sub = label;
     lv_obj_set_width(label, INNER_W);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(label, SIDE, 122);
@@ -1174,6 +1180,7 @@ static void build_approval(lv_obj_t *root)
 
     s.approval = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     bubble = make_speech(s.approval, PET_APPROVAL, &question);
+    s.approval_question = question;
     lv_label_set_text(question, PT_ASK_APPROVAL);
     // 是谁、要做什么，占气泡的第三行：这是判断要不要放行时最先要看的信息。
     s.approval_tool = make_text_block(bubble, &pocket_font_16, C_WARN, BUBBLE_PAD_X,
@@ -1221,7 +1228,7 @@ static void build_confirm(lv_obj_t *root)
 static void build_voice(lv_obj_t *root)
 {
     s.voice = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H);
-    make_pet(s.voice, PET_VOICE, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 0,
+    make_pet(s.voice, PET_VOICE, (SCREEN_W - POCKET_PET_LAYOUT_GRID * PET_SOLO_SCALE) / 2, 0,
              PET_SOLO_SCALE);
     s.voice_title = make_label(s.voice, &pocket_font_22, C_OK, PT_VOICE_LISTENING);
     lv_obj_set_width(s.voice_title, INNER_W);
@@ -1244,7 +1251,7 @@ static void build_voice(lv_obj_t *root)
 static void build_update(lv_obj_t *root)
 {
     s.update = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
-    make_pet(s.update, PET_UPDATE, (SCREEN_W - POCKET_PET_GRID * PET_SOLO_SCALE) / 2, 0,
+    make_pet(s.update, PET_UPDATE, (SCREEN_W - POCKET_PET_LAYOUT_GRID * PET_SOLO_SCALE) / 2, 0,
              PET_SOLO_SCALE);
     s.update_title = make_label(s.update, &pocket_font_22, C_XIAOYOU, PT_UPDATE_RECEIVING);
     lv_obj_set_width(s.update_title, INNER_W);
@@ -1362,7 +1369,7 @@ static void render_top_bar(const buddy_ui_snapshot_t *snap, int screen)
         count = DOT_MAX;
     }
     if (s.dot_count != count) {
-        // 多了（或者少了）用量那一屏：小点重新排，仍然居中。
+        // 固定四屏；首次绘制把小点居中。
         s.dot_count = count;
         for (index = 0; index < DOT_MAX; ++index) {
             lv_obj_set_x(s.page_dots[index], DOT_X(count) + index * (DOT_SIZE + DOT_GAP));
@@ -1901,8 +1908,8 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             break;
         default:
             status = hub ? PT_HEAD_DONE : PT_DESKTOP_REPLY;
-            if (hub && mood == POCKET_PET_IDLE) {
-                mood = POCKET_PET_HAPPY;  // 说完啦：她没说别的表情，就是开心的
+            if (hub) {
+                mood = POCKET_PET_HAPPY;  // 说完啦：一律开心，不跟模型挑的表情走
             }
             reply = with_cut_note(text, sizeof(text), snap->reply, snap->reply_truncated);
             break;
@@ -2283,13 +2290,19 @@ static void format_reset(const buddy_ui_snapshot_t *snap, uint32_t at, char *out
 static bool render_usage(const buddy_ui_snapshot_t *snap)
 {
     static char text[BUDDY_MODEL_MAX + 24];
-    unsigned count = snap->usage_count < BUDDY_USAGE_COUNT ? snap->usage_count
-                                                           : BUDDY_USAGE_COUNT;
+    pocket_usage_view_t view = pocket_usage_view_for(snap, false);
+    unsigned count = view == POCKET_USAGE_DATA
+                         ? (snap->usage_count < BUDDY_USAGE_COUNT ? snap->usage_count : BUDDY_USAGE_COUNT)
+                         : 0U;
     uint32_t oldest = 0;
     bool timed = false;
     unsigned built = 0;
     unsigned index;
     int y = 2;
+
+    set_text(s.usage_empty_sub, view == POCKET_USAGE_OFFLINE
+                                   ? (snap->ble_enabled ? PT_USAGE_NEED_LINK : PT_HOME_SUB_BLE_OFF)
+                                   : (view == POCKET_USAGE_EMPTY ? PT_USAGE_UNKNOWN : PT_USAGE_WAITING));
 
     set_visible(s.usage_empty, count == 0U);
     set_visible(s.usage_scroll, count > 0U);
@@ -2425,8 +2438,9 @@ static bool render_usage(const buddy_ui_snapshot_t *snap)
         }
         y += row + USAGE_GAP;
     }
-    if (count > 0U && built == 0U) {
-        // 一块都没建成（内存不够）：照没有数据那样显示。
+    if (pocket_usage_view_for(snap, count > 0U && built == 0U) == POCKET_USAGE_LOW_MEMORY) {
+        // 内存不足仍保留入口，明确让用户在手机上看；不降低堆保护。
+        set_text(s.usage_empty_sub, PT_USAGE_LOW_MEMORY);
         set_visible(s.usage_empty, true);
         set_visible(s.usage_scroll, false);
         return false;
@@ -2551,6 +2565,9 @@ static void render_approval(const buddy_ui_snapshot_t *snap)
     const char *tool;
     uint32_t status_color = C_TEXT;
 
+    set_text(s.approval_question,
+             snap->prompt_notification_only ? PT_ASK_DESKTOP : PT_ASK_APPROVAL);
+
     if (strcmp(s.approval_id, snap->prompt_id) != 0) {
         // 新的请求：从头显示，绝不沿用上一条的滚动位置。
         (void)snprintf(s.approval_id, sizeof(s.approval_id), "%s", snap->prompt_id);
@@ -2605,9 +2622,13 @@ static void render_approval(const buddy_ui_snapshot_t *snap)
         }
         set_bg_color(s.approval_reply, denied ? C_DANGER : C_OK);
     }
-    set_visible(s.approval_allow, status == NULL);
-    set_visible(s.approval_deny, status == NULL);
-    set_visible(s.approval_reply, status != NULL);
+    if (snap->prompt_notification_only) {
+        status = PT_APPROVAL_DESKTOP;
+        status_color = C_WARN;
+    }
+    set_visible(s.approval_allow, status == NULL && !snap->prompt_notification_only);
+    set_visible(s.approval_deny, status == NULL && !snap->prompt_notification_only);
+    set_visible(s.approval_reply, status != NULL && !snap->prompt_notification_only);
     set_visible(s.approval_status, status != NULL);
     if (status != NULL) {
         set_text(s.approval_status, status);
@@ -2696,6 +2717,22 @@ static void render_update(const buddy_ui_snapshot_t *snap)
     }
 }
 
+// 离开第四屏就把它的几块控件拆掉：一块十几个控件，留着会一直占着堆，
+// 按住说话要的那块连续的 12 KB 就要不到了。回到第四屏时再建。
+static void usage_release(void)
+{
+    unsigned index;
+
+    for (index = 0; index < BUDDY_USAGE_COUNT; ++index) {
+        usage_block_t *block = &s.usage_blocks[index];
+
+        if (block->box != NULL) {
+            lv_obj_delete(block->box);
+            memset(block, 0, sizeof(*block));
+        }
+    }
+}
+
 void pocket_ui_render(const buddy_ui_snapshot_t *snap)
 {
     static const hint_item_t hint_none[1] = {{KEY_NONE, NULL}};
@@ -2739,6 +2776,9 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
     if (view == POCKET_VIEW_PAGE && page == BUDDY_PAGE_USAGE && entered) {
         lv_obj_scroll_to_y(s.usage_scroll, 0, LV_ANIM_OFF);
     }
+    if (view != POCKET_VIEW_PAGE || page != BUDDY_PAGE_USAGE) {
+        usage_release();
+    }
     switch (view) {
     case POCKET_VIEW_UPDATE:
         // 这时按键都不管用，所以底下不写提示。
@@ -2760,6 +2800,9 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
         render_approval(snap);
         if (!snap->approval_locked) {
             hints[count++] = (hint_item_t){KEY_UP, PT_HINT_FULL};
+            if (snap->prompt_notification_only) {
+                hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+            }
         }
         break;
     case POCKET_VIEW_PAGE:

@@ -185,13 +185,11 @@ static void buddy_clear_logical_session(buddy_state_t *state)
     state->past_count = 0;
     state->task_pick[0] = '\0';
     state->thread_id[0] = '\0';
-    /* Usage too: the numbers go stale with nobody refreshing them. */
+    /* Usage numbers expire with the session; the fourth screen stays available. */
     memset(state->usage, 0, sizeof(state->usage));
     state->usage_count = 0;
+    state->usage_since_ms = 0;
     state->usage_known = false;
-    if (state->page == BUDDY_PAGE_USAGE) {
-        state->page = BUDDY_PAGE_HOME; /* the screen is no longer in the round */
-    }
     buddy_invalidate_prompt(state);
 }
 
@@ -254,7 +252,8 @@ static void buddy_set_ui_refresh(buddy_action_t *action)
 static bool buddy_has_actionable_prompt(const buddy_state_t *state)
 {
     return state->prompt.id[0] != '\0' && !state->heartbeat_stale &&
-           !state->approval_locked && buddy_prompt_id_is_valid(&state->prompt);
+           !state->approval_locked && !state->prompt.notification_only &&
+           buddy_prompt_id_is_valid(&state->prompt);
 }
 
 static bool buddy_has_prompt(const buddy_state_t *state)
@@ -469,11 +468,11 @@ static void buddy_scroll(buddy_key_t key, buddy_action_t *action)
     }
 }
 
-/* Where the round goes after the tasks: to the usage screen when the hub sends
- * usage, otherwise straight home (as before there was a fourth screen). */
+/* The fourth screen stays in the round while its data is absent or stale. */
 static buddy_page_t buddy_after_tasks(const buddy_state_t *state)
 {
-    return state->usage_known ? BUDDY_PAGE_USAGE : BUDDY_PAGE_HOME;
+    (void)state;
+    return BUDDY_PAGE_USAGE;
 }
 
 static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
@@ -508,12 +507,12 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
     case BUDDY_PAGE_COUNT:
         break;
     }
-    /* The three screens. A short press on OK goes to the next one, round and
+    /* The four screens. A short press on OK goes to the next one, round and
      * round; UP and DOWN only act inside the screen that is showing. */
     if (key == BUDDY_KEY_OK) {
         /* Home, conversation, tasks, and from the tasks the one that is picked
          * (its own exchange: what is read and said there is about it alone),
-         * then home again. With no task to pick, tasks lead straight home. */
+         * then usage and home again. With no task to pick, tasks lead to usage. */
         if (state->page == BUDDY_PAGE_HOME) {
             state->page = BUDDY_PAGE_TALK;
             state->thread = false;
@@ -661,6 +660,7 @@ static void buddy_decide_prompt(buddy_state_t *state, const buddy_event_t *event
                                 buddy_action_t *action)
 {
     if (state->approval_locked || state->prompt.id[0] == '\0' || state->heartbeat_stale ||
+        state->prompt.notification_only ||
         !buddy_prompt_id_is_valid(&state->prompt) ||
         !buddy_observed_prompt_matches(event, &state->prompt)) {
         return;
@@ -730,7 +730,7 @@ static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, 
     }
 }
 
-/* Long press. On the three screens holding OK is push-to-talk. On the menu and
+/* Long press. On the four screens holding OK is push-to-talk. On the menu and
  * the pages under it, it goes back to the first screen. UP and DOWN have no
  * long press. */
 static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action_t *action)
@@ -777,7 +777,7 @@ static void buddy_long_press(buddy_state_t *state, buddy_key_t key, buddy_action
     }
 }
 
-/* Two quick presses on OK. On the three screens: the menu. On the menu and the
+/* Two quick presses on OK. On the four screens: the menu. On the menu and the
  * pages under it: back to the first screen. Returns false when something else
  * has the screen; the press then counts as one ordinary click, so that pressing
  * OK twice on a prompt neither does nothing nor decides twice. */
@@ -1108,10 +1108,12 @@ static void buddy_key_click(buddy_state_t *state, const buddy_event_t *event,
         buddy_decide_prompt(state, event, BUDDY_PERMISSION_ONCE, action);
     } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_DOWN) {
         buddy_decide_prompt(state, event, BUDDY_PERMISSION_DENY, action);
-    } else if (buddy_has_actionable_prompt(state) && event->key == BUDDY_KEY_UP) {
+    } else if (buddy_has_prompt(state) && !state->approval_locked &&
+               (event->key == BUDDY_KEY_UP ||
+                (state->prompt.notification_only && event->key == BUDDY_KEY_DOWN))) {
         if (action != NULL) {
             action->type = BUDDY_ACTION_UI_SCROLL;
-            action->scroll_delta = -48;
+            action->scroll_delta = event->key == BUDDY_KEY_UP ? -48 : 48;
         }
     } else if (!buddy_has_prompt(state)) {
         buddy_normal_click(state, event->key, action);
@@ -1369,7 +1371,7 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
     }
     /* Anything that needs the owner's eyes turns the screen back on. */
     if (state->screen_off &&
-        (buddy_has_actionable_prompt(state) || state->passkey_visible ||
+        (buddy_has_prompt(state) || state->passkey_visible ||
          state->confirmation != BUDDY_CONFIRM_NONE)) {
         state->screen_off = false;
     }
@@ -1469,6 +1471,7 @@ void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snaps
     buddy_copy(snapshot->prompt_tool, sizeof(snapshot->prompt_tool), state->prompt.tool);
     buddy_copy(snapshot->prompt_hint, sizeof(snapshot->prompt_hint), state->prompt.hint);
     snapshot->prompt_hint_truncated = state->prompt.hint_truncated;
+    snapshot->prompt_notification_only = state->prompt.notification_only;
     snapshot->voice_phase = state->voice_phase;
     snapshot->voice_listening_since_ms = state->voice_listening_since_ms;
 }

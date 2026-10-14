@@ -43,6 +43,107 @@ static void test_heartbeat_optional_prompt_stays_in_heartbeat_snapshot(void)
     assert(strcmp(event.heartbeat.prompt.id, "req_abc123") == 0);
     assert(strcmp(event.heartbeat.prompt.tool, "Bash") == 0);
     assert(strcmp(event.heartbeat.prompt.hint, "rm -rf /tmp/foo") == 0);
+    assert(!event.heartbeat.prompt.notification_only);
+}
+
+static void test_desktop_notice_is_not_an_approval(void)
+{
+    buddy_event_t event = {0};
+    const char *json = "{\"connected\":true,\"running\":1,\"total\":1,\"waiting\":1,"
+                       "\"msg\":\"\",\"entries\":[],\"tokens\":0,\"tokens_today\":0,"
+                       "\"prompt\":{\"id\":\"desktop-one\",\"tool\":\"Bash\","
+                       "\"hint\":\"computer approval\",\"actionable\":false}}";
+    assert(parse(json, &event) == BUDDY_EVENT_HEARTBEAT);
+    assert(event.heartbeat.prompt.notification_only);
+    assert(strcmp(event.heartbeat.prompt.id, "desktop-one") == 0);
+    assert(parse("{\"connected\":true,\"running\":1,\"total\":1,\"waiting\":1,"
+                 "\"msg\":\"\",\"entries\":[],\"tokens\":0,\"tokens_today\":0,"
+                 "\"prompt\":{\"id\":\"desktop-one\",\"actionable\":\"false\"}}",
+                 &event) == BUDDY_EVENT_MALFORMED);
+}
+
+static void test_prompt_display_limits_keep_prompt_answerable(void)
+{
+    const struct {
+        size_t tool_length;
+        size_t hint_length;
+    } cases[] = {
+        {47, 319}, {48, 319}, {47, 320}, {48, 320},
+    };
+    static const char *const actionable[] = {
+        "", ",\"actionable\":true", ",\"actionable\":false",
+    };
+    size_t index;
+    size_t mode;
+
+    assert(BUDDY_TOOL_MAX == 48 && BUDDY_HINT_MAX == 320);
+    for (index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char tool[BUDDY_TOOL_MAX + 1];
+        char hint[BUDDY_HINT_MAX + 1];
+        char json[BUDDY_JSON_LINE_MAX];
+        bool tool_truncated = cases[index].tool_length >= BUDDY_TOOL_MAX;
+        bool hint_truncated = cases[index].hint_length >= BUDDY_HINT_MAX;
+
+        memset(tool, 't', cases[index].tool_length);
+        tool[cases[index].tool_length] = '\0';
+        memset(hint, 'h', cases[index].hint_length);
+        hint[cases[index].hint_length] = '\0';
+        for (mode = 0; mode < sizeof(actionable) / sizeof(actionable[0]); ++mode) {
+            buddy_event_t event = {0};
+
+            snprintf(json, sizeof(json),
+                     "{\"total\":1,\"running\":0,\"waiting\":1,\"msg\":\"\","
+                     "\"entries\":[],\"tokens\":0,\"tokens_today\":0,\"prompt\":{"
+                     "\"id\":\"boundary\",\"tool\":\"%s\",\"hint\":\"%s\"%s}}",
+                     tool, hint, actionable[mode]);
+            assert(parse(json, &event) == BUDDY_EVENT_HEARTBEAT);
+            assert(event.heartbeat.prompt.tool_truncated == tool_truncated);
+            assert(event.heartbeat.prompt.hint_truncated == hint_truncated);
+            /* Cut text is flagged for display; only the source makes it read-only. */
+            assert(event.heartbeat.prompt.notification_only == (mode == 2));
+            assert(strlen(event.heartbeat.prompt.tool) == BUDDY_TOOL_MAX - 1);
+            assert(strlen(event.heartbeat.prompt.hint) == BUDDY_HINT_MAX - 1);
+        }
+    }
+}
+
+static void test_prompt_utf8_limits_keep_complete_codepoints(void)
+{
+    size_t field;
+    size_t overflow;
+
+    for (field = 0; field < 2; ++field) {
+        size_t capacity = field == 0 ? BUDDY_TOOL_MAX : BUDDY_HINT_MAX;
+        for (overflow = 0; overflow < 2; ++overflow) {
+            buddy_event_t event = {0};
+            char value[BUDDY_HINT_MAX + 3];
+            char json[BUDDY_JSON_LINE_MAX];
+            size_t prefix = capacity - 4 + overflow;
+            const char *stored;
+
+            memset(value, 'a', prefix);
+            memcpy(value + prefix, "\xe4\xb8\xad", 3);
+            value[prefix + 3] = '\0';
+            snprintf(json, sizeof(json),
+                     "{\"total\":1,\"running\":0,\"waiting\":1,\"msg\":\"\","
+                     "\"entries\":[],\"tokens\":0,\"tokens_today\":0,\"prompt\":{"
+                     "\"id\":\"utf8-boundary\",\"tool\":\"%s\",\"hint\":\"%s\","
+                     "\"actionable\":true}}",
+                     field == 0 ? value : "Bash", field == 1 ? value : "ls");
+            assert(parse(json, &event) == BUDDY_EVENT_HEARTBEAT);
+            assert(!event.heartbeat.prompt.notification_only);
+            assert(event.heartbeat.prompt.tool_truncated == (field == 0 && overflow != 0));
+            assert(event.heartbeat.prompt.hint_truncated == (field == 1 && overflow != 0));
+            stored = field == 0 ? event.heartbeat.prompt.tool : event.heartbeat.prompt.hint;
+            assert(strlen(stored) == (overflow == 0 ? prefix + 3 : prefix));
+            if (overflow == 0) {
+                assert(strcmp(stored, value) == 0);
+            } else {
+                assert(stored[prefix] == '\0');
+                assert(memcmp(stored, value, prefix) == 0);
+            }
+        }
+    }
 }
 
 static void test_hub_hello_reports_voice_support(void)
@@ -596,11 +697,12 @@ static void test_chat_reports_the_conversation(void)
     }
 
     {
-        char ack[112];
+        char ack[160];
 
         assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
         assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
-                           "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true}\n") == 0);
+                           "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true,"
+                           "\"desktopApproval\":true}\n") == 0);
     }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }
@@ -971,6 +1073,9 @@ int main(void)
     test_other_turns_and_events_are_ignored_not_rejected();
     test_long_assistant_turn_is_cut_on_a_character_boundary();
     test_heartbeat_optional_prompt_stays_in_heartbeat_snapshot();
+    test_prompt_display_limits_keep_prompt_answerable();
+    test_prompt_utf8_limits_keep_complete_codepoints();
+    test_desktop_notice_is_not_an_approval();
     test_unpair_maps_confirmation_event();
     test_hub_hello_reports_voice_support();
     test_chat_reports_the_conversation();

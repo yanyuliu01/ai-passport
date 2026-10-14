@@ -80,3 +80,16 @@ Actual PNG dimensions, alpha statistics, hashes and selected/draft status are in
 The user supplied `reference-codex-elegant.png` as a character reference; original author and reuse license are unknown. `reference-xiaoyou-style.png` was rendered from this repository's `main/pocket_pet.c`. Other sheets were generated for this project, guided by community character conventions and the user's preferences. No third-party rights or official affiliation are asserted. No new artwork license is assigned by this entry; the repository code license does not establish rights to underlying character references.
 
 The root README's banners in `images/readme/` are composited from these sheets and from `reference-xiaoyou-style.png`; they carry the same status and rights notes.
+
+DS firmware and companion App now use the earlier pixel-head sheet
+[`avatar-whale-v1.png`](images/ai-companions/avatar-whale-v1.png). The original
+PNG is retained unchanged. The sleeping expression has a separate corrected
+source (`avatar-whale-sleep-v5.png`), matching the user-approved cheek and chin contour, with relaxed
+horizontal brows; the other five firmware portraits retain their source pixels. `tools/compile_pocket_avatar.py` uses checked source
+rectangles and nearest-neighbour sampling to produce
+[`pocket_whale_pixels.h`](images/ai-companions/pocket_whale_pixels.h): six
+60×60 indexed portraits and a shared 64-colour palette, 21,856 Flash bytes.
+`main/pocket_pet.c` reads this immutable data directly, without a decode buffer.
+The App embeds the original sheet as `drawable-nodpi/ds_source.png` and draws
+the reviewed portrait rectangles with bitmap filtering disabled. These derived
+resources carry the same source and rights notes as the sheet.

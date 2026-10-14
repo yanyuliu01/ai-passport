@@ -73,7 +73,26 @@ Whale expansion order: shy, proud, frustrated, surprised; tired, apologetic, dis
 
 ![App whale emotion expansion](../../../assets/images/ai-companions/app-whale-emotions-v2.png)
 
-## Sources and integration status
+## DS pixel-head integration (2026-10-13)
+
+The user chose the earlier [whale pixel heads](../../../assets/images/ai-companions/avatar-whale-v1.png)
+for the DS App and firmware. The original sheet is unchanged. Reviewed portrait
+rectangles supply eight App poses and six firmware moods. Firmware uses a
+60×60 indexed C atlas (21,856 Flash bytes) with no PNG decode buffer; the App
+draws the source rectangles without bitmap filtering. See the
+[asset conversion record](../../../assets/README.md#ai-companion-design-pack)
+and [companion guide](../../../companion/README.md#device-firmware).
+Physical display and mobile-device acceptance remain pending.
+
+The sleeping expression uses [a separate corrected head](../../../assets/images/ai-companions/avatar-whale-sleep-v5.png),
+keeping the [user-approved cheek and chin contour](../../../assets/images/ai-companions/reference-whale-sleep-approved-chin.png)
+and changing the brows to relaxed horizontal marks. Sleep, idle, ask and happy
+have a subtle 3.6-second breathing loop, with at most four display pixels of
+movement on the firmware home screen. The initial device flash and 35-second
+startup observation passed, but the user rejected that build's sleeping-face
+shape; the revised expression and animation require a new device acceptance.
+
+## Original design-stage sources and integration status
 
 - Artwork was generated for this project. Visual direction follows the [reference collection](ai-character-references.md); no downloaded third-party image was copied into the pack. The emotion expansion uses the generated app whale sheet as its identity reference.
 - Whale and Claude designs draw on community personification conventions. Codex now follows the user-provided elegant long-dress reference, with silver-lavender hair, navy bows, ivory/navy layered dress and a starry capelet; horns and tail are removed. The user supplied this reference for visual direction; its original author and reuse license are unknown. Generated artwork does not establish additional rights to underlying character designs or trademarks; do not represent it as official artwork or apply the repository code license as an artwork authorization.

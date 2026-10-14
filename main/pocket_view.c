@@ -217,7 +217,24 @@ unsigned pocket_task_window(const pocket_task_line_t *lines, unsigned count,
 
 int pocket_screen_count(const buddy_ui_snapshot_t *snapshot)
 {
-    return snapshot != NULL && snapshot->usage_known ? 4 : 3;
+    (void)snapshot;
+    return 4;
+}
+
+pocket_usage_view_t pocket_usage_view_for(const buddy_ui_snapshot_t *snapshot, bool low_memory)
+{
+    if (snapshot == NULL || !snapshot->ble_enabled || !snapshot->ble_connected ||
+        !snapshot->ble_encrypted || snapshot->heartbeat_stale ||
+        snapshot->connection != BUDDY_CONNECTION_CONNECTED) {
+        return POCKET_USAGE_OFFLINE;
+    }
+    if (!snapshot->usage_known) {
+        return POCKET_USAGE_WAITING;
+    }
+    if (snapshot->usage_count == 0U) {
+        return POCKET_USAGE_EMPTY;
+    }
+    return low_memory ? POCKET_USAGE_LOW_MEMORY : POCKET_USAGE_DATA;
 }
 
 int pocket_screen_index(const buddy_ui_snapshot_t *snapshot)
@@ -301,23 +318,6 @@ int pocket_usage_cells(int left, int cells)
     return lit;
 }
 
-static pocket_pet_mood_t pocket_pet_from_mood(buddy_mood_t mood)
-{
-    switch (mood) {
-    case BUDDY_MOOD_BUSY:
-        return POCKET_PET_BUSY;
-    case BUDDY_MOOD_ASK:
-        return POCKET_PET_ASK;
-    case BUDDY_MOOD_HAPPY:
-        return POCKET_PET_HAPPY;
-    case BUDDY_MOOD_OOPS:
-        return POCKET_PET_OOPS;
-    case BUDDY_MOOD_IDLE:
-        break;
-    }
-    return POCKET_PET_IDLE;
-}
-
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot)
 {
     switch (pocket_view_for(snapshot)) {
@@ -360,10 +360,9 @@ pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot)
     case POCKET_HOME_FAILED:
         return POCKET_PET_OOPS;
     case POCKET_HOME_ANSWERED:
-        // 她答完时自己说了是什么表情；桌面端没有这个说法，按平常算。
-        return snapshot->chat.phase == BUDDY_CHAT_DONE
-                   ? pocket_pet_from_mood(snapshot->chat.mood)
-                   : POCKET_PET_IDLE;
+        // 说完啦：一律是开心的（笑眼 + 爱心）。模型每轮自己挑的表情不稳定，
+        // 不跟它走；没成走的是 FAILED。桌面端没有这个说法，按平常算。
+        return snapshot->chat.phase == BUDDY_CHAT_DONE ? POCKET_PET_HAPPY : POCKET_PET_IDLE;
     case POCKET_HOME_LINKING:
     case POCKET_HOME_QUIET:
         break;
@@ -409,17 +408,21 @@ uint32_t pocket_helper_color(const char *name)
 {
     // 不认识的名字从这几个颜色里按名字选一个；都和小幽的淡紫、以及表示
     // 可以 / 不行 / 留意的绿、红、黄分得开。
-    static const uint32_t others[] = {0x7FB6FFu, 0xF2A7C8u, 0x8FD6E8u, 0xC9B458u};
+    static const uint32_t others[] = {0xF2A7C8u, 0xC9B458u, 0xB9A7FFu, 0xE6E6E6u};
     uint32_t hash = 2166136261u;
 
     if (name == NULL || name[0] == '\0') {
         return POCKET_COLOR_XIAOYOU;
     }
-    if (pocket_name_is(name, "claude")) {
+    if (pocket_name_is(name, "claude") || pocket_name_is(name, "cc")) {
         return 0xE08A63u;
     }
     if (pocket_name_is(name, "codex")) {
         return 0x6FD3B0u;
+    }
+    if (pocket_name_is(name, "dsh") || pocket_name_is(name, "deepseek") ||
+        pocket_name_is(name, "deep") || pocket_name_is(name, "ds")) {
+        return 0x4F7BFFu;
     }
     for (; *name != '\0'; ++name) {
         hash = (hash ^ (unsigned char)pocket_lower(*name)) * 16777619u;

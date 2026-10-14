@@ -75,3 +75,13 @@
 用户提供 `reference-codex-elegant.png` 作为角色参考，原作者和再利用许可未知。`reference-xiaoyou-style.png` 从仓库的 `main/pocket_pet.c` 渲染。其他图集为本项目生成，参考社区角色约定与用户偏好，不声称取得第三方权利或官方身份。本条目不赋予新的美术许可；仓库代码许可不能证明底层角色参考的使用权。
 
 根目录 README 用的横幅图放在 `images/readme/`，由这些图稿和 `reference-xiaoyou-style.png` 拼合而成，状态与权利说明同上。
+
+DS 固件与手机 App 现在使用之前的像素大头图集
+[`avatar-whale-v1.png`](images/ai-companions/avatar-whale-v1.png)，原 PNG 保持不变。睡眠表情另有修正版
+`avatar-whale-sleep-v5.png`，采用用户提供的下巴和脸颊轮廓，眉毛放松；其他五种
+固件表情沿用原有源像素。
+`tools/compile_pocket_avatar.py` 按逐个检查的边界做最近邻采样，生成
+[`pocket_whale_pixels.h`](images/ai-companions/pocket_whale_pixels.h)：六个 60×60
+索引头像和共享的 64 色调色板，共 21,856 字节 Flash。`main/pocket_pet.c` 直接读取
+这份只读数据，没有解码缓冲。App 将原图保留为 `drawable-nodpi/ds_source.png`，按
+已检查的头像边界绘制并禁用位图滤波。派生资源沿用原图的来源与权利说明。

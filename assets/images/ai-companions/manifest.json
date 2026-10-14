@@ -463,6 +463,27 @@
       },
       "intended_pose_count": 12,
       "status": "static-source-concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-whale-sleep-v5.png",
+      "selected": false,
+      "runtime_selected": true,
+      "width": 1402,
+      "height": 1122,
+      "mode": "RGBA",
+      "bytes": 793103,
+      "sha256": "70e146ecb2e4220db28928235a1d7556dd6b411f17424a867ecd80d27a42e382",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.5169575676204862,
+      "intended_grid": {
+        "columns": 1,
+        "rows": 1
+      },
+      "intended_pose_count": 1,
+      "status": "runtime-sleep-source; user-approved chin and relaxed brows; bounds reviewed"
     }
   ],
   "references": [
@@ -477,6 +498,17 @@
       "width": 720,
       "height": 480,
       "sha256": "c458ef7c136d43f6730de50ff4762cf90ccea5854ce0135b3294a966f904a92d"
+    },
+    {
+      "file": "reference-whale-sleep-approved-chin.png",
+      "width": 1402,
+      "height": 1122,
+      "mode": "RGBA",
+      "bytes": 852954,
+      "sha256": "e90a8fbe0b9c780cc17c3306ff063067067bd2f61946277fed049f76356dd420",
+      "source": "User-selected generated sleeping head; approved cheek and chin shape on 2026-10-13"
     }
-  ]
+  ],
+  "runtime_update_date": "2026-10-13",
+  "runtime_selection_note": "Original selected-sheet counts describe the 2026-10-12 pack. runtime_selected marks the separately corrected sleeping head used by firmware and App."
 }

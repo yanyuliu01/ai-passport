@@ -6,14 +6,14 @@
 // 约定：这里的字面量只用普通 UTF-8 字符和 \n，不用其他转义。
 #pragma once
 
-// ---- 第一屏：形象。小幽、一个标题、下面两三行 ----
+// ---- 第一屏：形象。DS、一个标题、下面两三行 ----
 #define PT_HOME_BLE_OFF    "蓝牙关着呢"
 #define PT_HOME_WAITING    "睡着啦"
 #define PT_HOME_LINKING    "连上啦"
 #define PT_HOME_QUIET      "待命中"
 
 #define PT_HOME_SUB_BLE_OFF   "双击确认键\n在菜单里把蓝牙打开"
-#define PT_HOME_SUB_WAITING   "手机上打开小幽中枢\n我就醒了"
+#define PT_HOME_SUB_WAITING   "手机上打开DS 中枢\n我就醒了"
 #define PT_HOME_SUB_LINKING   "等对面跟我打个招呼"
 #define PT_HOME_SUB_QUIET     "有事按住确认键\n直接说"
 // 后台在做的事的个数填在 %u 里。
@@ -24,8 +24,8 @@
 // 她把活交给了帮手：是谁写在下面那一行的名牌里
 #define PT_HOME_HANDED     "交给帮手了"
 
-// ---- 小幽此刻在干什么：第一屏的标题，也是第二屏顶上那一条 ----
-#define PT_XIAOYOU         "小幽"
+// ---- DS此刻在干什么：第一屏的标题，也是第二屏顶上那一条 ----
+#define PT_XIAOYOU         "DS"
 #define PT_HEAD_SENT       "在听写"
 #define PT_HEAD_THINKING   "在想"
 // 帮手在做：名字在旁边的名牌里
@@ -47,7 +47,7 @@
 #define PT_TALK_EMPTY_SUB  "按住确认键\n跟我说说话"
 // 这件事右上角的一句说明。%s 是帮手的名字，%u 是次数。
 #define PT_CARD_NEW        "新的一件"
-#define PT_CARD_SELF       "小幽答的"
+#define PT_CARD_SELF       "DS答的"
 #define PT_CARD_WORKING    "%s 在做"
 #define PT_CARD_WAITING    "等你点头"
 #define PT_CARD_DONE       "%s 做完"
@@ -85,6 +85,9 @@
 // ---- 第四屏：用量。每个订阅账号还剩多少，每个帮手用的是哪个模型 ----
 #define PT_USAGE_EMPTY     "还没有用量数据"
 #define PT_USAGE_EMPTY_SUB "帮手做过一件事\n这里就有了"
+#define PT_USAGE_WAITING   "等用量更新"
+#define PT_USAGE_NEED_LINK "先连上手机"
+#define PT_USAGE_LOW_MEMORY "RAM low · 在手机上看用量"
 #define PT_USAGE_SHORT     "5 小时"
 #define PT_USAGE_WEEK      "本周"
 // 还剩百分之几填在 %u 里
@@ -118,7 +121,7 @@
 #define PT_NOTICES_EMPTY   "还没有通知哦"
 
 // ---- 帮手 ----
-#define PT_HELPERS_TITLE   "小幽的帮手"
+#define PT_HELPERS_TITLE   "DS的帮手"
 #define PT_HELPERS_EMPTY   "还不知道有哪些帮手\n连上手机中枢就有了"
 
 #define PT_NO_VALUE        "--"
@@ -146,7 +149,7 @@
 #define PT_GUIDE_NAME      "本机名称"
 #define PT_GUIDE_BODY \
     "连手机（平时用这个）\n" \
-    "1. 手机上打开小幽中枢\n" \
+    "1. 手机上打开DS 中枢\n" \
     "2. 点连接设备，选择上面的本机名称\n" \
     "3. 在手机的蓝牙提示框输入本机显示的 6 位配对码\n" \
     "连电脑上的 Claude 桌面端\n" \
@@ -155,9 +158,11 @@
     "3. 点 Connect，选择上面的本机名称，输入配对码\n" \
     "之后会自动重连。熄屏时有事找你会自动亮屏。"
 
-// ---- 小幽的对话：有件事要你点头 ----
+// ---- DS的对话：有件事要你点头 ----
 // 气泡里每行最多 8 个汉字宽（136 像素），所以这里手动分行。
 #define PT_ASK_APPROVAL    "有件事要你点头\n可以吗？"
+// 只读提醒：来源不收设备的回答（不一定在电脑上），所以不写“电脑上”。
+#define PT_ASK_DESKTOP     "有件事等你确认\n这里只能看"
 #define PT_APPROVAL_NO_HINT "（没有更多说明）"
 #define PT_APPROVAL_FULL_TOOL "完整名称："
 #define PT_APPROVAL_CUT    "（太长了，后面被截断）"
@@ -167,12 +172,13 @@
 #define PT_APPROVAL_SENT_YES "好耶，已经回话啦"
 #define PT_APPROVAL_SENT_NO "好的，已经拦下啦"
 #define PT_APPROVAL_FAILED "没发出去，这次不算数"
+#define PT_APPROVAL_DESKTOP "请在手机或电脑确认"
 
-// ---- 小幽的对话：配对 ----
+// ---- DS的对话：配对 ----
 #define PT_ASK_PASSKEY     "有设备想认识我！\n在它的蓝牙提示框\n输入这串数字"
 #define PT_PAIR_SECURING   "正在握手\n稍等一下…"
 
-// ---- 小幽的对话：二次确认 ----
+// ---- DS的对话：二次确认 ----
 #define PT_ASK_UNPAIR      "要取消配对吗？\n下次得重新输入\n配对码哦"
 #define PT_ASK_FACTORY     "要恢复出厂吗？\n名字、统计、配对\n都会清空哦"
 #define PT_CONFIRM_YES     "确定"
@@ -184,7 +190,7 @@
 #define PT_VOICE_SENDING   "发出去啦"
 #define PT_VOICE_SUB_PREPARING "我竖起耳朵…"
 #define PT_VOICE_SUB_SENDING   "正在交给手机…"
-// 结果和提示（显示在底部提示那一行，或者小幽独占画面时的说明里；最多 13 个汉字一行）
+// 结果和提示（显示在底部提示那一行，或者DS独占画面时的说明里；最多 13 个汉字一行）
 #define PT_VOICE_LIMIT       "说得有点久，先发这些"
 #define PT_VOICE_TOO_SHORT   "按住确认键再说话哦"
 #define PT_VOICE_NEED_LINK   "先连上手机才能说话哦"
@@ -192,7 +198,7 @@
 #define PT_VOICE_FAILED_MIC  "麦克风没准备好，再试一次"
 #define PT_VOICE_FAILED_LINK "没发出去，连接不太稳"
 
-// ---- 经蓝牙换固件（小幽独占画面：标题、进度、一行说明）----
+// ---- 经蓝牙换固件（DS独占画面：标题、进度、一行说明）----
 #define PT_UPDATE_RECEIVING   "在换新样子"
 #define PT_UPDATE_CHECKING    "快好了"
 #define PT_UPDATE_RESTARTING  "换好啦"

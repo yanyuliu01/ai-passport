@@ -116,6 +116,13 @@
       "prompt": "Use case: stylized-concept. Input reference1 is the APPROVED CODEX STYLE master; reference2 is the target CHARACTER IDENTITY reference. Redraw ONLY the character of reference2, never Codex. Match reference1's head proportions, eyes, hair-detail density, subtle elegant expressions, outline weight, rendering and color softness exactly. DSH whale maid: navy-to-cyan long blue hair, blue eyes, curved ahoge, whale-fin ears, white frilled headband, blue bows, navy-white modest maid dress and white whale apron, blue whale tail. Preserve these distinguishing features while matching the elegant Codex style. Genuinely transparent alpha outside each character, no background, no words/logos/watermarks or UI, no overlapping cells. EXACTLY12 full-body smooth anime chibi illustrations in4columns x3rows. Match the approved Codex style in reference1, with graceful skirt layers and calm adult chibi proportions. Expressions and poses row-major: shy looking away; proud arms crossed; frustrated puffed cheeks; surprised raised hands; tired yawning; apologetic bow; discovery with finger raised; concentrated reading; overwhelmed multitasking with laptop/checklist; relieved wiping forehead; happy rice bowl; greeting wave. Same identity all12poses.",
       "generator": "built-in image_gen",
       "transparent_background_requested": true
+    },
+    "avatar-whale-sleep-v5.png": {
+      "prompt": "Use case: precise-object-edit / identity-preserve. This exact attached single DS sleeping pixel head is the user's APPROVED cheek and chin shape. Keep its entire face shape and jaw position EXACTLY as in this image: same height, width, rounded cheeks, same bottom contour and chin, no shortening, raising or shrinking the lower face. Keep all hair, headband, whale fins, closed eyes, mouth, blush, pixel positions, size, colors and transparent padding unchanged. Edit ONLY the two eyebrows: the current raised-inward slanted brows read as sad; replace them with tiny straight LEVEL HORIZONTAL relaxed eyebrows at the same position, or simple restful horizontal dashes. No inward brow lift, no frowning slants. Do NOT redraw the lower face at all. This should read peacefully asleep. Preserve coarse crisp square pixel clusters and flat palette. Genuinely transparent background and alpha outside the head; no text, symbols, extra props, smooth anime detail, glow or gradients. User's main constraint: THE CHIN IN THE PROVIDED IMAGE IS CORRECT AND MUST BE PRESERVED.",
+      "generator": "built-in image_gen",
+      "transparent_background_requested": true,
+      "date": "2026-10-13",
+      "reference": "reference-whale-sleep-approved-chin.png"
     }
   }
 }
