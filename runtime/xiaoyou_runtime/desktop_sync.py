@@ -27,6 +27,8 @@ POLL_SECONDS = 2.0
 DISCOVERY_SECONDS = 10.0
 RECENT_SECONDS = 86400
 STALE_SECONDS = 300
+# 只是工具、进展或时间戳变了：同一会话最多这么久发一次，免得经中继连着的手机被刷屏。
+MINOR_SECONDS = 10.0
 MAX_SESSIONS = 32
 MAX_READ_BYTES = 2 * 1024 * 1024
 MAX_LINE_BYTES = 512 * 1024
@@ -64,6 +66,8 @@ class Session:
     turn_id: str = ""
     card: Optional[str] = None
     published: Tuple[Any, ...] = ()
+    published_major: Tuple[Any, ...] = ()
+    published_at: float = 0.0
     hook_at: float = 0.0
     skip: bool = False
     unavailable: bool = False
@@ -482,6 +486,10 @@ class DesktopSync:
                title.title, title.source, title.truncated)
         if key == session.published and existing:
             return
+        major = (status, project, session.model, waiting, session.started_at, stale, content,
+                 session.content_truncated, title.title, title.source, title.truncated)
+        if existing and major == session.published_major and now - session.published_at < MINOR_SECONDS:
+            return
         if existing is None:
             card = self.cards.open(CONVERSATION, title.title, "unknown", session.agent,
                                    title_source=title.source)
@@ -509,6 +517,8 @@ class DesktopSync:
                           progress_lines=progress[-5:],
                           mood="busy" if status in ("running", "waiting") else "idle", **fields)
         session.published = key
+        session.published_major = major
+        session.published_at = now
 
     def _title(self, agent: str, sid: str, project: str, entries: List[Dict[str, Any]]):
         request = next((entry["text"] for entry in reversed(entries)

@@ -92,6 +92,29 @@ class DesktopTests(unittest.TestCase):
         self.sync.poll()
         self.assertEqual(self.cards.get(cards["s-1"]["id"])["state"], "cancelled")
 
+    def test_tool_churn_is_batched_but_new_messages_and_states_are_not(self):
+        path = self.codex()
+        self.append(path, [self.cevent("task_started", turn_id="turn1"), self.message("user", "整理一下")])
+        self.sync.poll()
+        card = self.observed()[0]["id"]
+        seq = self.cards.changed("phone", include_desktop=True)["seq"]
+        # Another tool call a second later only moves progress: held back for a while.
+        self.now += 1
+        self.append(path, [{"type": "response_item", "payload": {"type": "function_call",
+                            "name": "read", "arguments": "{}"}}])
+        self.sync.poll()
+        self.assertEqual(seq, self.cards.changed("phone", include_desktop=True)["seq"])
+        self.now += 10
+        self.sync.poll()
+        self.assertIn("read", self.cards.get(card)["progress"])
+        # A visible reply and the end of the turn go out at once.
+        seq = self.cards.changed("phone", include_desktop=True)["seq"]
+        self.now += 1
+        self.append(path, [self.message("assistant", "好了"), self.cevent("task_complete")])
+        self.sync.poll()
+        self.assertGreater(self.cards.changed("phone", include_desktop=True)["seq"], seq)
+        self.assertEqual(self.cards.get(card)["desktop_status"], "idle")
+
     def test_codex_sidebar_rename_wakes_feed_without_transcript_changes(self):
         path = self.codex()
         self.append(path, [self.message("user", "original request"),
