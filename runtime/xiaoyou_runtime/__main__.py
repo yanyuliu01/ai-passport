@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import signal
+import threading
 import socket
 import sys
 import time
@@ -277,12 +278,18 @@ def main(argv=None) -> int:
         signal.signal(signal.SIGTERM, stop)
     except (ValueError, OSError):
         pass  # 不在主线程里，或者这个平台没有
+    loopback = getattr(server, "loopback", None)
+    if loopback is not None:
+        threading.Thread(target=loopback.serve_forever, name="loopback-http", daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        if loopback is not None:
+            loopback.shutdown()
+            loopback.server_close()
         if desktop is not None:
             desktop.close()
         service.close()

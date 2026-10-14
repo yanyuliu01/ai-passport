@@ -408,4 +408,13 @@ def make_server(config: Config, service: Service,
 
     server = Server((config.host, config.port), Handler)
     server.daemon_threads = True
+    # 监听的是 Tailscale 之类的地址时，本机再开一个只给自己用的口子：Tailscale Funnel
+    # 这类本机转发进不去自己的 Tailscale 地址，只能转给 127.0.0.1。本机地址外面连不到。
+    server.loopback = None
+    if config.host not in ("127.0.0.1", "localhost", "::1", "", "0.0.0.0", "::"):
+        try:
+            server.loopback = Server(("127.0.0.1", config.port), Handler)
+            server.loopback.daemon_threads = True
+        except OSError as error:
+            sys.stderr.write("本机 127.0.0.1:%d 没开成：%s\n" % (config.port, error))
     return server
