@@ -1751,6 +1751,25 @@ class CardsTests(TempDirCase):
         cards.update("c2", state="failed")
         self.assertEqual([(card["id"], card["state"]) for card in seen], [("c2", "failed")])
 
+    def test_a_large_feed_comes_in_pages_that_continue_from_the_last_card(self):
+        cards = self.cards()
+        for index in range(6):
+            card = cards.open("default", "第 %d 件" % index)
+            cards.update(card["id"], said="问" * 300, say="答" * 3000)
+        seen, after, rounds = [], 0, 0
+        while True:
+            page = cards.changed("default", after, budget=20000)
+            seen += [card["id"] for card in page["cards"]]
+            after, rounds = page["seq"], rounds + 1
+            if not page.get("more"):
+                break
+        self.assertGreater(rounds, 1)
+        self.assertEqual(seen, ["c%d" % index for index in range(1, 7)])
+        # One card larger than the budget still goes out on its own.
+        single = cards.changed("default", 0, budget=10)
+        self.assertEqual(len(single["cards"]), 1)
+        self.assertTrue(single["more"])
+
     def test_cards_survive_a_restart_and_unfinished_ones_are_marked(self):
         cards = self.cards()
         cards.open("default", "做完的")

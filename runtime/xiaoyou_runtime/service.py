@@ -39,6 +39,8 @@ MAX_HOP = 3
 MAX_BUSY_CONVERSATIONS = 4
 # 等卡的时候隔这么久看一眼用量变没变。
 FEED_USAGE_SECONDS = 5.0
+# 一次 feed 最多带这么多字节的卡，其余分几次给（见 Cards.changed）。
+FEED_BUDGET_BYTES = 48 * 1024
 
 
 class RequestError(Exception):
@@ -267,7 +269,8 @@ class Service:
             remaining = deadline - time.monotonic()
             # 等卡的同时隔一会儿看一眼用量变没变。
             pause = remaining if usage is None else min(remaining, FEED_USAGE_SECONDS)
-            result = self._xiaoyou.cards.changed(conversation, after, pause, include_desktop=True)
+            result = self._xiaoyou.cards.changed(conversation, after, pause, include_desktop=True,
+                                                 budget=FEED_BUDGET_BYTES)
             if (result["cards"] or deadline - time.monotonic() <= 0
                     or (usage is not None and meter.rev != usage)):
                 break

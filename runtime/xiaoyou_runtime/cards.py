@@ -307,8 +307,11 @@ class Cards:
             return [self._copy(card) for card in cards[-limit:]]
 
     def changed(self, conversation: str, after: int = 0, wait: float = 0.0,
-                include_desktop: bool = False) -> Dict[str, Any]:
-        """序号比 after 大的卡；一张都没有时最多等 wait 秒。"""
+                include_desktop: bool = False, budget: int = 0) -> Dict[str, Any]:
+        """序号比 after 大的卡；一张都没有时最多等 wait 秒。
+
+        budget 大于 0 时一次最多给这么多字节（至少一张）：剩下的标 more，序号停在给出的
+        最后一张，客户端照常拿这个序号再要，就接着往下给。慢线路上一次几百 KB 常传不完。"""
         deadline = time.monotonic() + max(0.0, wait)
         with self._changed:
             while True:
@@ -319,6 +322,13 @@ class Cards:
                 remaining = deadline - time.monotonic()
                 if cards or remaining <= 0:
                     cards.sort(key=lambda card: card["seq"])
+                    if budget > 0:
+                        size = 0
+                        for index, card in enumerate(cards):
+                            size += len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
+                            if size > budget and index > 0:
+                                return {"seq": cards[index - 1]["seq"], "cards": cards[:index],
+                                        "more": True}
                     # 卡被清掉、或者 Runtime 换了一份记录之后，客户端手里的序号可能比这里的大：
                     # 把现在的序号给回去，它就知道要从头再同步。
                     return {"seq": self._seq, "cards": cards}
