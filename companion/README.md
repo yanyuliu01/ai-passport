@@ -259,6 +259,41 @@ the runtime, checks its SHA-256 and opens Android's installer; the first time,
 Android asks you to allow Pocket Hub to install apps. Installing always needs
 your confirmation on the phone.
 
+### Shipping an app change (developers and AI agents)
+
+Every finished change to `companion/android` reaches the owner's phone this
+way, not as an APK file to sideload:
+
+1. **Bump the version** in `companion/android/app/build.gradle`: `versionCode`
+   +1, and `versionName` (patch for fixes, minor for features). The phone
+   compares version codes; a forgotten bump still works only if the package
+   differs and is published later than the phone's install.
+2. **Build and test** in `companion/android` with JDK 17 and the Android SDK:
+   `gradle testDebugUnitTest assembleDebug`. Both must pass; do not publish a
+   failing build. The APK is `app/build/outputs/apk/debug/app-debug.apk`, with
+   Gradle's `output-metadata.json` beside it.
+3. **Publish** it on the computer that runs the owner's runtime (from `runtime/`):
+
+   ```bash
+   python3 -m xiaoyou_runtime app publish ../companion/android/app/build/outputs/apk/debug/app-debug.apk --note "one line the owner understands"
+   python3 -m xiaoyou_runtime app status
+   ```
+
+   The note is shown on the phone, so write what changed for the owner, not
+   commit jargon. Publishing only replaces the file the running runtime serves;
+   it needs no restart. A runtime older than this feature (no `/v1/app`) needs
+   one restart, and only when no task is running.
+4. **Tell the owner** the version and note, and that the phone will offer it on
+   the next open (or from Connections and settings → App update). Report that
+   the install on the phone has not been verified until they confirm it.
+5. **Commit; push only when asked.** Publishing does not push to Git and a
+   Git push does not publish.
+
+When a change also needs the runtime (new endpoints the app calls), restart
+the runtime before publishing the app, or the new app will meet the old
+runtime. The first build with this feature (0.11.0, version code 17) had to be
+installed by hand; phones still on an older build need one manual install.
+
 ## Device firmware
 
 The matching firmware and App use the retained `avatar-whale-v1.png` pixel head

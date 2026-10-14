@@ -187,6 +187,32 @@ Codex 或 Claude 的可见回复，并使用实际助手名称。Runtime 提供�
 侧边栏底部显示“有新版 App”。在「连接与设置 → App 更新」里点安装：经 Runtime 下载、校验 SHA-256，
 再打开系统安装界面。第一次安卓会要你允许 Pocket Hub 安装应用；每次安装都要你在手机上确认。
 
+### 发布一次 App 改动（开发者和 AI agent）
+
+`companion/android` 的每一次完整改动都这样送到主人手机上，不再发 APK 文件让主人自己装：
+
+1. **加版本号**：改 `companion/android/app/build.gradle`，`versionCode` 加 1，`versionName`
+   修问题加末位、加功能加中间位。手机按版本号比较；忘了加只有在安装包不同、而且发布得比手机上那份
+   装得晚时才会提示。
+2. **编译和测试**：在 `companion/android` 下用 JDK 17 和 Android SDK 运行
+   `gradle testDebugUnitTest assembleDebug`，两样都要通过，没通过不发布。安装包在
+   `app/build/outputs/apk/debug/app-debug.apk`，旁边有 Gradle 写的 `output-metadata.json`。
+3. **发布**：在跑着主人 Runtime 的那台电脑上（在 `runtime/` 下）：
+
+   ```bash
+   python3 -m xiaoyou_runtime app publish ../companion/android/app/build/outputs/apk/debug/app-debug.apk --note "主人看得懂的一句话"
+   python3 -m xiaoyou_runtime app status
+   ```
+
+   备注会显示在手机上，写给主人看的改动，不要写提交术语。发布只是替换正在运行的 Runtime
+   提供的文件，不用重启。Runtime 比这个功能旧（没有 `/v1/app`）时要重启一次，而且只在没有任务在跑时重启。
+4. **告诉主人**版本和备注，下次打开 App 会提示（或在「连接与设置 → App 更新」里手动查）。
+   主人确认装好之前，要说明手机上的安装还没验证。
+5. **提交；推送要等主人说**。发布不等于推到 Git，推到 Git 也不等于发布。
+
+改动同时要动 Runtime（App 要调新接口）时，先重启 Runtime 再发布 App，否则新 App 会碰上旧 Runtime。
+带这个功能的第一版（0.11.0，版本号 17）要手动装；手机上还是更旧的版本时，要再手动装一次。
+
 ## 设备固件
 
 配套固件和 App 使用原有 `avatar-whale-v1.png` 像素大头。固件将六种表情编译为

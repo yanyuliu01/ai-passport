@@ -74,6 +74,7 @@ same reader is used by both desktop agents' optional context hooks. See
 | Project completion | `docs/development/release/project-completion.md` (then the `issue-suggestions` or `experience-pr` skill) |
 | Documentation | `docs/contribution/doc-conventions.md`, `docs/README.md` |
 | Commit or PR | `docs/contribution/commit-and-pr.md` |
+| Companion Android app | `companion/README.md` (including [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents)) |
 
 Use `docs/README.md` for the product overview and the documentation index. For the detailed AI development workflow — context setup, source-of-truth priority, application/BSP boundary, runtime invariants, material placement, and delivery format — read `docs/development/ai-guide.md`. Fork-specific workflow is in `docs/fork-guide.md` and is not required for ordinary upstream development.
 
@@ -102,6 +103,15 @@ a release request. If no device is detected, ask the user to turn it on and
 connect it to a computer USB port with a data-capable cable. Follow the
 [on-device testing handoff](docs/development/ai-guide.md#offer-on-device-testing)
 and obtain approval before flashing; detection alone is not consent.
+
+After each complete change to the companion app (`companion/android`), deliver
+it through the runtime instead of handing the owner an APK: bump the version,
+build and run the unit tests, publish with `python3 -m xiaoyou_runtime app
+publish` and a plain-language `--note`, and tell the owner the phone will offer
+the update. Follow [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents).
+Publishing is local and does not need separate approval; restarting the
+runtime does, unless no task is running. Do not report the phone install as
+verified until the owner confirms it.
 
 Create commits and push only when the user requests them or the active workflow explicitly requires them. Ordinary feature, application, and documentation pull requests must not edit `docs/CHANGELOG.md` or `docs/CHANGELOG.zh_CN.md`; describe user-visible behavior, compatibility, and release-flow impact in the pull-request body and authoritative documentation instead. During release preparation, the release maintainer aggregates merged user-visible changes into both changelog files before creating the tag.
 
