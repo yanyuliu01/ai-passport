@@ -34,6 +34,7 @@
 除 /healthz 外都要带 Authorization: Bearer <令牌>。
 """
 
+import gzip
 import hmac
 import json
 import sys
@@ -45,6 +46,9 @@ from . import __version__
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
+
+# 比这小的回答不值得压。
+GZIP_MIN_BYTES = 2048
 from .service import MAX_AUDIO_BYTES, RequestError, Service
 
 MAX_BODY_BYTES = 64 * 1024
@@ -72,8 +76,16 @@ def make_server(config: Config, service: Service,
 
         def _send(self, status: int, body: Dict[str, Any]) -> None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            # 手机常经中继连过来，整份卡片有几百 KB：对方说收得了 gzip 就压一下。
+            zipped = (len(data) > GZIP_MIN_BYTES
+                      and "gzip" in self.headers.get("Accept-Encoding", "").lower())
+            if zipped:
+                data = gzip.compress(data, 6)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            if zipped:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

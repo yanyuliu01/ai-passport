@@ -10,6 +10,7 @@ import ast
 import contextlib
 import dataclasses
 import io
+import gzip
 import json
 import os
 import sqlite3
@@ -3864,6 +3865,26 @@ class RemoteAgentTests(TempDirCase):
         card = xiaoyou.settle(turn.card, 10)
         self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "（回声）列出桌面上的文件"))
         self.assertEqual(len(lead.jobs), 1)
+
+    def test_large_answers_are_gzipped_only_for_clients_that_accept_it(self):
+        request = urllib.request.Request(self.other + "/v1/agents")
+        request.add_header("Authorization", "Bearer " + OTHER_TOKEN)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertIsNone(response.headers.get("Content-Encoding"))
+            plain = json.loads(response.read())
+        body = json.dumps({"text": "长" * 3000, "agent": "echo", "hop": 1}).encode()
+        posted = urllib.request.Request(self.other + "/v1/messages", method="POST", data=body)
+        posted.add_header("Authorization", "Bearer " + OTHER_TOKEN)
+        with urllib.request.urlopen(posted, timeout=10) as response:
+            message = json.loads(response.read())
+        request = urllib.request.Request(self.other + "/v1/messages/%s?wait=10" % message["id"])
+        request.add_header("Authorization", "Bearer " + OTHER_TOKEN)
+        request.add_header("Accept-Encoding", "gzip")
+        with urllib.request.urlopen(request, timeout=15) as response:
+            self.assertEqual(response.headers.get("Content-Encoding"), "gzip")
+            done = json.loads(gzip.decompress(response.read()))
+        self.assertIn("长" * 100, done["reply"])
+        self.assertIn("agents", plain)
 
     def test_a_named_agent_on_the_other_side_is_waited_for(self):
         # Over there the sentence becomes a thing in the background; the caller here still
