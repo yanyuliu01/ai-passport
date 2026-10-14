@@ -1405,7 +1405,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         micButton = button;
         middle.addView(button, new LinearLayout.LayoutParams(dp(84), dp(84)));
         micHint = text("按住说话", 12, false); micHint.setPadding(0, dp(8), 0, 0);
-        middle.addView(micHint);
+        middle.addView(micHint, new LinearLayout.LayoutParams(-2, -2));
         bar.addView(middle, new LinearLayout.LayoutParams(0, -2, 1));
         bar.addView(roundIcon("history", "对话记录", view -> show(TAB_CHAT)), side);
         return bar;

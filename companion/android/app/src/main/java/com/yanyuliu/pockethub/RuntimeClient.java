@@ -177,9 +177,15 @@ final class RuntimeClient {
                     continue;  // 是换 Runtime 时自己断开的
                 }
                 String detail = String.valueOf(error.getMessage());
+                boolean old = detail.contains(" 404");
+                if (failures == 0 && !old) {
+                    // 经中继连着时偶尔断一次是常事：先悄悄重连一次，连续失败才算离线。
+                    failures++;
+                    pause(2);
+                    continue;
+                }
                 store.desktopDisconnected();
                 store.runtimeConnected(false);
-                boolean old = detail.contains(" 404");
                 if (!detail.equals(complained)) {
                     complained = detail;
                     store.log(old ? target.name + " 上的 Runtime 是旧版，没有卡和授权"
