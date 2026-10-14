@@ -31,7 +31,8 @@ from . import router as routing
 from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Job,
                      Outcome, clip, span)
 from .approvals import STALL, Approvals, Gate
-from .cards import ACTIVE, Cards, title_from
+from .artifacts import ArtifactError, ArtifactStore
+from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
@@ -433,6 +434,7 @@ class Xiaoyou:
         self._store = store
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
+        self.artifacts = ArtifactStore(config)
         self._approvals = Approvals(self._approval_changed)
         self._gate = Gate(self._approvals)
         self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun,
@@ -807,6 +809,8 @@ class Xiaoyou:
         """一轮开始前：进展记到卡上；要问“可以吗”的帮手，给它一把通到主人那里的钥匙。"""
         control.progress = lambda line, card=task.card: self._cards.update(card, progress=line)
         control.scratch = self._config.state_dir
+        if task.agent.type in ("claude_code", "codex", "dsh"):
+            task.artifact_dir = str(self.artifacts.task_dir(task.card))
         name = task.agent.name
 
         def model(seen: str, task: Task = task) -> None:
@@ -872,6 +876,11 @@ class Xiaoyou:
         card = self._cards.get(card_id)
         if card is None:
             return
+        if card.get("monitoring_only"):
+            # The desktop adapter owns its observed state; an approval is a
+            # separate response channel, not control of the desktop card.
+            self._cards.update(card_id, approval=approval_id)
+            return
         if card["state"] not in ACTIVE:
             if card["approval"] is not None:
                 self._cards.update(card_id, approval=None)
@@ -882,6 +891,25 @@ class Xiaoyou:
     def _finished(self, task: Task, outcome: Optional[Outcome], error: Optional[str]) -> None:
         """后台的事做完或没做成。在任务自己的线程里被调用。"""
         name = task.agent.name
+        if outcome is not None:
+            if not outcome.fields:
+                try:
+                    parsed = json.loads(outcome.text)
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict) and isinstance(parsed.get("reply"), str):
+                    outcome = Outcome(outcome.text, outcome.session_id, parsed)
+            task.artifacts = self.artifacts.register_task(
+                self._cards, task.card, outcome.text, outcome.fields, name)
+            full = self._field(outcome, "reply") or outcome.text
+            if len(full) > MAX_ENTRY_CHARS:
+                try:
+                    task.artifacts.append(self.artifacts.save_text(
+                        task.card, full, name="完整方案与回复.txt", source=name))
+                    task.full_reply_saved = True
+                except ArtifactError:
+                    # Preserve the reply and make the failed attachment visible.
+                    task.artifact_error = "完整回复保存失败，请稍后重试"
         card = self._cards.get(task.card)
         if card is not None and card["state"] != "cancelled":
             # 代理交回的原样记一条，不管之后小幽怎么转述。
@@ -897,7 +925,8 @@ class Xiaoyou:
             self._close(task, reply.strip() or outcome.text, fields.get("brief"),
                         fields.get("mood"), "done", [])
         else:
-            self.defer(task.conversation, lambda: self._relay(task, outcome.text))
+            self.defer(task.conversation, lambda: self._relay(
+                task, self._field(outcome, "reply") or outcome.text))
 
     def _relay(self, task: Task, result: str) -> None:
         """只会干活的帮手交回了结果：让说话的代理用小幽的话转述。"""
@@ -926,8 +955,16 @@ class Xiaoyou:
         card = self._cards.get(task.card)
         if card is None or card["state"] == "cancelled":
             return
-        self._cards.update(task.card, say=turn.reply, brief=turn.brief, mood=turn.mood,
-                           state=state, approval=None, queued=False)
+        display_reply = turn.reply
+        if len(display_reply) > MAX_ENTRY_CHARS:
+            note = "\n\n（内容较长，完整内容见附件。）" if task.full_reply_saved else (
+                "\n\n（内容较长，当前仅显示部分内容。）")
+            display_reply = display_reply[:MAX_ENTRY_CHARS - len(note)] + note
+        if task.artifact_error:
+            display_reply = display_reply[:MAX_ENTRY_CHARS - len(task.artifact_error) - 2] + (
+                "\n\n" + task.artifact_error)
+        self._cards.update(task.card, say=display_reply, brief=turn.brief, mood=turn.mood,
+                           state=state, approval=None, queued=False, attachments=task.artifacts)
         # 记进对话记录：说话的代理下次接话时会被告知这个结果。
         self._workspace.closed(card, state, turn.brief, turn.reply, turn.mood)
         self._store.transcript.add(

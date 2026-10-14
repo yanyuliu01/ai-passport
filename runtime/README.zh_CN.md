@@ -31,6 +31,7 @@
 ## 需要什么
 
 - Python 3.9 或更新版本。不需要第三方包，除非启用内置的语音识别引擎（见[语音](#语音)）。
+  Pillow 可选，用于生成缩小的图片预览；没有它也能登记和下载附件。
 - 每个登记的代理各自要用的东西：`claude_code` 类型需要同一台机器、同一个用户下装好并
   登录了 Claude Code（终端里能直接运行 `claude`）；`codex` 类型需要装好并登录了 Codex
   命令行。`--check` 会指出哪个代理的命令找不到。
@@ -104,7 +105,9 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 最近需求和回复：`said` 最多 159 个 UTF-8 字节，App 的电脑会话 `reply` 最多 480 字节，
 仍使用设备所有卡共用的 4 KiB 文本池。已经支持电脑卡片的固件不需要为内容同步重新刷写。
 
-手机和硬件只观察这些会话；继续、停止和确认操作仍在电脑端 App 中完成。
+电脑端会话卡继续保持只读：继续和停止仍在电脑端 App 中完成。安装并信任下面的可选
+审批桥后，可以从手机单独回答有效的操作审批；只有状态信号、或者没有决策通道的通知，
+仍需要在电脑端确认。
 “本轮结束”只表示这次响应结束，不代表整个项目
 已经完成。正在活动的会话连续五分钟没有来源事件，或记录文件变得不可用时，会显示
 `unknown`（状态未知）。
@@ -112,11 +115,64 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 记录文件的格式可能随代理版本改变，观察器需要适配；仅凭日志不能可靠识别所有等待确认
 的情况。这个功能观察本机记录，没有本机会话记录的纯云端对话不保证能显示。
 
+### 电脑端共享历史
+
+共享历史读取器让 Codex 和 Claude Code 接上 Runtime 的工作，避免主人重复交代。
+它读取 Runtime 任务卡／对话及两个 Agent 的本地可见消息，也包括 Runtime 配置中
+各自独立的 `config_dir`。统一结构保存来源、发言者、任务／卡片／会话编号、原始
+消息时间、状态、可见文字、附件，以及内容是否为近期片段。其他客户端可以直接消费
+JSON 输出，不依赖某个 Agent 的原始记录格式。
+
+在仓库根目录查询保留的历史，不调用模型：
+
+```bash
+python3 runtime/xiaoyou_runtime/shared_history.py --context
+python3 runtime/xiaoyou_runtime/shared_history.py --task c127
+python3 runtime/xiaoyou_runtime/shared_history.py --format json
+python3 runtime/xiaoyou_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
+```
+
+其他 Runtime／项目使用 `--config /absolute/config.json` 和
+`--project /absolute/project`；可重复指定 `--codex-dir` 或 `--claude-dir`
+接入额外的本地配置目录。读取器不会启动／恢复帮手，不改 Agent 的对话记录或数据库，
+也不会把历史中的授权当成新的审批决定。仓库 `AGENTS.md` 的接话规则使用同一入口，
+`CLAUDE.md` 也引用该规则。
+
+可选上下文 Hook 在 `SessionStart`（包括恢复会话和压缩）及 `UserPromptSubmit`
+时自动投递。首次事件给出有长度上限的简报，之后只补有变化的任务／对话。当前电脑
+会话和 Runtime 已管理的帮手记录不重复采集；再次读取桌面记录时过滤已注入的历史。
+每个 Agent／会话有独立、私有的指纹游标。两边都使用官方
+`hookSpecificOutput.additionalContext` 输出协议；不阻止提问、不批准操作，失败
+时把控制权交回电脑端。
+
+预览并安装两边的上下文 Hook，保留现有设置和审批／状态 Hook：
+
+```bash
+python3 tools/setup-history-sync.py            # 预览目标文件
+python3 tools/setup-history-sync.py --install  # 合并配置，保留私有备份
+```
+
+这会为当前项目更新 `~/.codex/hooks.json` 和 `~/.claude/settings.json`。
+Codex 需要通过 `/hooks` 审阅并信任更新后的定义；Claude Code 需要在新建／恢复会话
+时加载新设置。Hook 刷新 `state/history-context/shared-history.md`，可以在电脑端
+文件面板查看。上下文投递与原生聊天气泡是两种功能：两个适配器都不会向对方 App
+伪造对话轮次。协议见官方 [Codex Hook](https://learn.chatgpt.com/docs/hooks) 和
+[Claude Code Hook](https://code.claude.com/docs/en/hooks) 文档。
+
+这是保留的可见历史视图，不是无限归档。Runtime 卡片／对话的保留上限仍适用；
+每个 Agent 配置目录选取最新的 32 个项目记录文件，使用已有观察器的有界近期内容
+适配器，已归档、仅云端或已删除的旧对话可能不可用。消息保留原始时间，重新导入
+不会把旧任务算成新任务。`done` 只表示本轮结束，不代表部署成功或设备验收通过。
+可识别的凭证会脱敏，但普通个人内容仍属于本地私有记录。生成的视图和投递游标放在
+Git 忽略的 `state/`，不进入仓库。
+
 ### 用可选生命周期 Hook 同步等待确认
 
 可选 Hook 接收器把状态快照写入正在运行的 Runtime 所用的同一个 `state_dir`。
-Hook 只记录元数据和状态，不记录需求、回复、工具参数或工具结果。
-接收器从标准输入读取一个有大小上限的 JSON 对象，不向标准输出打印内容。
+生命周期快照只包含元数据和状态，不保存需求、回复、工具参数原文或工具结果。
+操作审批和权限通知还会创建私有审批记录，保存请求的操作描述及其指纹；描述中可识别的
+凭据会先脱敏。接收器从标准输入读取一个有大小上限的 JSON 对象。只同步状态的事件
+不向标准输出打印内容。
 在 `runtime/` 目录下，接收器的命令是：
 
 ```bash
@@ -173,6 +229,40 @@ Claude Code 的权限通知还覆盖一部分没有 `PermissionRequest` 事件�
 和 [Claude Code Hook 文档](https://code.claude.com/docs/en/hooks)。Runtime 不会自动安装或
 修改全局 Hook 配置。构建和主机测试通过不代表已经验证手机接收、蓝牙转发和硬件显示；
 这条链路需要用已连接的 App 和设备实测。
+
+### 可选电脑端审批桥
+
+对同步执行的 `PermissionRequest` Hook，在接收器命令后添加 `--approval-bridge` 和
+`--approval-timeout 300`。它最多等待 300 秒（可配置，上限 600 秒），收到一次
+`allow` 或 `deny` 后，只输出一次官方 `hookSpecificOutput` 决策，仅回答这一步操作。
+超时、Runtime 不可用、会话关闭或 Hook 租约失效时，不输出决策，交回电脑端正常的
+权限询问流程；没有回答不会自动放行。
+
+用下面的命令为每个代理生成可合并的配置，避免手动算错超时：
+
+```bash
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+  --agent codex --approval-timeout 300 --print-config
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+  --agent claude --approval-timeout 300 --print-config
+```
+
+生成器只打印 JSON，不安装配置。把输出合并到代理的 Hook 配置中，保留已有处理器；
+Hook 外层超时必须长于审批等待时间（生成值为 310 秒）。Runtime 要带 `--desktop-sync`
+启动，并使用相同的、解析后的 `state_dir`。Codex 需要通过 `/hooks` 审阅并信任实际安装的
+准确配置；Claude Code 要让相应会话加载这份设置。源码存在或测试通过，都不代表已有
+电脑端会话的 Hook 已经启用。
+
+请求放在私有的 `state_dir/desktop-approvals/` 暂存目录。Runtime 接受答案前会检查
+所属 Hook 的心跳、会话/轮次/工具身份、操作指纹和有效期限；重复或过期答案会被拒绝。
+操作描述过长、不支持的 Hook 通道，以及 Claude 的 `permission_prompt` 通知都只能提醒：
+App 提示到电脑端确认，不提供远程“可以/不行”按钮。
+
+电脑端审批带有 `source: "desktop"`、`session_id`、`project`、`request_id`、
+`remote_actionable` 和 `expires_at`，并可带轮次、子代理标识。`/v1/feed` 跨对话返回这些
+审批，手机切换聊天不会把电脑请求藏起来。即使独立审批仍有效并带有
+`remote_actionable: true`，电脑端会话卡本身也仍然只读。
+手机需要 Android 通知权限才能在后台提醒；没有该权限，审批仍可在 App 内查看。
 
 ## 配置
 
@@ -368,6 +458,48 @@ JSON 对象。
 
 交给帮手做的卡另有三项（0.6.0 起）：`effort` 是这件事用的努力程度，`model` 是实际用的
 模型，`cost` 是到现在花了多少，见下面两节。
+
+### 任务图片和可下载文件
+
+任务产物先登记，手机才能显示或下载。由 Runtime 管理的 Claude Code、Codex 和 DSH
+任务会在指令中收到各自的 `state_dir/artifact-inbox/<card-id>/` 目录。把已完成的文件
+保存在这里，再写一份相对路径清单：
+
+```json
+{
+  "artifacts": [
+    {"path": "preview.png", "name": "Preview.png"},
+    {"path": "design.pdf", "name": "Design.pdf"}
+  ]
+}
+```
+
+清单文件名为该目录下的 `manifest.json`。不要列入凭据、个人数据或原始日志。
+自动导入仅限这件事的输出目录，不会按回复中提到的路径扫描电脑。带鉴权的显式登记请求
+也可以读取该卡代理的工作区，但会拒绝隐藏/私密路径、凭据或配置文件、Runtime 的其他
+状态文件、符号链接和目录遍历。每次最多登记 16 个文件。
+
+Runtime 把每个文件复制到 `state_dir/artifacts/`，计算 SHA-256 并分配稳定附件 ID。
+下载只使用 ID，不使用电脑文件路径。源文件改动、删除或 Runtime 重启后，快照仍然可用。
+单文件上限 64 MB，快照存储上限 1 GB；导入失败会留下 `status: "error"` 的附件和有长度
+上限的说明。删除卡片不会自动回收其快照。
+
+元信息同时保存在卡片汇总的 `attachments` 和最终回复的 `entries[].attachments` 中：
+`id`、`name`、`mime`、`size`、`kind`（`image` 或 `file`）、`width`、`height`、
+`sha256`、`source`、`created_at`、`status`、`error`，以及布尔值 `thumbnail`。
+添加附件会推进卡片的 `seq`。帮手回复超过 8,000 字符显示上限时，也会在显示清理前保存
+一份 UTF-8 全文附件，正文说明内容已截断。JSON 的 `reply` 包装会先解开，再显示或
+保存完整正文。
+
+运行 Runtime 的 Python 有 Pillow 时，会生成最大 480×480 像素的预览。没有 Pillow 时，
+支持的图片不超过 2 MB 和约一百万像素，就使用原图字节作为预览；较大的图片保留原图
+下载，并标记 `thumbnail: false`。预览不可用时返回 `404`，客户端可退回原图。
+两个下载接口都要求 Runtime 令牌，并按有界的数据块流式传输。
+
+配套 App 展示已登记的图片和文件卡片，通过 Android 系统能力下载、保存或打开文件。
+缓存归属同时包含来源 Runtime、附件 ID 和哈希。这一版不包含手机附件上传、任意外部
+URL 获取、App 内置 PDF 阅读或通用蓝牙文件传输。只观察电脑端会话记录，也不会自动
+导入电脑会话附件。
 
 ### 档位：模型和努力程度
 
@@ -575,7 +707,8 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 
 ## HTTP 接口
 
-除 `/healthz` 外，所有请求都要带 `Authorization: Bearer <令牌>`。请求体和响应都是 JSON。
+除 `/healthz` 外，所有请求都要带 `Authorization: Bearer <令牌>`。请求体和响应通常为
+JSON；下列语音、固件和附件二进制接口除外。
 
 | 请求 | 结果 |
 | --- | --- |
@@ -585,10 +718,13 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
 | `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
-| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：`usage` 是现在的用量（和 `GET /v1/usage` 一样，0.6.0 起每次都带）；请求里带上手里那份用量的 `rev` 时，用量变了也会提前返回。其余的：这个对话里序号比 `after` 大的卡（完整内容），和这个对话里所有还在等回答的授权（`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`；`kind` 是 `tool`——这一步可以吗，或 `stall`——它很久没动静了、还等吗，0.5.4 起）。授权出现或有了答案都会让那张卡变一次，所以等卡就等到了授权。带 `wait`（最多 60）时没有变化就等，一有变化就返回。客户端记住 `seq`，下次当作 `after` 带上；拿到的 `seq` 比手里的小，说明 Runtime 的记录换过了，从 0 重新同步。 |
+| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
+| `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |
+| `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
+| `GET /v1/artifacts/<id>/thumbnail` | 图片预览的二进制内容；没有可用预览时返回 `404`，可退回 `/content`。 |
 | `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`；电脑端观察卡返回 `400`，需要到电脑端停止。 |
-| `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权。没有这个授权（或 Runtime 重启过）返回 `404`；已经回答过、或者那件事已经停了，返回 `409`。 |
+| `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权，也支持仍有效、`remote_actionable: true` 的电脑端审批。没有该授权（或 Runtime 重启过）返回 `404`；已回答、只能提醒、过期或其他失效请求返回 `409`。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
 | `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`：固件仓库的清单，版本从新到旧。见[设备固件](#设备固件)。 |
@@ -603,8 +739,9 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 `project`、`session_id`、`desktop_status`、`observed_at` 和 `stale`，以及
 `content_scope: "recent"` 和 `content_truncated`。有大小上限的 `entries` 保存实际提出的
 需求（`role: "you"`）和来源代理的可见输出（`role: "xiaoyou"`，App 上标注 Codex 或
-Claude）。`entries` 为空表示尚未采集到可见内容。这些卡没有 Runtime 授权；电脑端的
-`waiting` 只是状态信号，确认仍在原来的电脑端对话里完成。
+Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `waiting` 本身只是状态信号。
+可选审批桥可以提供独立的审批，是否可远程回答由 `remote_actionable` 决定；普通续聊和
+取消仍在电脑端会话中完成。
 
 消息记录说的是“这句话小幽接住了没有”，不是“这件事做完了没有”：小幽答完或者把活派出去，
 `status` 就是 `done`，后面的进展和结果在卡上，用 `/v1/feed` 等。只有别的 Runtime 转过来的
@@ -631,11 +768,13 @@ Claude）。`entries` 为空表示尚未采集到可见内容。这些卡没有 
 从需求生成时最多 24 字符）、`title_source`（`upstream`、`task`、`request` 或 `fallback`）、
 `title_truncated`、`state`、`agent`
 （谁在做或做的；小幽自己答的是 `null`）、`entries`（`[{"role": "you" 或 "xiaoyou", "text",
-"at"}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
+"at", "attachments"?}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
 `started_at`、`edits`（补充或改过几次）、`approval`（正在等的那个授权的编号，没有是
 `null`）、`queued`（设了并行
 上限、正在排队）、`created_at`、`updated_at`、`finished_at`（交给过帮手的事是什么时候
 结束的；还在做、或者是小幽自己答的，是 `null`）、`seq`。
+卡片顶层的 `attachments` 汇总这件事已登记的产物，见
+[任务图片和可下载文件](#任务图片和可下载文件)。
 
 同一个 `client_id` 再发一次，返回的是已有的那条记录，不会把这句话再处理一遍；所以客户端
 没收到响应时可以放心重试。
@@ -755,6 +894,17 @@ UTF-8（记事本里选“UTF-8”，不要选“带有 BOM 的 UTF-8”）。
 字。带不过去的是那边会话知道的其他一切：读过的文件、工具的输出，以及比手机还记得的那几轮
 更早的内容。
 
+配套 App 最多配对八台 Runtime，并独立监控各台待回答的审批，即使当前聊天选中了另一台
+电脑也一样。每台电脑独立请求 feed，一次最多等待 50 秒。App 按创建时间合并请求，并把
+来源 Runtime 固定在请求上；手机或设备的答案回到原来的电脑，不会跟着当前选择走。
+任务列表仍显示选中的 Runtime。点通知查看来源审批，不会改掉当前聊天；查看来源任务则
+由主人明确切换电脑。
+
+某台电脑断线时，会移除该来源尚未核实的审批和通知；重连后从序号 0 获取当前仍待回答
+的请求。网络失败按 2 到 30 秒间隔重试。监控需要手机的前台 Runtime 连接服务，
+Android 13 或更新版本的通知提醒需要通知权限。配对另一台电脑不会把附件快照复制过去：
+文件 ID 和缓存内容保留来源 Runtime 归属，对话历史接口只传文字。
+
 另一种接法是不换台：手机只连一台 Runtime，把另一台电脑登记成它的一个 `remote` 代理。
 这样“那台电脑上的事”由小幽转交过去，或者由主人点名，对话记录只在主的那一台上。已经
 被别的 Runtime 转过手的话不会再往外转，所以两台互相登记也不会来回踢。
@@ -843,6 +993,12 @@ python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 
   因为会话表在磁盘上。
 
 ## 哪些验证过、哪些没有
+
+附件主机测试覆盖鉴权流式下载、源文件删除、重启后保留、符号链接/凭据/FIFO 排除、
+存储上限和安全错误元信息。替身代理测试覆盖任务清单、产物绑定最终回复，以及长回复
+全文保留和 JSON 包装解开。电脑端审批测试覆盖一次性决策、过期/失效的所属进程、重复
+回答、没有决策通道的通知，以及跨对话返回审批。这些是本机测试；真实手机的下载、系统
+文件打开、后台通知及已信任的电脑 Hook 操作，仍需在目标电脑和手机上完成端到端检查。
 
 `runtime/tests/test_runtime.py`（`./tools/validate.sh --static` 会运行）验证了：配置
 检查和旧写法的兼容；交给假的 `claude`、`codex` 可执行文件的完整命令行和标准输入、结果与
@@ -1004,4 +1160,7 @@ python3 runtime/tests/test_desktop_content.py
 python3 runtime/tests/test_desktop_titles.py
 python3 runtime/tests/test_task_titles.py
 python3 runtime/tests/test_desktop_hook.py
+python3 runtime/tests/test_desktop_approvals.py
+python3 runtime/tests/test_artifacts.py
+python3 runtime/tests/test_artifact_delivery.py
 ```

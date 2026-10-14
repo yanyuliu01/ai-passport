@@ -12,6 +12,9 @@
   GET  /v1/feed?conversation=&after=<序号>&wait=<秒>&usage=<rev>
                                         之后变过的卡，和现在的用量；没有变化时最多等 wait 秒
   GET  /v1/cards?conversation=          最近的卡
+  POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
+  GET  /v1/artifacts/<编号>/content     按附件编号取得已保存的文件快照
+  GET  /v1/artifacts/<编号>/thumbnail   取得图片缩略图（不可用时返回 404）
   POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
@@ -35,9 +38,10 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from . import __version__
+from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from .service import MAX_AUDIO_BYTES, RequestError, Service
@@ -48,10 +52,13 @@ MAX_WAIT_SECONDS = 60.0
 
 
 def make_server(config: Config, service: Service,
-                firmware: Optional[FirmwareStore] = None) -> ThreadingHTTPServer:
+                firmware: Optional[FirmwareStore] = None,
+                artifacts: Optional[ArtifactStore] = None) -> ThreadingHTTPServer:
     expected = ("Bearer " + config.token).encode("utf-8")
     if firmware is None:
         firmware = FirmwareStore(config.state_dir)
+    if artifacts is None:
+        artifacts = getattr(service, "artifacts", None) or ArtifactStore(config)
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -142,6 +149,27 @@ def make_server(config: Config, service: Service,
             except FirmwareError as error:
                 self._fail(404 if len(parts) == 4 else 500, str(error))
 
+        def _artifact_get(self, artifact_id: str, thumbnail: bool) -> None:
+            try:
+                stream, meta, mime, size = artifacts.open_content(artifact_id, thumbnail)
+            except ArtifactError as error:
+                self._fail(404, str(error))
+                return
+            with stream:
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(size))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Cache-Control", "private, no-store")
+                self.send_header("ETag", '"' + meta["sha256"] + '"')
+                self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(meta["name"], safe=""))
+                self.end_headers()
+                while True:
+                    chunk = stream.read(COPY_CHUNK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+
         def _firmware_post(self, parts: Any, query: Dict[str, Any]) -> None:
             try:
                 if len(parts) == 2:
@@ -196,6 +224,9 @@ def make_server(config: Config, service: Service,
                 })
                 return
             if not self._authorized():
+                return
+            if len(parts) == 4 and parts[:2] == ["v1", "artifacts"] and parts[3] in ("content", "thumbnail"):
+                self._artifact_get(parts[2], parts[3] == "thumbnail")
                 return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
@@ -326,6 +357,23 @@ def make_server(config: Config, service: Service,
                         self._fail(404, "没有这件事")
                     else:
                         self._send(200, card)
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "artifacts":
+                    if not isinstance(body, dict):
+                        raise RequestError("请求体应该是一个对象")
+                    cards = getattr(service, "card_store", None)
+                    if cards is None:
+                        cards = service._xiaoyou.cards
+                    if cards.get(parts[2]) is None:
+                        self._fail(404, "没有这件事")
+                        return
+                    try:
+                        card = artifacts.register_for_card(cards, parts[2], body.get("artifacts"),
+                                                           body.get("entry_index"))
+                    except ArtifactError as error:
+                        self._fail(400, str(error))
+                        return
+                    self._send(200, card)
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "reset":
                     self._send(200, {"reset": service.reset(parts[2])})

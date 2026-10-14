@@ -52,6 +52,10 @@ class Task:
     # 这件事用哪一档努力程度、哪个模型；None 用帮手平时的
     effort: Optional[str] = None
     model: Optional[str] = None
+    artifact_dir: Optional[str] = None
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    artifact_error: str = ""
+    full_reply_saved: bool = False
 
     @property
     def session_key(self) -> str:
@@ -184,9 +188,21 @@ class Tasks:
             error: Optional[str] = None
             try:
                 self._prepare(task, control)
+                system = task.system
+                if task.artifact_dir:
+                    instruction = (
+                        "\n\n## Task files for the phone\n"
+                        "When this task produces an image, design document or downloadable file, "
+                        "save that output inside this task's directory: %s. "
+                        "Write manifest.json there with {\"artifacts\":[{\"path\":\"preview.png\","
+                        "\"name\":\"Preview\"}]} (paths relative to that directory). "
+                        "Only list finished task outputs; never credentials, personal data or raw logs. "
+                        "Do not create files for a text-only answer. Keep the requested reply format."
+                    ) % task.artifact_dir
+                    system = (system or "") + instruction
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
-                    system=task.system, schema=task.schema, hop=task.hop, control=control,
+                    system=system, schema=task.schema, hop=task.hop, control=control,
                     effort=task.effort, model=task.model,
                 ))
             except AgentError as failure:

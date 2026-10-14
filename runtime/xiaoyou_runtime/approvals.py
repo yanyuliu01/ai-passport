@@ -71,26 +71,38 @@ class Approvals:
         self._items: Dict[str, Dict[str, Any]] = {}
         self._next = 1
         self._notify: Changed = changed or (lambda card, approval: None)
+        self._desktop_prefix = "d" + secrets.token_hex(6)
+        self._responders: Dict[str, Callable[[str], bool]] = {}
 
     def ask(self, card: str, conversation: str, agent: str, tool: str, detail: str,
-            kind: str = TOOL) -> str:
+            kind: str = TOOL, *, context: Optional[Dict[str, Any]] = None,
+            responder: Optional[Callable[[str], bool]] = None) -> str:
         """登记一个授权并返回它的编号。不等。
 
         kind 是问的什么：tool 是“这一步操作可以吗”，stall 是“它很久没动静了，还等吗”
         （可以 = 接着等，不行 = 停掉）。两种走同一个弹窗。
         """
         with self._changed:
-            approval_id = "a%d" % self._next
+            approval_id = (self._desktop_prefix if context and context.get("source") == "desktop"
+                           else "a") + str(self._next)
             self._next += 1
             self._items[approval_id] = {
                 "id": approval_id, "card": card, "conversation": conversation, "agent": agent,
                 "tool": tool[:MAX_TOOL_CHARS], "detail": detail[:MAX_DETAIL_CHARS],
                 "created_at": time.time(), "decision": None, "kind": kind,
             }
+            if context:
+                for key in ("source", "session_id", "project", "remote_actionable", "expires_at",
+                            "request_id", "subagent_id", "turn_id"):
+                    if key in context:
+                        self._items[approval_id][key] = context[key]
+            if responder is not None:
+                self._responders[approval_id] = responder
             # 答过的只留最近一些，够回答“这个已经答过了”就行。
             answered = [key for key, item in self._items.items() if item["decision"] is not None]
             for key in answered[:-50]:
                 del self._items[key]
+                self._responders.pop(key, None)
         self._notify(card, approval_id)
         return approval_id
 
@@ -136,18 +148,32 @@ class Approvals:
 
     def answer(self, approval_id: str, decision: str) -> Optional[bool]:
         """回答一个授权。没有这个编号返回 None；已经答过了返回 False。"""
+        if decision not in (ALLOW, DENY):
+            raise ValueError("invalid approval decision")
+        accepted = True
         with self._changed:
             item = self._items.get(approval_id)
             if item is None:
                 return None
             if item["decision"] is not None:
                 return False
-            item["decision"] = decision
+            if item.get("source") == "desktop":
+                if item.get("remote_actionable") is not True:
+                    return False
+                responder = self._responders.get(approval_id)
+                try:
+                    accepted = responder is not None and responder(decision)
+                except (OSError, ValueError):
+                    accepted = False
+                if not accepted:
+                    item["decision"], item["gone"] = DENY, True
+            if accepted:
+                item["decision"] = decision
             card = item["card"]
             waiting = self._waiting(card)
             self._changed.notify_all()
         self._notify(card, waiting)
-        return True
+        return accepted
 
     def drop(self, card: str) -> None:
         """那件事停了（做完、取消、重做）：还在等的授权都不用等了。"""
@@ -173,15 +199,19 @@ class Approvals:
             item = self._items.get(approval_id)
             return dict(item) if item is not None else None
 
-    def pending(self, conversation: Optional[str] = None) -> List[Dict[str, Any]]:
+    def pending(self, conversation: Optional[str] = None, *,
+                include_desktop: bool = False) -> List[Dict[str, Any]]:
         """还在等回答的授权，按出现的先后。"""
         with self._changed:
             return [
                 {key: item[key] for key in
-                 ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind")}
+                 ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind",
+                  "source", "session_id", "project", "remote_actionable", "expires_at",
+                  "request_id", "subagent_id", "turn_id") if key in item}
                 for item in self._items.values()
                 if item["decision"] is None
-                and (conversation is None or item["conversation"] == conversation)
+                and (conversation is None or item["conversation"] == conversation
+                     or (include_desktop and item.get("source") == "desktop"))
             ]
 
 

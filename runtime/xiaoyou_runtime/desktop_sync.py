@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .cards import Cards
+from .approvals import Approvals
+from .desktop_approvals import DesktopApprovals
 from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 from .desktop_titles import DesktopTitles
 from .task_titles import select_title
@@ -99,6 +101,7 @@ class DesktopSync:
                  codex_dir: Optional[Path] = None, claude_dir: Optional[Path] = None,
                  projects: Optional[List[Path]] = None,
                  owned: Callable[[], Set[str]] = lambda: set(),
+                 approvals: Optional[Approvals] = None,
                  clock: Callable[[], float] = time.time):
         home = home or Path.home()
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
@@ -112,6 +115,10 @@ class DesktopSync:
         self.last_discovery = float("-inf")
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
+        self.approvals = approvals
+        self.desktop_approvals = (DesktopApprovals(self.state_dir, approvals, self._approval_card,
+                                                  eligible=self._approval_eligible,
+                                                  clock=clock) if approvals is not None else None)
         # Reuse the same cards after a Runtime restart; never bind these sessions
         # to the runtime's conversation/session ownership or model context.
         for card in cards.recent(None, 1000):
@@ -128,6 +135,8 @@ class DesktopSync:
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=5)
+        if self.desktop_approvals is not None:
+            self.desktop_approvals.close()
         for session in self.sessions.values():
             card = self.cards.get(session.card) if session.card else None
             if card and card["state"] in ("working", "waiting"):
@@ -149,6 +158,24 @@ class DesktopSync:
         if key not in self.sessions:
             self.sessions[key] = Session(agent, session_id)
         return self.sessions[key]
+
+    def _approval_card(self, request: Dict[str, Any]) -> Optional[str]:
+        session = self._session(request["agent"], request["session_id"])
+        if not self._approval_eligible(request):
+            return None
+        session.cwd = request["cwd"]
+        if self.projects and str(Path(session.cwd).expanduser().resolve()) not in self.projects:
+            return None
+        observed = max(request["created_at"], request.get("heartbeat", request["created_at"]))
+        session.transition("waiting", observed, request.get("turn_id", ""))
+        session.hook_at = max(session.hook_at, observed)
+        self._publish(session, self.clock())
+        return session.card
+
+    def _approval_eligible(self, request: Dict[str, Any]) -> bool:
+        session = self.sessions.get((request["agent"], request["session_id"]))
+        return not ((session is not None and session.skip) or request["session_id"] in self.owned()
+                    or (self.projects and str(Path(request["cwd"]).expanduser().resolve()) not in self.projects))
 
     def _content(self, session: Session, role: str, content: Any, at: float,
                  identity: str = "", commentary: bool = False) -> None:
@@ -447,7 +474,10 @@ class DesktopSync:
         # a previously imported name as an authoritative upstream rename.
         entries = session.entries if session.content_loaded else (existing or {}).get("entries", [])
         title = self._title(session.agent, session.session_id, project, entries)
-        key = (status, project, session.model, session.tool, observed_at,
+        waiting = (next((item["id"] for item in self.approvals.pending()
+                         if item["card"] == session.card and item.get("source") == "desktop"), None)
+                   if self.approvals is not None else None)
+        key = (status, project, session.model, session.tool, observed_at, waiting,
                session.started_at, stale, content, session.content_truncated, tuple(session.progress),
                title.title, title.source, title.truncated)
         if key == session.published and existing:
@@ -474,7 +504,7 @@ class DesktopSync:
         self.cards.update(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, monitoring_only=True, desktop_status=status,
                           observed_at=observed_at, stale=stale, model=session.model or None,
-                          started_at=session.started_at, approval=None, queued=False,
+                          started_at=session.started_at, approval=waiting, queued=False,
                           brief=_text(latest_reply, 120) or "%s · %s" % (project, label),
                           progress_lines=progress[-5:],
                           mood="busy" if status in ("running", "waiting") else "idle", **fields)
@@ -546,3 +576,5 @@ class DesktopSync:
                     self._publish(session, now, unavailable=True)
         for session in newest:
             self._publish(session, now)
+        if self.desktop_approvals is not None:
+            self.desktop_approvals.poll()

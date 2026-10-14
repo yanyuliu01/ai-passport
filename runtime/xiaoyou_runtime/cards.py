@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .store import _write
+from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
 
 # talking 留给“小幽正在处理这句话”，现在 Runtime 自己不会把卡放在这个状态。
@@ -89,7 +90,8 @@ class Cards:
 
         entries = [
             {"role": entry["role"], "text": entry["text"],
-             "at": entry.get("at") if isinstance(entry.get("at"), (int, float)) else 0}
+             "at": entry.get("at") if isinstance(entry.get("at"), (int, float)) else 0,
+             "attachments": clean_attachments(entry.get("attachments"))}
             for entry in card.get("entries", [])
             if isinstance(entry, dict) and entry.get("role") in ("you", "xiaoyou")
             and isinstance(entry.get("text"), str)
@@ -110,6 +112,7 @@ class Cards:
             if isinstance(card.get("finished_at"), (int, float))
             and not isinstance(card.get("finished_at"), bool) else None,
             "entries": entries,
+            "attachments": clean_attachments(card.get("attachments")),
             "brief": text("brief"),
             "mood": text("mood", "idle"),
             "progress": [line for line in card.get("progress", []) if isinstance(line, str)]
@@ -141,7 +144,9 @@ class Cards:
     @staticmethod
     def _copy(card: Dict[str, Any]) -> Dict[str, Any]:
         copy = dict(card)
-        copy["entries"] = [dict(entry) for entry in card["entries"]]
+        copy["entries"] = [dict(entry, attachments=[dict(item) for item in entry.get("attachments", [])])
+                           for entry in card["entries"]]
+        copy["attachments"] = [dict(item) for item in card.get("attachments", [])]
         copy["progress"] = list(card["progress"])
         copy["cost"] = dict(card["cost"]) if card.get("cost") else None
         return copy
@@ -201,7 +206,7 @@ class Cards:
                 "id": "c%d" % self._next, "conversation": conversation,
                 **name.fields(), "state": state, "agent": agent,
                 "created_at": now, "updated_at": now, "finished_at": None,
-                "entries": [], "brief": "", "mood": "idle",
+                "entries": [], "attachments": [], "brief": "", "mood": "idle",
                 "progress": [], "started_at": None, "edits": 0, "approval": None,
                 "queued": False, "effort": None, "model": None, "model_asked": None,
                 "cost": None, "seq": 0,
@@ -220,6 +225,7 @@ class Cards:
     def update(self, card_id: str, say: Optional[str] = None, said: Optional[str] = None,
                progress: Optional[str] = None, fresh: bool = False,
                progress_lines: Optional[List[str]] = None,
+               attachments: Optional[List[Dict[str, Any]]] = None,
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。"""
@@ -233,6 +239,11 @@ class Cards:
             if say is not None:
                 card["entries"].append(
                     {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now})
+            if attachments is not None:
+                incoming = clean_attachments(attachments)
+                self._merge_attachments(card, incoming)
+                if say is not None:
+                    card["entries"][-1]["attachments"] = incoming
             del card["entries"][:-MAX_ENTRIES]
             if fresh:
                 card["progress"] = []
@@ -256,6 +267,33 @@ class Cards:
                 card["finished_at"] = None
             elif card["agent"] and not card.get("finished_at"):
                 card["finished_at"] = now
+            snapshot = self._touch(card)
+        return self._tell(snapshot)
+
+    @staticmethod
+    def _merge_attachments(card: Dict[str, Any], incoming: List[Dict[str, Any]]) -> None:
+        items = {item["id"]: item for item in card.get("attachments", [])}
+        for item in incoming:
+            items[item["id"]] = dict(item)
+        card["attachments"] = list(items.values())
+
+    def add_attachments(self, card_id: str, attachments: List[Dict[str, Any]],
+                        entry_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Attach registered outputs and wake feed clients even without a text edit."""
+        with self._changed:
+            card = self._cards.get(card_id)
+            if card is None:
+                return None
+            incoming = clean_attachments(attachments)
+            self._merge_attachments(card, incoming)
+            if entry_index is None:
+                entry_index = next((index for index in range(len(card["entries"]) - 1, -1, -1)
+                                    if card["entries"][index]["role"] == "xiaoyou"), None)
+            if entry_index is not None and 0 <= entry_index < len(card["entries"]):
+                entry = card["entries"][entry_index]
+                items = {item["id"]: item for item in entry.get("attachments", [])}
+                items.update({item["id"]: dict(item) for item in incoming})
+                entry["attachments"] = list(items.values())
             snapshot = self._touch(card)
         return self._tell(snapshot)
 

@@ -38,7 +38,8 @@ particular host. See [What is and is not verified](#what-is-and-is-not-verified)
 ## Requirements
 
 - Python 3.9 or newer. No third-party packages, unless you enable the built-in
-  speech recognition engine (see [Voice](#voice)).
+  speech recognition engine (see [Voice](#voice)). Pillow is optional for resized
+  image thumbnails; attachment registration and downloads also work without it.
 - Whatever each configured agent needs: a `claude_code` agent needs Claude Code
   installed and logged in on the same machine and user (`claude` must work in a
   terminal); a `codex` agent needs the Codex command line installed and logged
@@ -130,8 +131,10 @@ the existing `card` message: `said` is limited to 159 UTF-8 bytes and the App's
 desktop `reply` to 480 bytes, within the device's shared 4 KiB text pool. Firmware
 that already supports desktop cards needs no new flash for content sync.
 
-The phone and hardware observe these sessions; continue, stop, and approve them
-in the desktop app.
+Desktop conversation cards remain read-only: continue and stop them in the
+desktop app. A live permission request can be answered separately from the phone
+when the optional approval bridge below is installed and trusted; a status signal
+or notification without that decision channel still requires desktop confirmation.
 Ending a response means this turn ended, not that the whole project is complete.
 An active session becomes `unknown` after five minutes without source events,
 or when its transcript becomes unavailable.
@@ -141,13 +144,78 @@ versions. Logs alone cannot reliably identify every approval wait. This feature
 observes local records; cloud-only conversations without a local transcript are
 not guaranteed to appear.
 
+### Shared history for desktop agents
+
+The shared-history reader lets Codex and Claude Code pick up Runtime work
+without asking the owner to repeat it. It reads Runtime cards/conversations and
+both agents' local visible transcripts, including their separate `config_dir`
+directories from this Runtime configuration. The common schema includes source,
+actor, task/card/session ID, original message timestamps, state, visible text,
+attachments, and whether content is a recent fragment. Other clients can consume
+the JSON output without depending on either agent's transcript format.
+
+From the repository root, query the retained history without calling a model:
+
+```bash
+python3 runtime/xiaoyou_runtime/shared_history.py --context
+python3 runtime/xiaoyou_runtime/shared_history.py --task c127
+python3 runtime/xiaoyou_runtime/shared_history.py --format json
+python3 runtime/xiaoyou_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
+```
+
+Use `--config /absolute/config.json` and `--project /absolute/project` for another
+Runtime/project, and repeat `--codex-dir` or `--claude-dir` for additional local
+configuration directories. The reader never starts/resumes a helper, writes an
+agent transcript/database, or turns a recorded approval into a new decision.
+The repository's `AGENTS.md` startup rule uses the same reader, and `CLAUDE.md`
+points to that rule as well.
+
+Optional context hooks automate delivery on `SessionStart` (including resume
+and compaction) and `UserPromptSubmit`. The first event supplies a bounded recap;
+later prompts receive only changed tasks/dialogue. The current desktop session
+and Runtime-owned helper transcripts are excluded from duplicate observation.
+Injected history is filtered out when desktop transcripts are read again. Each
+agent/session has a separate private fingerprint cursor. Both hooks use the
+official `hookSpecificOutput.additionalContext` contract; they never block a
+prompt or approve an operation, and failures return control to the desktop.
+
+Prepare and install these two context hooks, preserving existing settings and
+approval/status hooks:
+
+```bash
+python3 tools/setup-history-sync.py            # preview destination files
+python3 tools/setup-history-sync.py --install  # merge; private backups retained
+```
+
+This updates `~/.codex/hooks.json` and `~/.claude/settings.json` for this project.
+Codex requires reviewing/trusting the changed definition through `/hooks`.
+Claude Code must load the updated settings in a new/resumed session. A hook
+refreshes `state/history-context/shared-history.md` for people to inspect in a
+desktop file panel. Context delivery is distinct from native chat bubbles:
+neither adapter imports fabricated turns into the other app's conversation.
+See the official [Codex hooks](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hooks](https://code.claude.com/docs/en/hooks) contracts.
+
+This is a view of retained visible history, not an unlimited archive. Runtime
+card/transcript retention still applies. Per agent configuration directory the
+reader selects the newest 32 project transcript files and uses the observer's
+bounded recent-content adapter; old archived/cloud-only/deleted conversations
+may be unavailable. Original messages retain their timestamps; a fresh import
+does not make old work new. A task marked `done` indicates a completed turn and
+does not prove deployment or device acceptance. Recognizable credentials are
+redacted, but arbitrary personal prose remains private local content. Generated
+views and delivery cursors stay in ignored `state/`, outside Git.
+
 ### Optional lifecycle hooks for approval waits
 
 The optional hook receiver records status snapshots in the same `state_dir` as
-the running Runtime. Hooks record metadata and status only, without prompts,
-replies, tool arguments, or tool results. The receiver reads one bounded JSON
-object from standard input and prints no standard output. From `runtime/`, the
-receiver command is:
+the running Runtime. Lifecycle snapshots contain metadata and status, without
+prompts, replies, raw tool arguments, or tool results. Permission requests and
+permission notifications additionally create a private approval record with the
+requested operation description and an operation fingerprint; recognizable
+credentials in that description are redacted. The receiver reads one bounded
+JSON object from standard input. Status-only events produce no standard output.
+From `runtime/`, the receiver command is:
 
 ```bash
 python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
@@ -207,6 +275,49 @@ locations and lifecycle behavior. The Runtime does not install or modify global
 hook configuration automatically. Build and host-test success do not establish
 phone delivery, Bluetooth forwarding, or hardware rendering; test that path with
 the connected App and device.
+
+### Optional desktop permission bridge
+
+For a synchronous `PermissionRequest` hook, add `--approval-bridge` and
+`--approval-timeout 300` to the receiver command. It waits up to 300 seconds
+(configurable, at most 600) for one `allow` or `deny` answer, then prints exactly
+one official `hookSpecificOutput` decision. This answers that operation only.
+Timeout, an unavailable Runtime, a closed session, or a lost hook lease produces
+no decision and returns control to the desktop's normal permission prompt;
+silence never grants permission.
+
+Generate mergeable configuration for each agent instead of hand-editing timeout
+values:
+
+```bash
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+  --agent codex --approval-timeout 300 --print-config
+python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+  --agent claude --approval-timeout 300 --print-config
+```
+
+The generator prints JSON; it does not install anything. Merge it into the
+agent's hook configuration, preserving existing handlers, and keep the hook's
+outer timeout longer than the approval wait (the generated value is 310 seconds).
+Start this Runtime with `--desktop-sync`, using the same resolved `state_dir`.
+Codex must review and trust the exact installed definitions through `/hooks`;
+Claude Code must load the matching settings for that session. Having the source
+code or passing tests does not activate hooks in existing desktop sessions.
+
+Requests live in the private `state_dir/desktop-approvals/` spool. Runtime checks
+the owning hook's heartbeat, session/turn/tool identity, operation fingerprint,
+and deadline before accepting an answer. Duplicate or stale answers are rejected.
+Oversized descriptions, unsupported hook channels, and Claude's
+`permission_prompt` notifications are notification-only: the App tells the owner
+to confirm on the computer and exposes no remote allow/deny buttons.
+
+Desktop approvals carry `source: "desktop"`, `session_id`, `project`,
+`request_id`, `remote_actionable`, and `expires_at` (with optional turn/subagent
+identifiers). `/v1/feed` includes them across conversations, so changing the
+phone's chat does not hide a desktop request. The desktop card remains read-only
+even when its separate, still-valid approval has `remote_actionable: true`.
+The phone needs Android notification permission to alert in the background;
+without it, the approval is still visible inside the App.
 
 ## Configuration
 
@@ -446,6 +557,58 @@ saying the runtime was restarted.
 A card whose work went to a helper has three more fields (since 0.6.0):
 `effort` is the effort the thing runs at, `model` the model actually used, and
 `cost` what it has spent so far. The next two sections explain them.
+
+### Task images and downloadable files
+
+Task outputs are registered before the phone can display or download them. For
+Runtime-managed Claude Code, Codex, and DSH tasks, the job includes its dedicated
+`state_dir/artifact-inbox/<card-id>/` directory. Save finished files there and
+write a relative-path manifest:
+
+```json
+{
+  "artifacts": [
+    {"path": "preview.png", "name": "Preview.png"},
+    {"path": "design.pdf", "name": "Design.pdf"}
+  ]
+}
+```
+
+Use `manifest.json` in that directory. Do not list credentials, personal data, or
+raw logs. Automatic import stays inside this task's inbox; it does not scan the
+computer for paths mentioned in a reply. An authenticated explicit registration
+request may also read the card's agent workspace, while hidden/private paths,
+credential/configuration files, other Runtime state, symlinks, and directory
+traversal are rejected. Each registration accepts at most 16 files.
+
+The Runtime copies each file into `state_dir/artifacts/`, computes its SHA-256,
+and assigns a stable attachment ID. Downloads use that ID, never a computer path.
+Snapshots remain available after the source is changed or removed, and after a
+Runtime restart. The limit is 64 MB per file and 1 GB of stored snapshots; a failed
+import produces an attachment with `status: "error"` and a bounded explanation.
+Removing a card does not automatically reclaim its snapshots.
+
+Metadata appears in the card's aggregate `attachments` list and the final reply's
+`entries[].attachments`, with `id`, `name`, `mime`, `size`, `kind` (`image` or
+`file`), `width`, `height`, `sha256`, `source`, `created_at`, `status`, `error`, and
+the boolean `thumbnail`. Adding attachments advances the card's `seq`. A helper
+reply longer than the 8,000-character display limit is also saved as a UTF-8 text
+attachment before display cleanup; the visible reply explains the truncation.
+JSON `reply` wrappers are unpacked before display or saving the full text.
+
+Pillow, when available to the Runtime's Python, creates a preview of at most
+480 by 480 pixels. Without Pillow, a supported image no larger than 2 MB and one
+megapixel can use its original bytes as the preview; larger images expose their
+original content with `thumbnail: false`. Missing previews return `404`, letting
+the client fall back to the original. Both endpoints require the Runtime token
+and stream files in bounded chunks.
+
+The companion App displays registered images and file cards and can download,
+save, or open files through Android's system facilities. Cache ownership includes
+the originating Runtime, attachment ID, and hash. This first version does not
+upload phone attachments, fetch arbitrary external URLs, render PDF documents
+inside the App, or transfer general files over Bluetooth. Desktop transcript
+observation by itself does not import desktop attachments.
 
 ### Tiers: model and effort
 
@@ -725,7 +888,7 @@ Then set `"config_dir": "~/.codex-xiaoyou"` on that `codex` agent.
 ## HTTP interface
 
 All requests except `/healthz` need `Authorization: Bearer <token>`. Bodies and
-responses are JSON.
+responses are JSON except the documented voice, firmware, and artifact binaries.
 
 | Request | Result |
 | --- | --- |
@@ -735,10 +898,13 @@ responses are JSON.
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. |
-| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: `usage` is the usage at this moment (as in `GET /v1/usage`; always present since 0.6.0), and a request that carries the `rev` of the usage it already has also returns early when usage changes. The rest: the cards of that conversation, in full, whose sequence number is above `after`, and every approval of that conversation still waiting for an answer (`{"id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind"}`; `kind` is `tool` (may this step be done) or `stall` (it has been silent for long, keep waiting?), since 0.5.4). An approval appearing or being answered changes its card, so waiting for cards is waiting for approvals too. With `wait` (up to 60) the call waits while nothing has changed and returns as soon as something does. A client keeps `seq` and sends it as `after` next time; a `seq` lower than the one it holds means the runtime's records were replaced, and it starts again from 0. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
+| `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
+| `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
+| `GET /v1/artifacts/<id>/thumbnail` | A binary image preview; `404` when no preview is available. Use `/content` as the fallback. |
 | `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card; `400` for a desktop monitoring card, which must be stopped on the desktop. |
-| `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval. `404` if there is no such approval (or the runtime was restarted); `409` if it has been answered already or its thing has stopped. |
+| `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval, including a live desktop request with `remote_actionable: true`. `404` if there is no such approval (or the runtime was restarted); `409` for an already answered, notification-only, expired, or otherwise stale request. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
 | `GET /v1/firmware` | `{"rev", "versions": […], "target", "device", "log"}`: the firmware library, newest version first. See [Device firmware](#device-firmware). |
@@ -755,9 +921,10 @@ requested conversation. They carry `source: "desktop"`, `monitoring_only: true`,
 `content_scope: "recent"` and `content_truncated`. Their bounded `entries` hold
 visible human requests (`role: "you"`) and originating assistant output
 (`role: "xiaoyou"`, labeled Codex or Claude in the App). Empty `entries` mean no
-visible content has been collected. These cards have no Runtime approval; a
-desktop `waiting` state is a status signal, and confirmation stays in the
-originating desktop conversation.
+visible content has been collected. A desktop `waiting` state alone is only a
+status signal. The optional permission bridge can supply a separate approval
+whose `remote_actionable` field determines whether it can be answered remotely;
+ordinary continuation and cancellation remain in the desktop conversation.
 
 A message record says whether Xiaoyou has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`
@@ -791,7 +958,7 @@ A card has `id` (`c1`, `c2`, …), `conversation`, `title` (the canonical name:
 at most 200 characters, or 24 when derived from a request), `title_source`
 (`upstream`, `task`, `request`, or `fallback`), `title_truncated`, `state`,
 `agent` (who is or was on it; `null` when Xiaoyou
-answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at"}]`,
+answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at", "attachments"?}]`,
 the latest 40), `brief`, `mood`, `progress` (the latest 5 lines of progress,
 starting over with each round), `started_at`, `edits` (how many times it was
 added to or changed), `approval` (the number of the approval it is waiting
@@ -799,6 +966,8 @@ for, or `null`), `queued`
 (waiting its turn under a limit on parallel things), `created_at`,
 `updated_at`, `finished_at` (when a thing handed to a helper ended; `null`
 while it is in progress and for what Xiaoyou answered herself), and `seq`.
+The top-level `attachments` list aggregates the task's registered outputs; see
+[Task images and downloadable files](#task-images-and-downloadable-files).
 
 Sending the same `client_id` again returns the existing record instead of
 dealing with the sentence twice, so a client may retry safely after a lost
@@ -947,6 +1116,23 @@ replies, each shortened to 500 and 1000 characters when quoted to the model.
 What does not carry over is everything else the other session knew: files it
 read, tool output, and anything older than the turns the phone still holds.
 
+The companion App can pair with at most eight Runtimes and monitors their
+pending approvals independently, even while a different computer is selected
+for chat. Each computer uses a separate feed poll with a wait of up to 50 seconds.
+The App merges pending requests by creation time and keeps their originating
+Runtime bound to the request; a phone or device answer goes back to that computer,
+not whichever one is currently selected. Task lists still show the selected
+Runtime. Opening a notification shows its approval without changing the chat;
+viewing the originating task is an explicit computer switch.
+
+Losing a connection removes that computer's unverified pending approvals and
+notifications; reconnecting fetches its current pending requests from sequence 0.
+Network failures retry after 2 to 30 seconds. Monitoring requires the phone's
+foreground Runtime connection service, and Android 13 or newer requires
+notification permission for alerts. Pairing another computer does not copy
+attachment snapshots there: file IDs and cached content keep their original
+Runtime ownership, while the conversation-history endpoint transfers text only.
+
 The other arrangement is not to switch at all: the phone talks to one runtime,
 and the other computer is registered there as a `remote` agent. Work that
 belongs on that computer is then handed over by Xiaoyou, or sent there when the
@@ -1062,6 +1248,16 @@ holds only the part it took part in.
   table is on disk.
 
 ## What is and is not verified
+
+Attachment host tests exercise authenticated streaming downloads, source-file
+removal, restart persistence, symlink/credential/FIFO exclusions, storage limits,
+and safe failure metadata. Stand-in agent tests cover task manifests, attachment
+binding to the final entry, and preserving long replies without JSON wrappers.
+Desktop approval tests cover one-shot decisions, expired/dead owners, duplicate
+answers, notifications without a decision channel, and desktop approvals across
+conversations. These are local tests; real phone downloads, system file opening,
+background notifications, and trusted desktop hook operation still need an
+end-to-end check on the intended computer and phone.
 
 Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
 --static`): configuration checks and the old configuration shape; the exact
@@ -1302,4 +1498,7 @@ python3 runtime/tests/test_desktop_content.py
 python3 runtime/tests/test_desktop_titles.py
 python3 runtime/tests/test_task_titles.py
 python3 runtime/tests/test_desktop_hook.py
+python3 runtime/tests/test_desktop_approvals.py
+python3 runtime/tests/test_artifacts.py
+python3 runtime/tests/test_artifact_delivery.py
 ```

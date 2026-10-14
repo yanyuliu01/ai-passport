@@ -82,9 +82,9 @@ def _is_injected(text: str) -> bool:
     return head.startswith(INJECTED_PREFIXES)
 
 
-def _clip(text: str) -> str:
+def _clip(text: str, limit: int = MAX_TEXT_CHARS) -> str:
     text = " ".join(text.split())
-    return text if len(text) <= MAX_TEXT_CHARS else text[:MAX_TEXT_CHARS] + "…"
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _claude_project_dir(repo: Path, home: Path) -> Path:
@@ -141,6 +141,46 @@ def claude_sessions(repo: Path, now: float, home: Optional[Path] = None) -> List
         if turns:
             sessions.append({"when": path.stat().st_mtime, "turns": turns})
     return sessions
+
+
+# 接话用的，比简报摘得更多：这是要接着往下干活的背景，不是说给人听的一句话。
+RECAP_TURNS = 14
+RECAP_TEXT_CHARS = 700
+
+
+def latest_claude_session(repo: Path, now: Optional[float] = None, home: Optional[Path] = None,
+                          exclude: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """这个仓库在（通常是主人平时用的）某套 Claude 配置下最近的一个会话。
+
+    跳过 exclude 这个会话编号（用来在自己隔离的配置目录里接话时，不接自己刚留下的那个）。
+    没有任何会话就是 None。"""
+    folder = _claude_project_dir(repo, home or Path.home())
+    if not folder.is_dir():
+        return None
+    now = time.time() if now is None else now
+    cutoff = now - RECENT_DAYS * 86400
+    files = [path for path in folder.glob("*.jsonl") if path.stat().st_mtime >= cutoff]
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in files:
+        if exclude is not None and path.stem == exclude:
+            continue
+        turns = _claude_turns(path, RECAP_TURNS)
+        if turns:
+            return {"session_id": path.stem, "when": path.stat().st_mtime, "turns": turns}
+    return None
+
+
+def recap_text(session: Dict[str, Any], now: Optional[float] = None) -> str:
+    """接话用的一段话：主人最近在别的地方（通常是 App）聊过的内容，接着往下说。"""
+    now = time.time() if now is None else now
+    lines = [
+        "（主人最近（%s）在这个项目上聊过下面这些，当时用的不是这套会话——"
+        "接着它的话往下做，不要重新打招呼或者复述这些内容）" % _when(session["when"], now)
+    ]
+    for turn in session["turns"]:
+        who = "主人" if turn["role"] == "user" else "回答"
+        lines.append("%s：%s" % (who, _clip(turn["text"], RECAP_TEXT_CHARS)))
+    return "\n".join(lines)
 
 
 def _codex_session(path: Path, repo: str, limit: int) -> Tuple[Optional[str], List[Dict[str, str]]]:

@@ -73,6 +73,14 @@ class Service:
         xiaoyou.defer = self._defer
         xiaoyou.cards.subscribe(self._card_changed)
 
+    @property
+    def artifacts(self):
+        return self._xiaoyou.artifacts
+
+    @property
+    def card_store(self):
+        return self._xiaoyou.cards
+
     def agents(self) -> List[Dict[str, Any]]:
         """这台 Runtime 上小幽能用的代理，给客户端显示和点名用。
 
@@ -262,7 +270,7 @@ class Service:
                     or (usage is not None and meter.rev != usage)):
                 break
         # 授权出现和有了答案都会让那张卡变一次，所以等卡就等到了授权。
-        result["approvals"] = self._xiaoyou.approvals.pending(conversation)
+        result["approvals"] = self._xiaoyou.approvals.pending(conversation, include_desktop=True)
         result["usage"] = meter.snapshot()
         return result
 

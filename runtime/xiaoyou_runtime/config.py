@@ -53,6 +53,10 @@ class AgentSpec:
     efforts: List[str] = field(default_factory=list)
     # claude_code / dsh
     config_dir: Optional[Path] = None
+    # claude_code：配了独立 config_dir 时，新开会话要不要接上主人平时那套配置里这个项目
+    # 最近聊过的内容。默认不接：这一条要专门为某个代理打开，免得悄悄影响到别的代理
+    # （比如碰硬件、固件的那个，不该被不相关的背景信息搅进去）。
+    app_recap: bool = False
     # 后台做事时的权限模式。manual：该问的都问，问到主人那里
     permission_mode: str = "manual"
     allowed_tools: List[str] = field(default_factory=list)
@@ -280,6 +284,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         description=_expect(raw.get("description", ""), str, where + ".description").strip(),
         aliases=aliases,
         speaks=_expect(raw.get("speaks", kind in SPEAKS_BY_DEFAULT), bool, where + ".speaks"),
+        app_recap=_expect(raw.get("app_recap", False), bool, where + ".app_recap"),
         timeout_seconds=_timeout(
             raw.get("timeout_seconds", default_timeout), where + ".timeout_seconds"
         ),
@@ -288,6 +293,8 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         for key in ("effort", "efforts", "models"):
             if key in raw:
                 raise ConfigError("%s 是 %s 类型：没有 %s 这一项" % (where, kind, key))
+    if common["app_recap"] and kind != "claude_code":
+        raise ConfigError("%s.app_recap 只有 claude_code 类型才有" % where)
     if kind == "echo":
         return AgentSpec(**common)
     if kind == "remote":

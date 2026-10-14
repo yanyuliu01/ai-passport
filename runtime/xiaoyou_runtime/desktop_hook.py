@@ -1,8 +1,9 @@
-"""Record status-only lifecycle hooks from existing desktop conversations.
+"""Observe desktop hooks and optionally relay one-shot permission decisions.
 
 Run ``python3 -m xiaoyou_runtime.desktop_hook --state-dir PATH --agent codex``
-as a command hook. The hook never returns model context or permission decisions;
-recording failures are reported on stderr and leave the conversation running.
+as a command hook. With ``--approval-bridge``, an official PermissionRequest
+hook waits for the companion's answer. No answer defers to the desktop prompt;
+other lifecycle events remain status-only and never return model context.
 """
 
 import argparse
@@ -10,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -27,11 +29,36 @@ EVENT_STATUS = {
     "UserPromptSubmit": "running",
     "PermissionRequest": "waiting",
     "PostToolUse": "running",
+    "PostToolUseFailure": "running",
     "Stop": "idle",
     "Interrupt": "interrupted",
     "StopFailure": "failed",
     "SessionEnd": "unknown",
 }
+
+
+def configuration(agent: str, state_dir: Path, runtime_dir: Path,
+                  python: str = sys.executable, timeout: float = 300.0) -> Dict[str, Any]:
+    """Return mergeable hook groups; never install or replace user settings."""
+    if agent not in ("codex", "claude") or not 0 < timeout <= 600:
+        raise ValueError("invalid hook configuration")
+    command = "env PYTHONPATH=%s %s -m xiaoyou_runtime.desktop_hook --state-dir %s --agent %s" % (
+        shlex.quote(str(runtime_dir.resolve())), shlex.quote(python),
+        shlex.quote(str(state_dir.resolve())), agent)
+    events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+    events += ["Interrupt"] if agent == "codex" else ["PostToolUseFailure", "StopFailure"]
+    groups = {event: [{"hooks": [{"type": "command", "command": command, "timeout": 5}]}]
+              for event in events}
+    if agent == "codex":
+        for event in ("SessionEnd", "Interrupt"):
+            groups[event][0]["hooks"][0]["timeout"] = 1
+    groups["PermissionRequest"] = [{"hooks": [{"type": "command",
+        "command": command + " --approval-bridge --approval-timeout %s" % timeout,
+        "timeout": math.ceil(timeout + 10)}]}]
+    if agent == "claude":
+        groups["Notification"] = [{"matcher": "permission_prompt", "hooks": [{
+            "type": "command", "command": command, "timeout": 5}]}]
+    return {"hooks": groups}
 
 
 def _text(value: Any, limit: int, required: bool = False) -> Optional[str]:
@@ -83,6 +110,14 @@ def normalize(agent: str, payload: Any,
         clean = _text(value, limit)
         if clean is not None:
             result[key] = clean
+    if event in ("PostToolUse", "PostToolUseFailure"):
+        from .desktop_approvals import operation_fingerprint
+        tool = payload.get("tool_name")
+        if isinstance(tool, str):
+            result["tool_fingerprint"] = operation_fingerprint(tool, payload.get("tool_input"))
+        tool_id = _text(payload.get("tool_use_id") or payload.get("tool_call_id"), MAX_SESSION_CHARS)
+        if tool_id:
+            result["tool_id"] = tool_id
     return result
 
 
@@ -117,7 +152,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Record a desktop conversation status hook")
     parser.add_argument("--state-dir", required=True, type=Path)
     parser.add_argument("--agent", required=True, choices=("codex", "claude"))
+    parser.add_argument("--approval-bridge", action="store_true",
+                        help="relay one-shot decisions for official PermissionRequest hooks")
+    parser.add_argument("--approval-timeout", type=float, default=300.0,
+                        help="seconds to wait before restoring desktop approval (maximum 600)")
+    parser.add_argument("--print-config", action="store_true", help="print mergeable official hook configuration")
     args = parser.parse_args(argv)
+    if args.print_config:
+        print(json.dumps(configuration(args.agent, args.state_dir, Path(__file__).resolve().parent.parent,
+                                       timeout=args.approval_timeout), ensure_ascii=False, indent=2))
+        return 0
     try:
         # Reading bytes keeps the limit independent of UTF-8 character width.
         stream = getattr(sys.stdin, "buffer", sys.stdin)
@@ -127,9 +171,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if len(raw) > MAX_INPUT_BYTES:
             raise ValueError("hook input exceeds size limit")
         payload = json.loads(raw.decode("utf-8"))
-        event = normalize(args.agent, payload)
+        permission = isinstance(payload, dict) and payload.get("hook_event_name") == "PermissionRequest"
+        candidate = payload
+        if permission:
+            # Approval hooks may belong to a subagent. Bind them to its parent
+            # session and retain agent_id in the approval rather than losing the
+            # request because the transcript observer excludes sidechains.
+            candidate = {key: value for key, value in payload.items() if key not in
+                         ("agent_id", "parent_thread_id", "isSidechain", "is_sidechain", "source",
+                          "transcript_path")}
+        event = normalize(args.agent, candidate)
         if event is not None:
             record(args.state_dir, event)
+            notification = payload.get("hook_event_name") == "Notification" and event["status"] == "waiting"
+            if permission or notification:
+                from .desktop_approvals import create_request, hook_output, wait_for_decision
+                request = create_request(args.state_dir, args.agent, payload,
+                    actionable=args.approval_bridge and permission, timeout=args.approval_timeout)
+                if permission and args.approval_bridge:
+                    output = hook_output(wait_for_decision(args.state_dir, request))
+                    if output is not None:
+                        print(json.dumps(output, ensure_ascii=False))
     except (OSError, ValueError, TypeError, RecursionError):
         # Do not echo exceptions: parser errors may contain private hook input.
         print("Desktop status hook could not record this event.", file=sys.stderr)

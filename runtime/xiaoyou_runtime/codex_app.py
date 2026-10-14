@@ -447,6 +447,9 @@ def _answer(server: AppServer, spec: AgentSpec, control: Control, message: Dict[
     if method == "item/commandExecution/requestApproval":
         command = params.get("command") if isinstance(params.get("command"), str) else ""
         where = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
+        # 就在它平时的工作目录里：不必再写一遍，省下设备上的地方给命令本身。
+        if where and spec.workdir is not None and Path(where).resolve() == spec.workdir.resolve():
+            where = ""
         allowed = ask("命令", "%s%s" % (command, "\n（在 %s）" % where if where else ""))
         result = {"decision": "accept" if allowed else "decline"}
     elif method == "item/fileChange/requestApproval":

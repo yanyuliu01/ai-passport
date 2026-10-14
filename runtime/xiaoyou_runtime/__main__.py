@@ -257,9 +257,9 @@ def main(argv=None) -> int:
                               claude_dir=args.desktop_claude_dir.expanduser()
                               if args.desktop_claude_dir else None,
                               projects=[Path(path) for path in args.desktop_project],
-                              owned=store.session_ids)
+                              owned=store.session_ids, approvals=xiaoyou.approvals)
         desktop.start()
-        print("电脑会话状态同步已开启（只读；不发送对话正文）", file=sys.stderr)
+        print("电脑会话同步已开启；审批 Hook 通过手机和设备回应", file=sys.stderr)
     print("小幽 Runtime %s「%s」已启动：http://%s:%d（代理 %s，默认交给 %s，语音识别 %s）" % (
         __version__, config.name, config.host, config.port, roster, config.default_agent,
         config.stt_engine), file=sys.stderr)

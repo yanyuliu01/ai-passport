@@ -16,7 +16,7 @@ _CONTEXT_NAMES = (
     r"environment_context|in-app-browser-context|external_codex_apps_open_page|"
     r"skills_instructions|app-context|user_instructions|system-reminder|"
     r"permissions(?:[_:-][\w:-]+)?|codex_apps_client_time_context|"
-    r"codex_apps_open_page_instructions|send_user_message_question_reply"
+    r"codex_apps_open_page_instructions|send_user_message_question_reply|xiaoyou-history-context"
 )
 _CONTEXT_TOKEN = re.compile(
     r"<\s*(?P<close>/?)\s*(?P<name>" + _CONTEXT_NAMES + r")\b[^>]*(?:>|$)",

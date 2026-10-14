@@ -26,10 +26,11 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from . import project_brief
 from .approvals import progress_line
 from .config import AgentSpec
 
@@ -633,7 +634,25 @@ class ClaudeCodeAgent(Agent):
             env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
         return env
 
+    def _app_recap(self) -> str:
+        """配了 app_recap 的代理：主人平时那套 Claude 配置下，这个项目最近聊过的内容
+        （CLI、App 都算）。没开这一项、没配 workdir、接不上就是空字符串：这是锦上添花，
+        查不到不能把正事搅砸，也不替没开这一项的代理（比如碰硬件、固件的那个）多做。"""
+        spec = self.spec
+        if not spec.app_recap or spec.workdir is None:
+            return ""
+        try:
+            session = project_brief.latest_claude_session(spec.workdir)
+        except Exception:
+            return ""
+        return project_brief.recap_text(session) if session else ""
+
     def run(self, job: Job) -> Outcome:
+        if not job.session_id:
+            # 新开的会话：接上主人平时那套配置里，这个项目最近聊过的内容。
+            recap = self._app_recap()
+            if recap:
+                job = replace(job, text="%s\n\n%s" % (recap, job.text))
         if job.control is not None and not job.plain and self._run is subprocess.run:
             return self._work(job, job.control)
         done = run_command(

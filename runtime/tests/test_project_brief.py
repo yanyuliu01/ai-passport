@@ -165,6 +165,43 @@ class ClaudeSessionsTests(TempDirCase):
         self.assertEqual(len(sessions), pb.MAX_SESSIONS)
 
 
+class LatestClaudeSessionTests(TempDirCase):
+    def test_picks_the_most_recent_one(self):
+        repo = Path("/Users/weihaoliu/ai-passport")
+        home = self.folder
+        project_dir = home / ".claude" / "projects" / str(repo).replace("/", "-")
+        now = time.time()
+        import os
+        _write_jsonl(project_dir / "old.jsonl", [{"type": "user", "message": {"content": "旧的"}}])
+        os.utime(project_dir / "old.jsonl", (now - 100, now - 100))
+        _write_jsonl(project_dir / "new.jsonl", [{"type": "user", "message": {"content": "新的"}}])
+        os.utime(project_dir / "new.jsonl", (now, now))
+        session = pb.latest_claude_session(repo, now=now, home=home)
+        self.assertEqual(session["session_id"], "new")
+        self.assertEqual(session["turns"], [{"role": "user", "text": "新的"}])
+
+    def test_excludes_a_given_session_id(self):
+        repo = Path("/Users/weihaoliu/ai-passport")
+        home = self.folder
+        project_dir = home / ".claude" / "projects" / str(repo).replace("/", "-")
+        _write_jsonl(project_dir / "self.jsonl", [{"type": "user", "message": {"content": "自己刚留的"}}])
+        self.assertIsNone(pb.latest_claude_session(repo, now=time.time(), home=home, exclude="self"))
+
+    def test_none_when_no_sessions(self):
+        self.assertIsNone(pb.latest_claude_session(Path("/nowhere"), now=time.time(), home=self.folder))
+
+
+class RecapTextTests(unittest.TestCase):
+    def test_formats_turns_with_a_timestamp_and_instruction(self):
+        now = time.time()
+        session = {"when": now, "turns": [{"role": "user", "text": "我们聊到一半"},
+                                          {"role": "assistant", "text": "已经查完日志了"}]}
+        text = pb.recap_text(session, now=now)
+        self.assertIn("接着它的话往下做", text)
+        self.assertIn("主人：我们聊到一半", text)
+        self.assertIn("回答：已经查完日志了", text)
+
+
 class CodexSessionTests(TempDirCase):
     def test_filters_by_cwd(self):
         path = self.folder / "rollout.jsonl"

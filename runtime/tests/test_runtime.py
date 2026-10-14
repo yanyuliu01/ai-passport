@@ -257,10 +257,11 @@ def finish(status="completed", error=None, say=None):
 done(item("userMessage"))
 verdicts = []
 if mode in ("ask", "ask-all"):
-    command = item("commandExecution", command="rm -rf build", cwd="/work")
+    where = os.environ.get("FAKE_CODEX_CWD", "/work")
+    command = item("commandExecution", command="rm -rf build", cwd=where)
     send({"id": 900, "method": "item/commandExecution/requestApproval", "params": {
         "itemId": command["id"], "threadId": thread, "turnId": "turn-1", "startedAtMs": 1,
-        "command": "rm -rf build", "cwd": "/work", "reason": "needs to write outside the sandbox"}})
+        "command": "rm -rf build", "cwd": where, "reason": "needs to write outside the sandbox"}})
     verdicts.append(read()["result"]["decision"])
 if mode == "ask-all":
     patch = item("fileChange", changes=[{"path": "/work/a.py", "kind": {"type": "update"},
@@ -428,6 +429,15 @@ class ConfigTests(TempDirCase):
         self.assertEqual((loaded.host, loaded.port), ("0.0.0.0", 9000))
         self.assertEqual(loaded.token, "env-token-env-token-env")
         self.assertEqual(loaded.state_dir, Path("/var/lib/xiaoyou"))
+
+    def test_app_recap_defaults_off_and_only_claude_code_can_turn_it_on(self):
+        default = self.load(agents={"claude": {"type": "claude_code", "command": ["claude"]}})
+        self.assertFalse(default.agents[0].app_recap)
+        on = self.load(agents={"claude": {"type": "claude_code", "command": ["claude"],
+                                          "app_recap": True}})
+        self.assertTrue(on.agents[0].app_recap)
+        with self.assertRaisesRegex(config_module.ConfigError, "app_recap"):
+            self.load(agents={"echo": {"type": "echo", "app_recap": True}})
 
     def test_host_can_be_this_machines_tailscale_address(self):
         found = []
@@ -1014,6 +1024,85 @@ class ClaudeCodeAgentTests(TempDirCase):
                 config_module.load(write_config(self.folder, agents=bad), {})
 
 
+class AppRecapTests(TempDirCase):
+    """开了 app_recap 的 claude_code 代理，新开会话时接上主人平时那套配置里聊过的内容。
+
+    这一项默认关着：碰硬件、固件的代理（比如 tailor）不该被不相关的背景信息悄悄
+    搅进去，只有专门打开 app_recap 的代理才接。
+    """
+
+    def setUp(self):
+        super().setUp()
+        fake = self.folder / "fake_claude.py"
+        fake.write_text(FAKE_CLAUDE, encoding="utf-8")
+        self.log = self.folder / "calls.jsonl"
+        os.environ["FAKE_CLAUDE_LOG"] = str(self.log)
+        os.environ.pop("FAKE_CLAUDE_MODE", None)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_MODE", None)
+        self.home = self.folder / "home"
+        self.patch_home = mock.patch.object(Path, "home", return_value=self.home)
+        self.patch_home.start()
+        self.addCleanup(self.patch_home.stop)
+
+    def calls(self):
+        return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
+
+    def _agent(self, workdir="proj", **overrides):
+        fake = self.folder / "fake_claude.py"
+        spec = {"type": "claude_code", "command": [sys.executable, str(fake)],
+                "config_dir": "claude-isolated", "workdir": workdir, "app_recap": True}
+        spec.update(overrides)
+        config = config_module.load(write_config(self.folder, agents={"claude": spec}), {})
+        return agents_module.create(config.agents[0]), config.agents[0]
+
+    def _write_app_session(self, workdir_name, turns):
+        escaped = str((self.folder / workdir_name).resolve()).replace("/", "-")
+        folder = self.home / ".claude" / "projects" / escaped
+        folder.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps({"type": role, "message": {"content": text}}, ensure_ascii=False)
+                 for role, text in turns]
+        (folder / "s-app.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_fresh_session_gets_the_app_recap_prepended(self):
+        self._write_app_session("proj", [("user", "我们在聊固件的事"), ("assistant", "已经查过日志了")])
+        agent, _ = self._agent()
+        agent.run(Job("接着刚才说的做"))
+        stdin = self.calls()[0]["stdin"]
+        self.assertIn("我们在聊固件的事", stdin)
+        self.assertIn("已经查过日志了", stdin)
+        self.assertTrue(stdin.endswith("接着刚才说的做"))
+
+    def test_resuming_a_session_skips_the_recap(self):
+        self._write_app_session("proj", [("user", "不该出现在这里")])
+        agent, _ = self._agent()
+        agent.run(Job("继续吧", session_id="s-prev"))
+        self.assertEqual(self.calls()[0]["stdin"], "继续吧")
+
+    def test_isolated_config_dir_without_app_recap_flag_skips_the_recap(self):
+        # 这是 tailor 那种碰硬件/固件的代理：配了独立的 config_dir，但没打开 app_recap，
+        # 不该被这个背景信息影响到。
+        self._write_app_session("proj", [("user", "不该出现在这里")])
+        agent, _ = self._agent(app_recap=False)
+        agent.run(Job("正常问一句"))
+        self.assertEqual(self.calls()[0]["stdin"], "正常问一句")
+
+    def test_no_config_dir_at_all_skips_the_recap(self):
+        self._write_app_session("proj", [("user", "不该出现在这里")])
+        fake = self.folder / "fake_claude.py"
+        config = config_module.load(write_config(self.folder, agents={"claude": {
+            "type": "claude_code", "command": [sys.executable, str(fake)], "workdir": "proj",
+        }}), {})
+        agent = agents_module.create(config.agents[0])
+        agent.run(Job("正常问一句"))
+        self.assertEqual(self.calls()[0]["stdin"], "正常问一句")
+
+    def test_no_matching_app_session_leaves_the_text_alone(self):
+        agent, _ = self._agent(workdir="other-proj")
+        agent.run(Job("正常问一句"))
+        self.assertEqual(self.calls()[0]["stdin"], "正常问一句")
+
+
 class CodexAgentTests(TempDirCase):
     def setUp(self):
         super().setUp()
@@ -1219,6 +1308,14 @@ class CodexAppServerTests(TempDirCase):
             {"permissions": {"network": {"enabled": True}}, "scope": "turn"}, sort_keys=True), "error"])
         # Each step as it is: the command, the files, the search. Thinking is not a step.
         self.assertEqual(self.lines, ["rm -rf build", "改文件 /work/a.py", "搜索 python release"])
+
+    def test_its_own_workdir_is_not_repeated_in_the_question(self):
+        os.environ["FAKE_CODEX_MODE"] = "ask"
+        os.environ["FAKE_CODEX_CWD"] = str(self.config.agents[0].workdir)
+        self.addCleanup(os.environ.pop, "FAKE_CODEX_CWD", None)
+        self.agent.run(Job("clean up", control=self.control([True])))
+        self.assertEqual(self.asked, [
+            ("codex · 命令", "rm -rf build\n（Codex 说明：needs to write outside the sandbox）")])
 
     def test_nobody_to_ask_means_no(self):
         os.environ["FAKE_CODEX_MODE"] = "ask"

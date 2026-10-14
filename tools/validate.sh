@@ -173,7 +173,11 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_project_brief.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_sync.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_hook.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_approvals.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifacts.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifact_delivery.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_content.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_shared_history.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_titles.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_task_titles.py
     echo "Runtime tests: PASS"
