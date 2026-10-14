@@ -180,6 +180,8 @@ class Service:
                 "status": "queued",
                 "text": text,
                 "reply": None,
+                # 回复还在生成时，已经生成的那部分（整段）；没有流式、或者已经说完时是空串
+                "partial": "",
                 "brief": None,
                 "mood": "busy",
                 "error": None,
@@ -401,6 +403,13 @@ class Service:
             message = self._messages.get(message_id)
             if message is None:
                 return
+            if kind == "partial":
+                # 回复还在生成：到目前为止的那段，整段替换（不是追加），空串是收回。
+                if message["status"] == "running" and message["partial"] != text:
+                    message["partial"] = text
+                    message["rev"] += 1
+                    self._changed.notify_all()
+                return
             if len(message["events"]) < MAX_EVENTS:
                 message["events"].append({
                     "at": time.time(), "kind": kind, "agent": agent,
@@ -494,7 +503,8 @@ class Service:
             return
         self._update(
             message_id, status="done", reply=turn.reply, brief=turn.brief, mood=turn.mood,
-            agent=turn.agent, card=turn.card, stage=None, helper=None, finished_at=time.time(),
+            agent=turn.agent, card=turn.card, stage=None, helper=None, partial="",
+            finished_at=time.time(),
         )
 
     def _fail(self, message_id: str, conversation: str, text: str, error: str) -> None:
@@ -503,5 +513,5 @@ class Service:
         self._xiaoyou.cards.update(card["id"], said=text, say=error, brief=error, mood="oops")
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
-            card=card["id"], finished_at=time.time(),
+            card=card["id"], partial="", finished_at=time.time(),
         )

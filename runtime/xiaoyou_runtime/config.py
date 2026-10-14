@@ -68,6 +68,8 @@ class AgentSpec:
     env_files: Dict[str, Path] = field(default_factory=dict)
     # codex / dsh：沙箱范围。dsh 没有单独的审批通道：沙箱内自己做，出了沙箱就做不了
     sandbox: Optional[str] = None
+    # dsh：替小幽接话（只说话）的那一次直接调 DeepSeek 的流式接口，回复边生成边给手机
+    stream: bool = False
     # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
     codex_mode: str = "app_server"
     # app_server 模式下什么时候来问：untrusted、on-request、never
@@ -358,6 +360,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         env_files = _env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files")
         return AgentSpec(
             sandbox=sandbox,
+            stream=_expect(raw.get("stream", True), bool, where + ".stream"),
             config_dir=_path(dsh_home, base) if dsh_home else None,
             env=extra_env,
             env_files=env_files,

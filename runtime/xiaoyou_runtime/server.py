@@ -8,7 +8,8 @@
   POST /v1/voice?conversation=&client_id=&agent=&card=&pin=&effort=&model=
                                         请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
-                                        带 rev 时记录一有变化就返回
+                                        带 rev 时记录一有变化就返回；回复还在生成时
+                                        partial 是已经生成的那部分（流式）
   GET  /v1/feed?conversation=&after=<序号>&wait=<秒>&usage=<rev>
                                         之后变过的卡，和现在的用量；没有变化时最多等 wait 秒
   GET  /v1/cards?conversation=          最近的卡

@@ -347,7 +347,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | --- | --- | --- |
 | `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts`（见[档位](#档位模型和努力程度)） |
 | `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args`、`models`、`effort`、`efforts` |
-| `dsh` | 运行 DeepSeek Harness 命令行（`dsh`），见下面的 [DeepSeek Harness](#deepseek-harnessdsh)。 | `command`（默认 `["dsh"]`）、`workdir`、`config_dir`、`sandbox`（默认 `workspace-write`）、`model`、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts` |
+| `dsh` | 运行 DeepSeek Harness 命令行（`dsh`），见下面的 [DeepSeek Harness](#deepseek-harnessdsh)。 | `command`（默认 `["dsh"]`）、`workdir`、`config_dir`、`sandbox`（默认 `workspace-write`）、`stream`（默认 `true`）、`model`、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts` |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -405,7 +405,13 @@ chmod 600 ~/.config/xiaoyou/deepseek.key
 
 - 后台的事走 `dsh --profile acp`（Agent Client Protocol，标准输入输出上的 JSON-RPC）：
   有进展行、看动静、可以打断。
-- 小幽自己接话那一次走 `dsh --profile headless --json`：一问一答，关掉工具和思考，求快。
+- 小幽自己接话那一次默认流式（`stream`，默认 `true`）：dsh 只在一步结束时整段交出回复，
+  所以这一次直接调 DeepSeek 的 Messages 接口（和 dsh 用的是同一个：`DEEPSEEK_BASE_URL`
+  或 `https://api.deepseek.com/anthropic`，密钥是 `env` / `env_files` 里的
+  `DEEPSEEK_API_KEY`），打开 `stream`。已经生成的部分出现在 `GET /v1/messages/<编号>`
+  的 `partial` 里，手机边生成边显示。这几轮自己记一份简短的历史，放在
+  `<config_dir>/xiaoyou-stream-sessions/`（编号以 `api-` 开头）。流式没成、或者设了
+  `stream: false` 时，退回 `dsh --profile headless --json`：一问一答，关掉工具和思考，求快。
 - 没有 Claude Code 那种“每一步都问”的通道，权限只看 `sandbox`（`read-only`、
   `workspace-write`、`danger-full-access`，作为 `DSH_PERMISSION_MODE` 传给它）：沙箱内它
   自己做；越出沙箱时它来问，这一问照常变成设备和手机上的授权弹窗。所以没有
@@ -756,7 +762,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
-| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。 |
+| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。回复还在生成时，`partial` 是到目前为止的整段回复（整段替换，不是追加；空串表示收回）；处理完后是空串。 |
 | `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
 | `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |

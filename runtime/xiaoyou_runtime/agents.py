@@ -321,6 +321,8 @@ class Job:
     # 这一次用哪一档努力程度、哪个模型；None 用这个代理平时的。代理不认的会被忽略
     effort: Optional[str] = None
     model: Optional[str] = None
+    # 想边生成边看时：回复每多一块，就把到目前为止的原始全文交给它。代理做不到流式时不调用
+    on_text: Optional[Callable[[str], None]] = None
 
 
 @dataclass(frozen=True)
@@ -937,9 +939,10 @@ class DshAgent(Agent):
 
     PROVIDER = "deepseek-official"
 
-    def __init__(self, spec: AgentSpec, run=subprocess.run):
+    def __init__(self, spec: AgentSpec, run=subprocess.run, opener=urllib.request.urlopen):
         super().__init__(spec)
         self._run = run
+        self._open = opener
 
     def _env(self) -> Optional[Dict[str, str]]:
         env = dict(os.environ)
@@ -963,6 +966,17 @@ class DshAgent(Agent):
         if job.control is not None and self._run is subprocess.run:
             from . import dsh_app  # 放在这里：dsh_app 要用这个模块里的东西
             return dsh_app.run(self.spec, job, job.control, self._env(), self.tier(job))
+        if job.plain and job.on_text is not None and self.spec.stream:
+            # 只说话、又想边生成边看：dsh 不逐字给，直接问 DeepSeek。不成就走老路。
+            from . import dsh_stream
+            try:
+                return dsh_stream.run(self.spec, job, self._env(), self.tier(job)[0],
+                                      job.on_text, self._open)
+            except AgentError as error:
+                sys.stderr.write("流式回复没成，改用 dsh：%s\n" % error)
+                job.on_text("")
+                if job.session_id and job.session_id.startswith(dsh_stream.SESSION_PREFIX):
+                    job = replace(job, session_id=None)
         return self._headless(job)
 
     # 只要它说话、不让它动手时（job.plain）关掉的工具插件：bash、文件读写和搜索、

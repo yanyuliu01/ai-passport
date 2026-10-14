@@ -130,6 +130,53 @@ def _displayable(ch: str) -> bool:
     return category != "Cc" or ch == "\n"
 
 
+_REPLY_KEY = re.compile(r'"reply"\s*:\s*"')
+_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+
+def reply_so_far(raw: str) -> str:
+    """还没说完的那段 JSON 里，reply 已经写出来的部分。还没写到 reply 时是空串。
+
+    只认到最后一个完整的字符：写了一半的转义（\\、\\u4e）先不算，下一块来了再补上。"""
+    found = _REPLY_KEY.search(raw)
+    if found is None:
+        return ""
+    out: List[str] = []
+    at, end = found.end(), len(raw)
+    while at < end:
+        ch = raw[at]
+        if ch == '"':
+            break
+        if ch != "\\":
+            out.append(ch)
+            at += 1
+            continue
+        if at + 1 >= end:
+            break
+        code = raw[at + 1]
+        if code == "u":
+            digits = raw[at + 2:at + 6]
+            if len(digits) < 4:
+                break
+            try:
+                out.append(chr(int(digits, 16)))
+            except ValueError:
+                break
+            at += 6
+            continue
+        out.append(_ESCAPES.get(code, code))
+        at += 2
+    text = "".join(out)
+    # 代理对：先到的那一半单独显示不出来，等另一半。
+    if text and "\ud800" <= text[-1] <= "\udbff":
+        text = text[:-1]
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+# 流式回复最快隔这么久往外报一次，免得每个字都让手机多跑一趟。
+PARTIAL_SECONDS = 0.12
+
+
 def shape(reply: str, brief: Any, mood: Any, limit: int, agent: str, card: str = "",
           started: bool = False) -> Turn:
     """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle。"""
@@ -582,12 +629,17 @@ class Xiaoyou:
                              self._usage.notes(),
                              any(self._usage.account(agent.name) for agent in available))
         schema = lane_schema(available)
-        outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True)
+        stream = self._streamer(lead.name, say)
+        outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True,
+                              on_text=stream)
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
         self._trace(outcome, problem)
         if problem is not None:
+            # 刚才边说边给主人看的那段不算数了：收回来，重说的那一次从头再显示。
+            say("partial", lead.name, "")
+            stream = self._streamer(lead.name, say)
             outcome = self._speak(lead, retry_note(problem), conversation, system, schema, hop,
-                                  catch_up=False)
+                                  catch_up=False, on_text=stream)
             plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
         fields = outcome.fields or {}
@@ -726,15 +778,38 @@ class Xiaoyou:
         value = (outcome.fields or {}).get(key)
         return value if isinstance(value, str) else ""
 
+    @staticmethod
+    def _streamer(agent: str, say: Report) -> Callable[[str], None]:
+        """把代理边生成边交出的原始全文，换成主人能看的 reply 片段报出去：有变化才报，
+        而且不报得太勤。原始全文是空串表示这一次重来，已经报过的收回。"""
+        state: Dict[str, Any] = {"shown": "", "at": None}
+
+        def on_text(raw: str) -> None:
+            if not raw:
+                if state["shown"]:
+                    state["shown"] = ""
+                    say("partial", agent, "")
+                return
+            now = time.monotonic()
+            if state["at"] is not None and now - state["at"] < PARTIAL_SECONDS:
+                return
+            shown = clean_display(reply_so_far(raw))
+            if shown and shown != state["shown"]:
+                state["shown"], state["at"] = shown, now
+                say("partial", agent, shown)
+
+        return on_text
+
     def _speak(self, agent: Agent, text: str, conversation: str, system: str,
-               schema: Dict[str, Any], hop: int, catch_up: bool) -> Outcome:
+               schema: Dict[str, Any], hop: int, catch_up: bool,
+               on_text: Optional[Callable[[str], None]] = None) -> Outcome:
         """让能说话的代理在这个对话自己的会话里接一段话。只说话，不给工具。"""
         missed = self._store.transcript.unseen(conversation, agent.name) if catch_up else []
         outcome = agent.run(Job(
             text=recap(missed, text) if missed else text,
             session_id=self._store.session(conversation, agent.name),
             conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
-            timeout=self._config.voice_timeout_seconds,
+            timeout=self._config.voice_timeout_seconds, on_text=on_text,
         ))
         if outcome.session_id:
             self._store.remember(conversation, agent.name, outcome.session_id)
