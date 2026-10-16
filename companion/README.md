@@ -282,6 +282,19 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.16.0)
+
+- Cards and sync progress are kept per computer: switching to another computer and
+  back continues incrementally instead of starting over (kept while the app runs; an
+  app restart fetches once from the start).
+- Understands `turn_ended` from `/v1/sync` (runtime 0.8.2): a desktop session that
+  finished a turn shows "turn ended", not a finished task.
+- The recent turns carried to another computer are computed from every computer's
+  chat history instead of a separate list; the list older versions kept is only read
+  to fill gaps.
+- Covered by build and host tests; keeping cards across a computer switch has no unit
+  test and needs on-device confirmation.
+
 ## App fixes (0.15.0)
 
 - The home chips, the sidebar and the helper page share one helper state; a session

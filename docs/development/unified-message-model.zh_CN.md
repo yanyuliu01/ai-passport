@@ -290,10 +290,10 @@ Runtime 没有能力去读。方案是开一个上报接口，让对方主动报
 | --- | --- | --- | --- |
 | 1 | 收下的消息落盘，消息和卡共用一条序号，`epoch`，`/v1/feed?messages=1` | Runtime | 已上线（0.8.0） |
 | 2 | `runtime_id`，消息日志成为权威记录，`/v1/info`、`/v1/sync`，一致性测试（Runtime 0.8.0） | Runtime | 已上线（0.8.0），一致性测试 22 项通过 |
-| 3 | **记录中心**：新增 `Record`，49 处写卡改成发事件，去掉外面的 `bump()`；授权进日志、取序号；`/v1/sync` 的授权改成增量；电脑会话 `idle` → `turn_ended`（`/v1/feed` 仍给 `done`）；统一主体的预留：`subject_id`、日志每条写产地 `runtime_id` | Runtime | 下一步，约 2–3 天 |
+| 3 | **记录中心**：新增 `Record`，49 处写卡改成发事件，去掉外面的 `bump()`；授权进日志、取序号；`/v1/sync` 的授权改成增量；电脑会话 `idle` → `turn_ended`（`/v1/feed` 仍给 `done`；`/v1/sync` 里已在 Runtime 0.8.2 提前做了）；统一主体的预留：`subject_id`、日志每条写产地 `runtime_id` | Runtime | 下一步，约 2–3 天 |
 | 4 | transcript 和电脑端共享历史改成从日志算（原 2b），`transcript.json` 只作为迁移来源 | Runtime | 随第 3 步或紧接着，约 1 天 |
 | 5 | 外部上报：`/v1/reports`、`xiaoyou_runtime.report` 命令、一致性测试补上报用例 | Runtime | 约 1 天，可和第 4 步并行 |
-| 6 | 手机 App：按 `runtime_id` 认电脑、多地址合并；每台一份缓存和游标，游标原样存取；改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算；显示 `turn_ended`、`unavailable` 和外部来源的只读标记 | App | 部分提前做了（App 0.15.0、Runtime 0.8.1）：改用 `/v1/sync`、按 `runtime_id` 认电脑并合并地址、发消息前不再上传历史、去掉纯文字列表、显示别处还没上卡的消息。还没做：不同电脑各一份缓存、`turn_ended` 等新状态、ChatTurn 从缓存算 |
+| 6 | 手机 App：按 `runtime_id` 认电脑、多地址合并；每台一份缓存和游标，游标原样存取；改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算；显示 `turn_ended`、`unavailable` 和外部来源的只读标记 | App | 基本完成（App 0.16.0、Runtime 0.8.2）：改用 `/v1/sync`、按 `runtime_id` 认电脑并合并地址、每台电脑一份卡和同步进度（在内存里，App 重启后从头取）、发消息前不再上传历史、去掉纯文字列表、显示别处还没上卡的消息、认得 `turn_ended`、ChatTurn 从各台电脑的聊天记录算。还没做：`unavailable` 和外部来源的只读标记（等第 5 步） |
 | 7 | 设备：手机负责全局编号到短编号的映射，设备协议先不变 | App | 随第 6 步 |
 | 8 | 多台 Runtime 同时完整同步 | App | 看需要 |
 | 8b | 统一主体：主 Runtime（家）、分身把事件报回家、家可以搬 | 都有 | 暂缓，接口已在第 3、6 步预留 |

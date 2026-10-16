@@ -219,6 +219,25 @@ public final class HubStore {
         main.removeCallbacks(historySave); main.postDelayed(historySave, 300);
     }
 
+    /**
+     * 最近的 limit 轮完成的对话，从每台电脑存下的聊天记录里一起算（加上旧版单独存的那份），
+     * 换到另一台电脑时带过去。同一轮只算一次。
+     */
+    synchronized List<ChatTurn> recentTurns(List<ChatTurn> legacy, int limit) {
+        Map<String, ChatTurn> found = new java.util.LinkedHashMap<>();
+        for (ChatTurn turn : legacy) found.put(turn.id, turn);
+        if (historyPrefs != null) {
+            for (Map.Entry<String, ?> stored : historyPrefs.getAll().entrySet()) {
+                if (!(stored.getValue() instanceof String)) continue;
+                for (ChatTurn turn : ChatHistory.restore((String) stored.getValue()).turns()) found.put(turn.id, turn);
+            }
+        }
+        for (ChatTurn turn : history.turns()) found.put(turn.id, turn);
+        List<ChatTurn> all = new ArrayList<>(found.values());
+        all.sort(java.util.Comparator.comparingLong((ChatTurn turn) -> turn.at));
+        return all.subList(Math.max(0, all.size() - limit), all.size());
+    }
+
     synchronized List<ChatHistory.Message> mainMessages() { return history.main(); }
     synchronized List<ChatHistory.Message> pendingMessages(String card) { return history.pending(card); }
     synchronized String retryMessage(String id) { return history.retry(id); }
@@ -438,12 +457,58 @@ public final class HubStore {
         if (dirty) notifyChanged();
     }
 
+    // ---- 每台电脑一份：卡、同步进度和用量放在各自的架子上 ----
+
+    /** 一台电脑收起来的卡、同步进度和用量。 */
+    private static final class Shelf {
+        final TreeMap<Long, Card> cards; final Map<String, Long> order;
+        final long feedSeq; final Usage usage; final SyncCache sync;
+        Shelf(TreeMap<Long, Card> cards, Map<String, Long> order, long feedSeq, Usage usage, SyncCache sync) {
+            this.cards = cards; this.order = order; this.feedSeq = feedSeq; this.usage = usage; this.sync = sync;
+        }
+    }
+
+    private final Map<String, Shelf> shelves = new HashMap<>();
+    /** 现在摆出来的是哪台电脑的（RuntimeClient.historyKey）。 */
+    private String cardsKey = "";
+    private SyncCache sync = new SyncCache("default");
+
+    /** 现在这台电脑的 /v1/sync 进度；和卡一起收起、一起放回，所以两者总是对得上。 */
+    public synchronized SyncCache syncCache() { return sync; }
+
+    /**
+     * 换成显示另一台电脑：这台的卡和同步进度收起来，那台以前收起来的放回去，之后接着增量取；
+     * 没见过的那台从头取。同一台（包括它的另一个地址）什么都不动。
+     */
+    public void showComputer(String key) {
+        synchronized (this) {
+            String next = key == null ? "" : key;
+            if (next.equals(cardsKey)) return;
+            if (!cardsKey.isEmpty())
+                shelves.put(cardsKey, new Shelf(new TreeMap<>(cards), new HashMap<>(cardOrder), feedSeq, usage, sync));
+            Shelf shelf = shelves.remove(next);
+            cards.clear(); cardOrder.clear(); turnCard = null; runtimeConnected = false; ++cardsEpoch;
+            if (shelf != null) {
+                cards.putAll(shelf.cards); cardOrder.putAll(shelf.order);
+                feedSeq = shelf.feedSeq; usage = shelf.usage; sync = shelf.sync;
+            } else {
+                feedSeq = 0; usage = null; sync = new SyncCache("default");
+            }
+            cardsKey = next;
+        }
+        notifyChanged();
+    }
+
+    /** 不再登记的电脑：它的架子扔掉。 */
+    public synchronized void forgetComputer(String key) { if (key != null) shelves.remove(key); }
+
     /** 手里的卡都不算数了（换了一台 Runtime，或者它换了一份记录）：清掉，从头再取。 */
     public void resetCards() {
         synchronized (this) {
             cards.clear();
             runtimeConnected = false;
             cardOrder.clear();
+            sync = new SyncCache("default");
             // Approval origins have their own lifecycle; changing task Runtime must retain them.
             feedSeq = 0;
             turnCard = null;

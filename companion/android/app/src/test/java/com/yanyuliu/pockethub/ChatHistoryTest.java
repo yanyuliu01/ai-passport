@@ -1,9 +1,26 @@
 package com.yanyuliu.pockethub;
 
 import org.junit.Test;
+import java.util.List;
 import static org.junit.Assert.*;
 
 public class ChatHistoryTest {
+    @Test public void finishedMainTurnsAreWhatGoesToAnotherComputer() {
+        ChatHistory history = new ChatHistory();
+        history.begin("l1", null, "第一句", 10); history.accepted("l1", "m1"); history.finish("m1", "c1", "第一句的回答", false, null);
+        history.begin("l2", null, "还没答完", 20); history.accepted("l2", "m2");
+        history.begin("l3", "c9", "任务里的话", 30); history.accepted("l3", "m3"); history.finish("m3", "c9", "好", false, null);
+        history.begin("l4", null, RuntimeClient.VOICE_PLACEHOLDER, 40); history.accepted("l4", "m4");
+        history.finish("m4", null, "没听清", false, null);
+        List<ChatTurn> turns = history.turns();
+        assertEquals(1, turns.size());
+        assertEquals("m1", turns.get(0).id);
+        assertEquals("第一句", turns.get(0).text);
+        assertEquals("第一句的回答", turns.get(0).reply);
+        // Survives saving: the same turns come back from the stored history of any computer.
+        assertEquals("m1", ChatHistory.restore(history.json()).turns().get(0).id);
+    }
+
     @Test public void anExplicitCompletionSummaryIsNotReplacedByTheDeviceBrief() {
         String summary = "详细总结".repeat(250);
         ChatHistory history = new ChatHistory();

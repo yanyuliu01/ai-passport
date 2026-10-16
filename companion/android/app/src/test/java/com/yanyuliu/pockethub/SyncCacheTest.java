@@ -53,6 +53,17 @@ public class SyncCacheTest {
         assertEquals("查好了", cache.card("c1").entries.get(1).text);
     }
 
+    @Test public void turnEndedIsShownAsTheEndOfATurnNotAFinishedTask() {
+        SyncCache cache = new SyncCache("default");
+        Card card = cache.apply(page("{\"epoch\":\"e1\",\"seq\":3,\"messages\":[],\"tasks\":[{\"id\":\"c4\",\"seq\":3,"
+                + "\"title\":\"电脑上的会话\",\"state\":\"turn_ended\",\"agent\":\"codex\",\"source\":\"desktop\","
+                + "\"monitoring_only\":true,\"desktop_status\":\"idle\",\"members\":[]}]}")).cards.get(0);
+        assertTrue(card.turnEnded);
+        assertEquals("done", card.state);
+        assertFalse(card.outstanding());
+        assertEquals("本轮结束", DsState.label(card, true));
+    }
+
     @Test public void acceptedButNotYetFiledMessagesArePending() {
         SyncCache cache = new SyncCache("default");
         SyncCache.Result result = cache.apply(page("{\"epoch\":\"e1\",\"seq\":2,\"messages\":["

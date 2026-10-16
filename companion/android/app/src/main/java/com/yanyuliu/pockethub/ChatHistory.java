@@ -178,6 +178,26 @@ final class ChatHistory {
         return true;
     }
 
+    /**
+     * Finished question/answer pairs of the main conversation, oldest first: what is carried to
+     * another computer so Xiaoyou there can pick up the thread. Ids are the request ids, so a
+     * computer that already has a turn skips it.
+     */
+    List<ChatTurn> turns() {
+        List<ChatTurn> result = new ArrayList<>();
+        for (Message user : messages.values()) {
+            if (!user.role.equals("you") || !user.scope.equals("main") || !user.id.endsWith(":you")
+                    || !user.status.equals("done") || user.text.isEmpty()
+                    || user.text.equals(RuntimeClient.VOICE_PLACEHOLDER)) continue;
+            String base = user.id.substring(0, user.id.length() - 4);
+            Message reply = messages.get(base + ":reply");
+            if (reply == null || !reply.status.equals("done") || reply.text.isEmpty()) continue;
+            result.add(new ChatTurn(base, user.text, reply.text, (long) Math.max(user.at, reply.at)));
+        }
+        result.sort(Comparator.comparingLong((ChatTurn turn) -> turn.at));
+        return result;
+    }
+
     /** Adds the other history's messages this one does not have (same id = same message). */
     boolean absorb(ChatHistory other) {
         boolean added = false;

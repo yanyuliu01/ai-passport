@@ -182,12 +182,10 @@ final class RuntimeClient {
     }
 
     static synchronized void select(Context context, String url) {
-        Target before = selected(context);
         store(context, targets(context), url);
         Target now = selected(context);
-        // 换成另一台电脑：手里的卡是上一台的，马上清掉；同一台的另一个地址不用清。
-        if (before == null || now == null || !historyKey(context, before).equals(historyKey(context, now)))
-            HubStore.get().resetCards();
+        // 换成另一台电脑：这台的卡收起来、那台的放回去；同一台的另一个地址什么都不动。
+        HubStore.get().showComputer(now == null ? "" : historyKey(context, now));
         HubStore.get().selectedRuntime(url, now == null ? url : historyKey(context, now));
         HubStore.get().helpersChanged();
         HttpURLConnection waiting = feedConnection;
@@ -215,9 +213,8 @@ final class RuntimeClient {
 
     private static void watchLoop(Context app) {
         HubStore store = HubStore.get();
-        String watched = null, watchedKey = null;
+        String watched = null;
         java.util.Set<String> abilities = null;
-        SyncCache cache = null;
         String complained = null;
         int failures = 0;
         boolean more = false;
@@ -236,19 +233,15 @@ final class RuntimeClient {
                 if (abilities == null) {
                     abilities = identify(app, target);
                     String key = historyKey(app, target);
-                    if (!key.equals(watchedKey)) {
-                        // 另一台电脑（或刚开始）：卡从头取，同步缓存也换一份。
-                        if (watchedKey != null) store.resetCards();
-                        watchedKey = key;
-                        cache = new SyncCache("default");
-                    }
+                    // 另一台电脑：摆出它自己的卡和同步进度（没见过就从头取）；同一台不动。
+                    store.showComputer(key);
                     store.selectedRuntime(target.url, key);
                     final Target shared = target;
                     QUICK.execute(() -> shareHistory(app, shared));
                 }
                 // 0.8.0 的 /v1/sync 还不带用量：那一版继续用 feed，首页的额度才不会停在旧数上。
                 if (abilities.contains("sync") && abilities.contains("sync_usage")) {
-                    more = fetchSync(target, cache, more ? 0 : FEED_WAIT_SECONDS, true);
+                    more = fetchSync(target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
                 } else {
                     more = false;
                     fetchFeed(target, FEED_WAIT_SECONDS, true);
@@ -314,25 +307,28 @@ final class RuntimeClient {
         if (feed == null) {
             throw new IOException("Runtime 返回的内容看不懂");
         }
-        if (store.cardsEpoch() != epoch) {
-            return;  // 等的时候换了 Runtime：这是上一台的回答
-        }
-        long seq = (long) Json.number(feed, "seq");
-        if (seq < after) {
-            // Runtime 的序号比手里的小：它换了一份记录。手里的不算数了，从头再取。
-            store.resetCards();
-            return;
-        }
-        List<Card> cards = new ArrayList<>();
-        for (Object item : Json.list(feed, "cards")) {
-            Card card = Card.from(Json.object(item));
-            if (card != null) {
-                cards.add(card);
+        // 核对和写入在同一把锁里，见 fetchSync。
+        synchronized (store) {
+            if (store.cardsEpoch() != epoch) {
+                return;  // 等的时候换了 Runtime：这是上一台的回答
             }
+            long seq = (long) Json.number(feed, "seq");
+            if (seq < after) {
+                // Runtime 的序号比手里的小：它换了一份记录。手里的不算数了，从头再取。
+                store.resetCards();
+                return;
+            }
+            List<Card> cards = new ArrayList<>();
+            for (Object item : Json.list(feed, "cards")) {
+                Card card = Card.from(Json.object(item));
+                if (card != null) {
+                    cards.add(card);
+                }
+            }
+            store.applyFeed(seq, cards, null);
+            store.setUsage(Usage.from(feed.get("usage")), epoch);
+            store.runtimeConnected(true);
         }
-        store.applyFeed(seq, cards, null);
-        store.setUsage(Usage.from(feed.get("usage")), epoch);
-        store.runtimeConnected(true);
     }
 
     /**
@@ -353,20 +349,24 @@ final class RuntimeClient {
         if (page == null) {
             throw new IOException("Runtime 返回的内容看不懂");
         }
-        if (store.cardsEpoch() != epoch) {
-            return false;  // 等的时候换了 Runtime：这是上一台的回答
+        // 核对“还是这台电脑”和写进去在同一把锁里：中间换了电脑，这一页就整页不要，
+        // 不会把上一台的卡写到下一台的显示里。
+        synchronized (store) {
+            if (store.cardsEpoch() != epoch) {
+                return false;  // 等的时候换了 Runtime：这是上一台的回答
+            }
+            SyncCache.Result result = cache.apply(page);
+            if (result.replaced) {
+                // Runtime 换了一份记录：手里的卡不算数了。聊天记录按编号留着。
+                store.resetCards();
+                epoch = store.cardsEpoch();
+            }
+            store.applyFeed(result.seq, result.cards, null);
+            store.applyPending(result.pending);
+            if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
+            store.runtimeConnected(true);
+            return result.more;
         }
-        SyncCache.Result result = cache.apply(page);
-        if (result.replaced) {
-            // Runtime 换了一份记录：手里的卡不算数了。聊天记录按编号留着。
-            store.resetCards();
-            epoch = store.cardsEpoch();
-        }
-        store.applyFeed(result.seq, result.cards, null);
-        store.applyPending(result.pending);
-        if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
-        store.runtimeConnected(true);
-        return result.more;
     }
 
     /**
@@ -376,7 +376,8 @@ final class RuntimeClient {
     private static void shareHistory(Context app, Target target) {
         java.util.Set<String> shared = sharedWith(target.url);
         List<ChatTurn> history = new ArrayList<>();
-        for (ChatTurn turn : turns(app)) if (!shared.contains(turn.id)) history.add(turn);
+        for (ChatTurn turn : HubStore.get().recentTurns(turns(app), TURNS_KEPT))
+            if (!shared.contains(turn.id)) history.add(turn);
         if (history.isEmpty()) return;
         try {
             request("POST", target.url + "/v1/conversations/default/history", target.token,
@@ -540,6 +541,8 @@ final class RuntimeClient {
     static synchronized void remove(Context context, String url) {
         List<Target> list = targets(context);
         Target current = selected(context);
+        Target removed = target(context, url);
+        String removedKey = removed == null ? url : historyKey(context, removed);
         for (int index = list.size() - 1; index >= 0; index--) {
             if (list.get(index).url.equals(url)) {
                 list.remove(index);
@@ -547,7 +550,14 @@ final class RuntimeClient {
         }
         store(context, list, current == null ? null : current.url);
         HubStore.get().dropApprovalRuntime(url);
-        if (current != null && current.url.equals(url)) HubStore.get().resetCards();
+        if (current != null && current.url.equals(url)) {
+            Target next = selected(context);
+            HubStore.get().showComputer(next == null ? "" : historyKey(context, next));
+        }
+        // 这台电脑一个地址都不剩了：它收起来的卡也不要了。
+        boolean kept = false;
+        for (Target item : targets(context)) kept |= historyKey(context, item).equals(removedKey);
+        if (!kept) HubStore.get().forgetComputer(removedKey);
         ApprovalMonitor.reconcile(context.getApplicationContext());
         if (list.isEmpty()) context.stopService(new android.content.Intent(context, RuntimeWatchService.class));
     }
@@ -628,6 +638,7 @@ final class RuntimeClient {
 
     // ---- 最近的对话：存在手机上，换 Runtime 时带过去 ----
 
+    /** 旧版单独存的最近几轮（只读，用于迁移；现在从聊天记录里算，见 HubStore.recentTurns）。 */
     static synchronized List<ChatTurn> turns(Context context) {
         SharedPreferences prefs = prefs(context);
         List<ChatTurn> list = new ArrayList<>();
@@ -643,23 +654,6 @@ final class RuntimeClient {
         return list;
     }
 
-    private static synchronized void remember(Context context, ChatTurn turn) {
-        List<ChatTurn> list = turns(context);
-        list.add(turn);
-        while (list.size() > TURNS_KEPT) {
-            list.remove(0);
-        }
-        SharedPreferences.Editor editor = prefs(context).edit();
-        editor.putInt("turn_count", list.size());
-        for (int index = 0; index < list.size(); index++) {
-            ChatTurn kept = list.get(index);
-            editor.putString("turn_id_" + index, kept.id)
-                    .putString("turn_text_" + index, kept.text)
-                    .putString("turn_reply_" + index, kept.reply)
-                    .putLong("turn_at_" + index, kept.at);
-        }
-        editor.apply();
-    }
 
     /** App 刚启动时把存着的对话放回聊天框。 */
     static void restoreChat(Context context) {
@@ -779,11 +773,9 @@ final class RuntimeClient {
                                 catch (IOException | RuntimeException ignored) { }
                             });
                         }
-                        String said = recognized != null && !recognized.isEmpty() ? recognized : text;
                         if (!pin && reply != null && !reply.isEmpty()) {
-                            remember(app, new ChatTurn(id, said, reply,
-                                    System.currentTimeMillis() / 1000L));
-                            // 这一句本来就是在这台 Runtime 上说的：不用再带过去。
+                            // 这一轮记在聊天记录里，带给别的电脑时从那里算（HubStore.recentTurns）；
+                            // 这台本来就有，不用再带。
                             sharedWith(url).add(id);
                         }
                         return;
