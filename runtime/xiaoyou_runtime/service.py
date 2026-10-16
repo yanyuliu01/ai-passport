@@ -89,7 +89,7 @@ class Service:
         self._dedupe = dedupe  # type: OrderedDict[str, Dict[str, Any]]
         # 写盘在锁外做（整份 JSON 可能上 MB，不能挡住 feed 和查询）：锁里只拍一份快照并编号，
         # 写的时候比编号，旧快照不会盖掉新快照。
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()
         self._version = 0
         self._written = 0
         # 对话名 → 这条线上还没处理的东西：消息编号，或者一件要在这条线上做的事（转述
@@ -252,100 +252,107 @@ class Service:
             raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
         effort, model = self._tier(agent, effort, model)
         fingerprint = content_hash(kind, text, audio)
-        with self._changed:
-            if self._closed:
-                raise RequestError("Runtime 正在关闭")
-            if client_id is not None:
-                seen = self._dedupe.get(dedupe_key(conversation, client_id))
-                if seen is not None:
-                    if seen.get("hash") != fingerprint:
-                        raise ConflictError(
-                            "client_id %s 在这个对话里已经用过，内容不一样" % client_id)
-                    return self._seen(seen)
-            message_id = uuid.uuid4().hex
-            if audio is not None:
-                # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
-                path = self._store.voice_file(message_id)
-                path.write_bytes(audio)
-                try:
-                    describe_wav(path)
-                except SttError as error:
-                    path.unlink()
-                    raise RequestError(str(error))
-                self._audio[message_id] = path
-            message = {
-                "id": message_id,
-                "client_id": client_id,
-                "conversation": conversation,
-                "kind": kind,
-                "status": "queued",
-                "text": text,
-                "reply": None,
-                # 回复还在生成时，已经生成的那部分（整段）；没有流式、或者已经说完时是空串
-                "partial": "",
-                "brief": None,
-                "mood": "busy",
-                "error": None,
-                # 调用方指定的代理；没指定就是 None，由小幽决定
-                "asked": agent,
-                # 主人说这句话时屏幕上的那件事；处理完后是这句话归到的那张卡
-                "card": card,
-                # 主人是在那件事里面说的：这句话一定归到它
-                "pin": pin and card is not None,
-                # 给这句话选的努力程度和模型；没选就是 None
-                "effort": effort,
-                "model": model,
-                # 接这句话的代理；交给了帮手时是那个帮手
-                "agent": None,
-                # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
-                "helper": None,
-                # 给人看的一句话：现在走到哪一步了
-                "stage": None,
-                "events": [],
-                # 这条记录每变一次加一：调用方带着上次看到的值来等，有变化就能立刻知道
-                "rev": 0,
-                # 这条记录最近一次变化时拿到的序号（和卡共用一条），feed 靠它接着拉
-                "seq": self._xiaoyou.cards.bump(),
-                "hop": hop,
-                "created_at": time.time(),
-                "finished_at": None,
-            }
-            self._messages[message["id"]] = message
-            if client_id is not None:
-                self._dedupe[dedupe_key(conversation, client_id)] = {
-                    "conversation": conversation, "client_id": client_id, "id": message_id,
-                    "hash": fingerprint, "status": "queued", "card": card,
-                    "at": message["created_at"],
-                }
-                while len(self._dedupe) > MAX_DEDUPE:
-                    self._dedupe.popitem(last=False)
-            self._trim()
-            captured = self._capture()
-        # 先落盘再回“收到了”：之后 Runtime 重启，这句话也还在。写不下去就不算收下。
-        try:
-            self._flush(captured, strict=True)
-        except OSError as error:
+        # 一次只收一句：收下（落盘）的先后就是排队的先后；同一个 client_id 的重试要等前一次
+        # 写完（或者写失败、撤回）才看得到结果，不会对一句还没写下去的话回“收到了”。
+        with self._write_lock:
             with self._changed:
-                if self._messages.get(message_id, {}).get("status") == "queued":
-                    del self._messages[message_id]
-                    if client_id is not None:
-                        key = dedupe_key(conversation, client_id)
-                        if self._dedupe.get(key, {}).get("id") == message_id:
-                            del self._dedupe[key]
-                    path = self._audio.pop(message_id, None)
-                    if path is not None:
-                        try:
-                            path.unlink()
-                        except OSError:
-                            pass
+                if self._closed:
+                    raise RequestError("Runtime 正在关闭")
+                if client_id is not None:
+                    seen = self._dedupe.get(dedupe_key(conversation, client_id))
+                    if seen is not None:
+                        if seen.get("hash") != fingerprint:
+                            raise ConflictError(
+                                "client_id %s 在这个对话里已经用过，内容不一样" % client_id)
+                        return self._seen(seen)
+                message_id = uuid.uuid4().hex
+                if audio is not None:
+                    # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
+                    path = self._store.voice_file(message_id)
+                    path.write_bytes(audio)
+                    try:
+                        describe_wav(path)
+                    except SttError as error:
+                        path.unlink()
+                        raise RequestError(str(error))
+                    self._audio[message_id] = path
+                message = {
+                    "id": message_id,
+                    "client_id": client_id,
+                    "conversation": conversation,
+                    "kind": kind,
+                    "status": "queued",
+                    "text": text,
+                    "reply": None,
+                    # 回复还在生成时，已经生成的那部分（整段）；没有流式、或者已经说完时是空串
+                    "partial": "",
+                    "brief": None,
+                    "mood": "busy",
+                    "error": None,
+                    # 调用方指定的代理；没指定就是 None，由小幽决定
+                    "asked": agent,
+                    # 主人说这句话时屏幕上的那件事；处理完后是这句话归到的那张卡
+                    "card": card,
+                    # 主人是在那件事里面说的：这句话一定归到它
+                    "pin": pin and card is not None,
+                    # 给这句话选的努力程度和模型；没选就是 None
+                    "effort": effort,
+                    "model": model,
+                    # 接这句话的代理；交给了帮手时是那个帮手
+                    "agent": None,
+                    # 正在替小幽干活的帮手；没有转交、或者帮手已经交回结果时是 None
+                    "helper": None,
+                    # 给人看的一句话：现在走到哪一步了
+                    "stage": None,
+                    "events": [],
+                    # 这条记录每变一次加一：调用方带着上次看到的值来等，有变化就能立刻知道
+                    "rev": 0,
+                    # 这条记录最近一次变化时拿到的序号（和卡共用一条），feed 靠它接着拉。
+                    # 写下去之前是 0：别的客户端看不到一句可能还会撤回的话。
+                    "seq": 0,
+                    "hop": hop,
+                    "created_at": time.time(),
+                    "finished_at": None,
+                }
+                self._messages[message["id"]] = message
+                if client_id is not None:
+                    self._dedupe[dedupe_key(conversation, client_id)] = {
+                        "conversation": conversation, "client_id": client_id, "id": message_id,
+                        "hash": fingerprint, "status": "queued", "card": card,
+                        "at": message["created_at"],
+                    }
+                    while len(self._dedupe) > MAX_DEDUPE:
+                        self._dedupe.popitem(last=False)
+                self._trim()
+                captured = self._capture()
+            # 先落盘再回“收到了”：之后 Runtime 重启，这句话也还在。写不下去就不算收下。
+            try:
+                self._flush(captured, strict=True)
+            except OSError as error:
+                with self._changed:
+                    if self._messages.get(message_id, {}).get("status") == "queued":
+                        del self._messages[message_id]
+                        if client_id is not None:
+                            key = dedupe_key(conversation, client_id)
+                            if self._dedupe.get(key, {}).get("id") == message_id:
+                                del self._dedupe[key]
+                        path = self._audio.pop(message_id, None)
+                        if path is not None:
+                            try:
+                                path.unlink()
+                            except OSError:
+                                pass
+                    self._changed.notify_all()
+                raise UnavailableError("消息记录写不下去，这句话没收下，稍后用同一个 client_id 再试：%s"
+                                       % error)
+            with self._changed:
+                if message_id in self._messages:
+                    message["seq"] = self._xiaoyou.cards.bump()
+                    if not self._closed:
+                        self._line_up(conversation, message_id)
+                snapshot = self._snapshot(message)
                 self._changed.notify_all()
-            raise UnavailableError("消息记录写不下去，这句话没收下，稍后用同一个 client_id 再试：%s"
-                                   % error)
-        with self._changed:
-            snapshot = self._snapshot(message)
-            if message_id in self._messages and not self._closed:
-                self._line_up(conversation, message_id)
-        return snapshot
+            return snapshot
 
     def _seen(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """调用时已经拿着锁：重复提交。消息还留着就给它；已经被挤掉了，给一份最小的。"""
@@ -612,7 +619,8 @@ class Service:
             if self._messages[message_id]["status"] in FINISHED:
                 del self._messages[message_id]
 
-    def _update(self, message_id: str, **fields: Any) -> None:
+    def _update(self, message_id: str, strict: bool = False, **fields: Any) -> None:
+        """改一条消息并写下去。strict 时写不下去就把错误交给调用方。"""
         captured = None
         with self._changed:
             message = self._messages.get(message_id)
@@ -624,7 +632,7 @@ class Service:
                 captured = self._capture()
             self._changed.notify_all()
         if captured is not None:
-            self._flush(captured)
+            self._flush(captured, strict=strict)
 
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
         """小幽报告这一轮走到了哪一步。"""
@@ -709,7 +717,13 @@ class Service:
                              finished_at=time.time())
                 return
             text = text[:MAX_TEXT_CHARS]
-        self._update(message_id, status="running", text=text)
+        try:
+            # 交给模型之前，“开始处理”必须已经写下去：否则断电重启后会把它当成没开始，再做一遍。
+            self._update(message_id, strict=True, status="running", text=text)
+        except OSError as error:
+            self._update(message_id, status="failed", mood="oops", finished_at=time.time(),
+                         error="消息记录写不下去，这句话没处理：%s" % error)
+            return
         try:
             turn = self._xiaoyou.hear(
                 text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,

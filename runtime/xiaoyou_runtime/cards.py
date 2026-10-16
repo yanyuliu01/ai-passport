@@ -17,6 +17,7 @@
 """
 
 import json
+import sys
 import threading
 import time
 import uuid
@@ -179,10 +180,13 @@ class Cards:
         return copy
 
     def _save(self) -> None:
-        if self._seq >= self._reserved:
-            self._reserved = self._seq + SEQ_BLOCK
-        _write(self._path, {"next": self._next, "seq": self._reserved, "epoch": self._epoch,
+        reserved = self._reserved
+        if self._seq >= reserved:
+            reserved = self._seq + SEQ_BLOCK
+        _write(self._path, {"next": self._next, "seq": reserved, "epoch": self._epoch,
                             "cards": list(self._cards.values())})
+        # 写成功了才算占下：写失败时下一次变化还会再试。
+        self._reserved = reserved
 
     @property
     def epoch(self) -> str:
@@ -202,7 +206,12 @@ class Cards:
         with self._changed:
             self._seq = max(self._seq, at_least) + 1
             if self._seq >= self._reserved:
-                self._save()
+                try:
+                    self._save()
+                except OSError as error:
+                    # 消息照样往下走；下一次取号再试着占下一段。磁盘一直坏着时，断电重启后
+                    # 序号可能比客户端手里的小：那种情况下客户端靠“返回的序号变小”从头同步。
+                    sys.stderr.write("卡片记录写不下去：%s\n" % error)
             self._changed.notify_all()
             return self._seq
 

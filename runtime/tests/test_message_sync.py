@@ -127,6 +127,58 @@ class MessageLedgerTests(TempDirCase):
         retry = service.submit("写不下", client_id="w1")
         self.assertEqual(service.get(retry["id"], wait=5)["status"], "done")
 
+    def test_a_retry_during_a_failing_write_is_never_told_it_was_accepted(self):
+        service, agent, _, _ = self.start()
+        writing = threading.Event()
+        original = service._ledger.save
+
+        def slow_failure(*args):
+            writing.set()
+            time.sleep(0.3)
+            raise OSError("disk full")
+        service._ledger.save = slow_failure
+        outcome = {}
+
+        def first():
+            try:
+                outcome["first"] = service.submit("一句", client_id="r1")["status"]
+            except UnavailableError:
+                outcome["first"] = 503
+        thread = threading.Thread(target=first)
+        thread.start()
+        writing.wait(5)
+        service._ledger.save = original  # 磁盘好了；重试正好赶在第一次写的时候
+        retry = service.submit("一句", client_id="r1")
+        thread.join(5)
+        self.assertEqual(outcome["first"], 503)
+        # 重试等到第一次的结果（撤回）才处理，所以是一句新收下、真的写下去的话。
+        self.assertIsNotNone(service.get(retry["id"]))
+        self.assertEqual(service.get(retry["id"], wait=5)["status"], "done")
+        self.assertEqual(agent.started, ["一句"])
+
+    def test_sentences_run_in_the_order_they_were_accepted(self):
+        service, agent, _, _ = self.start()
+        original = service._flush
+        delayed = threading.Event()
+
+        def slow_once(*args, **kwargs):
+            # 第一句收下后、开始写盘前停一下：第二句正好在这时候来。
+            if not delayed.is_set():
+                delayed.set()
+                time.sleep(0.2)
+            original(*args, **kwargs)
+        service._flush = slow_once
+        ids = {}
+        thread = threading.Thread(target=lambda: ids.update(a=service.submit("A")["id"]))
+        thread.start()
+        delayed.wait(5)
+        ids["b"] = service.submit("B")["id"]
+        thread.join(5)
+        service.get(ids["b"], wait=5)
+        service.get(ids["a"], wait=5)
+        self.assertEqual(agent.started, ["A", "B"])
+        self.assertLess(service.get(ids["a"])["created_at"], service.get(ids["b"])["created_at"])
+
     def test_the_sequence_never_goes_back_even_when_streaming_was_never_written(self):
         service, agent, first, store = self.start()
         agent.gate.clear()
@@ -274,6 +326,21 @@ class FeedMessagesTests(TempDirCase):
             after = page["seq"]
         self.assertGreater(pages, 1)
         self.assertEqual(len(seen), len(set(seen)))
+
+
+class SequenceReservationTests(TempDirCase):
+    def test_a_failed_write_does_not_count_as_reserving_numbers(self):
+        from unittest import mock as _mock
+        import xiaoyou_runtime.cards as cards_module
+        cards = cards_module.Cards(self.folder / "cards.json")
+        on_disk = json.loads((self.folder / "cards.json").read_text(encoding="utf-8"))["seq"]
+        with _mock.patch.object(cards_module, "_write", side_effect=OSError("disk full")):
+            for _ in range(cards_module.SEQ_BLOCK + 5):
+                cards.bump()  # 写不下去也不抛给取号的人
+        self.assertLessEqual(cards._reserved, on_disk)
+        cards.bump()  # 磁盘好了：下一次取号补上
+        saved = json.loads((self.folder / "cards.json").read_text(encoding="utf-8"))["seq"]
+        self.assertGreater(saved, cards.seq)
 
 
 class HttpSyncTests(TempDirCase):
