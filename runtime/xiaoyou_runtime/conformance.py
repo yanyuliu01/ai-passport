@@ -168,8 +168,10 @@ def run(base: str, token: str, conversation: Optional[str] = None,
     rebuilt = {message["id"]: message for page in pages for message in page["messages"]}
     check("sync.snapshot_matches_increments",
           you in seen and reply in seen
-          and all(rebuilt.get(key, {}).get(field) == seen[key][field]
-                  for key in (you, reply) for field in ("text", "status", "rev")))
+          and all(key in rebuilt and (
+              rebuilt[key]["rev"] > seen[key]["rev"]  # 拉快照前它又变了一次：更新的那份
+              or all(rebuilt[key][field] == seen[key][field] for field in ("text", "status", "rev")))
+              for key in (you, reply)))
     tasks = {task["id"]: task for page in pages for task in page["tasks"]}
     holders = [task for task in tasks.values() if reply in task.get("members", [])]
     task = (answer or {}).get("task")

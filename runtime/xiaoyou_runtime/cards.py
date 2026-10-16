@@ -88,6 +88,12 @@ class Cards:
             # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
             # 只是从这以后它能认出“换了一份记录”。
             self._epoch = uuid.uuid4().hex
+        # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
+        self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
+        # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
+        if self._log.max_seq() > self._seq:
+            self._seq = self._log.max_seq()
+            self._reserved = self._seq
         interrupted = [card for card in self._cards.values() if card["state"] in ACTIVE]
         for card in interrupted:
             self._seq += 1
@@ -101,12 +107,6 @@ class Cards:
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
-        # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
-        self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
-        # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
-        if self._log.max_seq() > self._seq:
-            self._seq = self._log.max_seq()
-            self._reserved = self._seq
         migrated = self._adopt_log()
         if interrupted or fresh_epoch or migrated:
             self._save()
