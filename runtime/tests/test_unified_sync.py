@@ -73,6 +73,22 @@ class UnifiedSyncTests(TempDirCase):
                 return found
             page = service.sync(conversation, page["seq"])
 
+    def test_a_desktop_session_that_finished_its_turn_is_turn_ended_only_in_sync(self):
+        service, _, xiaoyou = self.start()
+        card = xiaoyou.cards.open(CONVERSATION, "电脑上的会话", "unknown", "codex")
+        xiaoyou.cards.update(card["id"], state="done", monitoring_only=True, source="desktop",
+                             desktop_status="idle", session_id="s1")
+        task = next(item for item in service.sync("default", 0)["tasks"] if item["id"] == card["id"])
+        self.assertEqual("turn_ended", task["state"])
+        # Older apps keep seeing done on /v1/feed, and the card itself is unchanged.
+        fed = next(item for item in service.feed("default", 0)["cards"] if item["id"] == card["id"])
+        self.assertEqual("done", fed["state"])
+        self.assertEqual("done", xiaoyou.cards.get(card["id"])["state"])
+        # A task the runtime itself finished is simply done.
+        own = xiaoyou.cards.open("default", "自己的事", "done", "codex")
+        self.assertEqual("done", next(item for item in service.sync("default", 0)["tasks"]
+                                      if item["id"] == own["id"])["state"])
+
     def test_sync_carries_usage_and_wakes_up_when_it_changes(self):
         service, _, xiaoyou = self.start()
         page = service.sync("default", 0)
