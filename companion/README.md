@@ -4,6 +4,12 @@
 
 # DS companion (Pocket Hub)
 
+Agents changing this project must first read the [root instructions](../AGENTS.md)
+and [mandatory App/Runtime/firmware reliability rules](../docs/development/cross-stack-reliability.md).
+They define regression, 3-second first-response, connection recovery, and
+multi-end consistency acceptance. The capability descriptions below do not
+establish that these requirements have passed validation.
+
 The Android companion is built around DS: you talk to her, she hands work to helpers, and a left sidebar shows every task and helper. It sits between the phone's AI assistants and
 the Claude Pocket device. It reads the notifications of registered apps
 (Claude and Codex by default), keeps the recent ones as a small feed, and sends
@@ -23,7 +29,7 @@ the device which agents the selected runtime has.
 
 Holding `OK` on the device records a voice message. The app receives the audio
 over Bluetooth, forwards it to the runtime, and the runtime turns it into text
-and answers it like a typed message. The app does not recognize speech itself.
+and answers it like a typed message. This device-audio path is separate from the phone microphone, which transcribes on the phone.
 When a thing was on the device's screen at the press (the card on screen 2,
 the selected one on screen 3), the device says the sentence is addressed to
 it, and the app passes that on to the runtime unchanged.
@@ -39,14 +45,19 @@ helpers. You only talk and watch, so the app offers no helper or effort picker;
 say "let Codex do it, carefully" and DS arranges it. The ☰ button at the top
 left opens a sidebar with every place in the app:
 
-- **Chat with DS** — DS's own conversation. A request she hands off leaves a
-  one-line receipt (helper portrait, title, current step) that opens the task.
-  Conversations started on the computer never appear here.
-- **Tasks** — work DS handed to a helper, newest first. A task's state never
-  changes its position, so nothing moves while you read; pinned tasks stay on
-  top. Long-press a task (or use ⋯ on its page) to pin, archive or stop it.
-  Pins and archives are kept on the phone per computer; archived tasks can be
-  restored from the "Archived" row. There is no rename: titles come from the
+- **Chat with DS** — a persistent message timeline. Sent messages appear immediately;
+  streamed replies update the same bubble. Hand-off replies stay visible with a task
+  link, and completion summaries arrive as new messages without changing pages.
+  Conversations started on the computer never appear here. Older messages can be
+  loaded above the visible window; deleting or pruning a task card does not remove
+  messages already saved on this phone.
+- **Tasks** — work DS handed to a helper, grouped by creation date in the phone's
+  time zone (Today, Yesterday, then calendar dates), newest first within each day.
+  Each row shows its creation time. Pinned tasks have their own section with a full
+  date and time. Completion, approvals and subsequent task runs never change the
+  original date or position. Long-press a task (or use ⋯ on its page) to pin,
+  archive or stop it. Pins and archives are kept on the phone per computer;
+  archived tasks can be restored from the "Archived" row. Titles come from the
   runtime so the device, phone and computer agree.
 - **Helpers** — one row per helper (Codex, Claude, then others) with its state.
   A helper's page lists what DS handed to it, each linking back to its task, and
@@ -59,11 +70,17 @@ she breathes while idle, tilts her head with rings while listening, floats with
 three dots while thinking, bounces lightly while her streamed reply appears,
 and hops when a helper finishes. Tap her and she answers locally. A handed-off
 request sends a small letter flying to the helper's chip, which spins while the
-helper works and turns green when it is done. Hold the big microphone to talk: the
-phone's own speech recognition turns it into text while you speak (the words
-appear in her bubble) and sends the text on release; a phone without a
-recognition service records 16 kHz mono and lets the runtime transcribe it,
-like the device's push-to-talk. Typing can use the keyboard's own voice input;
+helper works and turns green when it is done. Hold the big microphone to talk: a bundled Chinese streaming model shows provisional text while recording;
+SenseVoice performs final recognition after release. Only that final text is
+sent to the runtime. It works without Android's speech service or
+an offline language pack. Cancelling the gesture or leaving the screen discards
+the recording and result. Recordings stay in memory, are limited to 30 seconds,
+and are never uploaded from the phone microphone. Allow microphone permission;
+microphone capture starts immediately while the model loads on a separate worker,
+so speech spoken during model startup is retained. The recording hint appears
+only once the microphone is capturing. A failed attempt keeps its specific
+error visible below the microphone until the next press.
+Typing can use the keyboard's own voice input;
 the keyboard opens the conversation history for typing. With no computer added
 yet, the home screen offers to connect one. The device page mirrors the wrist
 screen, connects or disconnects it, links to firmware, and keeps a placeholder
@@ -71,7 +88,14 @@ for what later firmware adds.
 
 A task's page shows its steps (DS splits the request, the helper works with its
 latest progress, DS reports back), then the task's conversation; messages sent
-there continue that task. Desktop conversations are read-only and say so.
+there appear immediately and continue that task. A worker's original final result
+and DS's summary are separate entries, with long originals saved as attachments.
+Files and original results become available while the summary is still being
+prepared; its streaming bubble is independent of any current chat reply. New
+message IDs, scope and result metadata are additive and old runtimes remain
+readable. Restart the runtime after upgrading its Python code to enable these
+new result features. Previously discarded messages and originals cannot be
+recovered by the phone. Desktop conversations are read-only and say so.
 Status is written as one coloured word: blue in progress, amber waiting for
 you, nothing for ended tasks. The companion look only changes how DS appears in
 the chat; it does not decide which helper gets work. The plus button for
@@ -250,6 +274,56 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## Companion fixes (0.13.0)
+
+Conversation history is retained separately from the live task list. Streaming text
+updates existing bubbles, and late partial text cannot replace a synced final reply.
+The home and helper pages show real 5-hour and weekly quota as energy, including
+shared-account, unknown, expired-window and offline-cache states. API billing is
+shown without a fabricated percentage.
+
+Phone microphone recognition in 0.13.0 includes its own Chinese model instead of
+requiring a platform recognizer. It runs only on the phone and release sends text. Read requests and
+message submissions carrying a deduplication ID retry transient transport errors
+up to twice, preserving the original ID and body so a lost response cannot
+submit the task again. Authentication and other HTTP errors are reported directly.
+Foreground update checks retry after
+connection failures and run every minute while online. Cached installers are
+verified again before installation and releases stay bound to their Runtime.
+These paths have build and host coverage; microphone interaction, history scroll
+stability and the Android installation flow still require phone acceptance.
+
+## Bundled phone speech dependencies
+
+From 0.14.0, final recognition uses the same unchanged SenseVoice int8
+2024-07-17 model as the computer's configured recognizer: automatic language
+selection, inverse text normalization, and two CPU threads. The small Chinese
+Zipformer CTC int8 2025-04-01 model remains for provisional streaming text.
+Final recognition supports Mandarin, Cantonese, English, Japanese, and Korean;
+using identical weights does not establish identical microphone quality,
+accuracy, or latency on a phone.
+
+Microphone capture starts independently of model loading and retains startup
+audio. Utterances of at least 100 ms reach the model; empty taps and empty
+recognition still report errors. Release sends one final result; cancellation
+and leaving the screen discard it. The maximum recording remains 30 seconds.
+
+The build runs `android/tools/prepare_phone_speech.py` with pinned URLs and
+SHA-256 hashes in `android/tools/phone-speech.json`. It downloads sherpa-onnx
+1.13.8 and both unchanged models into `app/build/phone-speech/`. The first build
+needs network access; later builds can use verified caches. Both models are
+inside the APK, with no first-use download or server transcription request.
+The SenseVoice model alone is about 228 MiB before APK compression.
+
+Upstream: [Android library](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8),
+[SenseVoice model](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html),
+[streaming model](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-ctc/zipformer-ctc-models.html).
+The engine and preview model use Apache-2.0. SenseVoice weights use the separate
+[FunASR Model Open Source License Agreement](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE).
+Model names, authors, license texts, and ONNX Runtime's MIT license are included
+in the APK's `licenses/` assets. Kotlin standard library 1.9.20 supports the
+engine's Android binding.
+
 ## App updates
 
 When the computer has published a newer build (`python3 -m xiaoyou_runtime app
@@ -258,6 +332,30 @@ shows that a new app is available. Connections and settings → App update downl
 the runtime, checks its SHA-256 and opens Android's installer; the first time,
 Android asks you to allow Pocket Hub to install apps. Installing always needs
 your confirmation on the phone.
+
+From 0.13.1, the build produces standalone APKs for `arm64-v8a`, `armeabi-v7a`,
+`x86`, and `x86_64`, plus a universal APK. Each contains the same offline speech
+model and assets. The app requests its native ABI, falling back to the universal
+package when that variant is unavailable. Without an external download URL, downloads remain on the paired Runtime.
+From 0.14.0, an explicitly published HTTPS download URL can serve the APK
+from GitHub Releases or another host. The Runtime still supplies the trusted
+version, size, and SHA-256; external hosts and their HTTPS redirects never
+receive the Runtime token. Downloads remain resumable and hash-verified.
+
+Interrupted downloads keep a hash-named partial file and resume with HTTP Range,
+including after restarting the app. There are at most three attempts per download
+action; another tap continues retained bytes. The expected SHA-256, ETag, byte
+range, and size must agree before Android can install anything. An older Runtime
+that returns the full file instead of a range is supported by overwriting the
+partial. A replaced release requires checking for updates again. Older apps
+cannot resume, even when the Runtime supports it.
+
+0.14.0 raises the App and Runtime APK limit from 128 MiB to 512 MiB for the
+bundled SenseVoice model. Older installed updaters still have the 128 MiB limit;
+for this first large upgrade, use the published GitHub HTTPS download link in
+the phone browser and confirm Android's installer. Later upgrades can use the
+new in-app downloader. An external hosting change does not move conversations,
+recordings, or Runtime credentials to that host.
 
 ### Shipping an app change (developers and AI agents)
 
@@ -270,12 +368,18 @@ way, not as an APK file to sideload:
    differs and is published later than the phone's install.
 2. **Build and test** in `companion/android` with JDK 17 and the Android SDK:
    `gradle testDebugUnitTest assembleDebug`. Both must pass; do not publish a
-   failing build. The APK is `app/build/outputs/apk/debug/app-debug.apk`, with
+   failing build. The APK is `app/build/outputs/apk/debug/app-universal-debug.apk`, with
    Gradle's `output-metadata.json` beside it.
 3. **Publish** it on the computer that runs the owner's runtime (from `runtime/`):
 
    ```bash
-   python3 -m xiaoyou_runtime app publish ../companion/android/app/build/outputs/apk/debug/app-debug.apk --note "one line the owner understands"
+   apk_dir=../companion/android/app/build/outputs/apk/debug
+   python3 -m xiaoyou_runtime app publish "$apk_dir/app-universal-debug.apk" \
+     --variant "arm64-v8a=$apk_dir/app-arm64-v8a-debug.apk" \
+     --variant "armeabi-v7a=$apk_dir/app-armeabi-v7a-debug.apk" \
+     --variant "x86=$apk_dir/app-x86-debug.apk" \
+     --variant "x86_64=$apk_dir/app-x86_64-debug.apk" \
+     --note "one line the owner understands"
    python3 -m xiaoyou_runtime app status
    ```
 
@@ -288,6 +392,22 @@ way, not as an APK file to sideload:
    the install on the phone has not been verified until they confirm it.
 5. **Commit; push only when asked.** Publishing does not push to Git and a
    Git push does not publish.
+
+For an uploaded HTTPS release asset, add `--download-url HTTPS_URL` for the
+default APK and `--variant-download-url ABI=HTTPS_URL` for each hosted variant.
+Upload exactly the verified APK first; the Runtime records its local size/hash
+and keeps local serving available for older clients. A variant without its own
+URL uses its Runtime download path rather than another ABI's URL. Public hosting
+needs owner authorization and a check that the APK contains no private assets.
+
+The positional APK is the default used by older apps, which send no ABI. Use
+the universal default unless every legacy phone on that private Runtime is known
+to support a specific ABI. For a known ARM64 phone, the ARM64 APK may be the
+default to reduce its first upgrade; also publish `--variant universal=...` and
+the other ABI packages. This is an explicit deployment choice, not an automatic
+assumption about unknown phones. Variant packages need matching Gradle metadata
+(version and ABI). Restart an idle Runtime with variant/Range support before
+publishing these packages. The CI download keeps its existing universal filename.
 
 When a change also needs the runtime (new endpoints the app calls), restart
 the runtime before publishing the app, or the new app will meet the old

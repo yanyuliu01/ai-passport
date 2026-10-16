@@ -447,8 +447,9 @@ def relay(helper: str, title: str, result: str) -> str:
     """只会干活的帮手做完之后，交回给说话的代理的那段话。主人看不到这段。"""
     cut = ""
     if len(result) > RESULT_CHARS:
-        result = result[:RESULT_CHARS]
-        cut = "\n（结果太长，后面的没有贴出来。）"
+        head = RESULT_CHARS * 2 // 3
+        result = result[:head] + "\n（中间内容省略，完整原文在任务卡中）\n" + result[-(RESULT_CHARS - head):]
+        cut = "\n（以上为原文开头和结尾，请勿声称已阅读省略内容。）"
     return (
         "（后台那件事「%s」，帮手 %s 做完了。下面是它交回的原始结果，主人看不到这段。"
         "用你自己的话告诉主人：做了什么、结论是什么、有没有需要主人决定的事。"
@@ -570,7 +571,7 @@ class Xiaoyou:
                 model: Optional[str] = None) -> Turn:
         reply = "交给 %s 了" % agent.name
         card = self._cards.open(conversation, route.text, "working", agent.name)
-        self._cards.update(card["id"], said=said, say=reply, brief=reply, mood="busy")
+        self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff", brief=reply, mood="busy")
         task = route.text
         if route.reason == "mention" and agent.speaks:
             # 话里点的名还留在话里，要告诉它说的就是它自己；接口里指定的不用。
@@ -599,11 +600,11 @@ class Xiaoyou:
                 recent = self._store.transcript.turns(conversation)[-BACKGROUND_TURNS:]
                 if recent:
                     task = background(recent, task)
-            self._cards.update(card["id"], said=said, say=reply, brief=reply, mood="busy",
+            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", brief=reply, mood="busy",
                                state="working", edits=card["edits"] + 1)
             self._launch(card["id"], agent, task, conversation, hop, effort, model)
         else:
-            self._cards.update(card["id"], said=said, say=reply, edits=card["edits"] + 1)
+            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", edits=card["edits"] + 1)
             self._workspace.note(card, agent.name, task, done)
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
@@ -667,10 +668,10 @@ class Xiaoyou:
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
             # 那件事还在做时，卡上的简报和表情留给它的结果，不被一句闲聊盖掉。
             extra = {} if quiet else {"brief": turn.brief, "mood": turn.mood}
-            self._cards.update(target["id"], said=text, say=reply, **extra)
+            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
         elif kind == "cancel":
             self.cancel(target["id"])
-            self._cards.update(target["id"], said=text, say=reply)
+            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
         elif kind == "amend":
             worker = target["agent"] or lead.name
@@ -678,13 +679,13 @@ class Xiaoyou:
                                plan.get("effort") or effort, plan.get("model") or model)
             if done is None:
                 # 那件事已经不在做了：接着它原来的会话再做一轮。
-                self._cards.update(target["id"], said=text, say=reply, brief=clip(
+                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
                     reply, self._config.brief_max_chars), mood="busy", state="working",
                     edits=target["edits"] + 1)
                 self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop,
                              plan.get("effort") or effort, plan.get("model") or model)
             else:
-                self._cards.update(target["id"], said=text, say=reply, edits=target["edits"] + 1)
+                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", edits=target["edits"] + 1)
                 self._workspace.note(target, worker, plan["task"], done)
             say("handoff", worker, reply)
             started = True
@@ -697,7 +698,7 @@ class Xiaoyou:
                 target = self._cards.open(
                     conversation, plan.get("title") or text, "working", helper.name,
                     title_source="task" if plan.get("title") else "request")
-            self._cards.update(target["id"], said=text, say=reply, state="working",
+            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._config.brief_max_chars))
             say("handoff", helper.name, reply)
@@ -861,19 +862,18 @@ class Xiaoyou:
         effort, model = self._tier(agent, self._cards.get(card_id), effort, model)
         known = next((entry["model"] for entry in self._usage.snapshot()["agents"]
                       if entry["name"] == agent.name), None)
+        task_run = Task(
+            card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
+            system=task_prompt(self._config.persona, self._config.brief_max_chars) if speaking else None,
+            schema=reply_schema() if speaking else None, effort=effort, model=model,
+        )
         card = self._cards.update(card_id, state="working", agent=agent.name,
-                                  started_at=time.time(),
-                                  queued=self._config.max_parallel > 0, fresh=True,
-                                  effort=effort, model=model or known, model_asked=model)
+                                  started_at=time.time(), queued=self._config.max_parallel > 0,
+                                  fresh=True, effort=effort, model=model or known, model_asked=model,
+                                  run_id=task_run.run_id, result_ready=False, summary_partial="")
         if card is not None:
             self._workspace.task(card, agent.name, task)
-        self._tasks.start(Task(
-            card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
-            system=task_prompt(self._config.persona, self._config.brief_max_chars)
-            if speaking else None,
-            schema=reply_schema() if speaking else None,
-            effort=effort, model=model,
-        ))
+        self._tasks.start(task_run)
 
     def _begun(self, task: Task) -> None:
         """轮到这件事了（设了并行上限时，前面可能排过队）。"""
@@ -966,6 +966,9 @@ class Xiaoyou:
     def _finished(self, task: Task, outcome: Optional[Outcome], error: Optional[str]) -> None:
         """后台的事做完或没做成。在任务自己的线程里被调用。"""
         name = task.agent.name
+        current = self._cards.get(task.card)
+        if current is None or current["state"] == "cancelled" or current.get("run_id") != task.run_id:
+            return
         if outcome is not None:
             if not outcome.fields:
                 try:
@@ -985,6 +988,11 @@ class Xiaoyou:
                 except ArtifactError:
                     # Preserve the reply and make the failed attachment visible.
                     task.artifact_error = "完整回复保存失败，请稍后重试"
+            note = "\n\n（内容较长，完整原文见附件。）" if task.full_reply_saved else ""
+            original = full if not note else full[:MAX_ENTRY_CHARS - len(note)] + note
+            self._cards.update(task.card, say=original, turn_id=task.run_id + "-result",
+                               scope="task", kind="worker_result", author=name,
+                               result_ready=True, attachments=task.artifacts)
         card = self._cards.get(task.card)
         if card is not None and card["state"] != "cancelled":
             # 代理交回的原样记一条，不管之后小幽怎么转述。
@@ -1006,6 +1014,12 @@ class Xiaoyou:
     def _relay(self, task: Task, result: str) -> None:
         """只会干活的帮手交回了结果：让说话的代理用小幽的话转述。"""
         card = self._cards.get(task.card) or {}
+        if card.get("run_id") != task.run_id or card.get("state") == "cancelled":
+            return
+        def report(kind: str, agent: Optional[str], text: str) -> None:
+            current = self._cards.get(task.card)
+            if kind == "partial" and current and current.get("run_id") == task.run_id and current["state"] in ACTIVE:
+                self._cards.update(task.card, summary_partial=text)
         voice = self._voice(self._available(task.hop))
         if voice is not None and voice.name != task.agent.name:
             try:
@@ -1013,7 +1027,8 @@ class Xiaoyou:
                     voice, relay(task.agent.name, card.get("title", ""), result),
                     task.conversation, voice_prompt(
                         self._config.persona, self._config.brief_max_chars),
-                    reply_schema(), task.hop, catch_up=True)
+                    reply_schema(), task.hop, catch_up=True,
+                    on_text=self._streamer(voice.name, report))
                 reply = (self._field(outcome, "reply") or outcome.text).strip()
                 if reply:
                     fields = outcome.fields or {}
@@ -1028,9 +1043,16 @@ class Xiaoyou:
                seen: List[str]) -> None:
         turn = shape(reply, brief, mood, self._config.brief_max_chars, task.agent.name)
         card = self._cards.get(task.card)
-        if card is None or card["state"] == "cancelled":
+        if card is None or card["state"] == "cancelled" or card.get("run_id") != task.run_id:
             return
         display_reply = turn.reply
+        if task.system is None and len(display_reply) > MAX_ENTRY_CHARS:
+            try:
+                task.artifacts.append(self.artifacts.save_text(task.card, turn.reply,
+                                      name="完整结果总结.txt", source="xiaoyou"))
+                task.full_reply_saved = True
+            except ArtifactError:
+                task.artifact_error = "完整总结保存失败，请稍后重试"
         if len(display_reply) > MAX_ENTRY_CHARS:
             note = "\n\n（内容较长，完整内容见附件。）" if task.full_reply_saved else (
                 "\n\n（内容较长，当前仅显示部分内容。）")
@@ -1039,7 +1061,9 @@ class Xiaoyou:
             display_reply = display_reply[:MAX_ENTRY_CHARS - len(task.artifact_error) - 2] + (
                 "\n\n" + task.artifact_error)
         self._cards.update(task.card, say=display_reply, brief=turn.brief, mood=turn.mood,
-                           state=state, approval=None, queued=False, attachments=task.artifacts)
+                           state=state, approval=None, queued=False, attachments=task.artifacts,
+                           turn_id=task.run_id + "-summary", scope="main", kind="summary",
+                           result_ready=True, summary_partial="")
         # 记进对话记录：说话的代理下次接话时会被告知这个结果。
         self._workspace.closed(card, state, turn.brief, turn.reply, turn.mood)
         self._store.transcript.add(

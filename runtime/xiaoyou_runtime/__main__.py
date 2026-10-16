@@ -21,6 +21,7 @@ from . import (__version__, agents as agent_module, app_release, firmware_cli, r
 from .agents import AgentError
 from .config import ConfigError, load
 from .desktop_sync import DesktopSync
+from . import desktop_handoff
 from .firmware import FirmwareStore
 from .server import make_server
 from .service import Service
@@ -85,6 +86,7 @@ def main(argv=None) -> int:
     commands = parser.add_subparsers(dest="command", metavar="子命令")
     firmware_cli.add_arguments(commands)
     app_release.add_arguments(commands)
+    desktop_handoff.add_arguments(commands)
     usage_parser = commands.add_parser(
         "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
         description="现在去问一次 Claude Code 和 Codex 的订阅额度并打印。不调用模型，不用先启动服务。")
@@ -100,6 +102,8 @@ def main(argv=None) -> int:
         return 2
     for notice in config.notices:
         print("提示：%s" % notice, file=sys.stderr)
+    if args.command == "desktop":
+        return desktop_handoff.run_cli(config, args)
     if args.command == "firmware":
         # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
         return firmware_cli.run(config, Path(args.config), args,

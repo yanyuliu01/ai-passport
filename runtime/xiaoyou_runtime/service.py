@@ -321,6 +321,7 @@ class Service:
     @staticmethod
     def _snapshot(message: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = dict(message)
+        snapshot["event_stream"] = True
         snapshot["events"] = [dict(event) for event in message["events"]]
         return snapshot
 
@@ -407,6 +408,8 @@ class Service:
             if message is None:
                 return
             if kind == "partial":
+                if text and message.get("first_partial_at") is None:
+                    message["first_partial_at"] = time.time()
                 # 回复还在生成：到目前为止的那段，整段替换（不是追加），空串是收回。
                 if message["status"] == "running" and message["partial"] != text:
                     message["partial"] = text
@@ -456,6 +459,7 @@ class Service:
             pin = bool(message.get("pin"))
             effort, model = message.get("effort"), message.get("model")
             audio = self._audio.pop(message_id, None)
+            message["processing_started_at"] = time.time()
         if audio is not None:
             self._update(message_id, status="transcribing")
             try:
@@ -488,11 +492,11 @@ class Service:
                 report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
             )
         except AgentError as error:
-            self._fail(message_id, conversation, text, str(error))
+            self._fail(message_id, conversation, text, str(error), pin)
             return
         except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
             self._fail(message_id, conversation, text,
-                       "Runtime 内部出错：%s: %s" % (type(error).__name__, error))
+                       "Runtime 内部出错：%s: %s" % (type(error).__name__, error), pin)
             return
         if hop > 0 and turn.started:
             # 那台 Runtime 在等最终结果：这条消息等那件事结束才算完。
@@ -510,10 +514,11 @@ class Service:
             finished_at=time.time(),
         )
 
-    def _fail(self, message_id: str, conversation: str, text: str, error: str) -> None:
+    def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
         card = self._xiaoyou.cards.open(conversation, text, "failed")
-        self._xiaoyou.cards.update(card["id"], said=text, say=error, brief=error, mood="oops")
+        self._xiaoyou.cards.update(card["id"], said=text, say=error, brief=error, mood="oops",
+                                  turn_id=message_id, scope="task" if pin else "main")
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
             card=card["id"], partial="", finished_at=time.time(),

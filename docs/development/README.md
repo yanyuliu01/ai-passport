@@ -8,6 +8,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 
 ## AI workflow
 
+- [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
 - [ai-guide.md](ai-guide.md): AI-assisted development workflow.
 - [Core AI skills](../../skills/README.md): development, setup, build, device testing, and diagnosis; installation and usage examples.
 

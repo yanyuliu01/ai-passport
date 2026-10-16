@@ -3,6 +3,8 @@ package com.yanyuliu.pockethub;
 import android.app.PendingIntent;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.Context;
+import android.content.SharedPreferences;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -168,7 +170,46 @@ public final class HubStore {
     /** 小幽正在说、还没说完的那段回复（Runtime 流式给的）；没有就是空串。只给 App 画，不发设备。 */
     private String streaming = "";
     /** 这一轮的卡已经到了：之后晚到的片段不再画，免得和卡上的回复重复。 */
-    private boolean streamSettled;
+    private ChatHistory history = new ChatHistory();
+    private SharedPreferences historyPrefs;
+    private boolean historyLoaded;
+    private String historyRuntime = "", messageKey = "";
+    private final Runnable historySave = () -> { synchronized (this) { saveHistory(); } };
+
+    public synchronized void initializeHistory(Context context, String runtime, List<ChatTurn> legacy) {
+        if (historyPrefs != null && historyRuntime.equals(runtime == null ? "" : runtime)) return;
+        if (historyPrefs == null) historyLoaded = false;
+        historyPrefs = context.getApplicationContext().getSharedPreferences("conversation_history", Context.MODE_PRIVATE);
+        loadHistory(runtime);
+        for (Card card : cards.values()) history.ingest(card);
+        if (history.main().isEmpty()) {
+            for (ChatTurn turn : legacy) {
+                history.importTurn(turn);
+            }
+            saveHistory();
+        }
+    }
+
+    private void loadHistory(String runtime) {
+        main.removeCallbacks(historySave);
+        if (historyLoaded) saveHistory();
+        historyRuntime = runtime == null ? "" : runtime;
+        history = historyPrefs == null ? new ChatHistory() : ChatHistory.restore(
+                historyPrefs.getString(ArtifactDownload.key(historyRuntime), "{}"));
+        historyLoaded = true;
+    }
+
+    private void saveHistory() {
+        if (historyPrefs != null) historyPrefs.edit().putString(ArtifactDownload.key(historyRuntime), history.json()).apply();
+    }
+
+    private void historyChanged() {
+        main.removeCallbacks(historySave); main.postDelayed(historySave, 300);
+    }
+
+    synchronized List<ChatHistory.Message> mainMessages() { return history.main(); }
+    synchronized List<ChatHistory.Message> pendingMessages(String card) { return history.pending(card); }
+    synchronized String retryMessage(String id) { return history.retry(id); }
     private long sequence;
     private Turn turn = new Turn("idle", "", "", "", "", "idle");
     /** 换了一台 Runtime，或者别的原因让“小幽有哪些帮手”需要重新问一次。 */
@@ -297,7 +338,13 @@ public final class HubStore {
         return null;
     }
 
-    public synchronized void selectedRuntime(String url) { selectedRuntime = url; }
+    public synchronized void selectedRuntime(String url) {
+        selectedRuntime = url;
+        if (!historyRuntime.equals(url == null ? "" : url)) {
+            loadHistory(url); pending = 0; streaming = ""; messageKey = "";
+            turn = new Turn("idle", "", "", "", "", "idle");
+        }
+    }
 
     /** Independent origins are merged without changing the selected Runtime's task cards. */
     public void applyApprovals(String runtime, List<Card.Approval> pending) {
@@ -396,11 +443,8 @@ public final class HubStore {
                 }
                 cards.put(order, card);
                 dirty = true;
-                if (pending > 0 && !card.monitoringOnly && busyText.equals(card.said())) {
-                    // 正在说的这句话已经落到卡上：卡上的就是完整回复，不再画还在说的那段。
-                    streaming = "";
-                    streamSettled = true;
-                }
+                history.ingest(card);
+                historyChanged();
                 // 后台的一件事有了结果：第一屏说这件事。正在等小幽回话时不打断那一轮。
                 if (!card.monitoringOnly && previous != null && previous.active()
                         && !card.active() && pending == 0) {
@@ -557,15 +601,28 @@ public final class HubStore {
 
     /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
     public void chatAsked(String text) {
+        chatAsked(text, "local-" + java.util.UUID.randomUUID(), null);
+    }
+
+    public void chatAsked(String text, String clientId, String card) {
         synchronized (this) {
             ++pending;
             busyText = text;
             streaming = "";
-            streamSettled = false;
             turnCard = null;
             appendChat("我：" + text);
+            messageKey = clientId;
+            history.begin(clientId, card, text, System.currentTimeMillis() / 1000.0);
+            saveHistory();
             turn = new Turn("thinking", RuntimeClient.VOICE_PLACEHOLDER.equals(text) ? "" : text,
                     "", "", "", "busy");
+        }
+        notifyChanged();
+    }
+
+    public void chatAccepted(String clientId, String messageId) {
+        synchronized (this) {
+            history.accepted(clientId, messageId); messageKey = messageId; saveHistory();
         }
         notifyChanged();
     }
@@ -597,10 +654,11 @@ public final class HubStore {
     public void chatStreaming(String text) {
         synchronized (this) {
             String next = text == null ? "" : text;
-            if (pending <= 0 || streamSettled || next.equals(streaming)) {
+            if (pending <= 0 || next.equals(streaming)) {
                 return;
             }
             streaming = next;
+            history.streaming(messageKey, next);
         }
         notifyChanged();
     }
@@ -623,13 +681,13 @@ public final class HubStore {
             return new Turn(turn.phase, turn.said, turn.reply, turn.agent, turn.stage, turn.mood,
                     turn.card, doing);
         }
-        // 这一轮已经有卡了：第一屏跟着卡走，帮手做完时它自己就变成结果。
+        // Retain the hand-off response while its task runs; work is shown separately.
         String say = card.lastSay();
         if (card.active()) {
             if (card.agent.isEmpty()) {
                 return new Turn("thinking", card.said(), "", "", "", "busy", card.id, doing);
             }
-            return new Turn("helper", card.said(), "", card.agent, card.title,
+            return new Turn("helper", card.said(), say.isEmpty() ? turn.reply : say, card.agent, card.title,
                     card.state.equals("waiting") ? "ask" : "busy", card.id, doing);
         }
         if (card.state.equals("failed")) {
@@ -667,6 +725,7 @@ public final class HubStore {
             }
             if (pending > 0) {
                 busyText = heard;
+                history.heard(messageKey, heard);
                 turn = new Turn(turn.phase, heard, turn.reply, turn.agent, turn.stage, turn.mood);
             }
         }
@@ -691,6 +750,11 @@ public final class HubStore {
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
             trimEvents();
             appendChat(CHAT_SOURCE + "：" + shown);
+            Card snapshot = null;
+            Long order = card == null ? null : cardOrder.get(card);
+            if (order != null) snapshot = cards.get(order);
+            history.finish(messageKey, card, shown, false, snapshot);
+            saveHistory();
         }
         notifyChanged();
     }
@@ -716,6 +780,8 @@ public final class HubStore {
             trimEvents();
             appendChat("（没成功）" + error);
             appendLog("聊天失败：" + error);
+            history.finish(messageKey, null, error, true, null);
+            saveHistory();
         }
         notifyChanged();
     }

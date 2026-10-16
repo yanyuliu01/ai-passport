@@ -160,6 +160,42 @@ final class Usage {
         return null;
     }
 
+    /** Show the real limiting subscription window; never invent stamina for API billing. */
+    String energy(String role, long now, TimeZone zone) {
+        return energy(role, now, 0, zone);
+    }
+
+    String energy(String role, long now, long extraSeconds, TimeZone zone) {
+        Agent helper = null;
+        for (Agent candidate : agents) {
+            if (candidate.name.equals(role)) { helper = candidate; break; }
+        }
+        if (helper == null) for (Agent candidate : agents) {
+            if (AppPresentation.role(candidate.name).equals(AppPresentation.role(role))) { helper = candidate; break; }
+        }
+        Account account = null;
+        for (Account candidate : accounts) {
+            if (helper != null && candidate.id.equals(helper.account)
+                    || candidate.agents.contains(helper == null ? role : helper.name)) { account = candidate; break; }
+        }
+        if (account == null) return helper != null && helper.account.isEmpty() && !helper.model.isEmpty()
+                ? "精力值：按量计费" : "精力值：未知";
+        int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;
+        int weekLeft = account.reset7d > 0 && account.reset7d <= now ? -1 : account.left7d;
+        String label = "精力值 · 5 小时 " + (shortLeft < 0 ? "未知" : shortLeft + "%")
+                + " · 本周 " + (weekLeft < 0 ? "未知" : weekLeft + "%");
+        long reset = shortLeft >= 0 && (weekLeft < 0 || shortLeft <= weekLeft) ? account.reset5h : account.reset7d;
+        String when = resetText(reset, now, zone);
+        if (!when.isEmpty()) label += "\n" + when;
+        if (accountAgents(account).size() > 1) label += " · 共用额度";
+        if (account.updatedAt <= 0) label += " · 更新时间未知";
+        else {
+            long minutes = (long) (Math.max(0, at - account.updatedAt) + Math.max(0, extraSeconds)) / 60;
+            label += minutes == 0 ? " · 刚刚更新" : " · " + minutes + " 分钟前更新";
+        }
+        return label;
+    }
+
     /** 账号和帮手都没报过才是空；未知模型的帮手也保留。 */
     boolean empty() {
         return accounts.isEmpty() && agents.isEmpty();

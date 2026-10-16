@@ -85,6 +85,10 @@ class AppServer:
         self._control = control
         self._name = spec.name
         command = list(spec.command) + ["app-server"] + list(spec.extra_args)
+        if spec.app_server_socket is not None:
+            command = list(spec.command) + ["app-server", "proxy", "--sock",
+                                            str(spec.app_server_socket)] + list(spec.extra_args)
+        self._active_turn = None
         command[0] = shutil.which(command[0]) or command[0]
         extra: Dict[str, Any] = {}
         if env is not None:
@@ -191,6 +195,12 @@ class AppServer:
                 return result if isinstance(result, dict) else {}
 
     def kill(self) -> None:
+        # A proxy disconnect does not stop work on the shared service. Interrupt
+        # only this turn; never terminate the daemon or other desktop sessions.
+        if self._spec.app_server_socket is not None and self._active_turn:
+            thread_id, turn_id = self._active_turn
+            self.ask_from_elsewhere("turn/interrupt", {
+                "threadId": thread_id, "turnId": turn_id}, INTERRUPT_SECONDS)
         kill_tree(self._process)
 
     def stderr_tail(self) -> str:
@@ -200,6 +210,15 @@ class AppServer:
         return clip(text[-1], 200) if text else "没有输出"
 
     def close(self) -> None:
+        if self._spec.app_server_socket is not None and self._active_turn:
+            thread_id, turn_id = self._active_turn
+            request_id = self.request("turn/interrupt", {
+                "threadId": thread_id, "turnId": turn_id})
+            try:
+                self.expect(request_id, time.monotonic() + INTERRUPT_SECONDS, "turn/interrupt")
+            except AgentError:
+                pass
+            self._active_turn = None
         try:
             self._process.stdin.close()
         except OSError:
@@ -324,6 +343,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str):
         raise AgentError("Codex 没有给出这一轮的编号。可以先把这个代理的 mode 改成 exec")
+    server._active_turn = (thread_id, turn_id)
 
     def steer(more: str) -> bool:
         answer = server.ask_from_elsewhere("turn/steer", {
@@ -367,6 +387,9 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
             raise AgentError("Codex 的 app-server 中途退出了：%s" % (problem or server.stderr_tail()))
         method = message.get("method")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        # Shared services may broadcast events for other clients' threads.
+        if params.get("threadId") not in (None, thread_id):
+            continue
         if method is None:
             if message.get("id") in asked_limits and isinstance(message.get("result"), dict):
                 control.limits("codex", message["result"])
@@ -411,6 +434,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
             done = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             if done.get("id") not in (None, turn_id):
                 continue
+            server._active_turn = None
             status = done.get("status")
             if control.cancelled or status == "interrupted":
                 if control.cancelled:

@@ -26,6 +26,19 @@ do not claim installation succeeded. Having all five available does not mean
 loading or invoking all five for every task: use only the matching skills, and
 retain the separate authorization requirements for flashing, Git writes, and publishing.
 
+## Mandatory App / Runtime / firmware reliability
+
+Before changing App, Runtime, or firmware code, configuration, prompts, models,
+or dependencies, read and follow the
+[cross-stack reliability rules](docs/development/cross-stack-reliability.md).
+Preserving working features, meaningful first response within 3 seconds, and
+multi-end message consistency are acceptance requirements for every change.
+The guide defines measurement, failure/recovery behavior, compatibility, and
+required regression evidence; it does not claim the current code already passes.
+Directory `AGENTS.md` files are routing pointers, not independent rule sets.
+Entry points: [App](companion/AGENTS.md), [Runtime](runtime/AGENTS.md),
+[firmware application](main/AGENTS.md), [firmware components](components/AGENTS.md).
+
 ## Project and safety baseline
 
 When starting or resuming work in this checkout, obtain the retained shared
@@ -63,6 +76,7 @@ same reader is used by both desktop agents' optional context hooks. See
 | Task | Read before editing |
 | --- | --- |
 | Any code change | `docs/development/ai-guide.md`, relevant headers and neighboring implementation |
+| App, Runtime, or firmware behavior/configuration | `docs/development/cross-stack-reliability.md` (mandatory regression, first-response, connection, and synchronization contracts) |
 | Application workflow or core skill setup | `skills/README.md`; ensure the five required skills are available, then use only the matching skill |
 | Environment bootstrap or missing toolchain | `docs/development/engineering/environment-setup.md` |
 | BSP, pins, buses, display, audio, battery | `docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md`, `components/bsp/include/bsp_pins.h` |
@@ -75,6 +89,7 @@ same reader is used by both desktop agents' optional context hooks. See
 | Documentation | `docs/contribution/doc-conventions.md`, `docs/README.md` |
 | Commit or PR | `docs/contribution/commit-and-pr.md` |
 | Companion Android app | `companion/README.md` (including [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents)) |
+| Xiaoyou Runtime | `runtime/README.md`, relevant request/feed/persistence code and tests |
 
 Use `docs/README.md` for the product overview and the documentation index. For the detailed AI development workflow — context setup, source-of-truth priority, application/BSP boundary, runtime invariants, material placement, and delivery format — read `docs/development/ai-guide.md`. Fork-specific workflow is in `docs/fork-guide.md` and is not required for ordinary upstream development.
 
@@ -96,6 +111,12 @@ Host tests: PASS / FAIL / NOT RUN
 Device tests: PASS / FAIL / NOT RUN
 Unverified: remaining board, instrument, or user checks
 ```
+
+For App, Runtime, or firmware behavior changes, also report regression,
+first response <= 3s, connection recovery, and multi-end synchronization results
+with the versions and evidence required by the
+[shared delivery contract](docs/development/cross-stack-reliability.md#validation-and-delivery).
+Build and host-test PASS alone do not establish these results.
 
 After each complete implementation of a user-requested firmware change,
 proactively ask whether to flash it to the device for testing; do not wait for

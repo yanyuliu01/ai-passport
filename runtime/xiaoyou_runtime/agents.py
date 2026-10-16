@@ -963,18 +963,26 @@ class DshAgent(Agent):
         return env
 
     def run(self, job: Job) -> Outcome:
+        if job.plain and job.model is None and self.spec.chat_model:
+            job = replace(job, model=self.spec.chat_model)
         if job.control is not None and self._run is subprocess.run:
             from . import dsh_app  # 放在这里：dsh_app 要用这个模块里的东西
             return dsh_app.run(self.spec, job, job.control, self._env(), self.tier(job))
         if job.plain and job.on_text is not None and self.spec.stream:
             # 只说话、又想边生成边看：dsh 不逐字给，直接问 DeepSeek。不成就走老路。
             from . import dsh_stream
+            began = time.monotonic()
+            budget = job.timeout or self.spec.timeout_seconds or 60
             try:
                 return dsh_stream.run(self.spec, job, self._env(), self.tier(job)[0],
                                       job.on_text, self._open)
             except AgentError as error:
+                remaining = budget - (time.monotonic() - began)
+                if remaining <= 0:
+                    raise AgentError("DeepSeek 回复已达到 %d 秒总时限，不再重复等待" % budget) from error
                 sys.stderr.write("流式回复没成，改用 dsh：%s\n" % error)
                 job.on_text("")
+                job = replace(job, timeout=max(1, int(remaining)))
                 if job.session_id and job.session_id.startswith(dsh_stream.SESSION_PREFIX):
                     job = replace(job, session_id=None)
         return self._headless(job)

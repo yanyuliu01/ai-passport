@@ -15,7 +15,10 @@ dsh 自己的两条路（headless --json、ACP）都只在一步结束时交出�
 import json
 import os
 import re
+import socket
+import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -85,9 +88,11 @@ def _save(folder: Path, session_id: str, history: List[Dict[str, str]]) -> None:
     os.replace(name, target)
 
 
-def events(lines: Iterable[bytes]) -> Iterable[Dict[str, Any]]:
+def events(lines: Iterable[bytes], check: Optional[Callable[[], None]] = None) -> Iterable[Dict[str, Any]]:
     """把 text/event-stream 一行一行读成事件（只要 data: 那一行的 JSON）。"""
     for raw in lines:
+        if check is not None:
+            check()
         line = raw.decode("utf-8", "replace").strip()
         if not line.startswith("data:"):
             continue
@@ -134,9 +139,35 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     stopped = False
     timeout = job.timeout or spec.timeout_seconds or 60
     began = time.monotonic()
+    first_text: Optional[float] = None
+    expired = threading.Event()
+    timer: Optional[threading.Timer] = None
+
+    def check_deadline() -> None:
+        if expired.is_set() or time.monotonic() - began >= timeout:
+            raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
+
     try:
         with opener(request, timeout=timeout) as response:
-            for event in events(response):
+            check_deadline()
+
+            def stop_reading() -> None:
+                expired.set()
+                # Shutdown wakes a blocked SSL read without waiting on BufferedReader's lock.
+                raw = getattr(getattr(response, "fp", None), "raw", None)
+                sock = getattr(raw, "_sock", None)
+                try:
+                    if isinstance(sock, socket.socket):
+                        sock.shutdown(socket.SHUT_RDWR)
+                    else:
+                        response.close()
+                except OSError:
+                    pass
+
+            timer = threading.Timer(max(0.001, timeout - (time.monotonic() - began)), stop_reading)
+            timer.daemon = True
+            timer.start()
+            for event in events(response, check_deadline):
                 kind = event.get("type")
                 if kind == "error":
                     error = event.get("error")
@@ -147,12 +178,15 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                     if isinstance(delta, dict) and delta.get("type") == "text_delta" \
                             and isinstance(delta.get("text"), str) and delta["text"]:
                         said += delta["text"]
+                        if first_text is None:
+                            first_text = time.monotonic() - began
                         on_text(said)
                 elif kind == "message_stop":
                     stopped = True
                     break
                 if time.monotonic() - began > timeout:
                     raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
+            check_deadline()
     except urllib.error.HTTPError as error:
         detail = ""
         try:
@@ -161,10 +195,16 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             pass
         raise AgentError("DeepSeek 流式接口返回 %d：%s" % (error.code, clip(detail, 200)))
     except (urllib.error.URLError, OSError, ValueError) as error:
+        check_deadline()
         raise AgentError("连不上 DeepSeek 流式接口：%s" % error)
+    finally:
+        if timer is not None:
+            timer.cancel()
     said = said.strip()
     if not stopped or not said:
         raise AgentError("DeepSeek 流式接口没有说完就断了")
+    sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs\n" % (
+        model, first_text or 0.0, time.monotonic() - began))
     try:
         _save(folder, session_id, trim(body["messages"] + [{"role": "assistant", "content": said}]))
     except OSError:

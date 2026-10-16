@@ -1,0 +1,30 @@
+Pocket Hub bundled phone speech recognition
+
+sherpa-onnx 1.13.8
+Copyright 2022-2026 Xiaomi Corporation and contributors.
+https://github.com/k2-fsa/sherpa-onnx
+License: Apache-2.0 (see Apache-2.0.txt)
+
+Chinese model: sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01
+https://huggingface.co/csukuangfj/icefall-streaming-zipformer-small-ctc-zh-2025-04-01
+Model license: Apache-2.0 (see Apache-2.0.txt)
+The model and tokens are redistributed unchanged. Integration code is maintained by Pocket Hub.
+
+Final recognition model: SenseVoiceSmall, converted by sherpa-onnx as
+sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
+Authors: Alibaba Group / FunAudioLLM / FunASR contributors.
+https://github.com/FunAudioLLM/SenseVoice
+https://huggingface.co/FunAudioLLM/SenseVoiceSmall
+https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+Model weights license: FunASR Model Open Source License Agreement
+(see FunASR-MODEL-LICENSE.txt). The model and tokens are redistributed unchanged.
+This model license is separate from the engine and preview model licenses.
+
+Kotlin standard library 1.9.20
+Copyright 2010-2023 JetBrains s.r.o. and Kotlin Programming Language contributors.
+https://github.com/JetBrains/kotlin
+License: Apache-2.0
+
+ONNX Runtime (included in the sherpa-onnx AAR)
+https://github.com/microsoft/onnxruntime
+License: MIT (see ONNX-Runtime-MIT.txt)
