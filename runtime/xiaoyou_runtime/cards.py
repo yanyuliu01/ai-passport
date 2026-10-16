@@ -288,21 +288,26 @@ class Cards:
             self._changed.notify_all()
 
     @staticmethod
-    def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
+    def task_view(card: Dict[str, Any], unavailable: bool = True) -> Dict[str, Any]:
         """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。
 
         电脑上的会话说完一轮（desktop_status 是 idle）在卡上记成 done，好让旧 App 照常显示；
-        同步接口里如实给 turn_ended：这一轮说完了，那件事本身没完。"""
+        同步接口里如实给 turn_ended：这一轮说完了，那件事本身没完。
+        观察的会话或外部上报很久没更新（stale）、还没结束的，卡上留着最后知道的状态（或 unknown），
+        同步接口里给 unavailable：现在看不到它的状态，不是做完了。认得这个状态的客户端才给
+        （unavailable 为 False 时照旧给卡上的状态和 stale）。"""
         view = Cards._copy(card)
         view["members"] = [entry["id"] for entry in view.pop("entries")]
         if view.get("monitoring_only") and view.get("desktop_status") == "idle" and view.get("state") == "done":
             view["state"] = "turn_ended"
+        elif unavailable and view.get("monitoring_only") and view.get("stale") is True                 and view.get("state") in ("working", "waiting", "talking", "unknown"):
+            view["state"] = "unavailable"
         return view
 
-    def sync_since(self, conversation: str, after: int) -> Any:
+    def sync_since(self, conversation: str, after: int, unavailable: bool = True) -> Any:
         """（现在的序号, 变了的事, 变了的消息, floor）：同一刻、同一把锁里取的，不会漏。"""
         with self._changed:
-            tasks = [self.task_view(card) for card in self._cards.values()
+            tasks = [self.task_view(card, unavailable) for card in self._cards.values()
                      if (card["conversation"] == conversation or card.get("monitoring_only"))
                      and card["seq"] > after]
             tasks.sort(key=lambda task: task["seq"])

@@ -97,6 +97,31 @@ def _project_file(path, project):
     return False
 
 
+def _final_texts(path):
+    """Final message texts by id from the message log, read only (the log is authoritative).
+
+    The last line of an id wins; a half-written line is skipped. Repairing the
+    file is left to the Runtime, which owns it.
+    """
+    texts = {}
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                    continue
+                if item.get("status", "final") == "final" and isinstance(item.get("text"), str):
+                    texts[item["id"]] = item["text"]
+                else:
+                    texts.pop(item["id"], None)
+    except (OSError, UnicodeError):
+        return {}
+    return texts
+
+
 def _attachments(items, state):
     result = []
     for item in items if isinstance(items, list) else []:
@@ -133,7 +158,7 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
     state = _path(config.get("state_dir", "state"), config_path.parent)
     raw = _json(state / "cards.json")
     cards = raw.get("cards", []) if isinstance(raw, dict) else []
-    tasks, owned, covered = {}, set(), set()
+    tasks, owned, covered, covered_ids = {}, set(), set(), set()
     sessions = _json(state / "sessions.json")
     if isinstance(sessions, dict):
         for agents in sessions.values():
@@ -174,16 +199,34 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
         tasks[key] = task
         covered.update((entry["role"], entry["at"], entry["text"]) for entry in entries
                        if not desktop)
-    dialogs = []
+        if not desktop:
+            covered_ids.update(item["id"] for item in card.get("entries", [])
+                               if isinstance(item, dict) and isinstance(item.get("id"), str))
+    # The model's conversation record keeps message ids and reads the text from the
+    # log (unified message model, step 4); only turns not in the log keep their text.
+    dialogs, logged = [], None
     transcript = _json(state / "transcript.json")
     for conversation, data in transcript.items() if isinstance(transcript, dict) else []:
         if not isinstance(data, dict):
             continue
-        for turn in data.get("turns", []):
+        for turn in data.get("turns", []) if isinstance(data.get("turns"), list) else []:
             if not isinstance(turn, dict):
                 continue
-            for role, field in (("user", "text"), ("assistant", "reply")):
-                entry = _entry(role, turn.get(field), turn.get("at"), "xiaoyou")
+            sides = []
+            for role, field, ref in (("user", "text", "you_ref"), ("assistant", "reply", "reply_ref")):
+                text, ref_id = turn.get(field), turn.get(ref)
+                if not isinstance(text, str) and isinstance(ref_id, str):
+                    if logged is None:
+                        logged = _final_texts(state / "cards.log.jsonl")
+                    text = logged.get(ref_id)
+                sides.append((role, text, ref_id if isinstance(ref_id, str) else ""))
+            # Like the model context: a turn whose text the log no longer has is left out.
+            # A turn already shown on a task card is left out whole, so a synthesized
+            # prompt is not kept without its answer.
+            if any(not isinstance(text, str) or (ref_id and ref_id in covered_ids) for _, text, ref_id in sides):
+                continue
+            for role, text, ref_id in sides:
+                entry = _entry(role, text, turn.get("at"), "xiaoyou")
                 if entry and (entry["role"], entry["at"], entry["text"]) not in covered:
                     dialogs.append(dict(entry, conversation=visible_text(conversation)[:200],
                                         source="runtime"))

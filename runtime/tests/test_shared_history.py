@@ -122,6 +122,27 @@ class SharedHistoryTests(unittest.TestCase):
         self.assertEqual([entry["text"] for entry in data["dialog"]],
                          ["APK built, not installed", "hello", "hi"])
 
+    def test_dialog_reads_id_only_turns_from_the_message_log(self):
+        self.card["entries"][0]["id"] = "r1:you"
+        self.card["entries"][1]["id"] = "r1:reply"
+        self.write(self.state / "cards.json", {"cards": [self.card]})
+        self.jsonl(self.state / "cards.log.jsonl", [
+            {"id": "r2:you", "text": "draft", "status": "streaming"},
+            {"id": "r2:you", "text": "what changed?", "status": "final"},
+            {"id": "r2:reply", "text": "the sync view", "status": "final"},
+            {"id": "r3:you", "text": "trimmed later", "status": "final"},
+            {"id": "s1:reply", "text": "APK built, not installed", "status": "final"},
+        ])
+        self.write(self.state / "transcript.json", {"default": {"turns": [
+            {"id": "r2", "you_ref": "r2:you", "reply_ref": "r2:reply", "at": 40},
+            # The reply is gone from the log: the turn is left out, like the model context.
+            {"id": "r3", "you_ref": "r3:you", "reply_ref": "r3:reply", "at": 50},
+            # Already on a task card: the synthesized prompt is not kept without its answer.
+            {"id": "s1", "text": "(background result)", "reply_ref": "r1:reply", "at": 60}]}})
+        data = self.collect()
+        self.assertEqual([(entry["role"], entry["text"]) for entry in data["dialog"]],
+                         [("user", "what changed?"), ("assistant", "the sync view")])
+
     def test_credentials_and_injected_history_are_removed(self):
         self.card["entries"].append({"role": "xiaoyou", "text": "token=private-token-value", "at": 40})
         self.write(self.state / "cards.json", {"cards": [self.card]})

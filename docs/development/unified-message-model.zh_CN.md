@@ -162,7 +162,7 @@ Runtime 里唯一能改记录的地方：
 | `done` / `failed` / `cancelled` | 整件事结束 |
 | `unavailable` | 暂时看不到它的状态（比如观察的来源很久没有更新） |
 
-旧 App 不认识 `turn_ended`，`/v1/feed` 这个投影给旧 App 时仍然映射成 `done`，`/v1/sync` 给真实状态。
+旧 App 不认识 `turn_ended`，`/v1/feed` 这个投影给旧 App 时仍然映射成 `done`，`/v1/sync` 给真实状态。`unavailable` 只给带了 `states=unavailable` 的客户端，别的客户端拿到卡上的状态和 `stale: true`。
 
 ### 授权（Approval）
 
@@ -293,10 +293,10 @@ Runtime 没有能力去读。方案是开一个上报接口，让对方主动报
 | 1 | 收下的消息落盘，消息和卡共用一条序号，`epoch`，`/v1/feed?messages=1` | Runtime | 已上线（0.8.0） |
 | 2 | `runtime_id`，消息日志成为权威记录，`/v1/info`、`/v1/sync`，一致性测试（Runtime 0.8.0） | Runtime | 已上线（0.8.0），一致性测试 22 项通过 |
 | 3 | **记录中心**：新增 `Record`，49 处写卡改成发事件，去掉外面的 `bump()`；授权进日志、取序号；`/v1/sync` 的授权改成增量；电脑会话 `idle` → `turn_ended`（`/v1/feed` 仍给 `done`；`/v1/sync` 里已在 Runtime 0.8.2 提前做了）；统一主体的预留：`subject_id`、日志每条写产地 `runtime_id` | Runtime | 已上线（Runtime 0.9.0）：`record.Record` 是唯一写入口（有测试强制），请求的修订号、序号、写日志一步完成；授权取序号并带结局，`/v1/sync` 增量给；`subject_id`、记录写产地。卡和 `MessageLog` 仍是记录中心下面的存储 |
-| 4 | transcript 和电脑端共享历史改成从日志算（原 2b），`transcript.json` 只作为迁移来源 | Runtime | 已上线（Runtime 0.9.0）：给模型的对话记录只存消息编号，文字从日志取；合成提示语、从别的电脑带来的对话和旧记录仍存文字。电脑端共享历史还没改 |
+| 4 | transcript 和电脑端共享历史改成从日志算（原 2b），`transcript.json` 只作为迁移来源 | Runtime | 已上线（Runtime 0.9.0）：给模型的对话记录只存消息编号，文字从日志取；合成提示语、从别的电脑带来的对话和旧记录仍存文字。Runtime 0.9.1：电脑端共享历史也这样读（文字从日志取，日志里没有了的那轮不拿出来） |
 | 5 | 外部上报：`/v1/reports`、`xiaoyou_runtime.report` 命令、一致性测试补上报用例 | Runtime | 已上线（Runtime 0.9.0、App 0.17.1）：`POST /v1/reports`、`python3 -m xiaoyou_runtime report`，一致性测试加 `--with-reports` 时测上报；App 里上报的会话只读 |
-| 6 | 手机 App：按 `runtime_id` 认电脑、多地址合并；每台一份缓存和游标，游标原样存取；改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算；显示 `turn_ended`、`unavailable` 和外部来源的只读标记 | App | 基本完成（App 0.16.0、Runtime 0.8.2）：改用 `/v1/sync`、按 `runtime_id` 认电脑并合并地址、每台电脑一份卡和同步进度（在内存里，App 重启后从头取）、发消息前不再上传历史、去掉纯文字列表、显示别处还没上卡的消息、认得 `turn_ended`、ChatTurn 从各台电脑的聊天记录算。还没做：`unavailable` 和外部来源的只读标记（等第 5 步） |
-| 7 | 设备：手机负责全局编号到短编号的映射，设备协议先不变 | App | 随第 6 步 |
+| 6 | 手机 App：按 `runtime_id` 认电脑、多地址合并；每台一份缓存和游标，游标原样存取；改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算；显示 `turn_ended`、`unavailable` 和外部来源的只读标记 | App | 基本完成（App 0.16.0、Runtime 0.8.2）：改用 `/v1/sync`、按 `runtime_id` 认电脑并合并地址、每台电脑一份卡和同步进度（在内存里，App 重启后从头取）、发消息前不再上传历史、去掉纯文字列表、显示别处还没上卡的消息、认得 `turn_ended`、ChatTurn 从各台电脑的聊天记录算；上报的会话只读（App 0.17.1）；很久没更新的观察会话和上报会话显示 `unavailable`（App 0.17.3、Runtime 0.9.1，只给声明了 `states=unavailable` 的客户端）。还没做：每台电脑的缓存在内存里，App 重启后从头取 |
+| 7 | 设备：手机负责全局编号到短编号的映射，设备协议先不变 | App | 已具备：设备上只放当前选中那台电脑的卡，换电脑时先让设备清掉旧卡（`cardClear`），短编号不会在两台电脑之间撞上；超过固件长度上限的编号不发 |
 | 8 | 多台 Runtime 同时完整同步 | App | 看需要 |
 | 8b | 统一主体：主 Runtime（家）、分身把事件报回家、家可以搬 | 都有 | 暂缓，接口已在第 3、6 步预留 |
 | 9 | 旧 App 都升级后，删掉兼容路径 | 都有 | 最后 |

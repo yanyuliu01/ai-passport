@@ -512,7 +512,7 @@ class Service:
                 "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
-             wait: float = 0.0, usage: Any = None) -> Dict[str, Any]:
+             wait: float = 0.0, usage: Any = None, states: Any = ()) -> Dict[str, Any]:
         """统一同步接口（见 docs/development/unified-message-model）。
 
         返回序号比 after 大的消息（messages）和事（tasks，卡去掉 entries、换成 members），
@@ -522,7 +522,11 @@ class Service:
         没有变化时最多等 wait 秒。
 
         和 /v1/feed 一样每次带上现在的用量；usage 是调用方手里那份用量的 rev，带了它，
-        用量变了也会提前返回。"""
+        用量变了也会提前返回。
+
+        states 是客户端声明认得的新状态。现在只有 unavailable：观察的会话很久没更新时给它；
+        没声明的旧 App 照旧拿到卡上的状态（unknown 或最后知道的状态）和 stale，免得不认识的
+        状态被当成做完了。"""
         conversation = _name(conversation, "conversation")
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
@@ -540,7 +544,8 @@ class Service:
             after, reset = 0, True
         deadline = time.monotonic() + max(0.0, wait)
         while True:
-            seq, tasks, messages, floor = cards_store.sync_since(conversation, after)
+            seq, tasks, messages, floor = cards_store.sync_since(
+                conversation, after, unavailable="unavailable" in states)
             if after > 0 and after < floor:
                 # 等的时候日志挤掉了游标之后的消息：改给全量快照。
                 after, reset = 0, True
