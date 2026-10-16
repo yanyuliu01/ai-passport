@@ -1088,9 +1088,18 @@ written. After a runtime restart:
   `failed`, and the conversation gets a card with the original sentence and a
   note that the runtime restarted before it was finished, so it can be said
   again;
-- the sequence continues from where it was, so a client's `after` stays valid;
+- a message whose reply already reached its card, but whose record was not yet
+  updated, is recorded as `done` instead of being reported as unfinished;
+- the sequence never goes back (a block of numbers is reserved on disk and a
+  restart continues after it, skipping some numbers), so a client's `after`
+  stays valid;
 - asking for the old message id, or retrying with the old `client_id`, still
   finds that message.
+
+If the message cannot be written (for example a full disk) the answer is
+`503` and the message is not accepted; send it again with the same
+`client_id`. Writes are flushed to disk before the rename, so a power loss
+leaves either the old or the new file, never half of one.
 
 Deduplication outlives the messages themselves (the latest 2000 `client_id`s):
 a retry after the message has been trimmed returns the same id as a minimal

@@ -38,6 +38,10 @@ MAX_ENTRY_CHARS = 8000
 MAX_TITLE_CHARS = MAX_REQUEST_TITLE_CHARS
 MAX_PROGRESS_LINES = 5
 MAX_PROGRESS_CHARS = 200
+# 序号一次预留这么多写进文件：消息的序号变得很快（生成中的回复每变一次取一个号），
+# 不能每次都写盘；但重启后不能从比客户端手里还小的号重新数，所以先把一段号“占下”，
+# 用到头了再占下一段。重启后从占下的那段的末尾往后数：会跳一段，但不会往回走。
+SEQ_BLOCK = 1000
 RESTART_NOTE = "Runtime 重启了，这件事没做完"
 # 一件事花了多少：token（新读的、写的、从缓存读的），和订阅额度两个窗口各少了几个百分点。
 COST_KEYS = ("in", "out", "cached", "d5", "d7")
@@ -57,6 +61,7 @@ class Cards:
         self._cards: Dict[str, Dict[str, Any]] = {}
         self._next = 1
         self._seq = 0
+        self._reserved = 0  # 文件里记着的序号上限：重启后从它往后数
         self._epoch = ""
         self._listeners: List[Listener] = []
         try:
@@ -75,6 +80,7 @@ class Cards:
                                and not isinstance(saved_seq, bool) else 0, 0])
             if isinstance(raw.get("epoch"), str):
                 self._epoch = raw["epoch"]
+        self._reserved = self._seq
         fresh_epoch = not self._epoch
         if fresh_epoch:
             # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
@@ -173,7 +179,9 @@ class Cards:
         return copy
 
     def _save(self) -> None:
-        _write(self._path, {"next": self._next, "seq": self._seq, "epoch": self._epoch,
+        if self._seq >= self._reserved:
+            self._reserved = self._seq + SEQ_BLOCK
+        _write(self._path, {"next": self._next, "seq": self._reserved, "epoch": self._epoch,
                             "cards": list(self._cards.values())})
 
     @property
@@ -190,10 +198,11 @@ class Cards:
         """别的东西（消息）变了，要一个新序号：叫醒在等的人，返回这个号。
 
         at_least 用在启动时：消息记录里见过的最大序号比这里大时，从它往后接着发。
-        这里不落盘：序号会随下一次卡的变化写下去；消息自己也记着它拿到的号，重启时
-        取两边的最大值，不会往回走。"""
+        平时不落盘；只有用到了预留的那段号的末尾时才写一次文件，占下下一段（见 SEQ_BLOCK）。"""
         with self._changed:
             self._seq = max(self._seq, at_least) + 1
+            if self._seq >= self._reserved:
+                self._save()
             self._changed.notify_all()
             return self._seq
 

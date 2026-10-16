@@ -4,17 +4,19 @@
 R2（排着的补充满了被悄悄丢掉）、R3（去重只看 client_id）和 R6（电脑会话传播太慢）。
 """
 
+import http.client
 import json
 import threading
 import time
 import unittest
+from unittest import mock
 
 import test_runtime
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
 
 import xiaoyou_runtime.desktop_sync as desktop_sync
 import xiaoyou_runtime.service as service_module
-from xiaoyou_runtime.service import ConflictError, RESTART_NOTE, Service
+from xiaoyou_runtime.service import ConflictError, RESTART_NOTE, Service, UnavailableError
 from xiaoyou_runtime.tasks import MAX_PENDING, Task, Tasks
 
 
@@ -30,6 +32,22 @@ class MessageLedgerTests(TempDirCase):
     def ledger(self, store):
         return json.loads((store.state_dir / "messages.json").read_text(encoding="utf-8"))
 
+    def saved(self, store, message_id, status):
+        """等到这句话的这个状态真的写到盘上（写盘在锁外，比内存里晚一点）。"""
+        def check():
+            try:
+                items = self.ledger(store)["messages"]
+            except (OSError, ValueError):
+                return False
+            return any(item["id"] == message_id and item["status"] == status for item in items)
+        self.assertTrue(until(check))
+
+    @staticmethod
+    def crash(service, xiaoyou):
+        """这一台“断电”了：之后它的线程再怎么跑，也写不进同一份记录。"""
+        service._ledger.save = lambda *args: None
+        xiaoyou.cards._save = lambda: None
+
     def test_an_accepted_message_is_on_disk_before_the_caller_hears_back(self):
         service, agent, _, store = self.start()
         agent.gate.clear()
@@ -39,14 +57,15 @@ class MessageLedgerTests(TempDirCase):
         self.assertEqual(self.ledger(store)["dedupe"][0]["client_id"], "phone-1")
 
     def test_after_a_restart_queued_text_goes_on_and_unfinished_work_is_not_redone(self):
-        service, agent, _, store = self.start()
+        service, agent, first, store = self.start()
         agent.gate.clear()
         running = service.submit("第一句 slow", client_id="a")
         queued = service.submit("第二句", client_id="b")
-        self.assertTrue(until(lambda: service.get(running["id"])["status"] == "running"))
+        self.saved(store, running["id"], "running")
         self.assertEqual(service.get(queued["id"])["status"], "queued")
 
-        # 第一台还卡在模型里时，用同一份记录起一台新的：等于 Runtime 被重启。
+        # 第一台卡在模型里时断电，用同一份记录起一台新的：等于 Runtime 被重启。
+        self.crash(service, first)
         again, again_agent, xiaoyou, _ = self.start(self.folder)
         done = again.get(queued["id"], wait=5)
         self.assertEqual((done["status"], done["reply"]), ("done", "re:第二句"))
@@ -61,6 +80,70 @@ class MessageLedgerTests(TempDirCase):
         # 拿着原来的编号来问、带着原来的 client_id 重试，都还是那一句。
         self.assertEqual(again.submit("第二句", client_id="b")["id"], queued["id"])
         self.assertEqual(again.submit("第一句 slow", client_id="a")["status"], "failed")
+
+    def test_a_sentence_said_inside_a_task_keeps_its_restart_note_on_that_task(self):
+        service, agent, first, store = self.start()
+        done = service.get(service.submit("先开一件事")["id"], wait=5)
+        agent.gate.clear()
+        inside = service.submit("在里面补一句 slow", card=done["card"], pin=True)
+        self.saved(store, inside["id"], "running")
+        self.crash(service, first)
+        again, _, xiaoyou, _ = self.start(self.folder)
+        lost = again.get(inside["id"])
+        self.assertEqual((lost["status"], lost["card"]), ("failed", done["card"]))
+        texts = [entry["text"] for entry in xiaoyou.cards.get(done["card"])["entries"]]
+        self.assertEqual(texts[-2:], ["在里面补一句 slow", RESTART_NOTE])
+        self.assertEqual(len([card for card in xiaoyou.cards.recent("default")
+                              if card["state"] == "failed"]), 0)
+
+    def test_a_reply_already_on_its_card_is_not_reported_lost_after_a_crash(self):
+        service, _, first, store = self.start()
+        # 记录只写到“收下”为止：回复已经上了卡，消息记录还停在 queued。
+        original = service._ledger.save
+        calls = []
+
+        def only_first(*args):
+            if not calls:
+                calls.append(1)
+                original(*args)
+        service._ledger.save = only_first
+        message = service.submit("答完了才断电")
+        done = service.get(message["id"], wait=5)
+        self.assertEqual(done["status"], "done")
+        self.crash(service, first)
+        again, _, xiaoyou, _ = self.start(self.folder)
+        recovered = again.get(message["id"])
+        self.assertEqual((recovered["status"], recovered["reply"], recovered["card"]),
+                         ("done", "re:答完了才断电", done["card"]))
+        self.assertEqual([card["state"] for card in xiaoyou.cards.recent("default")], ["done"])
+
+    def test_a_message_that_cannot_be_written_down_is_not_accepted(self):
+        service, agent, _, _ = self.start()
+        with mock.patch.object(service._ledger, "save", side_effect=OSError("disk full")):
+            with self.assertRaises(UnavailableError):
+                service.submit("写不下", client_id="w1")
+        self.assertEqual(agent.started, [])
+        # 磁盘好了以后用同一个 client_id 再发，正常收下。
+        retry = service.submit("写不下", client_id="w1")
+        self.assertEqual(service.get(retry["id"], wait=5)["status"], "done")
+
+    def test_the_sequence_never_goes_back_even_when_streaming_was_never_written(self):
+        service, agent, first, store = self.start()
+        agent.gate.clear()
+        message = service.submit("一直在说 slow")
+        self.saved(store, message["id"], "running")
+        for index in range(1500):  # 超过一段预留的号
+            service._report(message["id"], "partial", None, "第 %d 段" % index)
+        held = service.feed("default", 0, 0, messages=True)["seq"]
+        self.crash(service, first)
+        again, _, _, _ = self.start(self.folder)
+        restarted = again.feed("default", 0, 0, messages=True)
+        self.assertGreater(restarted["seq"], held)
+        self.assertEqual(restarted["epoch"], service.feed("default")["epoch"])
+        # 重启后新出现的东西（没做完的那张卡）序号都在客户端手里那个之后，拿得到。
+        later = again.feed("default", held, 0, messages=True)
+        self.assertIn(message["id"], [item["id"] for item in later["messages"]])
+        self.assertTrue(later["cards"])
 
     def test_client_ids_are_scoped_to_a_conversation_and_bound_to_their_content(self):
         service, _, _, _ = self.start()
@@ -108,6 +191,7 @@ class FeedMessagesTests(TempDirCase):
         base = service.feed("default")
         agent.gate.clear()
         message = service.submit("还在想 slow", client_id="p1")
+        self.assertTrue(until(lambda: service.get(message["id"])["status"] == "running"))
         feed = service.feed("default", base["seq"], 0, messages=True)
         self.assertEqual([(item["id"], item["text"]) for item in feed["messages"]],
                          [(message["id"], "还在想 slow")])
@@ -118,15 +202,14 @@ class FeedMessagesTests(TempDirCase):
         waiter = threading.Thread(target=lambda: seen.update(
             service.feed("default", feed["seq"], 5, messages=True)))
         waiter.start()
-        until(lambda: service.get(message["id"])["status"] == "running")
         service._report(message["id"], "partial", None, "想到一半")
         waiter.join(3)
         self.assertFalse(waiter.is_alive())
-        partials = [item["partial"] for item in seen["messages"] if item["id"] == message["id"]]
-        self.assertIn("想到一半", partials + [service.get(message["id"])["partial"]])
+        self.assertEqual([item["partial"] for item in seen["messages"]], ["想到一半"])
 
         agent.gate.set()
         service.get(message["id"], wait=5)
+        self.assertTrue(until(lambda: service.feed("default", feed["seq"], 0, messages=True)["cards"]))
         final = service.feed("default", feed["seq"], 0, messages=True)
         self.assertEqual([item["status"] for item in final["messages"]], ["done"])
         entries = [entry["id"] for card in final["cards"] for entry in card["entries"]]
@@ -134,10 +217,17 @@ class FeedMessagesTests(TempDirCase):
         self.assertGreater(final["seq"], feed["seq"])
 
     def test_old_clients_get_exactly_what_they_got_before(self):
-        service, _, _ = self.start()
+        service, _, xiaoyou = self.start()
         feed = service.feed("default")
         self.assertNotIn("messages", feed)
         self.assertEqual(feed["cards"], [])
+        service.get(service.submit("一句")["id"], wait=5)
+        self.assertTrue(until(lambda: service.feed("default", 0)["cards"]))
+        old = xiaoyou.cards.changed("default", 0, include_desktop=True,
+                                    budget=service_module.FEED_BUDGET_BYTES)
+        new = service.feed("default", 0)
+        self.assertEqual((new["seq"], new["cards"]), (old["seq"], old["cards"]))
+        feed = new
         # 别人的消息变化不会把只等卡的客户端叫醒。
         started = time.monotonic()
         service.submit("别的对话", conversation="other")
@@ -146,16 +236,20 @@ class FeedMessagesTests(TempDirCase):
 
     def test_one_cursor_keeps_going_across_a_restart_and_the_epoch_tells_a_new_record(self):
         service, _, xiaoyou = self.start()
-        service.get(service.submit("一")["id"], wait=5)
+        first = service.submit("一")
+        service.get(first["id"], wait=5)
+        ledger = xiaoyou._config.state_dir / "messages.json"
+        self.assertTrue(until(lambda: '"status": "done"' in ledger.read_text(encoding="utf-8")))
         before = service.feed("default", 0, 0, messages=True)
         again, _, _ = self.start(self.folder)
         after = again.feed("default", before["seq"], 0, messages=True)
         self.assertEqual(after["epoch"], before["epoch"])
         self.assertEqual((after["cards"], after["messages"]), ([], []))
         newer = again.submit("二")
-        self.assertGreater(again.feed("default", before["seq"], 0, messages=True)["messages"][0]["seq"],
-                           before["seq"])
         again.get(newer["id"], wait=5)
+        later = again.feed("default", before["seq"], 0, messages=True)
+        self.assertEqual([item["id"] for item in later["messages"]], [newer["id"]])
+        self.assertGreater(later["messages"][0]["seq"], before["seq"])
 
         (xiaoyou._config.state_dir / "cards.json").unlink()
         replaced, _, _ = self.start(self.folder)
@@ -202,6 +296,26 @@ class HttpSyncTests(TempDirCase):
         self.assertTrue(feed["epoch"])
         self.assertNotIn("messages", self.call("GET", "/v1/feed?after=0")[1])
 
+    def test_a_409_is_the_only_answer_on_its_connection(self):
+        import socket
+        host, port = self.base.split("//")[1].split(":")
+        self.assertEqual(self.call("POST", "/v1/messages", {"text": "一", "client_id": "k1"})[0], 202)
+        body = json.dumps({"text": "二", "client_id": "k1"}).encode("utf-8")
+        request = ("POST /v1/messages HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n"
+                   "Content-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+                   % (test_runtime.TOKEN, len(body))).encode("ascii") + body
+        with socket.create_connection((host, int(port)), timeout=10) as connection:
+            connection.sendall(request)
+            received = b""
+            while True:  # 出错后服务端会关掉这条连接：一直读到关
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                received += chunk
+        # 只有一个回答（以前 409 后面还跟着一个多余的 404，会被当成下一个请求的回答）。
+        self.assertEqual(received.count(b"HTTP/1."), 1)
+        self.assertTrue(received.startswith(b"HTTP/1.1 409") or received.startswith(b"HTTP/1.0 409"))
+
 
 class QuickFixTests(TempDirCase):
     def test_a_full_follow_up_queue_says_so_instead_of_pretending(self):
@@ -212,9 +326,24 @@ class QuickFixTests(TempDirCase):
         self.assertEqual(results, ["after"] * MAX_PENDING + ["full"])
         self.assertEqual(len(task.after), MAX_PENDING)
 
-    def test_desktop_changes_reach_clients_within_three_seconds(self):
+    def test_desktop_tool_changes_are_published_within_three_seconds(self):
+        from pathlib import Path
+        from xiaoyou_runtime.cards import Cards
+        cards = Cards(self.folder / "observed.json")
+        sync = desktop_sync.DesktopSync(cards, self.folder, home=self.folder, clock=lambda: 100)
+        session = desktop_sync.Session("codex", "s1", cwd=str(self.folder), status="idle",
+                                       observed_at=100)
+        sync._publish(session, 100)
+        session.transition("running", 101)
+        sync._publish(session, 101)
+        seq = cards.get(session.card)["seq"]
+        session.tool = "read_file"
+        session.observed_at = 102
+        sync._publish(session, 102)
+        sync._publish(session, 104)  # 工具变化后 3 秒内一定发出去
+        self.assertGreater(cards.get(session.card)["seq"], seq)
+        # 新开的会话：找一次 + 读一次，加起来不超过 3 秒。
         self.assertLessEqual(desktop_sync.DISCOVERY_SECONDS + desktop_sync.POLL_SECONDS, 3.0)
-        self.assertLessEqual(desktop_sync.MINOR_SECONDS, 3.0)
 
 
 if __name__ == "__main__":

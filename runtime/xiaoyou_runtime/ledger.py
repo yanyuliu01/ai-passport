@@ -16,11 +16,10 @@
 
 import hashlib
 import json
+import os
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-
-from .store import _write
 
 # 处理完的消息在去重表里留的条数；比消息本身（Service.MAX_KEPT_MESSAGES）多得多，
 # 消息被挤掉以后，拿着旧 client_id 重试的也不会被当成新的一句。
@@ -97,5 +96,23 @@ class Ledger:
             item["partial"] = ""  # 生成中的那段不落盘：重启后它已经不会再变了
             item["events"] = [dict(event) for event in message.get("events", [])]
             stored.append(item)
-        _write(self._path, {"format": FORMAT, "seq": seq, "messages": stored,
-                            "dedupe": list(dedupe.values())})
+        data = json.dumps({"format": FORMAT, "seq": seq, "messages": stored,
+                           "dedupe": list(dedupe.values())}, ensure_ascii=False) + "\n"
+        # 写临时文件、刷到盘上、再换名：断电时要么是旧的一份，要么是新的一份，不会是半份。
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._path.with_suffix(self._path.suffix + ".tmp")
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temporary), str(self._path))
+        try:
+            directory = os.open(str(self._path.parent), os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(directory)
+        except OSError:
+            pass
+        finally:
+            os.close(directory)

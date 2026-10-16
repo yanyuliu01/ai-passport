@@ -59,7 +59,7 @@ from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 
 # 比这小的回答不值得压。
 GZIP_MIN_BYTES = 2048
-from .service import MAX_AUDIO_BYTES, ConflictError, RequestError, Service
+from .service import MAX_AUDIO_BYTES, ConflictError, RequestError, Service, UnavailableError
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_HISTORY_BODY_BYTES = 1024 * 1024
@@ -420,6 +420,10 @@ def make_server(config: Config, service: Service,
                 )
             except ConflictError as error:
                 self._fail(409, str(error))
+                return
+            except UnavailableError as error:
+                self._fail(503, str(error))
+                return
             except RequestError as error:
                 self._fail(400, str(error))
                 return
@@ -498,6 +502,10 @@ def make_server(config: Config, service: Service,
                     return
             except ConflictError as error:
                 self._fail(409, str(error))
+                return
+            except UnavailableError as error:
+                self._fail(503, str(error))
+                return
             except RequestError as error:
                 self._fail(400, str(error))
                 return

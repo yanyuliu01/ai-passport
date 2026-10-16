@@ -29,7 +29,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
-from .ledger import Ledger, content_hash, dedupe_key
+from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -63,6 +63,10 @@ class ConflictError(RequestError):
     """同一个对话里，同一个 client_id 带来了不一样的内容（HTTP 409）。"""
 
 
+class UnavailableError(RequestError):
+    """这句话没能落盘，所以没收下（HTTP 503）：调用方可以拿同一个 client_id 再试。"""
+
+
 def _name(value: Any, what: str) -> str:
     if not isinstance(value, str) or not value or len(value) > MAX_NAME_CHARS:
         raise RequestError("%s 应该是 1 到 %d 个字符的字符串" % (what, MAX_NAME_CHARS))
@@ -83,6 +87,11 @@ class Service:
         self._messages = messages  # type: OrderedDict[str, Dict[str, Any]]
         # 对话 + client_id → 那句话的编号、内容指纹（见 ledger.py）
         self._dedupe = dedupe  # type: OrderedDict[str, Dict[str, Any]]
+        # 写盘在锁外做（整份 JSON 可能上 MB，不能挡住 feed 和查询）：锁里只拍一份快照并编号，
+        # 写的时候比编号，旧快照不会盖掉新快照。
+        self._write_lock = threading.Lock()
+        self._version = 0
+        self._written = 0
         # 对话名 → 这条线上还没处理的东西：消息编号，或者一件要在这条线上做的事（转述
         # 帮手的结果）。有工作线程在处理的对话记在 _busy 里。
         self._lanes: Dict[str, Deque[Union[str, Callable[[], None]]]] = {}
@@ -108,26 +117,56 @@ class Service:
                 requeue.append(message["id"])
             else:
                 unfinished.append(message["id"])
+        cards = self._xiaoyou.cards
+        answered = {}  # 消息编号 → (卡, 小幽那句回复)：回复已经记在卡上的
+        for card in cards.recent(None, 10 ** 6):
+            for entry in card["entries"]:
+                if entry.get("id", "").endswith(":reply"):
+                    answered[entry["id"][:-len(":reply")]] = (card["id"], entry["text"])
+        for message_id in requeue + unfinished:
+            if message_id in answered and self._messages[message_id].get("hop", 0) == 0:
+                # 回复已经记在卡上，只是消息记录没来得及写完：这句话其实接住了。
+                message = self._messages[message_id]
+                card_id, reply = answered[message_id]
+                message.update(status="done", reply=reply, card=card_id, stage=None,
+                               helper=None, partial="", finished_at=time.time())
+                message["rev"] += 1
+                message["seq"] = cards.bump()
+                self._remember(message)
+                (requeue if message_id in requeue else unfinished).remove(message_id)
         for message_id in unfinished:
             message = self._messages[message_id]
             voice = message["kind"] == "voice" and not message["text"]
             note = RESTART_VOICE_NOTE if voice else RESTART_NOTE
-            card = self._xiaoyou.cards.open(message["conversation"],
-                                            message["text"] or "语音消息", "failed")
-            self._xiaoyou.cards.update(
-                card["id"], said=message["text"] or "（语音）", say=note, brief=note,
-                mood="oops", turn_id=message_id,
-                scope="task" if message.get("pin") else "main")
+            said = message["text"] or "（语音）"
+            existing = cards.get(message["card"]) if message.get("card") else None
+            if existing is not None and message.get("hop", 0) > 0:
+                # 别的 Runtime 转来、在等那件事结束的：那张卡启动时已经标成没做完了，
+                # 不再另开一张，消息跟着它。
+                card_id = existing["id"]
+            elif existing is not None and message.get("pin"):
+                # 主人是在那件事里面说的：没做完的原因也记在那件事上。
+                cards.update(existing["id"], said=said, say=note, turn_id=message_id,
+                             scope="task")
+                card_id = existing["id"]
+            else:
+                card = cards.open(message["conversation"], message["text"] or "语音消息",
+                                  "failed")
+                cards.update(card["id"], said=said, say=note, brief=note, mood="oops",
+                             turn_id=message_id, scope="main")
+                card_id = card["id"]
             message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
-                           card=card["id"], partial="", finished_at=time.time())
+                           card=card_id, partial="", finished_at=time.time())
             message["rev"] += 1
-            message["seq"] = self._xiaoyou.cards.bump()
+            message["seq"] = cards.bump()
             self._remember(message)
+        if answered or unfinished or requeue:
+            with self._changed:
+                snapshot = self._capture()
+            self._flush(snapshot)
         with self._changed:
             for message_id in requeue:
                 self._line_up(self._messages[message_id]["conversation"], message_id)
-            if unfinished or requeue:
-                self._save()
 
     @property
     def artifacts(self):
@@ -278,11 +317,34 @@ class Service:
                     "hash": fingerprint, "status": "queued", "card": card,
                     "at": message["created_at"],
                 }
+                while len(self._dedupe) > MAX_DEDUPE:
+                    self._dedupe.popitem(last=False)
             self._trim()
-            # 先落盘再回“收到了”：之后 Runtime 重启，这句话也还在。
-            self._save()
+            captured = self._capture()
+        # 先落盘再回“收到了”：之后 Runtime 重启，这句话也还在。写不下去就不算收下。
+        try:
+            self._flush(captured, strict=True)
+        except OSError as error:
+            with self._changed:
+                if self._messages.get(message_id, {}).get("status") == "queued":
+                    del self._messages[message_id]
+                    if client_id is not None:
+                        key = dedupe_key(conversation, client_id)
+                        if self._dedupe.get(key, {}).get("id") == message_id:
+                            del self._dedupe[key]
+                    path = self._audio.pop(message_id, None)
+                    if path is not None:
+                        try:
+                            path.unlink()
+                        except OSError:
+                            pass
+                self._changed.notify_all()
+            raise UnavailableError("消息记录写不下去，这句话没收下，稍后用同一个 client_id 再试：%s"
+                                   % error)
+        with self._changed:
             snapshot = self._snapshot(message)
-            self._line_up(conversation, message_id)
+            if message_id in self._messages and not self._closed:
+                self._line_up(conversation, message_id)
         return snapshot
 
     def _seen(self, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -310,12 +372,31 @@ class Service:
             entry["status"] = message["status"]
             entry["card"] = message.get("card")
 
-    def _save(self) -> None:
-        """调用时已经拿着锁：把消息和去重表写下去。写不了不能让工作线程死掉。"""
-        try:
-            self._ledger.save(self._messages, self._dedupe, self._xiaoyou.cards.seq)
-        except OSError as error:
-            sys.stderr.write("消息记录写不下去：%s\n" % error)
+    def _capture(self) -> Any:
+        """调用时已经拿着锁：拍一份要写下去的快照（消息浅拷贝，写盘在锁外做）。"""
+        self._version += 1
+        messages = OrderedDict((key, dict(value, events=list(value.get("events", []))))
+                               for key, value in self._messages.items())
+        dedupe = OrderedDict((key, dict(value)) for key, value in self._dedupe.items())
+        return self._version, messages, dedupe, self._xiaoyou.cards.seq
+
+    def _flush(self, captured: Any, strict: bool = False) -> None:
+        """不拿着消息的锁：写下一份快照。比它新的已经写过了就不写。
+
+        strict 为 False（工作线程里）时写不下去只记一笔，不能让工作线程死掉；为 True（收消息
+        时）把错误交给调用方，这句话就不算收下。"""
+        version, messages, dedupe, seq = captured
+        with self._write_lock:
+            if version <= self._written:
+                return
+            try:
+                self._ledger.save(messages, dedupe, seq)
+            except OSError as error:
+                if strict:
+                    raise
+                sys.stderr.write("消息记录写不下去：%s\n" % error)
+                return
+            self._written = version
 
     def _tier(self, agent: Optional[str], effort: Any, model: Any) -> Any:
         """检查调用方选的努力程度和模型。点了帮手时必须是那个帮手能选的。"""
@@ -532,6 +613,7 @@ class Service:
                 del self._messages[message_id]
 
     def _update(self, message_id: str, **fields: Any) -> None:
+        captured = None
         with self._changed:
             message = self._messages.get(message_id)
             if message is not None:
@@ -539,8 +621,10 @@ class Service:
                 message["rev"] += 1
                 message["seq"] = self._xiaoyou.cards.bump()
                 self._remember(message)
-                self._save()
+                captured = self._capture()
             self._changed.notify_all()
+        if captured is not None:
+            self._flush(captured)
 
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
         """小幽报告这一轮走到了哪一步。"""
@@ -605,27 +689,25 @@ class Service:
             message["processing_started_at"] = time.time()
         if audio is not None:
             self._update(message_id, status="transcribing")
+            failure = None
             try:
                 text = self._stt.transcribe(audio)
                 if not text:
                     raise SttError("没听清，再说一次吧")
             except SttError as error:
-                self._update(
-                    message_id, status="failed", error=str(error), mood="oops",
-                    finished_at=time.time(),
-                )
-                return
+                failure = str(error)
             except Exception as error:
-                self._update(
-                    message_id, status="failed", mood="oops", finished_at=time.time(),
-                    error="语音识别出错：%s: %s" % (type(error).__name__, error),
-                )
-                return
+                failure = "语音识别出错：%s: %s" % (type(error).__name__, error)
             finally:
+                # 先删录音再记结果：调用方看到结果时，录音已经不在了。
                 try:
                     audio.unlink()
                 except OSError:
                     pass
+            if failure is not None:
+                self._update(message_id, status="failed", error=failure, mood="oops",
+                             finished_at=time.time())
+                return
             text = text[:MAX_TEXT_CHARS]
         self._update(message_id, status="running", text=text)
         try:
