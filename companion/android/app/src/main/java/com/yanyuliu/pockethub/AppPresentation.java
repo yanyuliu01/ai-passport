@@ -6,6 +6,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 /** Phone presentation identities; never changes a task's protocol identity or owner. */
 final class AppPresentation {
@@ -88,8 +92,39 @@ final class AppPresentation {
         return result;
     }
 
+    static final class TaskSection {
+        final String title;
+        final List<Card> cards = new ArrayList<>();
+        TaskSection(String title) { this.title = title; }
+    }
+
+    /** Creation time is stable across completion, approvals and subsequent task runs. */
+    static List<TaskSection> taskSections(List<Card> cards, java.util.Set<String> pinned,
+                                          java.util.Set<String> archived, long now, ZoneId zone) {
+        Map<String, TaskSection> sections = new LinkedHashMap<>();
+        for (Card card : sidebarTasks(cards, pinned, archived)) {
+            String label = pinned.contains(card.id) ? "置顶" : taskDay(card, now, zone);
+            sections.computeIfAbsent(label, TaskSection::new).cards.add(card);
+        }
+        return new ArrayList<>(sections.values());
+    }
+
+    static String taskDay(Card card, long now, ZoneId zone) {
+        if (!Double.isFinite(card.createdAt) || card.createdAt <= 0) return "时间未知";
+        LocalDate day = Instant.ofEpochSecond((long) card.createdAt).atZone(zone).toLocalDate();
+        LocalDate today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+        return day.equals(today) ? "今天" : day.equals(today.minusDays(1)) ? "昨天" : day.toString();
+    }
+
+    static String taskTime(Card card, boolean pinned, ZoneId zone) {
+        if (!Double.isFinite(card.createdAt) || card.createdAt <= 0) return "时间未知";
+        return DateTimeFormatter.ofPattern(pinned ? "yyyy-MM-dd HH:mm" : "HH:mm", Locale.ROOT)
+                .format(Instant.ofEpochSecond((long) card.createdAt).atZone(zone));
+    }
+
     /** One status word; an ended task has none and is shown as muted text instead. */
     static String stateWord(Card card, boolean connected) {
+        if (connected && card.resultReady && card.active()) return "总结中";
         switch (DsState.state(card, connected)) {
             case "working": case "talking": return "进行中";
             case "queued": return "排队";

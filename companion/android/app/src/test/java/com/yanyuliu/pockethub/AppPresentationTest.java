@@ -8,6 +8,37 @@ import java.util.List;
 public class AppPresentationTest {
     private Card card(String fields) { return Card.from(Json.parseObject("{" + fields + "}")); }
 
+    @Test public void tasksUseLocalCreationDayAndKeepPinnedSeparate() {
+        java.time.ZoneId zone = java.time.ZoneId.of("Asia/Shanghai");
+        long now = java.time.ZonedDateTime.of(2026, 10, 14, 0, 5, 0, 0, zone).toInstant().toEpochMilli();
+        Card today = card("\"id\":\"c3\",\"agent\":\"codex\",\"created_at\":" + now / 1000);
+        Card yesterday = card("\"id\":\"c2\",\"agent\":\"codex\",\"created_at\":" + (now / 1000 - 600));
+        Card unknown = card("\"id\":\"c1\",\"agent\":\"codex\"");
+        java.util.Set<String> pins = new java.util.HashSet<>(Arrays.asList("c2"));
+        List<AppPresentation.TaskSection> groups = AppPresentation.taskSections(Arrays.asList(today, yesterday, unknown), pins,
+                new java.util.HashSet<>(), now, zone);
+        assertEquals("置顶", groups.get(0).title); assertEquals("今天", groups.get(1).title);
+        assertEquals("时间未知", groups.get(2).title);
+        assertEquals("昨天", AppPresentation.taskDay(yesterday, now, zone));
+        assertEquals("23:55", AppPresentation.taskTime(yesterday, false, zone));
+        assertEquals("2026-10-13 23:55", AppPresentation.taskTime(yesterday, true, zone));
+        assertEquals("今天", AppPresentation.taskDay(today, now - 300000, zone));
+        assertEquals("昨天", AppPresentation.taskDay(today, now + 86400000, zone));
+    }
+
+    @Test public void calendarDaysHandleDstYearBoundariesAndStateChanges() {
+        java.time.ZoneId zone = java.time.ZoneId.of("America/New_York");
+        long now = java.time.ZonedDateTime.of(2026, 3, 9, 0, 5, 0, 0, zone).toInstant().toEpochMilli();
+        long created = java.time.ZonedDateTime.of(2026, 3, 8, 0, 5, 0, 0, zone).toEpochSecond();
+        Card working = card("\"id\":\"c1\",\"agent\":\"codex\",\"state\":\"working\",\"created_at\":" + created);
+        Card done = card("\"id\":\"c1\",\"agent\":\"codex\",\"state\":\"done\",\"started_at\":" + now / 1000 + ",\"created_at\":" + created);
+        assertEquals("昨天", AppPresentation.taskDay(working, now, zone));
+        assertEquals(AppPresentation.taskDay(working, now, zone), AppPresentation.taskDay(done, now, zone));
+        assertEquals("2026-03-08", AppPresentation.taskDay(done, now + 3 * 86400000L, zone));
+        Card old = card("\"id\":\"c0\",\"agent\":\"codex\",\"created_at\":1735689600");
+        assertEquals("2024-12-31", AppPresentation.taskDay(old, now, zone));
+    }
+
     @Test public void aliasesUseTheSamePortraitWithoutChangingWireIdentity() {
         assertEquals("claude", AppPresentation.role("cc"));
         assertEquals("claude", AppPresentation.role("CLAUDE"));

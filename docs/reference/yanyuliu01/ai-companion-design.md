@@ -4,7 +4,7 @@
 
 Generated on 2026-10-12 with the built-in image generation tool. This pack explores three consistent identities across firmware pixel art and app chibi illustration: a blue whale maid, an orange-haired Claude scholar, and an elegant silver-lavender-haired Codex companion. These are unofficial fan-inspired designs.
 
-The user-selected elegant Codex sheets are the style master. DSH and Claude full-body sheets, portraits and whale emotion expansion are updated to v2. The recommended set contains 13 source sheets and 176 drawn poses, including style alternatives rather than 176 distinct emotions. Earlier versions remain drafts.
+The user-selected elegant Codex sheets are the style master. DSH and Claude full-body sheets, portraits and whale emotion expansion are updated to v2. The recommended set contains 15 source sheets and 208 drawn poses, including style alternatives rather than 176 distinct emotions. Earlier versions remain drafts.
 
 ## Dot-eye alternative matching XiaoYou
 
@@ -101,3 +101,17 @@ shape; the revised expression and animation require a new device acceptance.
 - Before integration: extract and visually inspect individual cells, clean edge artifacts, align anchors, reduce firmware sprites to an agreed integer grid and palette, convert to the selected LVGL format, and measure Flash/RAM costs. Avoid loading a full source atlas into firmware RAM. Verify small-size expressions and contrast on the board. App assets also need cell extraction and edge inspection.
 
 Build: NOT RUN (asset design only). Host tests: FAIL (static gate stopped at a macOS linker rejecting `--gc-sections`; earlier tests passed). Device tests: NOT RUN. Unverified: cell extraction, exact pixel grid/palette, alpha-edge cleanup, runtime integration, animation and physical-device rendering.
+
+## ChatGPT app head module (2026-10-16)
+
+Redesigned from the user-provided white dragon reference, matching `app-whale-v2.png`: white hair, pale violet eyes, white dragon horns, pointed ears and a knot-shaped hair ornament. This is a smooth HD app chibi head-only sheet, with sixteen expressions in a 4-by-4 grid, not a full-body character or pixel firmware resource. Expression order follows the head-avatar section.
+
+![ChatGPT head avatars](../../../assets/images/ai-companions/app-chatgpt-heads-v1.png)
+
+The [user-provided identity reference](../../../assets/images/ai-companions/reference-chatgpt-dragon.png) has unknown original authorship and reuse terms. The generated sheet has alpha transparency; cell extraction, margin alignment and alpha-edge inspection remain before integration. No app code or release was changed.
+
+## Codex app pixel portrait replacement (0.14.1)
+
+The owner selected the ChatGPT white-dragon design to replace the app Codex portraits, preserving DS and Claude. The new [pixel source sheet](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png) supplies reviewed idle, happy, thinking and focused cells. `companion/android/tools/PreparePortraits.java` generates transparent 256-by-256 resources; its optional trailing `codex` argument scopes regeneration to this role. Codex rendering uses nearest-neighbor scaling, preserving existing role identity, mood mapping and breathing animation. This changes portraits only, not connections, messages, approvals or firmware protocols.
+
+![Codex pixel portrait source](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)

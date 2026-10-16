@@ -34,12 +34,14 @@ final class RuntimeClient {
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
+    private static final Map<String, java.util.Set<String>> SHARED_HISTORY = new java.util.HashMap<>();
     /** 回答授权、取消一件事：不排在正在等结果的那句话后面。 */
     private static final ExecutorService QUICK = Executors.newCachedThreadPool();
     private static final int FEED_WAIT_SECONDS = 50;
     private static Thread watcher;
     /** 正在等卡变化的那条连接：换 Runtime 时断开它，不用等它自己超时。 */
     private static volatile HttpURLConnection feedConnection;
+    private static volatile MessageStream activeMessageStream;
     /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小幽回话，不能排在它后面。 */
     private static final ExecutorService FIRMWARE_WORKER = Executors.newSingleThreadExecutor();
     private static final ExecutorService AGENTS_WORKER = Executors.newSingleThreadExecutor();
@@ -134,6 +136,8 @@ final class RuntimeClient {
         if (waiting != null) {
             waiting.disconnect();
         }
+        MessageStream talking = activeMessageStream;
+        if (talking != null) talking.close();
     }
 
     // ---- 卡：一直等着 Runtime 说哪些事变了 ----
@@ -516,6 +520,8 @@ final class RuntimeClient {
 
     /** App 刚启动时把存着的对话放回聊天框。 */
     static void restoreChat(Context context) {
+        Target target = selected(context);
+        HubStore.get().initializeHistory(context, target == null ? "" : target.url, turns(context));
         HubStore.get().restoreChat(turns(context));
     }
 
@@ -559,6 +565,17 @@ final class RuntimeClient {
 
     private static void submit(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort, String agent) {
+        submit(context, text, wav, card, pin, effort, agent, null);
+    }
+
+    static void retry(Context context, String id, String text, String card) {
+        if (HubStore.get().busy()) return;
+        String client = HubStore.get().retryMessage(id);
+        if (client != null) submit(context, text, null, card, card != null, null, null, client);
+    }
+
+    private static void submit(Context context, String text, byte[] wav, String card,
+                               boolean pin, String effort, String agent, String retryId) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -572,17 +589,23 @@ final class RuntimeClient {
             store.chatFailed(text, "还没有设置 Runtime 的连接串");
             return;
         }
-        store.chatAsked(text);
-        final String clientId = UUID.randomUUID().toString().replace("-", "");
+        final String clientId = retryId == null ? UUID.randomUUID().toString().replace("-", "") : retryId;
+        store.selectedRuntime(url);
+        final long epoch = store.cardsEpoch();
+        store.chatAsked(text, clientId, pin ? card : null);
         WORKER.execute(() -> {
+            MessageStream events = null;
             try {
                 // 先把最近的对话带过去：这台 Runtime 已经知道的它会自己跳过。
-                List<ChatTurn> history = turns(app);
+                java.util.Set<String> shared = SHARED_HISTORY.computeIfAbsent(url, ignored -> new java.util.HashSet<>());
+                List<ChatTurn> history = new ArrayList<>();
+                for (ChatTurn turn : turns(app)) if (!shared.contains(turn.id)) history.add(turn);
                 if (!history.isEmpty()) {
                     try {
                         request("POST", url + "/v1/conversations/default/history", token,
                                 ChatTurn.historyJson(history).getBytes(StandardCharsets.UTF_8),
                                 "application/json; charset=utf-8", 15);
+                        for (ChatTurn turn : history) shared.add(turn.id);
                     } catch (IOException error) {
                         // 旧版 Runtime 没有这个接口：照常发消息，只是它接不上别处的话。
                         store.log("没能把之前的对话带给 " + target.name + "：" + error.getMessage());
@@ -604,9 +627,13 @@ final class RuntimeClient {
                 if (id == null) {
                     throw new IOException("Runtime 没有返回消息编号");
                 }
+                if (store.cardsEpoch() != epoch) return;
+                store.chatAccepted(clientId, id);
                 long deadline = System.currentTimeMillis() + GIVE_UP_MS;
                 boolean heard = wav == null;
+                boolean streamTried = false;
                 while (true) {
+                    if (store.cardsEpoch() != epoch) return;
                     String status = message.get("status");
                     String recognized = message.get("text");
                     if (!heard && recognized != null && !recognized.isEmpty()) {
@@ -617,21 +644,21 @@ final class RuntimeClient {
                         String reply = message.get("reply");
                         String brief = message.get("brief");
                         String filed = message.get("card");
-                        if (filed != null) {
-                            // 这句话归到了一张卡：先把卡取来，第一屏才不会先闪一下“说完了”
-                            // 再变成“交给帮手了”。取不到也没关系，盯着卡的那一路会补上。
-                            try {
-                                fetchFeed(target, 0, false);
-                            } catch (IOException | RuntimeException ignored) {
-                                // 见上：另一路会补上。
-                            }
-                        }
                         store.chatAnswered(brief == null ? "" : brief, reply == null ? "" : reply,
                                 message.get("mood"), filed);
+                        if (filed != null) {
+                            // Final text is already visible; refresh task details independently.
+                            QUICK.execute(() -> {
+                                if (store.cardsEpoch() != epoch) return;
+                                try { fetchFeed(target, 0, false); }
+                                catch (IOException | RuntimeException ignored) { }
+                            });
+                        }
                         String said = recognized != null && !recognized.isEmpty() ? recognized : text;
-                        if (reply != null && !reply.isEmpty()) {
+                        if (!pin && reply != null && !reply.isEmpty()) {
                             remember(app, new ChatTurn(id, said, reply,
                                     System.currentTimeMillis() / 1000L));
+                            shared.add(id);
                         }
                         return;
                     }
@@ -644,20 +671,47 @@ final class RuntimeClient {
                         throw new IOException("等了太久还没有结果");
                     }
                     // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
-                    store.chatProgress(message.get("helper"), message.get("stage"));
+                    store.chatProgress(message.get("helper"), "transcribing".equals(status) ? "正在识别语音…" : message.get("stage"));
                     // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
                     // 旧版 Runtime 没有这一项，就照旧等整段。
                     store.chatStreaming(message.get("partial"));
                     // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
                     // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
                     String rev = message.get("rev");
+                    if (!streamTried && "true".equals(message.get("event_stream"))) {
+                        streamTried = true;
+                        try {
+                            events = MessageStream.open(url, token, id, rev);
+                            activeMessageStream = events;
+                        } catch (IOException ignored) { /* Existing polling remains available. */ }
+                    }
+                    Map<String, String> pushed = null;
+                    if (events != null) {
+                        try {
+                            pushed = events.next();
+                            if (pushed != null && !id.equals(pushed.get("id"))) throw new IOException("回复消息编号不匹配");
+                        } catch (IOException error) { pushed = null; }
+                        if (pushed == null) {
+                            events.close();
+                            if (activeMessageStream == events) activeMessageStream = null;
+                            events = null;
+                        }
+                    }
+                    if (store.cardsEpoch() != epoch) return;
+                    if (pushed != null) { message = pushed; continue; }
                     int wait = heard || rev != null ? POLL_SECONDS : 2;
                     message = request("GET", url + "/v1/messages/" + id + "?wait=" + wait
                             + (rev == null ? "" : "&rev=" + rev), token, null, null, wait + 15);
                 }
             } catch (IOException | RuntimeException error) {
+                if (store.cardsEpoch() != epoch) return;
                 String detail = error.getMessage();
                 store.chatFailed(null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
+            } finally {
+                if (events != null) {
+                    events.close();
+                    if (activeMessageStream == events) activeMessageStream = null;
+                }
             }
         });
     }
@@ -709,7 +763,8 @@ final class RuntimeClient {
 
     /** 电脑上发布的 App 更新（一层的对象；没有时 available 是 false）。 */
     static Map<String, String> appRelease(Target target) throws IOException {
-        return request("GET", target.url + "/v1/app", target.token, null, null, 15);
+        return request("GET", target.url + "/v1/app?abi=" + AppUpdate.preferredAbi(android.os.Build.SUPPORTED_ABIS),
+                target.token, null, null, 15);
     }
 
     /**
@@ -806,6 +861,15 @@ final class RuntimeClient {
                                       byte[] body, String contentType, int timeoutSeconds,
                                       boolean feed)
             throws IOException {
+        // The watcher owns feed reconnection. A selection change must cancel it immediately.
+        return RuntimeRetry.run(!feed && RuntimeRetry.safe(method, address, body),
+                () -> requestOnce(method, address, token, body, contentType, timeoutSeconds, feed),
+                Thread::sleep);
+    }
+
+    private static String requestOnce(String method, String address, String token,
+                                      byte[] body, String contentType, int timeoutSeconds,
+                                      boolean feed) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setInstanceFollowRedirects(false);
         if (feed) {

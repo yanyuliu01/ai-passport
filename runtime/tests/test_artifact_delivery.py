@@ -139,6 +139,62 @@ class ArtifactDeliveryTests(unittest.TestCase):
         card = self.deliver(runtime)
         self.assertEqual(card["entries"][-1]["text"], "只显示正文")
 
+    def test_raw_short_result_and_main_summary_have_separate_persistent_identities(self):
+        runtime, config = self.runtime(OutputAgent("原始结论与证据", speaks=False))
+        card = self.deliver(runtime)
+        original = next(entry for entry in card["entries"] if entry.get("kind") == "worker_result")
+        summary = card["entries"][-1]
+        self.assertEqual((original["text"], original["scope"], original["author"]),
+                         ("原始结论与证据", "task", "fixture"))
+        self.assertEqual((summary["kind"], summary["scope"]), ("summary", "main"))
+        self.assertNotEqual(original["id"], summary["id"])
+        self.assertTrue(card["result_ready"])
+        self.assertEqual(card["summary_partial"], "")
+        restored = Cards(config.state_dir / "cards.json").get(card["id"])
+        self.assertEqual(restored["entries"], card["entries"])
+        self.assertTrue(restored["result_ready"])
+
+    def test_old_summary_cannot_close_a_new_task_run(self):
+        from xiaoyou_runtime.tasks import Task
+        agent = OutputAgent("unused")
+        runtime, _ = self.runtime(agent)
+        card = runtime.cards.open("default", "task", "working", "fixture")
+        old = Task(card=card["id"], conversation="default", agent=agent, text="old")
+        runtime.cards.update(card["id"], run_id="new-run")
+        runtime._close(old, "old summary", None, "happy", "done", [])
+        runtime._finished(old, Outcome("old raw result", None), None)
+        current = runtime.cards.get(card["id"])
+        self.assertEqual(current["state"], "working")
+        self.assertEqual(current["entries"], [])
+
+    def test_original_is_available_before_streamed_summary_finishes(self):
+        import threading
+        from test_runtime import Scripted, make_xiaoyou, until
+        from xiaoyou_runtime.service import Service
+        ready, finish = threading.Event(), threading.Event()
+        class Voice(Scripted):
+            def run(self, job):
+                if "原始结果" in job.text:
+                    self.assertion = job.on_text is not None
+                    job.on_text('{"reply":"总结开头')
+                    ready.set(); finish.wait(5)
+                    return Outcome('summary', None, {"reply": "summary", "brief": "done", "mood": "happy"})
+                return super().run(job)
+        voice, helper = Voice("ds"), Scripted("worker", speaks=False)
+        runtime, _ = make_xiaoyou(self.folder / "relay", [voice, helper])
+        service = Service(runtime, runtime._store)
+        self.addCleanup(service.close); self.addCleanup(finish.set)
+        message = service.get(service.submit("@worker read evidence")["id"], wait=5)
+        self.assertTrue(ready.wait(5))
+        card = runtime.cards.get(message["card"])
+        self.assertTrue(voice.assertion)
+        self.assertEqual(card["summary_partial"], "总结开头")
+        self.assertTrue(card["result_ready"])
+        self.assertTrue(any(entry.get("kind") == "worker_result" for entry in card["entries"]))
+        finish.set()
+        self.assertTrue(until(lambda: runtime.cards.get(message["card"])["state"] == "done", 5))
+        self.assertEqual(runtime.cards.get(message["card"])["entries"][-1]["kind"], "summary")
+
 
 if __name__ == "__main__":
     unittest.main()

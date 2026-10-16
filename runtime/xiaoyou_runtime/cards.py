@@ -91,6 +91,8 @@ class Cards:
         entries = [
             {"role": entry["role"], "text": entry["text"],
              "at": entry.get("at") if isinstance(entry.get("at"), (int, float)) else 0,
+             **{key: entry.get(key, "") if isinstance(entry.get(key, ""), str) else ""
+                for key in ("id", "scope", "kind", "author")},
              "attachments": clean_attachments(entry.get("attachments"))}
             for entry in card.get("entries", [])
             if isinstance(entry, dict) and entry.get("role") in ("you", "xiaoyou")
@@ -139,6 +141,9 @@ class Cards:
             "stale": card.get("stale") is True,
             "content_scope": text("content_scope"),
             "content_truncated": card.get("content_truncated") is True,
+            "result_ready": card.get("result_ready") is True,
+            "summary_partial": text("summary_partial"),
+            "run_id": text("run_id"),
         }
 
     @staticmethod
@@ -226,6 +231,8 @@ class Cards:
                progress: Optional[str] = None, fresh: bool = False,
                progress_lines: Optional[List[str]] = None,
                attachments: Optional[List[Dict[str, Any]]] = None,
+               turn_id: Optional[str] = None, scope: str = "main", kind: str = "reply",
+               author: str = "xiaoyou",
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。"""
@@ -235,10 +242,14 @@ class Cards:
                 return None
             now = time.time()
             if said is not None:
-                card["entries"].append({"role": "you", "text": said[:MAX_ENTRY_CHARS], "at": now})
+                card["entries"].append({"role": "you", "text": said[:MAX_ENTRY_CHARS], "at": now,
+                                        "id": turn_id + ":you" if turn_id else "", "scope": scope,
+                                        "kind": "user", "author": "you"})
             if say is not None:
                 card["entries"].append(
-                    {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now})
+                    {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now,
+                     "id": turn_id + ":reply" if turn_id else "", "scope": scope,
+                     "kind": kind, "author": author})
             if attachments is not None:
                 incoming = clean_attachments(attachments)
                 self._merge_attachments(card, incoming)

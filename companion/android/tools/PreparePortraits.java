@@ -15,14 +15,15 @@ class PreparePortraits {
         File output = new File(root, "companion/android/app/src/main/res/drawable-nodpi");
         if (!output.isDirectory() && !output.mkdirs()) throw new IllegalStateException("Cannot create output directory");
         String[] roles = {"ds", "codex", "claude"};
-        String[] atlases = {"avatar-whale-v1.png", "avatar-codex-elegant-v1.png", "avatar-claude-v2.png"};
+        String[] atlases = {"avatar-whale-v1.png", "avatar-chatgpt-pixel-v1.png", "avatar-claude-v2.png"};
         String[] moods = {"idle", "happy", "think", "focus"};
         int[][][] bounds = {
             {{16,8,346,291},{363,8,690,292},{1035,8,1330,292},{16,301,344,586}},
-            {{22,26,326,313},{350,26,653,313},{1006,26,1304,313},{14,321,326,611}},
+            {{4,2,359,272},{366,2,720,272},{1088,2,1447,272},{3,275,359,542}},
             {{4,10,330,308},{334,10,657,304},{988,10,1311,308},{3,306,329,606}}
         };
         for (int role = 0; role < roles.length; role++) {
+            if (args.length > 1 && !roles[role].equals(args[1])) continue;
             BufferedImage atlas = ImageIO.read(new File(source, atlases[role]));
             if (atlas == null) throw new IllegalArgumentException("Unreadable atlas: " + atlases[role]);
             for (int mood = 0; mood < moods.length; mood++) {
@@ -32,7 +33,7 @@ class PreparePortraits {
                 BufferedImage portrait = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
                 Graphics2D g = portrait.createGraphics();
                 g.setComposite(AlphaComposite.Src);
-                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, role == 0
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, role == 0 || role == 1
                         ? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR : RenderingHints.VALUE_INTERPOLATION_BICUBIC);
                 double scale = 240.0 / Math.max(width, height);
                 int w = (int)Math.round(width * scale), h = (int)Math.round(height * scale);

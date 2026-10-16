@@ -49,7 +49,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlsplit
 
 from . import __version__
-from .app_release import AppRelease, AppReleaseError
+from .app_release import AppRelease, AppReleaseError, byte_range
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
@@ -145,6 +145,45 @@ def make_server(config: Config, service: Service,
                     return None
             return wait, rev
 
+        def _message_stream(self, message_id: str, query: Dict[str, Any]) -> None:
+            asked = self._wait_and_rev(query)
+            if asked is None:
+                return
+            after = asked[1]
+            if service.get(message_id) is None:
+                self._fail(404, "没有这条消息（Runtime 重启后旧消息查不到）")
+                return
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                self.wfile.write(b": connected\n\n")
+                self.wfile.flush()
+                while True:
+                    current = service.get(message_id, wait=15 if after is not None else 0, rev=after)
+                    if current is None:
+                        # A restart/eviction does not authorize the client to resubmit the job.
+                        event = {"id": message_id, "status": "failed", "error": "消息记录已不可用，请查看任务"}
+                        self.wfile.write(("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode("utf-8"))
+                        self.wfile.flush()
+                        return
+                    terminal = current["status"] in ("done", "failed")
+                    if current["rev"] != after or terminal:
+                        data = json.dumps(current, ensure_ascii=False)
+                        self.wfile.write(("id: %d\nevent: message\ndata: %s\n\n" % (current["rev"], data)).encode("utf-8"))
+                    else:
+                        self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                    if terminal:
+                        return
+                    after = current["rev"]
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
         def _firmware_get(self, parts: Any, query: Dict[str, Any]) -> None:
             try:
                 if len(parts) == 2:
@@ -191,24 +230,49 @@ def make_server(config: Config, service: Service,
                         break
                     self.wfile.write(chunk)
 
-        def _app_apk(self) -> None:
+        def _app_apk(self, query: Dict[str, Any]) -> None:
             try:
-                stream, info, size = release.open()
+                stream, info, size = release.open(query.get("abi", [""])[0], query.get("sha256", [""])[0])
             except (AppReleaseError, OSError) as error:
-                self._fail(404, str(error))
+                self._fail(409 if query.get("sha256") else 404, str(error))
                 return
             with stream:
-                self.send_response(200)
+                etag = '"' + info["sha256"] + '"'
+                if self.headers.get("If-Match", etag) not in (etag, "*"):
+                    self._fail(412, "安装包已更新，请重新检查更新")
+                    return
+                asked = self.headers.get("Range", "")
+                partial = bool(asked and self.headers.get("If-Range", etag) == etag)
+                start, end = 0, size - 1
+                if partial:
+                    try:
+                        start, end = byte_range(asked, size)
+                    except ValueError:
+                        self.send_response(416)
+                        self.send_header("Content-Range", "bytes */%d" % size)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                self.send_response(206 if partial else 200)
                 self.send_header("Content-Type", "application/vnd.android.package-archive")
-                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Length", str(end - start + 1))
+                self.send_header("Accept-Ranges", "bytes")
+                if partial:
+                    self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
                 self.send_header("Cache-Control", "private, no-store")
-                self.send_header("ETag", '"' + info["sha256"] + '"')
+                self.send_header("ETag", etag)
                 self.end_headers()
-                while True:
-                    chunk = stream.read(COPY_CHUNK)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+                stream.seek(start)
+                remaining = end - start + 1
+                try:
+                    while remaining:
+                        chunk = stream.read(min(COPY_CHUNK, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         def _firmware_post(self, parts: Any, query: Dict[str, Any]) -> None:
             try:
@@ -265,19 +329,19 @@ def make_server(config: Config, service: Service,
                 return
             if not self._authorized():
                 return
+            query = parse_qs(url.query)
             if len(parts) == 4 and parts[:2] == ["v1", "artifacts"] and parts[3] in ("content", "thumbnail"):
                 self._artifact_get(parts[2], parts[3] == "thumbnail")
                 return
             if parts == ["v1", "app"]:
-                self._send(200, release.info())
+                self._send(200, release.info(query.get("abi", [""])[0]))
                 return
             if parts == ["v1", "app", "apk"]:
-                self._app_apk()
+                self._app_apk(query)
                 return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
-            query = parse_qs(url.query)
             if parts == ["v1", "usage"]:
                 self._send(200, service.usage(query.get("refresh", [""])[0] in ("1", "true")))
                 return
@@ -313,6 +377,9 @@ def make_server(config: Config, service: Service,
                 return
             if parts[:2] == ["v1", "firmware"]:
                 self._firmware_get(parts, query)
+                return
+            if len(parts) == 4 and parts[:2] == ["v1", "messages"] and parts[3] == "stream":
+                self._message_stream(parts[2], query)
                 return
             if len(parts) == 3 and parts[:2] == ["v1", "messages"]:
                 asked = self._wait_and_rev(query)

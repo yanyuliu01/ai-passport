@@ -4,7 +4,7 @@
 
 2026-10-12 使用内置图像生成工具生成。三位角色在固件像素风与 app Q 版画风中保留统一辨识特征：蓝色鲸鱼女仆、橙发 Claude 学者、银紫长发的优雅 Codex 伙伴。这些是非官方、参考社区形象的设计。
 
-本轮以用户选中的优雅 Codex 图集为画风基准，DSH 和 Claude 的全身图、头像及大肥鱼情绪扩展均更新为 v2。推荐源图共 13 张、176 个绘制姿态（包含画风备选，不是 176 种不同情绪）；之前版本保留为草稿。
+本轮以用户选中的优雅 Codex 图集为画风基准，DSH 和 Claude 的全身图、头像及大肥鱼情绪扩展均更新为 v2。推荐源图共 15 张、208 个绘制姿态（包含画风备选，不是 176 种不同情绪）；之前版本保留为草稿。
 
 ## 接近小幽质感的豆豆眼备选
 
@@ -96,3 +96,17 @@ App 按源图边界绘制并禁用位图滤波。见[素材转换记录](../../.
 - 接入前需要逐格提取和检查、清理边缘、统一锚点，将固件图转换到约定的整数像素网格和调色板，再转为选定的 LVGL 格式并测量 Flash/RAM。不要把整张高清源图集解码进固件 RAM。需上板检查小尺寸表情和对比度；app 也需要切图和边缘检查。
 
 Build: NOT RUN（仅素材设计）。Host tests: FAIL（静态门禁在 macOS 链接器拒绝 `--gc-sections` 时停止，之前的测试通过）。Device tests: NOT RUN。Unverified: 切图、精确像素网格与调色板、透明边缘清理、运行时接入、动画和真机显示。
+
+## ChatGPT app 大头模组（2026-10-16）
+
+按用户提供的白龙形象重新设计，画风对齐 `app-whale-v2.png`，保留白发、浅紫瞳、白龙角、尖耳和结形发饰。仅设计 app 的高清 Q 版大头头像，4×4 共 16 个表情，不是全身角色或像素固件资源。表情顺序与大头头像章节一致。
+
+![ChatGPT 大头头像](../../../assets/images/ai-companions/app-chatgpt-heads-v1.png)
+
+[用户提供的角色参考](../../../assets/images/ai-companions/reference-chatgpt-dragon.png)原作者与再利用许可未知。素材有透明通道，接入前仍需逐格裁切、调整边距和检查透明边缘；尚未修改或发布 app。
+
+## Codex app 像素头像替换（0.14.1）
+
+用户确认以 ChatGPT 白龙形象替换 app 中的 Codex 头像，DS 与 Claude 保持原样。新增[像素源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)，其中待命、开心、思考、专注四格经 `companion/android/tools/PreparePortraits.java` 生成透明 256×256 资源；支持尾随 `codex` 参数只生成这一角色。Codex 绘制使用最近邻缩放保留像素边缘，沿用原有角色身份、状态映射和呼吸动画。只改头像，不改连接、消息、审批或固件协议。
+
+![Codex 像素头像源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)

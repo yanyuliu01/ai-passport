@@ -4,6 +4,12 @@
 
 # Xiaoyou Runtime
 
+Agents changing this project must first read the [root instructions](../AGENTS.md)
+and [mandatory App/Runtime/firmware reliability rules](../docs/development/cross-stack-reliability.md).
+They define regression, 3-second first-response, connection recovery, and
+multi-end consistency acceptance. The capability descriptions below do not
+establish that these requirements have passed validation.
+
 Xiaoyou is the single voice the owner talks to, and an identity of her own: she
 is not another name for one model. This runtime is the small, always-on service
 behind her, and what is hers lives here: the persona, the transcript of her
@@ -65,6 +71,74 @@ token.
 To try the whole path without calling any model, start it with the environment
 variable `XIAOYOU_DEFAULT_AGENT=echo`: every message goes to an agent that
 repeats it, and the configuration file stays as it is.
+
+## View Runtime tasks in desktop apps
+
+Set `"desktop_open": true` on a `claude_code` or `codex` agent to request that
+its original session open in the native desktop app after a successful background
+task finishes. Queued follow-up rounds finish first. Normal conversation replies,
+failed tasks and cancelled tasks do not launch an app. This option defaults to
+`false`; opening failures are reported in the Runtime log without discarding the
+task result. A successful launcher exit means the request was sent, not that the
+desktop UI has been verified. When an agent uses an isolated home, only that
+completed session transcript is imported into the default desktop home; account
+settings, credentials and unrelated conversations are never copied, and no app
+database is edited. The import keeps the session ID and publishes a fully written
+file atomically. Identical imports are idempotent; an existing different transcript
+is never overwritten. This is a local snapshot: desktop continuations do not flow
+back into the isolated Runtime session. A later Runtime round with different
+content is reported as a conflict, not silently merged. Referenced external tool
+artifacts and subagent files are not imported.
+
+For retained tasks, from the repository root:
+
+```bash
+PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop list
+PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop open --task c149 --agent codex
+```
+
+Use the configured agent name (for example `cc`, not necessarily `claude`).
+Opening is refused while a task is working, waiting, or has an unknown state.
+These commands only read Runtime state and do not run startup cleanup or invoke
+a model. Use one owner at a time: once you start interacting in the desktop app,
+do not also send work to that session through Runtime.
+
+- **Claude Code:** uses `claude --desktop --resume <session-id>` with the agent's
+  original working directory and `CLAUDE_CONFIG_DIR`. Requires a supported Claude
+  Desktop installation, subscription login, and Claude Code 2.1.285 or later on
+  macOS. The Runtime launcher currently supports macOS only; on Windows use the
+  native command in an interactive terminal. Explicit API/third-party-provider
+  agents are refused. The launcher clears ambient provider routing and uses the
+  local subscription login without changing the worker environment. A session from a
+  custom configuration directory is imported into `~/.claude/projects/` before
+  opening. On macOS a temporary terminal is used because the CLI rejects redirected
+  I/O; no prompt is sent and the launcher is bounded to 15 seconds. macOS has been
+  exercised locally. This is a completed-session
+  handoff, not live mirroring of `claude -p`.
+  See [Claude's desktop documentation](https://code.claude.com/docs/en/desktop#coming-from-the-cli).
+- **Codex:** opens `codex://threads/<session-id>` on macOS. An isolated
+  `CODEX_HOME` transcript is imported into `~/.codex/sessions/` with its original
+  date layout. The desktop app continues under its own account and settings;
+  Runtime's configuration and login remain unchanged. Desktop source filters can
+  still hide external sessions from the sidebar; opening by ID avoids relying on
+  sidebar discovery. A successful import/read does not prove live display.
+
+For a Codex service shared with a desktop client, optionally set
+`"app_server_socket": "/absolute/path/to/app-server-control.sock"` and keep
+`"mode": "app_server"`. Runtime uses `codex app-server proxy --sock <path>`;
+the service must already be running and the desktop client must actually use
+that same service and home. The socket is not auto-discovered, and starting a
+separate daemon does not by itself connect the desktop app. A missing or
+incompatible service fails visibly without silently launching a private fallback.
+Only Runtime's proxy process is closed; cancellation sends an interrupt for this
+task's turn, and events belonging to other threads are ignored. This optional
+transport preserves Runtime's approval and steering protocol. Shared-service
+support alone does not guarantee live display in the desktop app.
+See the [App Server protocol](https://learn.chatgpt.com/docs/app-server).
+
+After changing configuration, restart Runtime only when no task is running, or
+obtain the owner's approval to interrupt work. This feature is separate from the
+read-only observation described below.
 
 ## Sync existing desktop conversations
 
@@ -488,6 +562,15 @@ shell:
   fails, or with `stream: false`, the call falls back to
   `dsh --profile headless --json`: one question, one answer, with tools and
   thinking switched off for speed.
+- Optional `chat_model` selects the model for plain conversation, routing, and
+  result summaries; background tool jobs keep `model`, and an explicitly selected
+  per-call model takes precedence. Without it behavior is unchanged. For example,
+  `model: "deepseek-v4-pro"` and `chat_model: "deepseek-flash"` retain the persona,
+  conversation history, task dispatch, and approval logic while separating models.
+- Keepalive comments, empty lines, and invalid events count toward the same total
+  deadline. A headless fallback only gets the remaining budget; an exhausted
+  budget does not start another wait. Logs record model, first-text and total
+  timing without recording the prompt, response, or credentials.
 - There is no per-step approval channel like Claude Code's. Permissions follow
   `sandbox` only (`read-only`, `workspace-write`, `danger-full-access`, passed as
   `DSH_PERMISSION_MODE`): inside the sandbox it acts on its own; when it wants
@@ -948,6 +1031,8 @@ Then set `"config_dir": "~/.codex-xiaoyou"` on that `codex` agent.
 
 ## HTTP interface
 
+Message snapshots optionally include Unix timestamps `processing_started_at` and `first_partial_at` to distinguish queue delay from the wait for visible text.
+
 All requests except `/healthz` need `Authorization: Bearer <token>`. Bodies and
 responses are JSON except the documented voice, firmware, and artifact binaries.
 
@@ -959,6 +1044,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. |
+| `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
 | `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
@@ -1284,7 +1370,7 @@ runtime (any address, Funnel included), checks its SHA-256 and hands it to
 Android, which asks the owner to confirm:
 
 ```bash
-python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-debug.apk --note "what changed"
+python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "what changed"
 python3 -m xiaoyou_runtime app status
 ```
 
@@ -1294,6 +1380,37 @@ when it is the same but the package differs and was published after the phone
 installed its copy. It checks when opened (at most every ten minutes) and from
 Connections and settings → App update. The first version with this feature
 must be installed by hand.
+
+App 0.13.1 adds ABI selection and resumable downloads. Publish the universal APK
+as the default and add `--variant ABI=APK` for each matching Gradle ABI output;
+see [the app shipping flow](../companion/README.md#shipping-an-app-change-developers-and-ai-agents).
+For a private Runtime whose legacy phones are all known ARM64 devices, the ARM64
+APK can be the default if the universal and other ABI variants are also supplied.
+Unknown legacy phones should retain a universal default.
+
+`GET /v1/app?abi=arm64-v8a` returns the selected package's ordinary version, size,
+and checksum fields; an unavailable ABI falls back to the universal package.
+Omitting `abi` preserves the published default. Download from
+`GET /v1/app/apk?abi=arm64-v8a&sha256=<expected-hash>`; replacement of that release
+returns 409 rather than mixing versions. Single byte ranges return 206 with
+`Content-Range`, `Accept-Ranges`, and an ETag; invalid ranges return 416. If-Range
+mismatches return the complete file, and If-Match mismatches return 412. All
+requests retain Bearer authentication. Hash-named immutable APKs avoid replacing
+bytes beneath an open transfer; storage keeps at most the current and previous
+publication's hash-named packages. The old `app.apk` filename remains available
+for older Runtime processes. New apps tolerate older servers ignoring Range.
+These changes reduce transferred bytes and repeated work, but do not remove
+Funnel or DERP relay bottlenecks; measure throughput on the phone's actual path.
+
+From App 0.14.0, publish an uploaded APK with `--download-url HTTPS_URL` for
+the default package and `--variant-download-url ABI=HTTPS_URL` for each hosted
+variant. Upload exactly the verified local bytes first. Runtime still supplies
+the trusted version, size, and SHA-256. The App never sends its Runtime token to
+the host, follows only HTTPS redirects, and verifies the complete hash after
+resuming. Variants without a URL keep their Runtime download path. The App and
+Runtime limit is 512 MiB; older Apps retain their 128 MiB limit, so the first
+large upgrade needs browser installation. This setting changes only APK delivery,
+not conversation or recording destinations.
 
 ## How a sentence is processed
 

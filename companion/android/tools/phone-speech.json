@@ -1,0 +1,39 @@
+{
+  "engine": "sherpa-onnx 1.13.8",
+  "model": "SenseVoice int8 2024-07-17 final; Zipformer small CTC zh int8 2025-04-01 preview",
+  "downloads": [
+    {
+      "name": "sherpa-onnx-1.13.8.aar",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar",
+      "sha256": "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96",
+      "outputs": {
+        "": "sherpa-onnx-1.13.8.aar"
+      }
+    },
+    {
+      "name": "chinese-streaming-int8.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01.tar.bz2",
+      "sha256": "b3b309f7ce4a737195fcc6963ea19b0653a7d3401580af5ae0d3e284cbb71f0b",
+      "outputs": {
+        "./sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01/model.int8.onnx": "assets/asr/zh/model.int8.onnx",
+        "./sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01/tokens.txt": "assets/asr/zh/tokens.txt"
+      }
+    },
+    {
+      "name": "sense-voice-int8-2024-07-17.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+      "sha256": "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e",
+      "outputs": {
+        "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx": "assets/asr/sense-voice/model.int8.onnx",
+        "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt": "assets/asr/sense-voice/tokens.txt"
+      }
+    }
+  ],
+  "files": {
+    "sherpa-onnx-1.13.8.aar": "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96",
+    "assets/asr/zh/model.int8.onnx": "68c9c943840f7d9cf3e8a4970ba50f404feb5277f611fa82b7e72267786fa84a",
+    "assets/asr/zh/tokens.txt": "6fed8c6c248516f38e7faa19404b57413e8ce259f1cbc1fa4aebc86eac32fdfd",
+    "assets/asr/sense-voice/model.int8.onnx": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+    "assets/asr/sense-voice/tokens.txt": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+  }
+}

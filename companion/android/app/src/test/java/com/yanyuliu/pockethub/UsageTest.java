@@ -63,4 +63,19 @@ public class UsageTest {
         assertTrue(usage("{}").empty());
         assertNull(Usage.from(null));
     }
+    @Test public void energyUsesRealSharedWindowsAndRoleAliases() {
+        Usage value = usage("{\"at\":1000,\"accounts\":[{\"id\":\"shared\",\"updated_at\":999,"
+                + "\"windows\":[{\"kind\":\"5h\",\"left\":0,\"resets_at\":2000},"
+                + "{\"kind\":\"7d\",\"left\":72,\"resets_at\":9000}]}],"
+                + "\"agents\":[{\"name\":\"cc\",\"account\":\"shared\"},"
+                + "{\"name\":\"codex\",\"account\":\"shared\"}]}");
+        String energy = value.energy("claude", 1000, zone);
+        assertTrue(energy.contains("5 小时 0%"));
+        assertTrue(energy.contains("本周 72%"));
+        assertTrue(energy.contains("共用额度"));
+        assertTrue(value.energy("cc", 2001, zone).contains("5 小时 未知"));
+        assertEquals("精力值：未知", value.energy("ds", 1000, zone));
+        Usage billed = usage("{\"agents\":[{\"name\":\"deepseek\",\"model\":\"deepseek-chat\"}]}");
+        assertEquals("精力值：按量计费", billed.energy("ds", 1000, zone));
+    }
 }

@@ -1,0 +1,79 @@
+{
+  "audit_date": "2026-10-16",
+  "timezone": "Asia/Shanghai",
+  "local_head": "e1f5238c781d784338f325ac289e0f140a0b3382",
+  "branch": "feature/usage-history",
+  "ai_passport_remote_head": "e1f5238c781d784338f325ac289e0f140a0b3382",
+  "coucou_local_snapshot": "a95d309a4752c23ae28453819245339800557609",
+  "coucou_remote_reviewed": "f09ac0b451128781b88b0f8a77f69bab622b9f24",
+  "coucou_cited_files_unchanged_in_comparison": true,
+  "source_sha256": {
+    "runtime/xiaoyou_runtime/service.py": "25a97b904c1617f946f9fb067f3401dc13db0cfa0a97597c2cfddef0f67e2c78",
+    "runtime/xiaoyou_runtime/tasks.py": "f52c131f323abc7c596a2e4febdb1c262aa6a4d34daeae28ff0b23fc46204340",
+    "runtime/xiaoyou_runtime/cards.py": "54acc196f7be926a79ff3014e55752e921f1b7a62772db8d1c8e3b13f1699738",
+    "runtime/xiaoyou_runtime/store.py": "05e8e7264310ea6cd0e7c9e8584bec7a5c04abb5522d99edcb3876b0f0190d93",
+    "runtime/xiaoyou_runtime/desktop_sync.py": "8ab9d8742e3f3117c670f1e4b81ef16b2f056a47042e54b7c54a58fbeae44dad",
+    "runtime/xiaoyou_runtime/desktop_hook.py": "c74a7534cb6b6838a740f3148f6670c90e5c3650f893f82684d933e3b2c11bec",
+    "runtime/xiaoyou_runtime/desktop_approvals.py": "ef4b6a1e0104125faa70d4250ed29dda34911b8557872b01016f5a79c9d9a40c",
+    "runtime/xiaoyou_runtime/agents.py": "cf4b9afe36deb194732d98b00d3df195f22fe0bf1ac50dea1ef15550b0566070",
+    "runtime/xiaoyou_runtime/dsh_stream.py": "c81b6fbc19fc9f7482de30001c0c72f21308e0d612d8fa3c05e3a8368b3a3a20",
+    "runtime/xiaoyou_runtime/dsh_app.py": "8c117ba1166d8f0c8d2cc1244c26f3703a1833805d6f8a8af185f3c66e99e1ab",
+    "runtime/xiaoyou_runtime/codex_app.py": "a4a1e2ec8e955b16afbb3c7c8624ff04a8a726b1f50f2a6ba745e3f109698a6f",
+    "runtime/xiaoyou_runtime/xiaoyou.py": "72c2cf4bbf928f4ee4a83243d8aee0b6dd541dbd309fb19d0610ab978c107d08",
+    "runtime/xiaoyou_runtime/desktop_handoff.py": "a28a5488330c6d4378432e4193cb3c5e0f1994bb6925de1af1499ac93542bb79",
+    "runtime/xiaoyou_runtime/config.py": "96fc399d865a849c0b60d83056e51aba499211fc2ab6383d46d68d1daba8cab9",
+    "runtime/xiaoyou_runtime/server.py": "3be620b73839f34df8c82bfa62ae63d22851e1bb8aa3b791e8c3915f2444f6aa",
+    "companion/android/app/src/main/java/com/yanyuliu/pockethub/RuntimeClient.java": "7aa263eae53671c14082fe2d5f0fd2ca1a38e1186bc5f9d5aee6a5f964582be9",
+    "companion/android/app/src/main/java/com/yanyuliu/pockethub/HubStore.java": "c14807c1a3c0de1359f056705fe8a624f362b72ceaacf479db1188e0ca294d99",
+    "companion/android/app/src/main/java/com/yanyuliu/pockethub/ChatHistory.java": "0efc179bf855f280806a4d9b067e9290aafc7673b88c367c70884d6d3082b98c",
+    "main/buddy_cards.h": "2b80b8fcc1f95a3cb533589a816f7ed2e740c70a4200a0e083302f8988182766",
+    "main/buddy_types.h": "2919b25126ae2475990b5b1d58d5a48d5931c57e478ed18eee29785092188397"
+  },
+  "probe": {
+    "same_instance_dedup": true,
+    "restart_creates_new_id": true,
+    "cross_conversation_returns_A": true,
+    "accepted_text_persisted": false,
+    "amend_after": {
+      "accepted_results": 9,
+      "queued": 8,
+      "last_missing": true
+    },
+    "idle_projection": "done",
+    "minor_publish": {
+      "at_1s_unchanged": true,
+      "at_10s_changed": true
+    }
+  },
+  "validation": {
+    "desktop_tests": {
+      "tests": 97,
+      "result": "PASS"
+    },
+    "coucou_registry_tests": "PASS",
+    "runtime_full_sandbox": {
+      "tests": 432,
+      "failures": 8,
+      "errors": 32,
+      "result": "FAIL",
+      "note": "32 PermissionErrors; eight wait assertions require unrestricted confirmation"
+    },
+    "static_sandbox": {
+      "runtime_tests_before_abort": 186,
+      "failures": 8,
+      "errors": 20,
+      "result": "FAIL",
+      "note": "Stopped at restricted Runtime tests; cJSON-dependent tests skipped without IDF_PATH. Not a complete gate PASS."
+    },
+    "installed_clients": "NOT RUN",
+    "runtime_full_unrestricted": {
+      "tests": 432,
+      "result": "PASS",
+      "seconds": 57.533
+    },
+    "repository_document_checks": {
+      "result": "PASS",
+      "text_files_scanned": 444
+    }
+  }
+}

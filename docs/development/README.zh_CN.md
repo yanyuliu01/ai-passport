@@ -17,6 +17,7 @@
 
 ## AI 工作流
 
+- [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。
 - [核心 AI 技能](../../skills/README.zh_CN.md)：开发、环境准备、构建、真机测试及诊断，包含安装和使用示例。
 

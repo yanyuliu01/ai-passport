@@ -116,7 +116,7 @@ final class AvatarView extends View {
         if (bitmap == null) return;
         float size = Math.min(getWidth(), getHeight());
         float left = (getWidth() - size) / 2, top = (getHeight() - size) / 2 + lift;
-        paint.setFilterBitmap(!role.equals("ds"));
+        paint.setFilterBitmap(!role.equals("ds") && !role.equals("codex"));
         source.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
         destination.set(left, top, left + size, top + size);
         canvas.drawBitmap(bitmap, source, destination, paint);
