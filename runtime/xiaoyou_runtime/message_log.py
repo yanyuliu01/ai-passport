@@ -85,7 +85,20 @@ class MessageLog:
         self._messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._lines = 0
         self.floor = 0
+        # 这台 Runtime 的编号：本机产生的记录都写上它（产地），日志搬家或和别处合并时不会认错。
+        self.origin = ""
         self._load()
+
+    def set_origin(self, runtime_id: str) -> None:
+        self.origin = runtime_id
+        for record in self._messages.values():
+            self._stamp(record)
+
+    def _stamp(self, record: Dict[str, Any]) -> None:
+        source = record.get("source")
+        if self.origin and isinstance(source, dict) and source.get("type") == "runtime" \
+                and not source.get("runtime_id"):
+            source["runtime_id"] = self.origin
 
     # ---- 文件 ----
 
@@ -210,6 +223,7 @@ class MessageLog:
     # ---- 写 ----
 
     def _put(self, record: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
+        self._stamp(record)
         # 修订号就用序号：序号跨重启只增不减（Cards 预留号段），没落盘的生成中修订也不会
         # 让重启后的修订号比客户端手里的小。
         record["seq"] = self._bump()

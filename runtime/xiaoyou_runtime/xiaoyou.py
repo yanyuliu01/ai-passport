@@ -485,7 +485,7 @@ class Xiaoyou:
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
         self.artifacts = ArtifactStore(config)
-        self._approvals = Approvals(self._approval_changed)
+        self._approvals = Approvals(self._approval_changed, self._cards.bump)
         self._gate = Gate(self._approvals)
         self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun,
                             self._prepare, self._release)

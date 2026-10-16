@@ -225,6 +225,11 @@ class Cards:
         # 写成功了才算占下：写失败时下一次变化还会再试。
         self._reserved = reserved
 
+    def set_origin(self, runtime_id: str) -> None:
+        """本机产生的消息记录都写上这台 Runtime 的编号（见 MessageLog.set_origin）。"""
+        with self._changed:
+            self._log.set_origin(runtime_id)
+
     @property
     def epoch(self) -> str:
         """这份记录的编号：记录换了（文件丢了、坏了、换了一台）就不一样。"""

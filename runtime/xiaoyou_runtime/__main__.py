@@ -227,7 +227,7 @@ def main(argv=None) -> int:
                                             ).strip().lower() in ("y", "yes")
                         else:
                             print("（这里没法问你，当作不行）", file=sys.stderr)
-                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny")
+                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny", by="computer")
             except KeyboardInterrupt:
                 xiaoyou.cancel(turn.card)
                 xiaoyou.close()

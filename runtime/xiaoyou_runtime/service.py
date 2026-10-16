@@ -29,7 +29,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
-from .identity import CAPABILITIES, PROTOCOL, runtime_id
+from .identity import CAPABILITIES, PROTOCOL, runtime_id, subject_id
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
@@ -86,6 +86,9 @@ class Service:
         self._changed = threading.Condition()
         # 这台 Runtime 的固定编号：客户端拿它和消息编号拼成全局编号。
         self.runtime_id = runtime_id(store.state_dir)
+        # 小幽这个主体的编号（统一主体的预留）：和电脑无关，跟着 state 目录走。
+        self.subject_id = subject_id(store.state_dir)
+        xiaoyou.cards.set_origin(self.runtime_id)
         # 不在这台电脑上的会话报进来的进展（POST /v1/reports）
         self._reports = Reports(xiaoyou.cards)
         self._ledger = Ledger(store.state_dir / "messages.json")
@@ -509,7 +512,7 @@ class Service:
 
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
-        return {"runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
+        return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
                 "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
@@ -546,8 +549,10 @@ class Service:
                 # 等的时候日志挤掉了游标之后的消息：改给全量快照。
                 after, reset = 0, True
                 continue
+            # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
+            approvals = self._xiaoyou.approvals.since(conversation, after)
             remaining = deadline - time.monotonic()
-            if (tasks or messages or reset or remaining <= 0
+            if (tasks or messages or approvals or reset or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
             cards_store.wait_beyond(seq, remaining if usage is None
@@ -561,11 +566,13 @@ class Service:
                 items, seq, more = items[:index], items[index - 1][1]["seq"], True
                 break
         return {
-            "protocol": PROTOCOL, "runtime_id": self.runtime_id, "epoch": cards_store.epoch,
+            "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
+            "epoch": cards_store.epoch,
             "seq": seq, "reset": reset, "more": more,
             "messages": [item for kind, item in items if kind == "message"],
             "tasks": [item for kind, item in items if kind == "task"],
-            "approvals": self._xiaoyou.approvals.pending(conversation, include_desktop=True),
+            # 序号比 after 大的授权变化，含已经有结局的（status：pending / allowed / denied / withdrawn）。
+            "approvals": approvals,
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
             "removed": [],
             "usage": meter.snapshot(),
