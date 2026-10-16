@@ -154,6 +154,8 @@ conversation follow the same rule; unrelated/private desktop conversations are
 not merged by matching text. Runtime owns the shared conversation's durable
 record; imported or observed desktop sessions retain explicit source identity
 and supported read/write boundaries.
+The data structure, ids and sync interface are defined in the
+[unified message model](unified-message-model.md).
 
 - Carry stable source/conversation, turn, and message identities, plus a
   monotonic event sequence/revision. Equal text in different turns remains two
