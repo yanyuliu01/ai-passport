@@ -40,7 +40,10 @@ class PreparePortraits {
                 // Busts stand on the bottom edge; Codex's pixel head is wider than tall, so it is
                 // centered instead of sinking toward the bottom of round frames.
                 int top = roles[role].equals("codex") ? (256 - h) / 2 : 248 - h;
-                g.drawImage(crop, (256 - w) / 2, top, w, h, null);
+                // The Codex sprite's visible face sits right of its rectangular crop.
+                // Apply the same optical correction to all four expressions.
+                int left = (256 - w) / 2 - (roles[role].equals("codex") ? 8 : 0);
+                g.drawImage(crop, left, top, w, h, null);
                 g.dispose();
                 File file = new File(output, "portrait_" + roles[role] + "_" + moods[mood] + ".png");
                 if (!ImageIO.write(portrait, "png", file)) throw new IllegalStateException("No PNG encoder");

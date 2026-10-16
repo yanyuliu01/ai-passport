@@ -52,6 +52,10 @@ public class UsageTest {
                 + "\"agents\":[{\"name\":\"codex\",\"account\":\"codex-account\"},{\"name\":\"cc\",\"account\":\"claude-account\"},"
                 + "{\"name\":\"dsh\",\"model\":\"deepseek\"}]}");
         assertEquals(35, value.left("codex", 1000));
+        String detail = value.windowSummary("codex", 1000, zone);
+        assertTrue(detail.contains("5 小时 剩 70%"));
+        assertTrue(detail.contains("本周 剩 35%"));
+        assertTrue(detail.contains("重置"));
         // The 5-hour window already reset: only the weekly one still says something.
         assertEquals(80, value.left("claude", 1000));
         assertEquals(-1, value.left("dsh", 1000));

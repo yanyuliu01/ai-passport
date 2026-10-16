@@ -1883,11 +1883,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         } else if (pokeLine != null) {
             state = "happy"; mood = "happy"; line = pokeLine;
         } else if (!latestMainReply(store).isEmpty()) {
-            state = "idle"; mood = "happy"; line = CardViews.oneLine(latestMainReply(store), 180);
+            state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(latestMainReply(store)), 180);
         } else if (turn.phase.equals("failed")) {
-            state = "idle"; mood = "idle"; line = "刚才那句没发出去：" + CardViews.oneLine(turn.reply, 60);
+            state = "idle"; mood = "idle"; line = "刚才那句没发出去：" + CardViews.oneLine(HomeMessage.display(turn.reply), 60);
         } else if (turn.phase.equals("done") && !turn.reply.isEmpty()) {
-            state = "idle"; mood = "happy"; line = CardViews.oneLine(turn.reply, 180);
+            state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(turn.reply), 180);
         } else {
             Card busy = null;
             for (AppPresentation.Helper helper : roster) if (busy == null) busy = helper.current(connected);
@@ -1963,6 +1963,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             ring = new NavIconView(MainActivity.this, "spinner"); ring.color(0xff6a5fd0); ring.setAlpha(0f);
             face.addView(ring, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
             face.setClipChildren(false);
+            face.setContentDescription(AppPresentation.name(role) + " 的用量详情");
+            face.setOnClickListener(click -> showQuota(role));
             view.addView(face, new LinearLayout.LayoutParams(dp(40), dp(40)));
             words = text("", 13, false); words.setPadding(dp(6), 0, 0, 0);
             view.addView(words);
@@ -2025,6 +2027,17 @@ public class MainActivity extends Activity implements HubStore.Listener {
                     .withEndAction(() -> view.animate().scaleX(1f).scaleY(1f).setDuration(260)
                             .setInterpolator(new android.view.animation.OvershootInterpolator(3f)).start()).start();
         }
+    }
+
+    private void showQuota(String role) {
+        HubStore current = HubStore.get();
+        Usage data = current.usage();
+        String details = data == null ? "还没有收到用量数据。"
+                : data.windowSummary(role, System.currentTimeMillis() / 1000L, java.util.TimeZone.getDefault());
+        if (!current.runtimeConnected() && data != null) details += "\n电脑离线，以上是缓存数据。";
+        new AlertDialog.Builder(this).setTitle(AppPresentation.name(role) + " 的用量")
+                .setMessage(details).setPositiveButton("关闭", null)
+                .setNeutralButton("刷新用量", (dialog, which) -> fetchUsage()).show();
     }
 
     private void refreshHelperRow(List<AppPresentation.Helper> roster, boolean connected) {

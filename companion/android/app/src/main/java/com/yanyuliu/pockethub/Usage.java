@@ -217,6 +217,17 @@ final class Usage {
         return label;
     }
 
+    String windowSummary(String role, long now, TimeZone zone) {
+        Agent helper = helper(role);
+        Account account = account(helper, role);
+        if (account == null) return "还没有这个帮手的订阅额度数据。";
+        StringBuilder out = new StringBuilder("绿圈显示以下两项中较少的剩余额度。");
+        window(out, "5 小时", account.left5h, account.reset5h, now, zone);
+        window(out, "本周", account.left7d, account.reset7d, now, zone);
+        if (accountAgents(account).size() > 1) out.append("\n这份额度由多个帮手共用。");
+        return out.toString();
+    }
+
     /** 账号和帮手都没报过才是空；未知模型的帮手也保留。 */
     boolean empty() {
         return accounts.isEmpty() && agents.isEmpty();
