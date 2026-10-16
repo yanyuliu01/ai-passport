@@ -23,6 +23,8 @@ final class OnDeviceSpeech {
         void partial(String text);
         void ended();
         void finished(String text, String error);
+        /** The recorded utterance, delivered just before finished, so it can also go to the computer. */
+        default void recording(byte[] wav) { }
     }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final EmbeddedSpeech speech = new EmbeddedSpeech();
@@ -50,6 +52,10 @@ final class OnDeviceSpeech {
             } catch (OutOfMemoryError failure) {
                 Log.e("PocketHubSpeech", "Bundled speech model needs more available memory", failure);
                 throw new IllegalStateException("手机可用内存不足，请关闭其他应用后重试语音", failure);
+            } catch (IllegalStateException missing) {
+                if (String.valueOf(missing.getMessage()).startsWith("手机语音模型还没下载")) throw missing;
+                Log.e("PocketHubSpeech", "Bundled speech model initialization failed", missing);
+                throw new IllegalStateException("内置语音模型未能启动，请重试或更新 App", missing);
             } catch (RuntimeException failure) {
                 Log.e("PocketHubSpeech", "Bundled speech model initialization failed", failure);
                 throw new IllegalStateException("内置语音模型未能启动，请重试或更新 App", failure);
@@ -60,6 +66,7 @@ final class OnDeviceSpeech {
             @Override public void level(float value) { post(() -> callback.level(value)); }
             @Override public void partial(String text) { post(() -> callback.partial(text)); }
             @Override public void limitReached() { post(callback::ended); }
+            @Override public void recording(byte[] wav) { post(() -> callback.recording(wav)); }
             @Override public void finished(String text, String error, boolean cancelled) {
                 // EmbeddedSpeech has closed the utterance streams and cleared its active session.
                 if (disposed && !speech.running()) releaseCachedModels();
@@ -105,27 +112,32 @@ final class OnDeviceSpeech {
         private OnlineRecognizer previewRecognizer;
         private OfflineRecognizer finalRecognizer;
         ModelSet(Context context) {
+            // The models come from the speech resource pack (AppPacks), not from the APK, so
+            // app updates do not carry them again. Files are read from disk: no AssetManager.
+            if (!AppPacks.ready(context, AppPacks.SPEECH, AppPacks.SPEECH_FILES))
+                throw new IllegalStateException("手机语音模型还没下载，去「连接与设置 → App 更新」下载");
+            java.io.File base = AppPacks.dir(context, AppPacks.SPEECH);
             try {
                 OnlineModelConfig previewModel = new OnlineModelConfig();
-                previewModel.setZipformer2Ctc(new OnlineZipformer2CtcModelConfig("asr/zh/model.int8.onnx"));
-                previewModel.setTokens("asr/zh/tokens.txt");
+                previewModel.setZipformer2Ctc(new OnlineZipformer2CtcModelConfig(new java.io.File(base, "zh/model.int8.onnx").getPath()));
+                previewModel.setTokens(new java.io.File(base, "zh/tokens.txt").getPath());
                 previewModel.setNumThreads(2); previewModel.setProvider("cpu"); previewModel.setDebug(false);
                 OnlineRecognizerConfig previewConfig = new OnlineRecognizerConfig();
                 previewConfig.setModelConfig(previewModel); previewConfig.setEnableEndpoint(false);
                 previewConfig.setDecodingMethod("greedy_search");
-                previewRecognizer = new OnlineRecognizer(context.getAssets(), previewConfig);
+                previewRecognizer = new OnlineRecognizer(null, previewConfig);
 
                 OfflineSenseVoiceModelConfig senseVoice = new OfflineSenseVoiceModelConfig();
-                senseVoice.setModel("asr/sense-voice/model.int8.onnx");
+                senseVoice.setModel(new java.io.File(base, "sense-voice/model.int8.onnx").getPath());
                 senseVoice.setLanguage("auto");
                 senseVoice.setUseInverseTextNormalization(true);
                 OfflineModelConfig finalModel = new OfflineModelConfig();
                 finalModel.setSenseVoice(senseVoice);
-                finalModel.setTokens("asr/sense-voice/tokens.txt");
+                finalModel.setTokens(new java.io.File(base, "sense-voice/tokens.txt").getPath());
                 finalModel.setNumThreads(2); finalModel.setProvider("cpu"); finalModel.setDebug(false);
                 OfflineRecognizerConfig finalConfig = new OfflineRecognizerConfig();
                 finalConfig.setModelConfig(finalModel); finalConfig.setDecodingMethod("greedy_search");
-                finalRecognizer = new OfflineRecognizer(context.getAssets(), finalConfig);
+                finalRecognizer = new OfflineRecognizer(null, finalConfig);
             } catch (RuntimeException | LinkageError | OutOfMemoryError failure) {
                 try { close(); }
                 catch (RuntimeException | LinkageError cleanup) { failure.addSuppressed(cleanup); }

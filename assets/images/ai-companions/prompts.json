@@ -123,6 +123,25 @@
       "transparent_background_requested": true,
       "date": "2026-10-13",
       "reference": "reference-whale-sleep-approved-chin.png"
+    },
+    "app-chatgpt-heads-v1.png": {
+      "prompt": "Use case: stylized-concept. Create an Android APP HEAD AVATAR MODULE sheet for a ChatGPT-inspired white dragon girl. Input image1 is CHARACTER IDENTITY reference only: white/silver long hair with subtle lavender shadows, pale violet eyes, two white scaled dragon horns, small pointed ears, small white knot-shaped hair ornament near one ear. Input image2 is the APPROVED STYLE reference (blue whale maid sheet): match its polished elegant chibi face proportions, expressive big eyes, delicate clean outlines, soft cel shading and premium anime finish. Do NOT draw the whale character. PRIMARY REQUEST: exactly16 large HEAD-ONLY avatar modules, arranged4columns x4rows, equal square cells with generous clear padding. Heads and hair occupy about75%of each cell. Complete horns and hair silhouette stay entirely within each cell. NO full bodies, NO shoulders, NO hands, NO wings/tails/props, no UI frames, no labels, no words, no watermark. This is smooth HD app artwork, NOT pixel art. Consistent same head size, face, white hair, two white horns and ornament across all16cells. Simplify long hair into a graceful framing head silhouette so all emotion remains readable as a small avatar. Row-major expressions:1 neutral calm;2 cheerful closed-eye smile;3 attentive listening;4 thoughtful looking slightly up;5 focused serious;6 skeptical raised eyebrow;7 puzzled;8 surprised;9 nervous;10 apologetic downcast;11 sad teary;12 mildly frustrated puffed cheeks;13 tired half-lidded;14 sleeping closed eyes;15 proud little grin;16 shy blushing. Keep tasteful dignified gentle personality, round adult-chibi face, modest design. Absolutely genuinely transparent alpha background around each head, no drop shadows, no colored glow, no backgrounds or baked checkerboard. Pure ivory-white silhouette must retain clear lavender/navy contour for readability on light and dark app surfaces.",
+      "generator": "built-in image_gen",
+      "transparent_background_requested": true,
+      "references": [
+        "reference-chatgpt-dragon.png",
+        "app-whale-v2.png"
+      ]
+    },
+    "avatar-chatgpt-pixel-v1.png": {
+      "prompt": "Use case: style-transfer. Create a crisp PIXEL ART head-avatar sheet for Android. Reference1 is the TARGET CHARACTER: retain its exact white/silver lavender hair, pale violet eyes, two WHITE scaled dragon horns, pointed ears, white knot-shaped side ornament, same recognizable face and expressions. Reference2 is PIXEL STYLE reference only: match its crisp stepped pixel clusters, limited flat color bands, dark outlines and chibi head proportions, not its headband/dress. Redraw target reference1 as visibly coarse retro RPG PIXEL ART, conceptual 48x48 pixel portraits enlarged nearest-neighbor with hard square pixel edges, no smooth painterly gradients, no realistic lighting, no detailed individual hair strands. Exactly16 HEAD-ONLY avatars in4columns x4rows. Equal360px-square conceptual cells with generous clear gutters. Every head, horns and ahoge FULLY INSIDE its cell with minimum12%empty padding on every side. No hands/shoulders/bodies/props. Consistent head size and identity across all16cells. Expressions row-major: neutral; cheerful closed-eye smile; attentive; thinking; focused; skeptical; puzzled; surprised; nervous; apologetic; sad teary; frustrated; tired; sleeping; proud; shy. Genuine fully transparent alpha background, absolutely no colored backdrop, no glow, no checkerboard, no labels or text. White hair and horns retain lavender shade bands and navy pixel outline for clear contrast.",
+      "generator": "built-in image_gen",
+      "transparent_background_requested": true,
+      "references": [
+        "app-chatgpt-heads-v1.png",
+        "avatar-codex-elegant-v1.png"
+      ]
     }
-  }
+  },
+  "updated": "2026-10-16"
 }

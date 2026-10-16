@@ -74,7 +74,10 @@ final class ChatHistory {
         if (user != null) { user.status = failed ? "failed" : "done"; user.card = card == null ? user.card : card; }
         if (reply != null) { reply.text = text; reply.status = failed ? "failed" : "done"; reply.card = card == null ? reply.card : card; }
         if (snapshot == null || failed) return;
-        // The message response identifies the card. Bind its exact returned pair, including old runtimes.
+        // Runtimes that number card entries use the message ids themselves: ingest matches by id.
+        for (Card.Entry entry : snapshot.entries)
+            if (!entry.id.isEmpty() && (entry.id.equals(id + ":you") || entry.id.equals(id + ":reply"))) return;
+        // Older runtimes: the message response identifies the card; bind its returned pair by text.
         boolean boundReply = false;
         for (int index = snapshot.entries.size() - 1; index >= 0; index--) {
             Card.Entry entry = snapshot.entries.get(index);
@@ -156,6 +159,51 @@ final class ChatHistory {
             put(new Message(partialId, card.id, "main", "xiaoyou", card.summaryPartial, "streaming",
                     "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true));
         } else messages.remove(partialId);
+    }
+
+    /**
+     * A message another client sent (or Xiaoyou's reply still being written) that is not on a card
+     * yet. Local sends keep their own bubble; anything already final is left alone.
+     */
+    boolean pending(SyncCache.Pending item) {
+        Message known = messages.get(item.id);
+        if (known != null && (!known.synced || known.status.equals("done"))) return false;
+        boolean you = item.role.equals("you");
+        String status = you ? "sent" : item.text.isEmpty() ? "thinking" : "streaming";
+        if (known != null && known.text.equals(item.text) && known.status.equals(status)) return false;
+        Message next = new Message(item.id, item.task, item.scope, item.role, item.text, status,
+                you ? "user" : "reply", known != null ? known.at : item.at, true);
+        next.clientId = "";
+        put(next);
+        return true;
+    }
+
+    /**
+     * Finished question/answer pairs of the main conversation, oldest first: what is carried to
+     * another computer so Xiaoyou there can pick up the thread. Ids are the request ids, so a
+     * computer that already has a turn skips it.
+     */
+    List<ChatTurn> turns() {
+        List<ChatTurn> result = new ArrayList<>();
+        for (Message user : messages.values()) {
+            if (!user.role.equals("you") || !user.scope.equals("main") || !user.id.endsWith(":you")
+                    || !user.status.equals("done") || user.text.isEmpty()
+                    || user.text.equals(RuntimeClient.VOICE_PLACEHOLDER)) continue;
+            String base = user.id.substring(0, user.id.length() - 4);
+            Message reply = messages.get(base + ":reply");
+            if (reply == null || !reply.status.equals("done") || reply.text.isEmpty()) continue;
+            result.add(new ChatTurn(base, user.text, reply.text, (long) Math.max(user.at, reply.at)));
+        }
+        result.sort(Comparator.comparingLong((ChatTurn turn) -> turn.at));
+        return result;
+    }
+
+    /** Adds the other history's messages this one does not have (same id = same message). */
+    boolean absorb(ChatHistory other) {
+        boolean added = false;
+        for (Message message : other.messages.values())
+            if (!messages.containsKey(message.id)) { put(message); added = true; }
+        return added;
     }
 
     List<Message> main() { return select("main", null, false); }

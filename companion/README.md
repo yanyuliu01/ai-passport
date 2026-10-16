@@ -29,7 +29,7 @@ the device which agents the selected runtime has.
 
 Holding `OK` on the device records a voice message. The app receives the audio
 over Bluetooth, forwards it to the runtime, and the runtime turns it into text
-and answers it like a typed message. This device-audio path is separate from the phone microphone, which transcribes on the phone.
+and answers it like a typed message. This device-audio path is separate from the phone microphone, which by default transcribes on the phone (see below for when the computer recognizes it).
 When a thing was on the device's screen at the press (the card on screen 2,
 the selected one on screen 3), the device says the sentence is addressed to
 it, and the app passes that on to the runtime unchanged.
@@ -61,7 +61,8 @@ left opens a sidebar with every place in the app:
   runtime so the device, phone and computer agree.
 - **Helpers** — one row per helper (Codex, Claude, then others) with its state.
   A helper's page lists what DS handed to it, each linking back to its task, and
-  the conversations opened on the computer (read-only).
+  the conversations opened on the computer; its composer hands work to that helper
+  directly, without DS arranging it.
 - **Connection and settings** — the device and computer connection, companion
   look, usage, firmware, notifications and preferences.
 
@@ -74,8 +75,11 @@ helper works and turns green when it is done. Hold the big microphone to talk: a
 SenseVoice performs final recognition after release. Only that final text is
 sent to the runtime. It works without Android's speech service or
 an offline language pack. Cancelling the gesture or leaving the screen discards
-the recording and result. Recordings stay in memory, are limited to 30 seconds,
-and are never uploaded from the phone microphone. Allow microphone permission;
+the recording and result. Recordings stay in memory and are limited to 30 seconds.
+Capture prefers Android's voice-recognition source and falls back to the plain
+microphone. When the phone cannot recognize the speech, or "Let the computer
+recognize phone speech" is on under Preferences, the recording is sent to the
+connected computer and recognized like device audio; otherwise it is never uploaded. Allow microphone permission;
 microphone capture starts immediately while the model loads on a separate worker,
 so speech spoken during model startup is retained. The recording hint appears
 only once the microphone is capturing. A failed attempt keeps its specific
@@ -95,7 +99,11 @@ prepared; its streaming bubble is independent of any current chat reply. New
 message IDs, scope and result metadata are additive and old runtimes remain
 readable. Restart the runtime after upgrading its Python code to enable these
 new result features. Previously discarded messages and originals cannot be
-recovered by the phone. Desktop conversations are read-only and say so.
+recovered by the phone. A conversation opened on the computer can be continued here once its turn has
+stopped: the message goes to the matching helper, which resumes that session in its
+own project directory, so the reply also appears on the computer; the work gets its
+own task, titled after that conversation. While the turn is still running on the computer, sending is
+refused so two sides never edit one session. Needs runtime 0.8.1.
 Status is written as one coloured word: blue in progress, amber waiting for
 you, nothing for ended tasks. The companion look only changes how DS appears in
 the chat; it does not decide which helper gets work. The plus button for
@@ -274,6 +282,56 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.17.0): incremental updates
+
+- An update now has two parts: **the APK carries only code** (about 17 MB for arm64,
+  down from about 194 MB) and **the speech models are the `speech` resource pack**.
+  Packs are published per file by checksum; the phone compares with what it has and
+  downloads only files that changed, so an update without model changes downloads no
+  models. Other large resources can use the same mechanism later.
+- Both the APK and the speech models can be downloaded from the internet (GitHub) or
+  from the computer, chosen each time; without an internet address the computer is
+  used directly. Both resume, and files replace the old ones only after verification.
+- Download the speech models under Connections and settings → Phone speech models.
+  Until then, holding the microphone only records and the computer recognizes it.
+- Needs runtime 0.8.3 (`/v1/app/packs`, `/v1/app/file`). After upgrading from 0.16.0
+  the models are downloaded once.
+- Covered by build and host tests; downloading, loading and recognizing on a phone
+  still need on-device acceptance.
+
+## App fixes (0.16.0)
+
+- Cards and sync progress are kept per computer: switching to another computer and
+  back continues incrementally instead of starting over (kept while the app runs; an
+  app restart fetches once from the start).
+- Understands `turn_ended` from `/v1/sync` (runtime 0.8.2): a desktop session that
+  finished a turn shows "turn ended", not a finished task.
+- The recent turns carried to another computer are computed from every computer's
+  chat history instead of a separate list; the list older versions kept is only read
+  to fill gaps.
+- Covered by build and host tests; keeping cards across a computer switch has no unit
+  test and needs on-device confirmation.
+
+## App fixes (0.15.0)
+
+- The home chips, the sidebar and the helper page share one helper state; a session
+  running on the computer shows as "running on the computer". The row scrolls
+  sideways when there are many helpers. A ring around each portrait shows the quota
+  left (the tighter of the 5-hour and weekly windows): full and green, shrinking as
+  it is spent, amber then red near the end; home no longer shows energy text.
+- "Sending" and "thinking" are small grey captions under the bubble; a reply with no
+  text yet draws no empty bubble.
+- The Codex pixel portrait is vertically centered in its frame.
+- With a runtime that offers `sync_usage` (0.8.1 and later) the app uses `/v1/sync`:
+  per-message increments, so another phone's new message and a reply still being
+  written also appear. Addresses of one computer (LAN, Funnel) are recognized as one
+  by `runtime_id`: switching keeps cards and chat, and a failing address falls over to
+  another. Older runtimes keep `/v1/feed`.
+- Sending no longer uploads other conversations first (that now happens in the
+  background on connect); the unused plain-text chat list is gone.
+- Covered by build and host tests; installation, real recording and two phones
+  converging still need on-device acceptance.
+
 ## Companion fixes (0.13.0)
 
 Conversation history is retained separately from the live task list. Streaming text
@@ -295,6 +353,8 @@ stability and the Android installation flow still require phone acceptance.
 
 ## Bundled phone speech dependencies
 
+From 0.17.0 these models are no longer packaged in the APK; they are the `speech`
+resource pack, downloaded once (see "App fixes (0.17.0)").
 From 0.14.0, final recognition uses the same unchanged SenseVoice int8
 2024-07-17 model as the computer's configured recognizer: automatic language
 selection, inverse text normalization, and two CPU threads. The small Chinese
@@ -379,9 +439,23 @@ way, not as an APK file to sideload:
      --variant "armeabi-v7a=$apk_dir/app-armeabi-v7a-debug.apk" \
      --variant "x86=$apk_dir/app-x86-debug.apk" \
      --variant "x86_64=$apk_dir/app-x86_64-debug.apk" \
-     --note "one line the owner understands"
+     --note "one line the owner understands" --github
    python3 -m xiaoyou_runtime app status
    ```
+
+   `--github` uploads the arm64 package (the phone's) to GitHub Releases (the owner
+   authorized public hosting of the APK), so the phone can choose "download from the
+   internet" or "download from the computer" on each update; both are the same file
+   with the same checksum. Add ABIs with `--github arm64-v8a,universal`. The upload
+   uses the credential git pushes to GitHub with (or `GITHUB_TOKEN`) and uploads files
+   only, never code. Publish the `speech` resource pack again only when the models change:
+
+   ```bash
+   python3 -m xiaoyou_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr --github
+   ```
+
+   Pack files are stored and uploaded by checksum: unchanged files are never uploaded
+   again, and the phone downloads only files that changed.
 
    The note is shown on the phone, so write what changed for the owner, not
    commit jargon. Publishing only replaces the file the running runtime serves;

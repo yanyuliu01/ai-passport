@@ -204,6 +204,10 @@ final class Card {
             }
         }
         String state = Json.string(raw, "state");
+        // /v1/sync 说 turn_ended：这一轮说完了，事本身没完。界面一直把电脑会话的 done 显示成
+        // “本轮结束”，所以当 done 处理，另外记下真实状态。
+        boolean turnEnded = state.equals("turn_ended");
+        if (turnEnded) state = "done";
         String mood = Json.string(raw, "mood");
         Map<String, Object> cost = raw.get("cost") instanceof Map ? Json.object(raw.get("cost"))
                 : null;
@@ -224,11 +228,14 @@ final class Card {
                 Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
                 Json.flag(raw, "title_truncated"), allAttachments(raw, entries));
         card.resultReady = Json.flag(raw, "result_ready");
+        card.turnEnded = turnEnded;
         card.summaryPartial = Json.string(raw, "summary_partial");
         return card;
     }
 
     boolean resultReady;
+    /** Runtime 明说的是“本轮结束”（不是整件事做完）。 */
+    boolean turnEnded;
     String summaryPartial = "";
 
     private static List<Attachment> allAttachments(Map<String, Object> raw, List<Entry> entries) {

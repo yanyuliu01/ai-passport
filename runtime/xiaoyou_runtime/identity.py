@@ -12,7 +12,8 @@ from pathlib import Path
 FILE = "runtime-id"
 PROTOCOL = 1
 # 这台 Runtime 支持的同步能力；客户端按它决定用哪些接口。
-CAPABILITIES = ("messages", "sync", "approvals", "feed", "client_id_dedupe")
+# sync_usage：/v1/sync 也带用量，并且接受 usage=<rev>（用量变了提前返回）
+CAPABILITIES = ("messages", "sync", "approvals", "feed", "client_id_dedupe", "sync_usage")
 
 
 def runtime_id(state_dir: Path) -> str:

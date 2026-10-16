@@ -544,6 +544,10 @@ class Xiaoyou:
         直接给主人看。
         """
         say: Report = report if report is not None else (lambda kind, agent, detail: None)
+        desktop = self._cards.get(card) if card and pin else None
+        if desktop is not None and desktop.get("monitoring_only"):
+            # 主人在电脑上那个会话里说的：接着那个会话做，不交给小幽转述。
+            return self._continue_desktop(desktop, text, conversation, turn_id, hop, say, effort, model)
         available = self._available(hop)
         if not available:
             raise AgentError("这台 Runtime 上没有能接这句话的代理")
@@ -614,6 +618,38 @@ class Xiaoyou:
             self._workspace.note(card, agent.name, task, done)
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
+        return Turn(reply, reply, "busy", agent.name, card["id"], True)
+
+    def _desktop_agent(self, desktop: Dict[str, Any]) -> Optional[Agent]:
+        """能接电脑上这类会话的代理：Codex 的会话交给 codex 类型，Claude 的交给 claude_code 类型。"""
+        wanted = "codex" if desktop.get("agent") == "codex" else "claude_code"
+        return next((agent for agent in self.agents() if agent.type == wanted), None)
+
+    def _continue_desktop(self, desktop: Dict[str, Any], said: str, conversation: str,
+                          turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
+                          model: Optional[str] = None) -> Turn:
+        """主人在手机上接着电脑上的会话说一句：另开一件事，在那个会话的目录里用它的会话编号跑。
+
+        会话不归 Runtime：不记进会话表，电脑那边照常观察，回复也会出现在那个会话里；主人之后
+        还能回到电脑上接着聊。电脑上这一轮还在跑时不接，免得两边同时改一个会话。
+        """
+        agent = self._desktop_agent(desktop)
+        if agent is None:
+            raise AgentError("这台 Runtime 上没有能接 %s 会话的代理" % (desktop.get("agent") or "这个"))
+        session, where = desktop.get("session_id"), desktop.get("desktop_cwd")
+        if not session or not where:
+            raise AgentError("这个电脑会话还没同步到会话编号和目录，过几秒再试")
+        if desktop.get("desktop_status") in ("running", "waiting") and not desktop.get("stale"):
+            raise AgentError("电脑上这一轮还在跑，等它停下再发")
+        name = desktop.get("title") or "电脑上的会话"
+        reply = "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
+        card = self._cards.open(conversation, "接着：" + name, "working", agent.name)
+        self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff",
+                           brief=reply, mood="busy", borrowed_session=session,
+                           borrowed_cwd=where, desktop_card=desktop["id"])
+        self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
+        say("handoff", agent.name, reply)
+        self._launch(card["id"], agent, said, conversation, hop, effort, model)
         return Turn(reply, reply, "busy", agent.name, card["id"], True)
 
     # ---- 没指定：她自己接话 ----
@@ -867,7 +903,10 @@ class Xiaoyou:
 
     def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int,
                 effort: Optional[str] = None, model: Optional[str] = None) -> None:
-        speaking = agent.speaks
+        opened = self._cards.get(card_id) or {}
+        borrowed = opened.get("borrowed_session") if opened.get("borrowed_cwd") else None
+        # 借来的电脑会话是主人自己的：不给它加小幽的人设和回复格式。
+        speaking = agent.speaks and borrowed is None
         effort, model = self._tier(agent, self._cards.get(card_id), effort, model)
         known = next((entry["model"] for entry in self._usage.snapshot()["agents"]
                       if entry["name"] == agent.name), None)
@@ -875,6 +914,7 @@ class Xiaoyou:
             card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
             system=task_prompt(self._config.persona, self._config.brief_max_chars) if speaking else None,
             schema=reply_schema() if speaking else None, effort=effort, model=model,
+            borrowed_session=borrowed, cwd=opened.get("borrowed_cwd") if borrowed else None,
         )
         card = self._cards.update(card_id, state="working", agent=agent.name,
                                   started_at=time.time(), queued=self._config.max_parallel > 0,

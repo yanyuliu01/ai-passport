@@ -245,7 +245,11 @@ class Service:
             card = _name(card, "card")
             observed = self._xiaoyou.cards.get(card)
             if observed is not None and observed.get("monitoring_only"):
-                raise RequestError("这是电脑端同步的会话，请在电脑端继续对话")
+                # 电脑上的会话可以从手机接着聊，但只能在它里面说，而且这一轮要已经停下。
+                if not pin:
+                    raise RequestError("要接着电脑上的会话，请打开那个会话再发")
+                if observed.get("desktop_status") in ("running", "waiting") and not observed.get("stale"):
+                    raise RequestError("电脑上这一轮还在跑，等它停下再发")
         if client_id is not None:
             client_id = _name(client_id, "client_id")
         if agent is not None:
@@ -490,17 +494,24 @@ class Service:
                 "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
-             wait: float = 0.0) -> Dict[str, Any]:
+             wait: float = 0.0, usage: Any = None) -> Dict[str, Any]:
         """统一同步接口（见 docs/development/unified-message-model）。
 
         返回序号比 after 大的消息（messages）和事（tasks，卡去掉 entries、换成 members），
         以及现在等回答的授权。after 为 0 是全量快照。客户端带来的 epoch 和这里不一样、
         游标比这里现在的序号还大（记录换过）、或者比日志的 floor 还旧时，reset 为 true，
         并且从 0 给全量快照：客户端应该丢掉这台 Runtime 的游标（缓存的消息按编号合并即可）。
-        没有变化时最多等 wait 秒。"""
+        没有变化时最多等 wait 秒。
+
+        和 /v1/feed 一样每次带上现在的用量；usage 是调用方手里那份用量的 rev，带了它，
+        用量变了也会提前返回。"""
         conversation = _name(conversation, "conversation")
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
+        if usage is not None and (isinstance(usage, bool) or not isinstance(usage, int)):
+            raise RequestError("usage 应该是整数")
+        meter = self._xiaoyou.usage
+        meter.poke()
         if epoch is not None and (not isinstance(epoch, str) or len(epoch) > MAX_NAME_CHARS):
             raise RequestError("epoch 应该是字符串")
         cards_store = self._xiaoyou.cards
@@ -516,9 +527,11 @@ class Service:
                 after, reset = 0, True
                 continue
             remaining = deadline - time.monotonic()
-            if tasks or messages or reset or remaining <= 0:
+            if (tasks or messages or reset or remaining <= 0
+                    or (usage is not None and meter.rev != usage)):
                 break
-            cards_store.wait_beyond(seq, remaining)
+            cards_store.wait_beyond(seq, remaining if usage is None
+                                    else min(remaining, FEED_USAGE_SECONDS))
         items = sorted([("task", item) for item in tasks] + [("message", item) for item in messages],
                        key=lambda pair: pair[1]["seq"])
         more, size = False, 0
@@ -535,6 +548,7 @@ class Service:
             "approvals": self._xiaoyou.approvals.pending(conversation, include_desktop=True),
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
             "removed": [],
+            "usage": meter.snapshot(),
         }
 
     def _messages_since(self, conversation: str, after: int, upto: int) -> List[Dict[str, Any]]:

@@ -275,9 +275,14 @@ class Cards:
 
     @staticmethod
     def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
-        """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。"""
+        """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。
+
+        电脑上的会话说完一轮（desktop_status 是 idle）在卡上记成 done，好让旧 App 照常显示；
+        同步接口里如实给 turn_ended：这一轮说完了，那件事本身没完。"""
         view = Cards._copy(card)
         view["members"] = [entry["id"] for entry in view.pop("entries")]
+        if view.get("monitoring_only") and view.get("desktop_status") == "idle" and view.get("state") == "done":
+            view["state"] = "turn_ended"
         return view
 
     def sync_since(self, conversation: str, after: int) -> Any:

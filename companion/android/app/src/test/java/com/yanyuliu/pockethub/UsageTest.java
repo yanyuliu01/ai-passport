@@ -43,6 +43,21 @@ public class UsageTest {
         assertEquals(2, value.deviceEntries(0).get(0).who.size());
     }
 
+    @Test public void leftIsTheTighterLiveWindowForTheHomeRing() {
+        Usage value = usage("{\"rev\":5,\"at\":1000,\"accounts\":["
+                + "{\"id\":\"codex-account\",\"state\":\"ok\",\"agents\":[\"codex\"],"
+                + "\"windows\":[{\"kind\":\"5h\",\"left\":70,\"resets_at\":5000},{\"kind\":\"7d\",\"left\":35,\"resets_at\":90000}]},"
+                + "{\"id\":\"claude-account\",\"state\":\"ok\",\"agents\":[\"cc\"],"
+                + "\"windows\":[{\"kind\":\"5h\",\"left\":10,\"resets_at\":900},{\"kind\":\"7d\",\"left\":80,\"resets_at\":90000}]}],"
+                + "\"agents\":[{\"name\":\"codex\",\"account\":\"codex-account\"},{\"name\":\"cc\",\"account\":\"claude-account\"},"
+                + "{\"name\":\"dsh\",\"model\":\"deepseek\"}]}");
+        assertEquals(35, value.left("codex", 1000));
+        // The 5-hour window already reset: only the weekly one still says something.
+        assertEquals(80, value.left("claude", 1000));
+        assertEquals(-1, value.left("dsh", 1000));
+        assertEquals(-1, value.left("nobody", 1000));
+    }
+
     @Test public void cachedAgeAdvancesAndExpiredResetDoesNotImplyFreshQuota() {
         Usage value = usage("{\"rev\":3,\"at\":1000,\"accounts\":["
                 + "{\"id\":\"account\",\"state\":\"ok\",\"updated_at\":880,"

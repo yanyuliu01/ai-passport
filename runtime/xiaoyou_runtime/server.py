@@ -16,7 +16,7 @@
                                         带 messages=1 时还给之后变过的消息（同一条序号）；
                                         epoch 变了说明换了一份记录，要从 0 重新拉
   GET  /v1/info                         runtime_id、epoch、同步协议版本和能力
-  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>
+  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>&usage=<rev>
                                         统一同步：变了的消息、事、授权（见统一消息结构说明）
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
@@ -42,6 +42,8 @@
   GET  /v1/app                          发布的那一版 {"available","version_code","version_name","sha256","size",
                                          "published_at","note"}
   GET  /v1/app/apk                      安装包本身
+  GET  /v1/app/packs                    资源包清单 {"packs":[{"name","files":[{"path","sha256","size","download_url"}]}]}
+  GET  /v1/app/file?sha256=             资源包里的一个文件（ETag 是校验值，支持 Range 续传）
 
 除 /healthz 外都要带 Authorization: Bearer <令牌>。
 """
@@ -242,10 +244,22 @@ def make_server(config: Config, service: Service,
             except (AppReleaseError, OSError) as error:
                 self._fail(409 if query.get("sha256") else 404, str(error))
                 return
+            self._send_file(stream, info["sha256"], size, "application/vnd.android.package-archive")
+
+        def _app_file(self, query: Dict[str, Any]) -> None:
+            try:
+                stream, size = release.open_pack_file(query.get("sha256", [""])[0])
+            except (AppReleaseError, OSError) as error:
+                self._fail(409 if query.get("sha256") else 404, str(error))
+                return
+            self._send_file(stream, query["sha256"][0], size, "application/octet-stream")
+
+        def _send_file(self, stream: Any, sha256: str, size: int, kind: str) -> None:
+            """按校验值提供一个不会变的文件：ETag 就是校验值，支持一段 Range 续传。"""
             with stream:
-                etag = '"' + info["sha256"] + '"'
+                etag = '"' + sha256 + '"'
                 if self.headers.get("If-Match", etag) not in (etag, "*"):
-                    self._fail(412, "安装包已更新，请重新检查更新")
+                    self._fail(412, "文件已更新，请重新检查更新")
                     return
                 asked = self.headers.get("Range", "")
                 partial = bool(asked and self.headers.get("If-Range", etag) == etag)
@@ -260,7 +274,7 @@ def make_server(config: Config, service: Service,
                         self.end_headers()
                         return
                 self.send_response(206 if partial else 200)
-                self.send_header("Content-Type", "application/vnd.android.package-archive")
+                self.send_header("Content-Type", kind)
                 self.send_header("Content-Length", str(end - start + 1))
                 self.send_header("Accept-Ranges", "bytes")
                 if partial:
@@ -345,6 +359,12 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "app", "apk"]:
                 self._app_apk(query)
                 return
+            if parts == ["v1", "app", "packs"]:
+                self._send(200, release.packs())
+                return
+            if parts == ["v1", "app", "file"]:
+                self._app_file(query)
+                return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
@@ -374,8 +394,13 @@ def make_server(config: Config, service: Service,
                     self._fail(400, "after 应该是整数")
                     return
                 try:
+                    seen = int(query["usage"][0]) if "usage" in query else None
+                except ValueError:
+                    self._fail(400, "usage 应该是整数")
+                    return
+                try:
                     body = service.sync(query.get("conversation", ["default"])[0], after,
-                                        query.get("epoch", [None])[0], asked[0])
+                                        query.get("epoch", [None])[0], asked[0], seen)
                 except RequestError as error:
                     self._fail(400, str(error))
                     return

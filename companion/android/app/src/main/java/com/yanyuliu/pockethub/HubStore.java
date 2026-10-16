@@ -152,7 +152,6 @@ public final class HubStore {
 
     private static final int EVENT_LIMIT = 40;
     private static final int LOG_LIMIT = 60;
-    private static final int CHAT_LIMIT = 60;
     private static final String CHAT_SOURCE = "小幽";
     private static final HubStore INSTANCE = new HubStore();
 
@@ -162,7 +161,6 @@ public final class HubStore {
     private final List<String> log = new ArrayList<>();
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final List<String> chat = new ArrayList<>();
     private String linkState = "未启动";
     /** 已经发给 Runtime、还没等到结果的消息数。 */
     private int pending;
@@ -199,12 +197,45 @@ public final class HubStore {
         historyLoaded = true;
     }
 
+    /**
+     * Before addresses of one Runtime shared a history, each address kept its own. Fold the one
+     * kept under this address into the shared history once, then drop it.
+     */
+    private void adoptHistory(String url) {
+        if (historyPrefs == null || url == null || url.equals(historyRuntime)) return;
+        String alias = ArtifactDownload.key(url);
+        String stored = historyPrefs.getString(alias, null);
+        if (stored == null) return;
+        history.absorb(ChatHistory.restore(stored));
+        saveHistory();
+        historyPrefs.edit().remove(alias).apply();
+    }
+
     private void saveHistory() {
         if (historyPrefs != null) historyPrefs.edit().putString(ArtifactDownload.key(historyRuntime), history.json()).apply();
     }
 
     private void historyChanged() {
         main.removeCallbacks(historySave); main.postDelayed(historySave, 300);
+    }
+
+    /**
+     * 最近的 limit 轮完成的对话，从每台电脑存下的聊天记录里一起算（加上旧版单独存的那份），
+     * 换到另一台电脑时带过去。同一轮只算一次。
+     */
+    synchronized List<ChatTurn> recentTurns(List<ChatTurn> legacy, int limit) {
+        Map<String, ChatTurn> found = new java.util.LinkedHashMap<>();
+        for (ChatTurn turn : legacy) found.put(turn.id, turn);
+        if (historyPrefs != null) {
+            for (Map.Entry<String, ?> stored : historyPrefs.getAll().entrySet()) {
+                if (!(stored.getValue() instanceof String)) continue;
+                for (ChatTurn turn : ChatHistory.restore((String) stored.getValue()).turns()) found.put(turn.id, turn);
+            }
+        }
+        for (ChatTurn turn : history.turns()) found.put(turn.id, turn);
+        List<ChatTurn> all = new ArrayList<>(found.values());
+        all.sort(java.util.Comparator.comparingLong((ChatTurn turn) -> turn.at));
+        return all.subList(Math.max(0, all.size() - limit), all.size());
     }
 
     synchronized List<ChatHistory.Message> mainMessages() { return history.main(); }
@@ -339,11 +370,22 @@ public final class HubStore {
     }
 
     public synchronized void selectedRuntime(String url) {
+        selectedRuntime(url, url);
+    }
+
+    /**
+     * url is the address in use; history is the key the chat history is kept under: the same for
+     * every address of one Runtime (see RuntimeClient.historyKey), so switching between its LAN and
+     * remote address keeps the conversation.
+     */
+    public synchronized void selectedRuntime(String url, String history) {
         selectedRuntime = url;
-        if (!historyRuntime.equals(url == null ? "" : url)) {
-            loadHistory(url); pending = 0; streaming = ""; messageKey = "";
+        String key = history == null ? url : history;
+        if (!historyRuntime.equals(key == null ? "" : key)) {
+            loadHistory(key); pending = 0; streaming = ""; messageKey = "";
             turn = new Turn("idle", "", "", "", "", "idle");
         }
+        adoptHistory(url);
     }
 
     /** Independent origins are merged without changing the selected Runtime's task cards. */
@@ -405,12 +447,68 @@ public final class HubStore {
         return count;
     }
 
+    /** /v1/sync 给的、还没上卡的消息（别的手机刚发的话、小幽正在写的回复）：画在聊天里。 */
+    public void applyPending(List<SyncCache.Pending> items) {
+        boolean dirty = false;
+        synchronized (this) {
+            for (SyncCache.Pending item : items) dirty |= history.pending(item);
+            if (dirty) historyChanged();
+        }
+        if (dirty) notifyChanged();
+    }
+
+    // ---- 每台电脑一份：卡、同步进度和用量放在各自的架子上 ----
+
+    /** 一台电脑收起来的卡、同步进度和用量。 */
+    private static final class Shelf {
+        final TreeMap<Long, Card> cards; final Map<String, Long> order;
+        final long feedSeq; final Usage usage; final SyncCache sync;
+        Shelf(TreeMap<Long, Card> cards, Map<String, Long> order, long feedSeq, Usage usage, SyncCache sync) {
+            this.cards = cards; this.order = order; this.feedSeq = feedSeq; this.usage = usage; this.sync = sync;
+        }
+    }
+
+    private final Map<String, Shelf> shelves = new HashMap<>();
+    /** 现在摆出来的是哪台电脑的（RuntimeClient.historyKey）。 */
+    private String cardsKey = "";
+    private SyncCache sync = new SyncCache("default");
+
+    /** 现在这台电脑的 /v1/sync 进度；和卡一起收起、一起放回，所以两者总是对得上。 */
+    public synchronized SyncCache syncCache() { return sync; }
+
+    /**
+     * 换成显示另一台电脑：这台的卡和同步进度收起来，那台以前收起来的放回去，之后接着增量取；
+     * 没见过的那台从头取。同一台（包括它的另一个地址）什么都不动。
+     */
+    public void showComputer(String key) {
+        synchronized (this) {
+            String next = key == null ? "" : key;
+            if (next.equals(cardsKey)) return;
+            if (!cardsKey.isEmpty())
+                shelves.put(cardsKey, new Shelf(new TreeMap<>(cards), new HashMap<>(cardOrder), feedSeq, usage, sync));
+            Shelf shelf = shelves.remove(next);
+            cards.clear(); cardOrder.clear(); turnCard = null; runtimeConnected = false; ++cardsEpoch;
+            if (shelf != null) {
+                cards.putAll(shelf.cards); cardOrder.putAll(shelf.order);
+                feedSeq = shelf.feedSeq; usage = shelf.usage; sync = shelf.sync;
+            } else {
+                feedSeq = 0; usage = null; sync = new SyncCache("default");
+            }
+            cardsKey = next;
+        }
+        notifyChanged();
+    }
+
+    /** 不再登记的电脑：它的架子扔掉。 */
+    public synchronized void forgetComputer(String key) { if (key != null) shelves.remove(key); }
+
     /** 手里的卡都不算数了（换了一台 Runtime，或者它换了一份记录）：清掉，从头再取。 */
     public void resetCards() {
         synchronized (this) {
             cards.clear();
             runtimeConnected = false;
             cardOrder.clear();
+            sync = new SyncCache("default");
             // Approval origins have their own lifecycle; changing task Runtime must retain them.
             feedSeq = 0;
             turnCard = null;
@@ -585,20 +683,6 @@ public final class HubStore {
 
     // ---- 和小幽聊天 ----
 
-    /** App 刚启动、聊天框还空着时，把存着的对话放回来。 */
-    public void restoreChat(List<ChatTurn> turns) {
-        synchronized (this) {
-            if (!chat.isEmpty()) {
-                return;
-            }
-            for (ChatTurn turn : turns) {
-                appendChat("我：" + turn.text);
-                appendChat(CHAT_SOURCE + "：" + turn.reply);
-            }
-        }
-        notifyChanged();
-    }
-
     /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
     public void chatAsked(String text) {
         chatAsked(text, "local-" + java.util.UUID.randomUUID(), null);
@@ -610,7 +694,6 @@ public final class HubStore {
             busyText = text;
             streaming = "";
             turnCard = null;
-            appendChat("我：" + text);
             messageKey = clientId;
             history.begin(clientId, card, text, System.currentTimeMillis() / 1000.0);
             saveHistory();
@@ -717,12 +800,6 @@ public final class HubStore {
     /** 语音识别出了我刚才说的话：把聊天记录里的占位换成原话。 */
     public void chatHeard(String placeholder, String heard) {
         synchronized (this) {
-            for (int position = chat.size() - 1; position >= 0; --position) {
-                if (chat.get(position).equals("我：" + placeholder)) {
-                    chat.set(position, "我：" + heard);
-                    break;
-                }
-            }
             if (pending > 0) {
                 busyText = heard;
                 history.heard(messageKey, heard);
@@ -749,7 +826,6 @@ public final class HubStore {
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
             trimEvents();
-            appendChat(CHAT_SOURCE + "：" + shown);
             Card snapshot = null;
             Long order = card == null ? null : cardOrder.get(card);
             if (order != null) snapshot = cards.get(order);
@@ -763,7 +839,6 @@ public final class HubStore {
     public void chatFailed(String asked, String error) {
         synchronized (this) {
             if (asked != null) {
-                appendChat("我：" + asked);
                 turn = new Turn("failed", RuntimeClient.VOICE_PLACEHOLDER.equals(asked) ? "" : asked,
                         error, "", "", "oops");
                 if (pending == 0) {
@@ -778,7 +853,6 @@ public final class HubStore {
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", "没成功：" + error,
                     System.currentTimeMillis(), "没成功：" + error));
             trimEvents();
-            appendChat("（没成功）" + error);
             appendLog("聊天失败：" + error);
             history.finish(messageKey, null, error, true, null);
             saveHistory();
@@ -792,18 +866,6 @@ public final class HubStore {
 
     public synchronized String busyText() {
         return busyText;
-    }
-
-    /** 聊天记录，旧的在前。 */
-    public synchronized List<String> chatLines() {
-        return new ArrayList<>(chat);
-    }
-
-    private void appendChat(String line) {
-        chat.add(line);
-        while (chat.size() > CHAT_LIMIT) {
-            chat.remove(0);
-        }
     }
 
     private void trimEvents() {

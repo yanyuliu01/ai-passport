@@ -1,7 +1,7 @@
 {
   "date": "2026-10-12",
-  "selected_sheet_count": 13,
-  "selected_drawn_pose_count": 176,
+  "selected_sheet_count": 15,
+  "selected_drawn_pose_count": 208,
   "note": "Pose count includes style variants; not unique moods or animation frames. Native grid and palette not certified.",
   "assets": [
     {
@@ -484,6 +484,46 @@
       },
       "intended_pose_count": 1,
       "status": "runtime-sleep-source; user-approved chin and relaxed brows; bounds reviewed"
+    },
+    {
+      "file": "app-chatgpt-heads-v1.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 3047889,
+      "sha256": "a78e35be75192906f28ae3afb1c5491aef1308c99c4cb0b74d9e5281711a1a97",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.2509653246237905,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "app head-avatar source concept; no runtime integration; cell boundaries not certified"
+    },
+    {
+      "file": "avatar-chatgpt-pixel-v1.png",
+      "selected": true,
+      "width": 1448,
+      "height": 1086,
+      "mode": "RGBA",
+      "bytes": 2650990,
+      "sha256": "12e7e18257934dedd90ccf3217dd85423b173095a4cedc9a1a813d9c98bf03d5",
+      "alpha_extrema": [
+        0,
+        255
+      ],
+      "fully_transparent_fraction": 0.17623978714528454,
+      "intended_grid": {
+        "columns": 4,
+        "rows": 4
+      },
+      "intended_pose_count": 16,
+      "status": "pixel source sheet; four reviewed crops used for app Codex portraits in 0.14.1"
     }
   ],
   "references": [
@@ -507,8 +547,14 @@
       "bytes": 852954,
       "sha256": "e90a8fbe0b9c780cc17c3306ff063067067bd2f61946277fed049f76356dd420",
       "source": "User-selected generated sleeping head; approved cheek and chin shape on 2026-10-13"
+    },
+    {
+      "file": "reference-chatgpt-dragon.png",
+      "sha256": "f5e8e29b02539eacdf2db59b7957ce5bf08a63b6ead3cc9892ba07ebc0a22e71",
+      "source": "user-provided reference; author and reuse license unknown"
     }
   ],
   "runtime_update_date": "2026-10-13",
-  "runtime_selection_note": "Original selected-sheet counts describe the 2026-10-12 pack. runtime_selected marks the separately corrected sleeping head used by firmware and App."
+  "runtime_selection_note": "Original selected-sheet counts describe the 2026-10-12 pack. runtime_selected marks the separately corrected sleeping head used by firmware and App.",
+  "updated": "2026-10-16"
 }
