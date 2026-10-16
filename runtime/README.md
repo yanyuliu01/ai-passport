@@ -1041,11 +1041,13 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyou can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}` (since 0.6.0). `accounts` has one entry per subscription login: `{"id", "kind", "agents", "state", "windows": [{"kind": "5h" or "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`; `left` is the percentage that remains, `null` when unknown. `agents` has one entry per helper: `{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`; `running` is how many rounds it is working on and `now` the model of the one in progress. Without `refresh` the numbers at hand are returned (and asked for again in the background when they are old); with it they are asked for now, which takes a few seconds. See [Usage](#usage-what-is-left-of-each-subscription). |
-| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). |
+| `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). `client_id` deduplicates retries (since 0.7.0 per conversation, and it survives a restart): the same `client_id` in the same conversation returns the original message when the content matches and `409` when it differs. The message is written to disk before `202` is returned; see [Messages on disk and restarts](#messages-on-disk-and-restarts). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
-| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. |
+| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. Since 0.7.0 the record survives a runtime restart (the latest 200 are kept). |
 | `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
-| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. |
+| `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. Since 0.7.0, `messages=1` adds `messages`: the message records of this conversation with a sequence above `after` (the same sequence as cards, including queued messages and replies still being written), so another phone sees what was just said; without it the response is unchanged. `epoch` identifies the record set: when it differs from the one last seen, the records were replaced and the client must resync from 0. |
+| `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}` (since 0.8.0): the runtime's fixed id, the record set id, the sync protocol version and capabilities. See the [unified message model](../docs/development/unified-message-model.md). |
+| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed"}`. `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
 | `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
 | `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
@@ -1074,6 +1076,37 @@ visible content has been collected. A desktop `waiting` state alone is only a
 status signal. The optional permission bridge can supply a separate approval
 whose `remote_actionable` field determines whether it can be answered remotely;
 ordinary continuation and cancellation remain in the desktop conversation.
+
+### Messages on disk and restarts
+
+Since 0.7.0 every accepted sentence is written to `state/messages.json` before
+`202` is returned, and again whenever its status changes (started, finished,
+failed). The reply that is still being written changes too fast and is not
+written. After a runtime restart:
+
+- typed messages that were still queued and never started are processed;
+- messages already being processed, and voice recordings not yet transcribed,
+  may have done part of their work, so they are not redone: they are marked
+  `failed`, and the conversation gets a card with the original sentence and a
+  note that the runtime restarted before it was finished, so it can be said
+  again;
+- a message whose reply already reached its card, but whose record was not yet
+  updated, is recorded as `done` instead of being reported as unfinished;
+- the sequence never goes back (a block of numbers is reserved on disk and a
+  restart continues after it, skipping some numbers), so a client's `after`
+  stays valid;
+- asking for the old message id, or retrying with the old `client_id`, still
+  finds that message.
+
+If the message cannot be written (for example a full disk) the answer is
+`503` and the message is not accepted; send it again with the same
+`client_id`. Writes are flushed to disk before the rename, so a power loss
+leaves either the old or the new file, never half of one.
+
+Deduplication outlives the messages themselves (the latest 2000 `client_id`s):
+a retry after the message has been trimmed returns the same id as a minimal
+record with `expired: true` and is not run again. A broken `messages.json` does
+not stop the runtime; the broken file is kept as `messages.json.broken`.
 
 A message record says whether Xiaoyou has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`

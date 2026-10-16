@@ -56,6 +56,8 @@ BACKGROUND_TURNS = 6
 ACTIONS = ("none", "start", "amend", "cancel")
 # 小幽接话时提示里列出的事：还在做的全列，另外带上最近结束的几件（主人常会接着问）。
 RECENT_FINISHED_CARDS = 5
+# 一件事排着的补充已经满了（见 tasks.MAX_PENDING），这句补充没记上时小幽这样说。
+QUEUE_FULL_NOTE = "这件事排着的补充已经有好几条了，这句没记上，等它做完这一轮再说吧"
 
 # 向调用方报告这一轮走到了哪一步：(kind, agent, text)。
 Report = Callable[[str, Optional[str], str], None]
@@ -594,6 +596,8 @@ class Xiaoyou:
             task = named_note(agent.name, task)
         reply = "好，告诉 %s 了" % agent.name
         done = self._amend(card, agent, "after", task, effort, model)
+        if done == "full":
+            reply = QUEUE_FULL_NOTE
         if done is None:
             # 这件事现在没人在做：让被点名的代理接着做一轮。它没做过这件事时带上背景。
             if not self._store.session("%s/%s" % (conversation, card["id"]), agent.name):
@@ -603,6 +607,8 @@ class Xiaoyou:
             self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", brief=reply, mood="busy",
                                state="working", edits=card["edits"] + 1)
             self._launch(card["id"], agent, task, conversation, hop, effort, model)
+        elif done == "full":
+            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff")
         else:
             self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", edits=card["edits"] + 1)
             self._workspace.note(card, agent.name, task, done)
@@ -677,7 +683,10 @@ class Xiaoyou:
             worker = target["agent"] or lead.name
             done = self._amend(target, self._agents[worker], plan["mode"], plan["task"],
                                plan.get("effort") or effort, plan.get("model") or model)
-            if done is None:
+            if done == "full":
+                reply = QUEUE_FULL_NOTE
+                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
+            elif done is None:
                 # 那件事已经不在做了：接着它原来的会话再做一轮。
                 self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
                     reply, self._config.brief_max_chars), mood="busy", state="working",

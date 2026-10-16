@@ -23,12 +23,14 @@ from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 from .desktop_titles import DesktopTitles
 from .task_titles import select_title
 
-POLL_SECONDS = 2.0
-DISCOVERY_SECONDS = 10.0
+POLL_SECONDS = 1.0
+# 找新开的会话。多端一致性要求 3 秒内反映变化，所以不能隔太久。
+DISCOVERY_SECONDS = 2.0
 RECENT_SECONDS = 86400
 STALE_SECONDS = 300
 # 只是工具、进展或时间戳变了：同一会话最多这么久发一次，免得经中继连着的手机被刷屏。
-MINOR_SECONDS = 10.0
+# 不超过 3 秒：多端一致性要求已经发生的变化 3 秒内到各端。
+MINOR_SECONDS = 2.5
 MAX_SESSIONS = 32
 MAX_READ_BYTES = 2 * 1024 * 1024
 MAX_LINE_BYTES = 512 * 1024

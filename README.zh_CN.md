@@ -25,26 +25,30 @@ ESP32-C3 小型可穿戴设备上的固件。按住按键说话，小幽在屏�
 解决不了的事，她会把活儿交给编程 agent：屏幕上能看到是谁在做、做到第几步；
 需要你点头的操作，她会先问你。
 
-设备通过加密的低功耗蓝牙连着手机伴侣 App。没装 App 时，也可以在开发者模式下
-直连 Claude 桌面端。
+设备通过加密的低功耗蓝牙连着手机伴侣 App。不带设备时，App 自己就能和她说话：
+首页上的小幽跟着真实状态动，按住麦克风就能说。电脑上已经开着的 Codex、Claude Code
+对话也能同步到手机和设备上。经 Tailscale Funnel，手机在任何网络下都连得回家里的电脑。
+没装 App 时，设备也可以在开发者模式下直连 Claude 桌面端。
 
 ## 认识小幽
 
 小幽就是 DeepSeek 的那条鲸鱼——大肥鱼女仆。她是你唯一要对话的对象，Runtime
-通过 DeepSeek Harness 命令行（`dsh`）让她跑在 DeepSeek 上。
+通过 DeepSeek Harness 命令行（`dsh`）让她跑在 DeepSeek 上，她的回复边生成边显示。
+App 和固件的文档里也叫她 DS。
 
 <p align="center">
-  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="小幽的像素形象空闲时上下浮动。" width="160">
+  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="小幽的像素大头空闲时轻轻呼吸。" width="160">
   &nbsp;&nbsp;
-  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="小幽像素形象的六种表情：睡着、空闲、忙碌头顶跳点、感叹号找你、开心带爱心、失败叉叉眼。" width="480">
+  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="小幽像素大头的六种表情：睡着冒 Zz、空闲、忙碌头顶跳点、有事找你、开心带爱心、出错。" width="480">
 </p>
 
-在设备上她是一个 20 × 20 的像素小人。没连上时她在睡觉，空闲时轻轻上下浮动；
-忙的时候头顶跳着三个点。有事找你时会冒出感叹号，事情顺利会冒爱心，失败了就
-变成叉叉眼。
+在设备上她是一个 60 × 60 的像素大头，从设计包里的鲸鱼女仆原稿编译而来，有六种
+表情：没连上时睡觉，空闲时轻轻呼吸，忙的时候头顶跳着三个点，有事找你、事情顺利、
+出错各有自己的脸。除了表情，她的动作也跟着真实状态走，和手机首页同一套：你按住说话
+时她左右轻晃，想的时候上下浮，回答到了蹦一下；活儿交给帮手时，一封信从她飞向那位
+帮手的名牌。
 
-> 像素形象正从原来的小幽灵换成大肥鱼。这几帧是从还在开发中的
-> `main/pocket_pet.c` 渲染出来的。
+> 上面两张图由 `main/pocket_pet.c` 直接渲染，和设备上画的是同一份像素。
 
 ## 她的帮手
 
@@ -75,31 +79,32 @@ ESP32-C3 小型可穿戴设备上的固件。按住按键说话，小幽在屏�
 ## 整体由三部分组成
 
 ```text
- 设备（固件）  ──加密低功耗蓝牙──>  手机 App「小幽中枢」  ──HTTP──>  小幽 Runtime（电脑上）
- 按住说话、四屏、授权弹窗           转发语音、卡、用量、换固件          人设 · 对话 · 卡 · 路由
-                                                                       ├─> claude / tailor（Claude Code）
+ 设备（固件）  ──加密低功耗蓝牙──>  手机 App「DS 中枢」  ──HTTP(S)──>  小幽 Runtime（电脑上）
+ 按住说话、四屏、授权弹窗           聊天、任务、帮手、审批            人设 · 对话 · 卡 · 路由
+                                    转发语音、卡、用量、换固件          ├─> dsh（DeepSeek Harness，替小幽说话）
+                                    局域网 / Tailscale Funnel          ├─> claude / tailor（Claude Code）
                                                                        ├─> codex（Codex app-server）
                                                                        ├─> deepseek（Claude Code 外壳 + DeepSeek 接口）
-                                                                       ├─> dsh（DeepSeek Harness）
-                                                                       └─> 任意命令 / 另一台 Runtime
+                                                                       ├─> 任意命令 / 另一台 Runtime
+                                                                       └── 观察本机的 Codex、Claude Code 对话（--desktop-sync）
 ```
 
 | 部分 | 目录 | 做什么 | 说明文档 |
 | --- | --- | --- | --- |
 | 设备固件 | `main/`、`components/` | 四屏（形象 / 对话 / 任务 / 用量）、按住说话、授权弹窗、经蓝牙换固件（双槽位，没被认可自动退回） | [Claude Pocket](docs/claude-pocket.zh_CN.md) |
-| 手机 App | `companion/` | 安卓。设备和 Runtime 之间的中转：语音、卡、任务、授权、用量、固件；自己也能聊天、看任务、选档位 | [小幽中枢](companion/README.zh_CN.md) |
-| Runtime | `runtime/` | 小幽本身：一件事一张卡，几件事并行，补充 / 改要求 / 取消；派活时看档位和订阅余量；长任务看有没有动静；可写进 Notion 共享工作区 | [小幽 Runtime](runtime/README.zh_CN.md) |
+| 手机 App | `companion/` | 安卓。侧边栏四处：和小幽聊天、任务、帮手、连接与设置。首页的小幽跟着状态动，按住麦克风说话（手机自己识别）；审批提醒（最多同时盯八台电脑）、任务图片和文件、用量；同时是设备和 Runtime 之间的中转；新版经 Runtime 推到手机 | [DS 中枢](companion/README.zh_CN.md) |
+| Runtime | `runtime/` | 小幽本身：一件事一张卡，几件事并行，补充 / 改要求 / 取消；回复流式生成；派活时看档位和订阅余量；长任务看有没有动静；任务的图片和文件可下载；同步电脑上的 Codex、Claude Code 对话，可选审批桥；给电脑端 agent 共享历史；可写进 Notion 共享工作区 | [小幽 Runtime](runtime/README.zh_CN.md) |
 
 只用 Claude 桌面端也行：同一份固件可以在开发者模式下直连 Claude 桌面端的 Hardware
 Buddy（这时没有语音和卡）。
 
-## 现在到哪了（2026-10-12）
+## 现在到哪了（2026-10-16）
 
 | 部分 | 版本 | 构建 | 真机 |
 | --- | --- | --- | --- |
-| 固件 | 预发布 `firmware-build-19` | 通过 | 连着手机按住说话已在设备上跑通（`28119d8`）；三屏在设备上用过；第四屏、任务历史的显示还没人确认 |
-| 手机 App | 0.9.1，预发布 `companion-build-15` | 通过 | 0.2.0 在手机上跑通过配对和打字；之后各版都没有逐项在手机上验过 |
-| Runtime | 0.6.1 | 测试全过 | 在作者的 Mac 上日常运行；Claude Code 的订阅用量、Codex app-server 的授权还没在 Mac 上实测 |
+| 固件 | 预发布 `firmware-build-22`（`8220106`，鲸鱼像素大头 + 跟着状态的动作） | 通过 | 连着手机按住说话已在设备上跑通（`firmware-build-19`）；三屏用过；鲸鱼的睡脸和呼吸在设备上确认过；跟着状态的动作、第四屏、任务历史还没人在设备上确认 |
+| 手机 App | 0.11.0（版本号 17），预发布 `companion-build-26` | 通过 | 0.2.0 在手机上跑通过配对和打字；侧边栏版、手机按住说话、审批提醒、经 Runtime 更新都还没在手机上逐项验过 |
+| Runtime | 0.8.0 | 468 个测试全过 | 在作者的 Mac 上日常运行；Claude Code 的订阅用量、Codex app-server 的授权、电脑端审批桥的真实往返还没在 Mac 上实测 |
 
 每一部分“哪些验证过、哪些没有”写在各自的文档末尾。开发主线是
 `feature/usage-history`；其余分支的用途见下表。
@@ -115,9 +120,12 @@ Buddy（这时没有语音和卡）。
 
 固件、App、Runtime 之间的协议是一起改的，升级时三样一起：
 
-1. 手机装最新的 `companion-build-N`（Releases 里的 `pocket-hub-debug.apk`）。
-2. 电脑上停掉 Runtime，拉主线，重新启动：
+1. 电脑上停掉 Runtime，拉主线，重新启动（先升 Runtime，免得新 App 碰上旧接口）：
    `cd runtime`，`python3 -m xiaoyou_runtime --config config.json`
+2. 手机 App：0.11.0 起经 Runtime 更新。在 `runtime/` 下
+   `python3 -m xiaoyou_runtime app publish <apk 路径> --note "改了什么"`，手机打开 App 或在
+   「连接与设置 → App 更新」里点安装。手机上还是 0.11.0 之前的版本时，要先手动装一次
+   最新的 `companion-build-N`（Releases 里的 `pocket-hub-debug.apk`）。
 3. 新固件经蓝牙推到设备：`python3 -m xiaoyou_runtime firmware fetch --push`。
    设备上还是单槽位的旧固件时，要先插线刷一次：`bash tools/flash_pocket.sh`。
 
@@ -129,8 +137,11 @@ Buddy（这时没有语音和卡）。
 | 我想… | 从这里开始 |
 | --- | --- |
 | 了解设备能做什么、按键、协议、内存 | [Claude Pocket](docs/claude-pocket.zh_CN.md) |
-| 装手机 App、和设备配对 | [小幽中枢](companion/README.zh_CN.md) |
+| 装手机 App、和设备配对 | [DS 中枢](companion/README.zh_CN.md) |
 | 在电脑上跑小幽、登记 agent、配置档位和用量 | [小幽 Runtime](runtime/README.zh_CN.md) |
+| 把电脑上的 Codex、Claude Code 对话同步到手机和设备 | [同步已有电脑端对话](runtime/README.zh_CN.md#同步已有电脑端对话) |
+| 出门在外也连上家里的 Runtime | [Tailscale Funnel](runtime/README.zh_CN.md#在任何网络下连上-runtimetailscale-funnel) |
+| 把 App 的新版推到手机上 | [App 更新](companion/README.zh_CN.md#app-更新) |
 | 用 AI 编程工具改固件 | [AGENTS.zh_CN.md](AGENTS.zh_CN.md) |
 | 看硬件、引脚、内存预算 | [硬件指南](docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) |
 | 看上游基线平台和完整的文档地图 | [docs/README.zh_CN.md](docs/README.zh_CN.md) |
