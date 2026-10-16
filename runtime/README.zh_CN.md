@@ -845,6 +845,8 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/firmware/<编号>/image` | 这一版的应用镜像（二进制）。 |
 | `GET /v1/app` | 这台电脑上发布的手机 App 更新：`available`、`version_code`、`version_name`、`sha256`、`size`、`published_at`、`note`。 |
 | `GET /v1/app/apk` | 这个更新的安装包。 |
+| `GET /v1/app/packs` | 资源包清单（0.8.3 起）：`{"packs": [{"name", "published_at", "files": [{"path", "sha256", "size", "download_url"}]}]}`。手机比对已装好的文件，只下载校验值变了的。 |
+| `GET /v1/app/file?sha256=<校验值>` | 资源包里的一个文件（0.8.3 起），ETag 是校验值，支持单段 Range 续传；不在现在发布的包里时 409。 |
 | `POST /v1/firmware?note=<备注>&push=1`，请求体是固件文件 | `201` 和这一版的记录；`push=1` 同时把它设为要推的。 |
 | `POST /v1/firmware/target`，请求体 `{"id": 版本或 null, "reason"?, "force"?}` | 指定（或取消）要推给设备的那一版；返回同 `GET /v1/firmware/target`。 |
 | `POST /v1/firmware/device`，请求体 `{"event", "build", "state", "prev", …}` | 手机 App 转告设备的情况。`event` 为 `connected`、`progress`、`installed`、`failed` 或 `unsupported`；返回同 `GET /v1/firmware/target`。 |
@@ -1116,6 +1118,13 @@ SHA-256 后交给安卓安装，安装要主人在系统界面上点确认：
 python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "改了什么"
 python3 -m xiaoyou_runtime app status
 ```
+
+增量更新（0.8.3 起）：很少变的大文件（语音模型）不进安装包，用
+`python3 -m xiaoyou_runtime app pack <名字> <目录>` 发布成资源包，按文件 SHA-256 存放和提供，手机只下载变了的。
+`app publish` 和 `app pack` 加 `--github` 时，先把同一个文件传到 GitHub Releases（安装包默认只传
+arm64，发布 tag 为 `app-<版本>-<版本号>`；资源文件都放在 `app-packs` 发布里、按校验值命名，没变的不重传），
+再把网址写进清单，手机可以选从网上下载。令牌取自 `GITHUB_TOKEN`/`GH_TOKEN` 或 git 的 GitHub 凭据，
+只发给 GitHub，只上传文件、不推送代码；上传失败时本机什么都不发布。
 
 版本号从 apk 旁边 Gradle 写的 `output-metadata.json` 读（或用 `--version-code`）。版本号更大，
 或版本号相同但安装包不同、而且发布得比手机上那份装得晚时，App 提示更新。打开 App 时会问一次

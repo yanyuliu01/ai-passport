@@ -1066,6 +1066,8 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/firmware/<id>/image` | That version's application image (binary). |
 | `GET /v1/app` | The phone app update published on this computer: `available`, `version_code`, `version_name`, `sha256`, `size`, `published_at`, `note`. |
 | `GET /v1/app/apk` | That update's APK. |
+| `GET /v1/app/packs` | Resource packs (since 0.8.3): `{"packs": [{"name", "published_at", "files": [{"path", "sha256", "size", "download_url"}]}]}`. The phone compares with what it has and downloads only files whose checksum changed. |
+| `GET /v1/app/file?sha256=<hash>` | One resource pack file (since 0.8.3); the ETag is its checksum and a single Range resumes; 409 when no current pack lists it. |
 | `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
 | `POST /v1/firmware/target` with `{"id": version or null, "reason"?, "force"?}` | Sets (or clears) the version the device should run; answers like `GET /v1/firmware/target`. |
 | `POST /v1/firmware/device` with `{"event", "build", "state", "prev", …}` | What the phone app says about the device. `event` is `connected`, `progress`, `installed`, `failed` or `unsupported`; answers like `GET /v1/firmware/target`. |
@@ -1413,6 +1415,16 @@ Android, which asks the owner to confirm:
 python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "what changed"
 python3 -m xiaoyou_runtime app status
 ```
+
+Incremental updates (since 0.8.3): large files that rarely change (speech models) stay out
+of the APK and are published with `python3 -m xiaoyou_runtime app pack <name> <folder>` as a
+resource pack, stored and served per file by SHA-256, so the phone downloads only what changed.
+With `--github`, `app publish` and `app pack` first upload the same files to GitHub Releases
+(the APK defaults to arm64 only, under tag `app-<version>-<code>`; pack files share the
+`app-packs` release, named by checksum, and unchanged ones are not uploaded again) and put the
+addresses into the manifest, so the phone can choose to download from the internet. The token
+comes from `GITHUB_TOKEN`/`GH_TOKEN` or git's GitHub credential, is sent only to GitHub, and
+only files are uploaded, never code; a failed upload publishes nothing locally.
 
 The version code is read from Gradle's `output-metadata.json` next to the APK
 (or `--version-code`). The app offers the update when the code is higher, or

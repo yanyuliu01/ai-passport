@@ -1,7 +1,12 @@
 """手机 App 的更新包：这台电脑上只留最新发布的一版，手机经 Runtime 取走后自己装。
 
-  python3 -m xiaoyou_runtime app publish 文件.apk [--note 一句话]   发布一版
-  python3 -m xiaoyou_runtime app status                           现在发布的是哪一版
+  python3 -m xiaoyou_runtime app publish 文件.apk [--note 一句话] [--github [ABI,...]]   发布一版
+  python3 -m xiaoyou_runtime app pack speech 目录 [--github]                            发布资源包
+  python3 -m xiaoyou_runtime app status                                                现在发布的是哪一版
+
+更新是增量的：安装包只放代码，语音模型这类很少变的大文件放在资源包里。资源包里每个文件
+按 SHA-256 存放和提供，手机比对自己装好的，只下载变了的文件。--github 把安装包或资源文件
+传到 GitHub Releases，网址写进清单，手机可以选“从网上下载”（同一个文件，同一个校验值）。
 
 文件旁边有 Gradle 写的 output-metadata.json 时，版本号从那里读；也可以用 --version-code、
 --version-name 指定。手机看到版本号更大（或同一版本号但安装包不同、发布得比它装得晚）时提示更新，
@@ -16,11 +21,14 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, Optional, Tuple
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 MAX_APK_BYTES = 512 * 1024 * 1024
+MAX_PACK_FILE_BYTES = 1024 * 1024 * 1024
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64", "universal")
+PACK_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
+PACK_PATH = re.compile(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
 
 
 class AppReleaseError(Exception):
@@ -81,7 +89,105 @@ class AppRelease:
         self._dir = Path(state_dir).resolve() / "app-release"
         self._apk = self._dir / "app.apk"
         self._meta = self._dir / "release.json"
+        self._packs_dir = self._dir / "packs"
+        self._packs = self._dir / "packs.json"
         self._lock = threading.Lock()
+
+    # ---- 资源包：按文件校验值增量更新 ----
+
+    def packs(self) -> Dict[str, Any]:
+        """现在发布的资源包：{"packs": [{"name", "published_at", "files": [{"path", "sha256", "size", "download_url"}]}]}。"""
+        try:
+            raw = json.loads(self._packs.read_text("utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        packs = raw.get("packs") if isinstance(raw, dict) else None
+        return {"packs": [dict(pack) for pack in packs] if isinstance(packs, list) else []}
+
+    @staticmethod
+    def pack_files(folder: Path) -> List[Tuple[str, Path]]:
+        """目录里要进资源包的文件（相对路径, 文件），按路径排好；隐藏文件不算。"""
+        folder = Path(folder)
+        if not folder.is_dir():
+            raise AppReleaseError("资源目录不存在：%s" % folder)
+        found = []
+        for path in sorted(folder.rglob("*")):
+            relative = path.relative_to(folder).as_posix()
+            if path.is_file() and not any(part.startswith(".") for part in relative.split("/")):
+                if not PACK_PATH.fullmatch(relative):
+                    raise AppReleaseError("资源文件名只能用字母、数字和 . _ -：%s" % relative)
+                found.append((relative, path))
+        if not found:
+            raise AppReleaseError("资源目录是空的：%s" % folder)
+        return found
+
+    def publish_pack(self, name: str, folder: Path,
+                     download_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """发布（或更新）一个资源包。没变的文件不重复存；download_urls 按 SHA-256 给网上的地址。"""
+        if not PACK_NAME.fullmatch(name or ""):
+            raise AppReleaseError("资源包名只能用小写字母、数字和 -，以字母开头")
+        urls = {sha: _download_url(url) for sha, url in (download_urls or {}).items()}
+        files = []
+        with self._lock:
+            self._packs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for relative, path in self.pack_files(folder):
+                stored = self._store_pack_file(path)
+                files.append(dict(path=relative, download_url=urls.get(stored["sha256"], ""), **stored))
+            current = [pack for pack in self.packs()["packs"] if pack.get("name") != name]
+            pack = {"name": name, "published_at": round(time.time(), 3), "files": files}
+            current.append(pack)
+            current.sort(key=lambda item: item["name"])
+            self._write_json(self._packs, {"packs": current})
+            # 只留现在哪个包都还用得上的文件。
+            keep = {item["sha256"] for entry in current for item in entry.get("files", [])}
+            for cached in self._packs_dir.glob("*.bin"):
+                if re.fullmatch(r"[0-9a-f]{64}\.bin", cached.name) and cached.stem not in keep:
+                    try:
+                        cached.unlink()
+                    except OSError:
+                        pass
+        return pack
+
+    def _store_pack_file(self, source: Path) -> Dict[str, Any]:
+        digest = hashlib.sha256()
+        total = 0
+        with source.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                total += len(chunk)
+                digest.update(chunk)
+        if total <= 0 or total > MAX_PACK_FILE_BYTES:
+            raise AppReleaseError("资源文件是空的或者超过 1 GB：%s" % source)
+        sha = digest.hexdigest()
+        target = self._packs_dir / (sha + ".bin")
+        if not target.is_file() or target.stat().st_size != total:
+            handle, temp = tempfile.mkstemp(prefix="pack-", suffix=".part", dir=str(self._packs_dir))
+            try:
+                with os.fdopen(handle, "wb") as output, source.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1 << 20), b""):
+                        output.write(chunk)
+                os.replace(temp, target)
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+        return {"sha256": sha, "size": total}
+
+    def open_pack_file(self, sha256: str) -> Tuple[BinaryIO, int]:
+        """资源包里的一个文件；只给现在发布的包里有的。"""
+        if not re.fullmatch(r"[0-9a-f]{64}", sha256 or ""):
+            raise AppReleaseError("缺少文件校验值")
+        listed = any(item.get("sha256") == sha256
+                     for pack in self.packs()["packs"] for item in pack.get("files", []))
+        path = self._packs_dir / (sha256 + ".bin")
+        if not listed or not path.is_file():
+            raise AppReleaseError("资源文件已更新，请重新检查更新")
+        stream = path.open("rb")
+        return stream, os.fstat(stream.fileno()).st_size
+
+    def _write_json(self, target: Path, value: Any) -> None:
+        handle, temp = tempfile.mkstemp(prefix="meta-", suffix=".part", dir=str(self._dir))
+        with os.fdopen(handle, "w", encoding="utf-8") as output:
+            output.write(json.dumps(value, ensure_ascii=False, indent=1))
+        os.replace(temp, target)
 
     def info(self, abi: str = "") -> Dict[str, Any]:
         """发布的那一版；没有时 available 为 False。"""
@@ -204,7 +310,22 @@ class AppRelease:
         return stream, info, os.fstat(stream.fileno()).st_size
 
 
+def _github(args: Any) -> Any:
+    from . import github_release
+    repo = args.github_repo or github_release.repo_from_git(Path(__file__).resolve().parents[2])
+    return github_release.Releases(repo, github_release.token())
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run(config: Any, args: Any) -> int:
+    from .github_release import GitHubError
     release = AppRelease(config.state_dir)
     if args.action == "publish":
         try:
@@ -220,15 +341,61 @@ def run(config: Any, args: Any) -> int:
                 if not separator or not url or abi in variant_urls:
                     raise AppReleaseError("--variant-download-url 应为不重复的 架构=HTTPS网址")
                 variant_urls[abi] = url
+            download_url = args.download_url
+            if args.github:
+                # 先传到 GitHub、拿到地址，再在本机发布：手机看到的清单里网址一定已经能下。
+                found = _metadata_beside(Path(args.file))
+                code = args.version_code if args.version_code is not None else found.get("version_code")
+                name = args.version_name if args.version_name is not None else found.get("version_name")
+                packages = dict(variants)
+                packages.setdefault(found.get("abi", "universal"), Path(args.file))
+                github = _github(args)
+                tag = "app-%s-%s" % (name or "build", code)
+                published = github.release(tag, "Pocket Hub %s" % (name or code),
+                                           "Pocket Hub %s（版本号 %s）。%s" % (name or "-", code, args.note[:200]))
+                for abi in [item.strip() for item in args.github.split(",") if item.strip()]:
+                    if abi not in packages:
+                        raise AppReleaseError("--github 里的 %s 没有对应的安装包" % abi)
+                    url = github.upload(published, packages[abi], "pocket-hub-%s-%s.apk" % (name or code, abi))
+                    if packages[abi] == Path(args.file) and abi == found.get("abi", "universal"):
+                        download_url = url
+                    else:
+                        variant_urls[abi] = url
             info = release.publish(Path(args.file), args.note, args.version_code, args.version_name,
-                                   variants, args.download_url, variant_urls)
-        except (AppReleaseError, OSError) as error:
+                                   variants, download_url, variant_urls)
+        except (AppReleaseError, GitHubError, OSError) as error:
             print("没发布成：%s" % error)
             return 1
         print("发布了 App %s（版本号 %d，%.2f MB）。手机连着这台电脑时会提示更新。" % (
             info["version_name"] or "-", info["version_code"], info["size"] / 1048576.0))
         return 0
+    if args.action == "pack":
+        try:
+            urls = {}
+            if args.github:
+                # 资源文件按校验值起名，放在同一个发布里：没变的文件早就在那儿，不再上传。
+                github = _github(args)
+                published = github.release("app-packs", "Pocket Hub 资源包",
+                                           "Pocket Hub 的资源文件（语音模型等），按 SHA-256 命名，手机只下载变了的。")
+                for relative, path in AppRelease.pack_files(Path(args.folder)):
+                    sha = _sha256(path)
+                    urls[sha] = github.upload(published, path, "%s-%s-%s" % (
+                        args.name, sha[:16], relative.replace("/", "-")))
+            pack = release.publish_pack(args.name, Path(args.folder), urls)
+        except (AppReleaseError, GitHubError, OSError) as error:
+            print("没发布成：%s" % error)
+            return 1
+        print("发布了资源包 %s：%d 个文件，共 %.2f MB%s。手机只会下载变了的文件。" % (
+            pack["name"], len(pack["files"]), sum(item["size"] for item in pack["files"]) / 1048576.0,
+            "，也传到了 GitHub" if args.github else ""))
+        return 0
     info = release.info()
+    for pack in release.packs()["packs"]:
+        print("资源包 %s：%d 个文件，共 %.2f MB，%s" % (
+            pack["name"], len(pack.get("files", [])),
+            sum(item.get("size", 0) for item in pack.get("files", [])) / 1048576.0,
+            "可以从网上下载" if all(item.get("download_url") for item in pack.get("files", []))
+            else "从这台电脑下载"))
     if not info.get("available"):
         print("还没有发布 App 更新。")
         return 0
@@ -253,4 +420,13 @@ def add_arguments(subparsers: Any) -> None:
                          help="默认安装包的公开 HTTPS 下载网址；不填则从本机 Runtime 下载")
     publish.add_argument("--variant-download-url", action="append", default=[], metavar="ABI=HTTPS_URL",
                          help="--variant 安装包对应的公开 HTTPS 下载网址，可重复")
+    publish.add_argument("--github", nargs="?", const="arm64-v8a", default="", metavar="ABI[,ABI]",
+                         help="同时把这些架构的安装包传到 GitHub Releases（默认 arm64-v8a），手机可选从网上下载")
+    publish.add_argument("--github-repo", default="", metavar="OWNER/NAME",
+                         help="GitHub 仓库；不写就用仓库的 github（或 origin）远端")
+    pack = actions.add_parser("pack", help="发布一个资源包（比如语音模型），手机只下载变了的文件")
+    pack.add_argument("name", help="资源包名，比如 speech")
+    pack.add_argument("folder", help="资源文件所在的目录")
+    pack.add_argument("--github", action="store_true", help="同时把新文件传到 GitHub Releases")
+    pack.add_argument("--github-repo", default="", metavar="OWNER/NAME")
     actions.add_parser("status", help="现在发布的是哪一版")
