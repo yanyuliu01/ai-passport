@@ -4,18 +4,21 @@
 
 # Unified message model
 
-Status: decided (2026-10-16, the owner asked to follow one unified structure); being
-implemented step by step, see the end. It pairs with the "Multi-end message consistency"
-contract in the [cross-stack reliability rules](cross-stack-reliability.md): that document
-says what must hold, this one says what the data looks like and how each end connects.
+Status: decided (2026-10-16, the owner asked to follow one unified structure). The same day it
+was checked against the local code; this revision adds the single write path, source
+connection and multiple runtimes on the phone, and reorders the steps (see the end). It pairs
+with the "Multi-end message consistency" contract in the
+[cross-stack reliability rules](cross-stack-reliability.md): that document says what must hold,
+this one says what the data looks like and how each end connects.
 
 ## In one sentence
 
 Each runtime keeps one **message log** per conversation, and it is the only authoritative
-record. Cards, the model context, the phone's chat history and the device's screen window are
-**projections** computed from that log and can be thrown away and rebuilt. Ends, and any
-runtime or agent added later, exchange content only through the log's format and the sync
-interface: **identity comes from ids, never from text**.
+record. Only one module, the **record hub**, may write it. Cards, the model context, the phone's
+chat history and the device's screen window are **projections** computed from that log and can
+be thrown away and rebuilt. Ends, and any runtime, agent or external source added later,
+exchange content only through the log's format and the sync interface: **identity comes from
+ids, never from text**.
 
 ## Why
 
@@ -35,6 +38,93 @@ merge rules:
 As a result nobody was authoritative, equal texts could be merged wrongly, ids such as `c1`
 were unique on one computer only, and every new view added another copy to keep in sync.
 
+## Current architecture (checked against the code, 2026-10-16)
+
+Is there one module that manages everything today? **There is one record, but not yet one way
+to write it.**
+
+```text
+                        ┌──────────────── Runtime process ────────────────┐
+ phone ─HTTP─► server.py ─► Service ──┬─► ledger.py   state/messages.json    accepted requests, dedupe
+                                      │
+                 xiaoyou.py (26 calls)┼─► Cards ─► MessageLog  state/cards.log.jsonl  authoritative log
+                 service.py (18 calls)┤    │                   state/cards.json       cards (copy)
+             desktop_sync.py (4 calls)┤    └─ issues sequence numbers, holds the lock
+                artifacts.py (1 call) ┘
+                                      ├─► store.py    state/transcript.json  model context (another copy)
+                                      └─► approvals   in memory, no sequence number
+                        └──────────────────────────────────────────────────┘
+```
+
+Already in place:
+
+- `MessageLog` (`message_log.py`) is the authoritative record of every sentence, with
+  `runtime_id`, `epoch` and `floor`.
+- `Cards` (`cards.py`) is the log's only owner: its lock protects the log and it issues the
+  sequence. Card `entries` are rebuilt from the log on startup.
+- `/v1/info`, `/v1/sync` and the conformance test exist.
+
+Not yet in place, and the reason the ends keep drifting:
+
+1. **Writes are scattered.** Four modules call `Cards.open/update` directly, 49 calls in all.
+   `update` takes about ten optional arguments, and every caller builds the message id, `kind`
+   and `author` itself. One wrong call produces a message that is valid but does not line up,
+   and the log cannot catch it.
+2. **Part of the sequence is taken by hand.** `Service` calls `cards.bump()` in 7 places to number
+   request records. A missed call means that change does not wake waiting syncs.
+3. **Approvals are not in the log and take no sequence.** `/v1/sync` returns the full list of
+   approvals still pending. An approval that appears and disappears between two syncs (for
+   example answered on the computer) is never seen by the phone, and nothing records who answered
+   it where. The previous version of this document said messages, tasks and approvals share one
+   counter; the code does not do that for approvals.
+4. **Two more records live next to the log.** `messages.json` (the request record) is used only
+   to accept and deduplicate, which is fine; `transcript.json` (model context) is a separate copy.
+   Until it is computed from the log, what Xiaoyou remembers can differ from what the phone shows.
+5. **Computer sessions get the wrong state.** `desktop_sync.py` maps a computer session's `idle`
+   (this turn has ended) to the card state `done`, so the phone shows "finished" when only the
+   turn has ended.
+
+## Target architecture: the record hub
+
+Wrap `Cards` and `MessageLog` in one layer, the **record hub** (tentatively `Record` in
+`record.py`). It is the only place in the runtime that may change records:
+
+```text
+   Sources (who produces content)           Record hub                        Projections (who reads)
+ ┌────────────────────────────┐     ┌─────────────────────────────┐      ┌──────────────────────────┐
+ │ messages from the phone     │─ev─►│ one lock, one counter        │─────►│ cards / legacy /v1/feed   │
+ │ Xiaoyou (dsh)               │     │ builds ids, checks fields     │─────►│ /v1/sync                  │
+ │ agents started by runtime   │     │ on disk before acknowledging  │─────►│ model context             │
+ │ observed computer sessions  │     │ messages/tasks/approvals logged│─────►│ shared desktop history    │
+ │ external reports (web etc.) │     │ runtime_id, epoch, floor      │─────►│ waiting syncs (wake-up)   │
+ └────────────────────────────┘     └─────────────────────────────┘      └──────────────────────────┘
+```
+
+Rules:
+
+- **It accepts events, not prebuilt records.** Callers say what happened; the hub decides the
+  id, `kind`, `author` and sequence. The events are:
+
+  | Event | Sent by | Result |
+  | --- | --- | --- |
+  | `accept(conversation, text, client_id)` | Service, on a phone message | an owner message, returned only once on disk |
+  | `reply_started / reply_partial / reply_final / reply_failed` | Xiaoyou, agent adapters | a reply from Xiaoyou or a helper; `partial` is not written to disk |
+  | `task_open / task_progress / task_state` | Service, agent adapters | a task and its state |
+  | `approval_open / approval_closed(by, where)` | approval bridge, desktop approvals | approvals enter the log with a sequence; closing records who answered and where |
+  | `observed(source, upstream_id, …)` | computer session observer | a read-only message whose id comes from the upstream record |
+  | `reported(source, upstream_id, …)` | external report endpoint | a read-only message whose id comes from the reporter |
+  | `note(conversation, text)` | the runtime itself | notes such as "the runtime restarted" |
+
+- **Every change takes a sequence, appends to the log and wakes waiters under one lock.** There is
+  no separate `bump()` for outside callers.
+- **Projections are read-only.** Cards, transcript and shared history subscribe to the hub's
+  changes and never write the log. They can be rebuilt from it.
+- **`Cards` becomes a projection**; `MessageLog` and `ledger.py` become storage inside the hub and
+  are no longer used directly from outside.
+
+"Unified management" then lives in one module: to know where a sentence came from and why it has
+its state, read the hub's events.
+
 ## The records
 
 ### Identity
@@ -43,11 +133,12 @@ were unique on one computer only, and every new view added another copy to keep 
   changed. Another computer or virtual machine has its own.
 - `epoch`: identifies the record set. It changes when the records are lost, broken or
   replaced; a client that sees it change resyncs from scratch.
-- Message id: unique within one runtime and generated by the runtime. The owner's sentence is
+- Message id: unique within one runtime and generated by the record hub. The owner's sentence is
   `<request id>:you` and Xiaoyou's answer to it `<request id>:reply` (the ids card entries
   already use); background results and summaries follow rules such as
-  `<task run id>-result:reply`. **Global id = `runtime_id` + `/` + message id**, which never
-  collides across computers.
+  `<task run id>-result:reply`; observed and reported messages combine the source and the
+  upstream id. **Global id = `runtime_id` + `/` + message id**, which never collides across
+  computers.
 - `client_id`: generated by the phone when sending, used only to deduplicate submissions per
   conversation, and mapped to the message id once accepted. Messages the phone has not sent
   yet are known only by it.
@@ -60,28 +151,48 @@ were unique on one computer only, and every new view added another copy to keep 
 | `conversation` | the conversation |
 | `task` | the task (card id) it belongs to; none for chat |
 | `scope` | `main` (main conversation) or `task` (said inside a task) |
-| `author` | `{kind, name}`: `owner`, `xiaoyou`, `agent` (a helper), `desktop` (an observed computer session) |
+| `author` | `{kind, name}`: `owner`, `xiaoyou`, `agent` (a helper), `desktop` (an observed computer session), `external` (an external report) |
 | `kind` | `user`, `reply`, `handoff`, `result`, `summary`, `note` (for example "the runtime restarted") |
 | `reply_to` | the message this answers |
 | `text` / `partial` | final text / the whole reply so far (replaced, not appended; empty withdraws it) |
 | `status` | `queued`, `streaming`, `final`, `failed`, `cancelled` |
-| `source` | `{type, session_id?, runtime_id?}`: `runtime` (made here), `desktop` (observed, read-only, with `session_id`), `imported` (history brought from another runtime, with its original `runtime_id`). Local messages do not repeat `runtime_id`; the sync response carries it at the top level |
+| `source` | `{type, session_id?, runtime_id?, origin?}`: `runtime` (made here), `desktop` (observed, read-only, with `session_id`), `external` (reported, read-only, with `origin` and `session_id`), `imported` (history brought from another runtime, with its original `runtime_id`). Local messages do not repeat `runtime_id`; the sync response carries it at the top level |
 | `attachments` | attachment ids |
 | `created_at`, `rev`, `seq` | creation time, revision of this record (only grows, also across restarts; implemented as the sequence), log sequence |
 
 ### Task (today's card)
 
-A task groups messages: id, conversation, title, state (working, waiting for approval,
-finished...), who works on it, progress, the ids of its messages, and usage. For existing
-clients a card still carries copies of its messages (`entries`); those are a projection, not a
-second record.
+A task groups messages: id, conversation, title, state, who works on it, progress, the ids of
+its messages, and usage. For existing clients a card still carries copies of its messages
+(`entries`); those are a projection, not a second record.
+
+States separate "this turn has ended" from "the whole task is finished":
+
+| State | Meaning |
+| --- | --- |
+| `working` | in progress |
+| `waiting` | waiting for an approval or for the owner |
+| `turn_ended` | this turn has ended, the task has not (a computer session's `idle` maps here) |
+| `done` / `failed` / `cancelled` | the task is over |
+| `unavailable` | its state cannot be seen right now (for example an observed source stopped updating) |
+
+Older apps do not know `turn_ended`; the `/v1/feed` projection still maps it to `done` for them,
+while `/v1/sync` returns the real state.
+
+### Approval
+
+An approval is a record in the log and takes a sequence on every change: id, task, who asked,
+what for, state (`pending`, `allowed`, `denied`, `expired`, `withdrawn`) and who answered
+(`phone`, `desktop`, `device`). The phone receives them incrementally by sequence and sees how an
+approval ended even if it appeared and disappeared between syncs.
 
 ### Log and sequence
 
-Every change to a message, task or approval takes a `seq` from one counter. Within an `epoch`
-the sequence only grows, also across restarts; it is increasing, not necessarily contiguous.
+Every change to a message, task or approval takes a `seq` from one counter in the record hub.
+Within an `epoch` the sequence only grows, also across restarts; it is increasing, not
+necessarily contiguous.
 
-The log is stored in `state/cards.log.jsonl` (one line per latest version of a message,
+The log is stored in `state/cards.log.jsonl` (one line per latest version of a record,
 appended) and keeps up to 5000 messages. Beyond that the oldest messages that are no longer on
 any card are dropped. **Dropping is not deletion**: no tombstone is sent and clients keep their
 cached copies, otherwise the phone's chat history would vanish with the runtime's trimming. The
@@ -94,24 +205,69 @@ snapshot again. Only an explicit deletion, should one exist later, appears in `r
 | --- | --- |
 | `GET /v1/info` (token required) | returns `runtime_id`, `epoch`, `protocol`, `capabilities`, `name` and `version`; `/healthz` needs no token, so it does not carry them |
 | `POST /v1/messages` with `client_id` | `202` only after the message is on disk; same conversation and `client_id`: the original message when the content matches, `409` when it differs; `503` when it cannot be written |
-| `GET /v1/sync?conversation=&after=&epoch=&wait=` | returns `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`; `after=0` is a full snapshot; `reset: true` (with a snapshot from 0) when the `epoch` does not match, `after` is above the current `seq`, or older than `floor`. A task is a card without `entries` and with the ids of its messages in `members`. Nothing may be lost between the snapshot and the following increments |
+| `GET /v1/sync?conversation=&after=&epoch=&wait=` | returns `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`; `after=0` is a full snapshot; `reset: true` (with a snapshot from 0) when the `epoch` does not match, `after` is above the current `seq`, or older than `floor`. A task is a card without `entries` and with the ids of its messages in `members`. `approvals` becomes incremental by sequence (above). Nothing may be lost between the snapshot and the following increments |
 | `POST /v1/approvals/<id>` | answers an approval, unchanged |
+| `POST /v1/reports` (token required, new) | an external source reports progress; see the next section |
 
 Client rules: apply first, then advance the cursor; merge by global id; the higher `rev`
 wins; a final text is never replaced by a `partial`; unknown optional fields are ignored and an
 unknown required structure asks for an upgrade. The existing `/v1/feed` stays as the projection
 for older apps and gets nothing new.
 
+## Source connection: which sessions can come in
+
+Sessions from elsewhere that the phone can show come in three kinds with different abilities,
+and the UI must say which:
+
+| Source | How it comes in | What the phone can do | Today |
+| --- | --- | --- | --- |
+| Agents started by the runtime (`claude`, `codex`, `tailor`…) | agent adapters send events | view, steer, cancel, approve | exists |
+| Claude Code and Codex sessions the owner opened on the computer | the observer reads local transcript files every second | read-only; optional approval bridge | exists; new sessions found in about 2 seconds, the `idle` mapping must change |
+| **Sessions not on this computer**: claude.ai on the web, cloud Claude Code, other people's computers | there are no local transcript files, so the observer **cannot read them** | read-only, only if the source reports itself | **missing** |
+
+The third kind is why the app cannot see what Claude on the web is doing: that conversation is
+stored on claude.ai and the runtime has no way to read it. The fix is a report endpoint the
+source calls itself:
+
+- `POST /v1/reports`: `{origin, session_id, title?, state, text?, upstream_id, at}`. `origin` names
+  the source (for example `claude-web`); `upstream_id` comes from the reporter, so repeated reports
+  are not recorded twice. The hub records a read-only message with `source: external` on an
+  "external session" task.
+- How a source reports: when Claude on the web can run commands on the owner's Mac, its project
+  instructions ask it to run `python3 -m xiaoyou_runtime.report …` when it starts, finishes a
+  stage and ends. A source that cannot run commands cannot connect, and the phone does not pretend
+  to see it.
+- Reports are read-only and cannot be continued from the phone; a state that has not been updated
+  for a while shows as `unavailable`, never as finished.
+
+## Multiple runtimes on the phone
+
+Today the phone follows only the selected runtime: switching clears the cards and fetches from
+scratch (`selectedRuntime` and `resetCards` in `RuntimeClient.java`). The phone identifies a
+computer by its address, so the same Mac's LAN address and Funnel address count as two
+computers. New rules:
+
+1. **Identify a computer by `runtime_id`, not by address.** When an address is added, call
+   `/v1/info` first; addresses with the same `runtime_id` belong to one computer. If one address
+   fails, try another without clearing data.
+2. **One local cache and one cursor per computer**, keyed by `runtime_id`. Switching the computer
+   on screen clears nothing; switching back continues incrementally.
+3. **Fully sync only the selected computer at first; fetch only a summary from the others**
+   (pending approvals, new results) and show a badge in the sidebar. Full concurrent sync of
+   several computers comes later if it is needed.
+4. A sentence exists only on the runtime it belongs to; the phone tells them apart by global id
+   and never merges across computers.
+
 ## Which projection each end is
 
 | Projection | What it computes from the log | What it may write |
 | --- | --- | --- |
-| Runtime cards | messages and state grouped by task | nothing directly; the runtime writes the log |
+| Runtime cards, legacy `/v1/feed` | messages and state grouped by task | nothing; the record hub writes the log |
 | Model context (transcript) | recent final messages; `imported` ones keep their origin | nothing |
 | Shared history for desktop agents | the same, for agents on the computer | nothing |
-| Phone chat and tasks | a local cache of the log keyed by global id, plus messages not sent yet | new messages, approval answers, cancellation |
+| Phone chat and tasks | one local cache of the log per runtime, keyed by global id, plus messages not sent yet | new messages, approval answers, cancellation |
 | Device screen | the recent window from the phone; the phone maps global ids to the device's short ids | buttons and voice become messages through the phone |
-| Observed computer sessions | messages with `source: desktop`, ids taken from the upstream transcript records | read-only |
+| Observed computer sessions, external reports | messages with `source: desktop` / `external` | read-only |
 
 ## How to connect
 
@@ -120,12 +276,13 @@ for older apps and gets nothing new.
    another computer; data is keyed by `runtime_id`, so ids never collide. Before connecting it,
    run the conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`
    (it sends two sentences in a separate conversation, so it calls a model once).
-2. **A new agent behind a runtime**: its adapter only reports started, text so far, a progress
-   line, an approval request, finished and failed (the existing `Control` callbacks), and
-   declares what it supports (steering, cancellation, resuming a session). Ids, sequence,
-   storage and sync belong to the runtime; the agent does not touch them.
-3. **Observe-only sources** (sessions the owner opened on the computer) produce read-only
-   messages with `source: desktop` whose ids come from the upstream records, never from text.
+2. **A new agent behind a runtime**: its adapter only sends the hub the events started, text so
+   far, a progress line, an approval request, finished and failed (the existing `Control`
+   callbacks), and declares what it supports (steering, cancellation, resuming a session). Ids,
+   sequence, storage and sync belong to the record hub; the agent does not touch them.
+3. **Observe-only sources**: when transcript files exist on this computer, the observer sends
+   `observed` events; otherwise the source calls `/v1/reports`. Both are read-only and take their
+   ids from upstream, never from text.
 
 ## What does not change
 
@@ -136,11 +293,17 @@ for older apps and gets nothing new.
 
 ## Steps
 
-| Step | Content | Status |
-| --- | --- | --- |
-| 1 | Accepted messages on disk, one sequence for messages and cards, `epoch`, `/v1/feed?messages=1` (PR #2) | committed, not deployed |
-| 2 | Runtime: `runtime_id`, the message log becomes the authoritative record (card entries are copies of it and it wins on startup), `/v1/info`, `/v1/sync`, conformance test (runtime 0.8.0) | committed, not deployed |
-| 2b | Compute the transcript (model context) from the log. It is internal to the runtime and does not affect the sync interface | later |
-| 3 | Phone app: chat and tasks become a cache keyed by global id, use `/v1/sync`; legacy text matching only as a one-time migration; drop the plain "me:" text list and compute ChatTurn from the cache | after step 2 |
-| 4 | Device: the phone maps global ids to short ids; the device protocol stays as is for now | with step 3 |
-| 5 | Remove compatibility paths once every app has been upgraded | last |
+| Step | Content | Where | Status |
+| --- | --- | --- | --- |
+| 1 | Accepted messages on disk, one sequence for messages and cards, `epoch`, `/v1/feed?messages=1` | runtime | merged into local `feature/usage-history`, waiting for a restart |
+| 2 | `runtime_id`, the message log becomes authoritative, `/v1/info`, `/v1/sync`, conformance test (runtime 0.8.0) | runtime | same |
+| 3 | **Record hub**: add `Record`, turn the 49 card writes into events, remove outside `bump()` calls; approvals enter the log with a sequence; incremental approvals in `/v1/sync`; computer session `idle` → `turn_ended` (`/v1/feed` still says `done`) | runtime | next, about 2–3 days |
+| 4 | Compute the transcript and the shared desktop history from the log (formerly 2b); `transcript.json` becomes a migration source only | runtime | with step 3 or right after, about 1 day |
+| 5 | External reports: `/v1/reports`, the `xiaoyou_runtime.report` command, report cases in the conformance test | runtime | about 1 day, parallel to step 4 |
+| 6 | Phone app: identify computers by `runtime_id` and merge their addresses; one cache and cursor per computer; use `/v1/sync`; legacy text matching only as a one-time migration; drop the plain "me:" list and compute ChatTurn from the cache; show `turn_ended`, `unavailable` and read-only marks for external sources | app | after steps 3–5, about 3–4 days |
+| 7 | Device: the phone maps global ids to short ids; the device protocol stays as is for now | app | with step 6 |
+| 8 | Full concurrent sync of several runtimes | app | if needed |
+| 9 | Remove compatibility paths once every app has been upgraded | both | last |
+
+Steps 3–5 change only the runtime and older apps keep working, so they can ship together as one
+PR; steps 6 and 7 are one app PR.
