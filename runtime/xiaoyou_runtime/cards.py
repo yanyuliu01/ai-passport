@@ -6,7 +6,11 @@
 模型（model）、到现在花了多少（cost）。
 
 每次有卡变化，全局的序号加一并记在那张卡上：客户端记住看到的最大序号，带着它来
-等（/v1/feed），就只会拿到之后变过的卡。
+等（/v1/feed），就只会拿到之后变过的卡。消息（Service 里还在处理的那些话）变化时也从
+这里取号（bump），所以卡和消息排在同一条序号上，客户端一个游标就能接着拉两样东西。
+
+序号和这份记录的编号（epoch）都落盘：Runtime 重启后序号接着往上走；记录文件丢了、坏了
+或者换了一份时 epoch 会变，客户端看到 epoch 变了就从头同步。
 
 卡落盘在 state/cards.json，只留最近的若干张。Runtime 重启时还在做的事没法接着做，
 启动时把它们标成没做完。
@@ -15,6 +19,7 @@
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -52,6 +57,7 @@ class Cards:
         self._cards: Dict[str, Dict[str, Any]] = {}
         self._next = 1
         self._seq = 0
+        self._epoch = ""
         self._listeners: List[Listener] = []
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -63,7 +69,17 @@ class Cards:
                     self._cards[card["id"]] = self._clean(card)
             if isinstance(raw.get("next"), int) and not isinstance(raw.get("next"), bool):
                 self._next = max(1, raw["next"])
-            self._seq = max([card["seq"] for card in self._cards.values()] + [0])
+            saved_seq = raw.get("seq")
+            self._seq = max([card["seq"] for card in self._cards.values()]
+                            + [saved_seq if isinstance(saved_seq, int)
+                               and not isinstance(saved_seq, bool) else 0, 0])
+            if isinstance(raw.get("epoch"), str):
+                self._epoch = raw["epoch"]
+        fresh_epoch = not self._epoch
+        if fresh_epoch:
+            # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
+            # 只是从这以后它能认出“换了一份记录”。
+            self._epoch = uuid.uuid4().hex
         interrupted = [card for card in self._cards.values() if card["state"] in ACTIVE]
         for card in interrupted:
             self._seq += 1
@@ -76,7 +92,7 @@ class Cards:
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
-        if interrupted:
+        if interrupted or fresh_epoch:
             self._save()
 
     @staticmethod
@@ -157,7 +173,51 @@ class Cards:
         return copy
 
     def _save(self) -> None:
-        _write(self._path, {"next": self._next, "cards": list(self._cards.values())})
+        _write(self._path, {"next": self._next, "seq": self._seq, "epoch": self._epoch,
+                            "cards": list(self._cards.values())})
+
+    @property
+    def epoch(self) -> str:
+        """这份记录的编号：记录换了（文件丢了、坏了、换了一台）就不一样。"""
+        return self._epoch
+
+    @property
+    def seq(self) -> int:
+        with self._changed:
+            return self._seq
+
+    def bump(self, at_least: int = 0) -> int:
+        """别的东西（消息）变了，要一个新序号：叫醒在等的人，返回这个号。
+
+        at_least 用在启动时：消息记录里见过的最大序号比这里大时，从它往后接着发。
+        这里不落盘：序号会随下一次卡的变化写下去；消息自己也记着它拿到的号，重启时
+        取两边的最大值，不会往回走。"""
+        with self._changed:
+            self._seq = max(self._seq, at_least) + 1
+            self._changed.notify_all()
+            return self._seq
+
+    def since(self, conversation: str, after: int,
+              include_desktop: bool = False) -> Any:
+        """现在的序号，和这个对话里序号比 after 大的卡（按序号排）。两样是同一刻的。"""
+        with self._changed:
+            cards = [self._copy(card) for card in self._cards.values()
+                     if (card["conversation"] == conversation
+                         or (include_desktop and card.get("monitoring_only")))
+                     and card["seq"] > after]
+            cards.sort(key=lambda card: card["seq"])
+            return self._seq, cards
+
+    def wait_beyond(self, seq: int, timeout: float) -> int:
+        """等到序号超过 seq（任何卡或消息变了），最多等 timeout 秒；返回现在的序号。"""
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._changed:
+            while self._seq <= seq:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._changed.wait(remaining)
+            return self._seq
 
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
         """调用时已经拿着锁：记下这张卡变了，落盘，叫醒在等的人。"""

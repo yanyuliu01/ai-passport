@@ -9,8 +9,16 @@
 
 别的 Runtime 转过来的话（hop 大于 0）是例外：那边在等最终结果，所以这样的消息要
 等到那件事结束才算处理完。
+
+收下的话先落盘（state/messages.json，见 ledger.py）才回“收到了”。Runtime 重启后：
+还没开始处理的打字消息接着排队做；已经在处理（或者是还没识别的录音）的，不知道做到
+哪一步了，不自动重做，标成没做完，并在对话里留一张卡说明，主人可以再说一次。
+
+每条消息变化时从卡那里取一个序号（和卡共用），feed 带上 messages=1 时，一个游标就能
+同时拿到变了的卡和变了的消息：另一台手机能看到这边刚说的话和正在生成的回复。
 """
 
+import json
 import sys
 import threading
 import time
@@ -21,6 +29,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
+from .ledger import Ledger, content_hash, dedupe_key
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -39,12 +48,19 @@ MAX_HOP = 3
 MAX_BUSY_CONVERSATIONS = 4
 # 等卡的时候隔这么久看一眼用量变没变。
 FEED_USAGE_SECONDS = 5.0
-# 一次 feed 最多带这么多字节的卡，其余分几次给（见 Cards.changed）。
+# 一次 feed 最多带这么多字节的卡和消息，其余分几次给。
 FEED_BUDGET_BYTES = 48 * 1024
+FINISHED = ("done", "failed")
+RESTART_NOTE = "Runtime 重启了，这句话没处理完，可以再说一次"
+RESTART_VOICE_NOTE = "Runtime 重启了，这段录音没来得及识别，再说一次吧"
 
 
 class RequestError(Exception):
     """调用方给的内容不对；消息可以直接返回给调用方。"""
+
+
+class ConflictError(RequestError):
+    """同一个对话里，同一个 client_id 带来了不一样的内容（HTTP 409）。"""
 
 
 def _name(value: Any, what: str) -> str:
@@ -62,8 +78,11 @@ class Service:
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
-        self._messages = OrderedDict()  # type: OrderedDict[str, Dict[str, Any]]
-        self._by_client_id: Dict[str, str] = {}
+        self._ledger = Ledger(store.state_dir / "messages.json")
+        messages, dedupe, seq = self._ledger.load()
+        self._messages = messages  # type: OrderedDict[str, Dict[str, Any]]
+        # 对话 + client_id → 那句话的编号、内容指纹（见 ledger.py）
+        self._dedupe = dedupe  # type: OrderedDict[str, Dict[str, Any]]
         # 对话名 → 这条线上还没处理的东西：消息编号，或者一件要在这条线上做的事（转述
         # 帮手的结果）。有工作线程在处理的对话记在 _busy 里。
         self._lanes: Dict[str, Deque[Union[str, Callable[[], None]]]] = {}
@@ -74,6 +93,41 @@ class Service:
         self._held: Dict[str, str] = {}
         xiaoyou.defer = self._defer
         xiaoyou.cards.subscribe(self._card_changed)
+        # 序号接着上次往上走：卡和消息两边见过的最大值之后。
+        if seq > xiaoyou.cards.seq:
+            xiaoyou.cards.bump(at_least=seq)
+        self._recover()
+
+    def _recover(self) -> None:
+        """Runtime 刚启动：上次收下但没处理完的话。"""
+        requeue, unfinished = [], []
+        for message in self._messages.values():
+            if message["status"] in FINISHED:
+                continue
+            if message["status"] == "queued" and message["kind"] == "text":
+                requeue.append(message["id"])
+            else:
+                unfinished.append(message["id"])
+        for message_id in unfinished:
+            message = self._messages[message_id]
+            voice = message["kind"] == "voice" and not message["text"]
+            note = RESTART_VOICE_NOTE if voice else RESTART_NOTE
+            card = self._xiaoyou.cards.open(message["conversation"],
+                                            message["text"] or "语音消息", "failed")
+            self._xiaoyou.cards.update(
+                card["id"], said=message["text"] or "（语音）", say=note, brief=note,
+                mood="oops", turn_id=message_id,
+                scope="task" if message.get("pin") else "main")
+            message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
+                           card=card["id"], partial="", finished_at=time.time())
+            message["rev"] += 1
+            message["seq"] = self._xiaoyou.cards.bump()
+            self._remember(message)
+        with self._changed:
+            for message_id in requeue:
+                self._line_up(self._messages[message_id]["conversation"], message_id)
+            if unfinished or requeue:
+                self._save()
 
     @property
     def artifacts(self):
@@ -158,11 +212,17 @@ class Service:
         if isinstance(hop, bool) or not isinstance(hop, int) or not 0 <= hop <= MAX_HOP:
             raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
         effort, model = self._tier(agent, effort, model)
+        fingerprint = content_hash(kind, text, audio)
         with self._changed:
             if self._closed:
                 raise RequestError("Runtime 正在关闭")
-            if client_id is not None and client_id in self._by_client_id:
-                return self._snapshot(self._messages[self._by_client_id[client_id]])
+            if client_id is not None:
+                seen = self._dedupe.get(dedupe_key(conversation, client_id))
+                if seen is not None:
+                    if seen.get("hash") != fingerprint:
+                        raise ConflictError(
+                            "client_id %s 在这个对话里已经用过，内容不一样" % client_id)
+                    return self._seen(seen)
             message_id = uuid.uuid4().hex
             if audio is not None:
                 # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
@@ -205,17 +265,57 @@ class Service:
                 "events": [],
                 # 这条记录每变一次加一：调用方带着上次看到的值来等，有变化就能立刻知道
                 "rev": 0,
+                # 这条记录最近一次变化时拿到的序号（和卡共用一条），feed 靠它接着拉
+                "seq": self._xiaoyou.cards.bump(),
                 "hop": hop,
                 "created_at": time.time(),
                 "finished_at": None,
             }
             self._messages[message["id"]] = message
             if client_id is not None:
-                self._by_client_id[client_id] = message["id"]
+                self._dedupe[dedupe_key(conversation, client_id)] = {
+                    "conversation": conversation, "client_id": client_id, "id": message_id,
+                    "hash": fingerprint, "status": "queued", "card": card,
+                    "at": message["created_at"],
+                }
             self._trim()
+            # 先落盘再回“收到了”：之后 Runtime 重启，这句话也还在。
+            self._save()
             snapshot = self._snapshot(message)
             self._line_up(conversation, message_id)
         return snapshot
+
+    def _seen(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """调用时已经拿着锁：重复提交。消息还留着就给它；已经被挤掉了，给一份最小的。"""
+        message = self._messages.get(entry["id"])
+        if message is not None:
+            return self._snapshot(message)
+        return {
+            "id": entry["id"], "client_id": entry["client_id"],
+            "conversation": entry["conversation"], "kind": "text",
+            "status": entry.get("status") or "done", "text": "", "reply": None, "partial": "",
+            "brief": None, "mood": "idle", "error": None, "asked": None,
+            "card": entry.get("card"), "pin": False, "effort": None, "model": None,
+            "agent": None, "helper": None, "stage": None, "events": [], "rev": 0, "seq": 0,
+            "hop": 0, "created_at": entry.get("at") or 0, "finished_at": None,
+            "event_stream": True, "expired": True,
+        }
+
+    def _remember(self, message: Dict[str, Any]) -> None:
+        """调用时已经拿着锁（或者还没有别的线程）：去重表里跟着记最终状态和卡。"""
+        if message.get("client_id") is None:
+            return
+        entry = self._dedupe.get(dedupe_key(message["conversation"], message["client_id"]))
+        if entry is not None and entry["id"] == message["id"]:
+            entry["status"] = message["status"]
+            entry["card"] = message.get("card")
+
+    def _save(self) -> None:
+        """调用时已经拿着锁：把消息和去重表写下去。写不了不能让工作线程死掉。"""
+        try:
+            self._ledger.save(self._messages, self._dedupe, self._xiaoyou.cards.seq)
+        except OSError as error:
+            sys.stderr.write("消息记录写不下去：%s\n" % error)
 
     def _tier(self, agent: Optional[str], effort: Any, model: Any) -> Any:
         """检查调用方选的努力程度和模型。点了帮手时必须是那个帮手能选的。"""
@@ -253,10 +353,15 @@ class Service:
     # ---- 卡 ----
 
     def feed(self, conversation: Any, after: Any = 0, wait: float = 0.0,
-             usage: Any = None) -> Dict[str, Any]:
+             usage: Any = None, messages: bool = False) -> Dict[str, Any]:
         """这个对话里序号比 after 大的卡，和还在等回答的授权；没有变化时最多等 wait 秒。
 
-        每次都带上现在的用量。usage 是调用方手里那份用量的 rev：带了它，用量变了也会提前返回。"""
+        每次都带上现在的用量。usage 是调用方手里那份用量的 rev：带了它，用量变了也会提前返回。
+        messages 为 True 时还带上序号比 after 大的消息（这个对话里收下的话，包括正在生成的
+        回复）；不带时和以前完全一样，旧客户端不会因为消息变化被频繁叫醒。
+
+        epoch 是这份记录的编号：和客户端上次看到的不一样，说明 Runtime 换了一份记录，客户端
+        应该丢掉游标从 0 重新拉。"""
         conversation = _name(conversation, "conversation")
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
@@ -264,19 +369,55 @@ class Service:
             raise RequestError("usage 应该是整数")
         meter = self._xiaoyou.usage
         meter.poke()  # 有人在看：太久没问过额度就在后台问一次
+        cards_store = self._xiaoyou.cards
         deadline = time.monotonic() + max(0.0, wait)
         while True:
+            # 先在卡的锁里同时拿到现在的序号和变了的卡，再取序号不超过它的消息：消息取号
+            # 和记号是在消息的锁里一起做的，所以序号不超过它的消息此时都已经记好了。
+            seq, cards = cards_store.since(conversation, after, include_desktop=True)
+            changed = self._messages_since(conversation, after, seq) if messages else []
             remaining = deadline - time.monotonic()
-            # 等卡的同时隔一会儿看一眼用量变没变。
-            pause = remaining if usage is None else min(remaining, FEED_USAGE_SECONDS)
-            result = self._xiaoyou.cards.changed(conversation, after, pause, include_desktop=True,
-                                                 budget=FEED_BUDGET_BYTES)
-            if (result["cards"] or deadline - time.monotonic() <= 0
+            if (cards or changed or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
+            # 等任何东西变（序号超过 seq）；同时隔一会儿看一眼用量变没变。
+            cards_store.wait_beyond(seq, remaining if usage is None
+                                    else min(remaining, FEED_USAGE_SECONDS))
+        result = self._page(seq, cards, changed, messages)
+        result["epoch"] = cards_store.epoch
         # 授权出现和有了答案都会让那张卡变一次，所以等卡就等到了授权。
         result["approvals"] = self._xiaoyou.approvals.pending(conversation, include_desktop=True)
         result["usage"] = meter.snapshot()
+        return result
+
+    def _messages_since(self, conversation: str, after: int, upto: int) -> List[Dict[str, Any]]:
+        with self._changed:
+            return [self._snapshot(message) for message in self._messages.values()
+                    if message["conversation"] == conversation
+                    and after < message.get("seq", 0) <= upto]
+
+    @staticmethod
+    def _page(seq: int, cards: List[Dict[str, Any]], messages: List[Dict[str, Any]],
+              with_messages: bool) -> Dict[str, Any]:
+        """按序号排好，一次最多 FEED_BUDGET_BYTES（至少一样）：剩下的标 more，序号停在
+        给出的最后一样上，客户端照常拿这个序号再要就接着往下给。"""
+        items = sorted([("card", card) for card in cards]
+                       + [("message", message) for message in messages],
+                       key=lambda item: item[1]["seq"])
+        size = 0
+        for index, (_, item) in enumerate(items):
+            size += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if size > FEED_BUDGET_BYTES and index > 0:
+                result = {"seq": items[index - 1][1]["seq"], "more": True,
+                          "cards": [obj for kind, obj in items[:index] if kind == "card"]}
+                if with_messages:
+                    result["messages"] = [obj for kind, obj in items[:index] if kind == "message"]
+                return result
+        # 卡被清掉、或者 Runtime 换了一份记录之后，客户端手里的序号可能比这里的大：
+        # 把现在的序号给回去，它就知道要从头再同步。
+        result = {"seq": seq, "cards": cards}
+        if with_messages:
+            result["messages"] = messages
         return result
 
     def approve(self, approval_id: str, decision: Any) -> Optional[bool]:
@@ -383,15 +524,12 @@ class Service:
             worker.join(timeout=5)
 
     def _trim(self) -> None:
-        # 只丢已经处理完的旧消息，还在排队的不能丢。
+        # 只丢已经处理完的旧消息，还在排队的不能丢。去重表另外留着（见 ledger.py）。
         for message_id in list(self._messages):
             if len(self._messages) <= MAX_KEPT_MESSAGES:
                 break
-            old = self._messages[message_id]
-            if old["status"] in ("done", "failed"):
+            if self._messages[message_id]["status"] in FINISHED:
                 del self._messages[message_id]
-                if old["client_id"] is not None:
-                    self._by_client_id.pop(old["client_id"], None)
 
     def _update(self, message_id: str, **fields: Any) -> None:
         with self._changed:
@@ -399,6 +537,9 @@ class Service:
             if message is not None:
                 message.update(fields)
                 message["rev"] += 1
+                message["seq"] = self._xiaoyou.cards.bump()
+                self._remember(message)
+                self._save()
             self._changed.notify_all()
 
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
@@ -414,6 +555,7 @@ class Service:
                 if message["status"] == "running" and message["partial"] != text:
                     message["partial"] = text
                     message["rev"] += 1
+                    message["seq"] = self._xiaoyou.cards.bump()
                     self._changed.notify_all()
                 return
             if len(message["events"]) < MAX_EVENTS:
@@ -427,6 +569,7 @@ class Service:
                 message["stage"] = text[:MAX_EVENT_CHARS]
                 message["helper"] = agent if kind == "handoff" else None
             message["rev"] += 1
+            message["seq"] = self._xiaoyou.cards.bump()
             self._changed.notify_all()
 
     def _drain(self, conversation: str) -> None:

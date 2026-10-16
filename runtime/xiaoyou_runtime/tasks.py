@@ -104,7 +104,8 @@ class Tasks:
 
     def amend(self, card: str, mode: str, text: str, effort: Optional[str] = None,
               model: Optional[str] = None) -> Optional[str]:
-        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；没在做返回 None。
+        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；排着的补充已经
+        有 MAX_PENDING 条、这条没记上时返回 full；没在做返回 None。
 
         effort / model 不是 None 时，之后的几轮换成这一档、这个模型。正在跑的那一轮换不了：
         改要求（redo）时为了换档会停掉重做，不走中途追加。
@@ -120,8 +121,10 @@ class Tasks:
             if model is not None:
                 task.model = model
             if mode == "after":
-                if len(task.after) < MAX_PENDING:
-                    task.after.append(text)
+                if len(task.after) >= MAX_PENDING:
+                    # 排着的补充满了：明说没记上，不能回“after”让人以为记下了。
+                    return "full"
+                task.after.append(text)
                 return "after"
             control = task.control
         # 中途追加要和帮手通信，不拿着锁做。

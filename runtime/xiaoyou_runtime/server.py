@@ -4,14 +4,17 @@
   GET  /v1/agents                       小幽在这台 Runtime 上能用的代理
   GET  /v1/usage?refresh=1              订阅额度还剩多少，每个帮手用的模型和档位；refresh 现问一次
   POST /v1/messages                     {"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?,
-                                         "effort"?, "model"?} → 202 + 消息
+                                         "effort"?, "model"?} → 202 + 消息；同一对话里同一 client_id
+                                         内容一样返回原来那条，不一样 409
   POST /v1/voice?conversation=&client_id=&agent=&card=&pin=&effort=&model=
                                         请求体是 16 位单声道 WAV → 202 + 消息
   GET  /v1/messages/<id>?wait=<秒>&rev=<n>  查结果；wait 最多 60 秒，处理完会提前返回；
                                         带 rev 时记录一有变化就返回；回复还在生成时
                                         partial 是已经生成的那部分（流式）
-  GET  /v1/feed?conversation=&after=<序号>&wait=<秒>&usage=<rev>
-                                        之后变过的卡，和现在的用量；没有变化时最多等 wait 秒
+  GET  /v1/feed?conversation=&after=<序号>&wait=<秒>&usage=<rev>&messages=1
+                                        之后变过的卡，和现在的用量；没有变化时最多等 wait 秒。
+                                        带 messages=1 时还给之后变过的消息（同一条序号）；
+                                        epoch 变了说明换了一份记录，要从 0 重新拉
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
   GET  /v1/artifacts/<编号>/content     按附件编号取得已保存的文件快照
@@ -56,7 +59,7 @@ from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 
 # 比这小的回答不值得压。
 GZIP_MIN_BYTES = 2048
-from .service import MAX_AUDIO_BYTES, RequestError, Service
+from .service import MAX_AUDIO_BYTES, ConflictError, RequestError, Service
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_HISTORY_BODY_BYTES = 1024 * 1024
@@ -151,7 +154,7 @@ def make_server(config: Config, service: Service,
                 return
             after = asked[1]
             if service.get(message_id) is None:
-                self._fail(404, "没有这条消息（Runtime 重启后旧消息查不到）")
+                self._fail(404, "没有这条消息（太旧的已经清掉了）")
                 return
             self.close_connection = True
             self.send_response(200)
@@ -369,7 +372,7 @@ def make_server(config: Config, service: Service,
                     return
                 try:
                     feed = service.feed(query.get("conversation", ["default"])[0], after, asked[0],
-                                        seen)
+                                        seen, query.get("messages", [""])[0] in ("1", "true"))
                 except RequestError as error:
                     self._fail(400, str(error))
                     return
@@ -388,7 +391,7 @@ def make_server(config: Config, service: Service,
                 wait, rev = asked
                 message = service.get(parts[2], wait, rev)
                 if message is None:
-                    self._fail(404, "没有这条消息（Runtime 重启后旧消息查不到）")
+                    self._fail(404, "没有这条消息（太旧的已经清掉了）")
                 else:
                     self._send(200, message)
                 return
@@ -415,6 +418,8 @@ def make_server(config: Config, service: Service,
                     query.get("pin", [""])[0] in ("1", "true"),
                     query.get("effort", [None])[0], query.get("model", [None])[0],
                 )
+            except ConflictError as error:
+                self._fail(409, str(error))
             except RequestError as error:
                 self._fail(400, str(error))
                 return
@@ -491,6 +496,8 @@ def make_server(config: Config, service: Service,
                 if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "reset":
                     self._send(200, {"reset": service.reset(parts[2])})
                     return
+            except ConflictError as error:
+                self._fail(409, str(error))
             except RequestError as error:
                 self._fail(400, str(error))
                 return
