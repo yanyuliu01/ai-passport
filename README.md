@@ -114,7 +114,7 @@ to Claude desktop's Hardware Buddy (no voice or cards in that mode).
 | --- | --- | --- | --- |
 | Firmware | prerelease `firmware-build-22` (`8220106`, whale pixel head plus state-driven motion) | passes | Push-to-talk with the phone connected works on the device (`firmware-build-19`); the three screens have been used; the whale's sleeping face and breathing were confirmed on the device; the state-driven motion, the fourth screen and task history have not been checked on the device yet |
 | Phone app | 0.11.0 (version code 17), prerelease `companion-build-26` | passes | 0.2.0 paired and chatted on a phone; the sidebar version, phone hold-to-talk, approval alerts and updates through the runtime have not been checked item by item on a phone |
-| Runtime | 0.7.0 | all 444 tests pass | Runs daily on the author's Mac; Claude Code subscription usage, Codex app-server approvals and a real round trip through the desktop approval bridge have not been tested there yet |
+| Runtime | 0.7.0 | all 452 tests pass | Runs daily on the author's Mac; Claude Code subscription usage, Codex app-server approvals and a real round trip through the desktop approval bridge have not been tested there yet |
 
 Each part's document ends with what is and is not verified. Development happens on
 `feature/usage-history`; the other branches are:
