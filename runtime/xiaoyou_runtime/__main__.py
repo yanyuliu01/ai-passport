@@ -16,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
+from . import reports as reports_module
 from . import (__version__, agents as agent_module, app_release, firmware_cli, router as router_module, stt,
                workspace as workspace_module)
 from .agents import AgentError
@@ -86,6 +87,7 @@ def main(argv=None) -> int:
     commands = parser.add_subparsers(dest="command", metavar="子命令")
     firmware_cli.add_arguments(commands)
     app_release.add_arguments(commands)
+    reports_module.add_arguments(commands)
     desktop_handoff.add_arguments(commands)
     usage_parser = commands.add_parser(
         "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
@@ -108,6 +110,8 @@ def main(argv=None) -> int:
         # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
         return firmware_cli.run(config, Path(args.config), args,
                                 arguments[arguments.index("firmware") + 1:])
+    if args.command == "report":
+        return reports_module.run(config, args)
     if args.command == "app":
         if args.action is None:
             parser.parse_args(["app", "--help"])
@@ -223,7 +227,7 @@ def main(argv=None) -> int:
                                             ).strip().lower() in ("y", "yes")
                         else:
                             print("（这里没法问你，当作不行）", file=sys.stderr)
-                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny")
+                        xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny", by="computer")
             except KeyboardInterrupt:
                 xiaoyou.cancel(turn.card)
                 xiaoyou.close()

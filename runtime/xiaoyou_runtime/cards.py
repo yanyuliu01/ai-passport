@@ -225,6 +225,11 @@ class Cards:
         # 写成功了才算占下：写失败时下一次变化还会再试。
         self._reserved = reserved
 
+    def set_origin(self, runtime_id: str) -> None:
+        """本机产生的消息记录都写上这台 Runtime 的编号（见 MessageLog.set_origin）。"""
+        with self._changed:
+            self._log.set_origin(runtime_id)
+
     @property
     def epoch(self) -> str:
         """这份记录的编号：记录换了（文件丢了、坏了、换了一台）就不一样。"""
@@ -270,6 +275,15 @@ class Cards:
     def request(self, message: Dict[str, Any]) -> None:
         """Service 收下的一次请求变了（见 MessageLog.request）。"""
         with self._changed:
+            self._log.request(message)
+            self._changed.notify_all()
+
+    def request_changed(self, message: Dict[str, Any], revise: bool = True) -> None:
+        """修订号加一（revise）、取序号、写进日志、叫醒等待的人：一把锁里做完（见 record.py）。"""
+        with self._changed:
+            if revise:
+                message["rev"] = message.get("rev", 0) + 1
+            message["seq"] = self._issue()
             self._log.request(message)
             self._changed.notify_all()
 

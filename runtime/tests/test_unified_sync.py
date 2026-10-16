@@ -4,6 +4,7 @@
 """
 
 import json
+import threading
 import time
 import unittest
 
@@ -88,6 +89,65 @@ class UnifiedSyncTests(TempDirCase):
         own = xiaoyou.cards.open("default", "自己的事", "done", "codex")
         self.assertEqual("done", next(item for item in service.sync("default", 0)["tasks"]
                                       if item["id"] == own["id"])["state"])
+
+    def test_subject_is_separate_from_the_runtime_and_records_carry_their_origin(self):
+        service, _, xiaoyou = self.start()
+        info = service.info()
+        self.assertRegex(info["subject_id"], "^[0-9a-f]{32}$")
+        self.assertNotEqual(info["subject_id"], info["runtime_id"])
+        message = service.submit("记一句", client_id="o1")
+        service.get(message["id"], wait=5)
+        page = service.sync("default", 0)
+        self.assertEqual(info["subject_id"], page["subject_id"])
+        mine = [item for item in self.all_messages(service).values() if item["id"].startswith(message["id"])]
+        self.assertTrue(mine)
+        self.assertTrue(all(item["source"].get("runtime_id") == info["runtime_id"] for item in mine))
+        # On disk too, so a moved or merged log still knows where each record was made.
+        lines = [json.loads(line) for line in (self.folder / "state" / "cards.log.jsonl").read_text("utf-8").splitlines()]
+        written = [line for line in lines if line.get("id", "").startswith(message["id"])]
+        self.assertTrue(written)
+        self.assertTrue(all(line["source"].get("runtime_id") == info["runtime_id"] for line in written))
+        # The same state directory keeps both ids after a restart.
+        again, _, _ = self.start()
+        self.assertEqual((info["subject_id"], info["runtime_id"]),
+                         (again.info()["subject_id"], again.info()["runtime_id"]))
+
+    def test_approvals_come_by_sequence_with_their_outcome(self):
+        service, _, xiaoyou = self.start()
+        card = xiaoyou.cards.open("default", "要确认的事", "working", "claude")
+        cursor = self.all_seq(service)
+        asked = xiaoyou.approvals.ask(card["id"], "default", "claude", "Bash", "ls")
+        page = service.sync("default", cursor)
+        item = next(entry for entry in page["approvals"] if entry["id"] == asked)
+        self.assertEqual(("pending", "Bash"), (item["status"], item["tool"]))
+        self.assertGreater(item["seq"], cursor)
+        # An approval that appears and is answered between two syncs still shows its outcome.
+        quick = xiaoyou.approvals.ask(card["id"], "default", "claude", "Write", "x")
+        xiaoyou.approvals.answer(quick, "allow")
+        xiaoyou.approvals.withdraw(asked)
+        later = {entry["id"]: entry for entry in service.sync("default", page["seq"])["approvals"]}
+        self.assertEqual(("allowed", "phone"), (later[quick]["status"], later[quick]["by"]))
+        self.assertEqual(("withdrawn", "unanswered"), (later[asked]["status"], later[asked]["reason"]))
+        self.assertGreater(later[asked]["seq"], later[quick]["seq"])
+        # Another conversation's approvals are not included.
+        other = xiaoyou.cards.open("other", "别的对话", "working", "claude")
+        hidden = xiaoyou.approvals.ask(other["id"], "other", "claude", "Bash", "pwd")
+        self.assertNotIn(hidden, {entry["id"] for entry in service.sync("default", 0)["approvals"]})
+        # Only an approval change still wakes a waiting sync.
+        seq = max(self.all_seq(service), max(entry["seq"] for entry in service.sync("default", 0)["approvals"]))
+        timer = threading.Timer(0.3, lambda: xiaoyou.approvals.ask(card["id"], "default", "claude", "Edit", "y"))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        woke = service.sync("default", seq, None, 5)
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertIn("Edit", {entry["tool"] for entry in woke["approvals"]})
+
+    def all_seq(self, service):
+        page = service.sync("default", 0)
+        while page["more"]:
+            page = service.sync("default", page["seq"])
+        return page["seq"]
 
     def test_sync_carries_usage_and_wakes_up_when_it_changes(self):
         service, _, xiaoyou = self.start()
@@ -314,7 +374,7 @@ class HttpTests(TempDirCase):
         status, info = self.call("GET", "/v1/info")
         self.assertEqual(status, 200)
         self.assertEqual(sorted(info), ["capabilities", "epoch", "name", "protocol", "runtime_id",
-                                        "version"])
+                                        "subject_id", "version"])
         self.assertEqual(self.call("GET", "/v1/sync?after=x")[0], 400)
         status, body = self.call("GET", "/v1/sync?after=0")
         self.assertEqual((status, body["runtime_id"], body["reset"]), (200, info["runtime_id"], False))

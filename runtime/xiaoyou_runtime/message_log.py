@@ -41,7 +41,12 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
     """卡上的一个条目对应的消息（不含 rev、seq、status）。"""
     desktop = card.get("monitoring_only") is True
     you = entry["role"] == "you"
-    if desktop:
+    if desktop and card.get("source") == "external":
+        # 别处上报来的会话（reports.py）：只读，标明来源。
+        origin = card.get("origin") or "external"
+        author = {"kind": "owner", "name": "you"} if you else {"kind": "external", "name": origin}
+        source = {"type": "external", "origin": origin, "session_id": card.get("session_id") or ""}
+    elif desktop:
         author = {"kind": "owner", "name": "you"} if you else {
             "kind": "desktop", "name": card.get("agent") or "desktop"}
         source = {"type": "desktop", "session_id": card.get("session_id") or ""}
@@ -80,7 +85,20 @@ class MessageLog:
         self._messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._lines = 0
         self.floor = 0
+        # 这台 Runtime 的编号：本机产生的记录都写上它（产地），日志搬家或和别处合并时不会认错。
+        self.origin = ""
         self._load()
+
+    def set_origin(self, runtime_id: str) -> None:
+        self.origin = runtime_id
+        for record in self._messages.values():
+            self._stamp(record)
+
+    def _stamp(self, record: Dict[str, Any]) -> None:
+        source = record.get("source")
+        if self.origin and isinstance(source, dict) and source.get("type") == "runtime" \
+                and not source.get("runtime_id"):
+            source["runtime_id"] = self.origin
 
     # ---- 文件 ----
 
@@ -205,6 +223,7 @@ class MessageLog:
     # ---- 写 ----
 
     def _put(self, record: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
+        self._stamp(record)
         # 修订号就用序号：序号跨重启只增不减（Cards 预留号段），没落盘的生成中修订也不会
         # 让重启后的修订号比客户端手里的小。
         record["seq"] = self._bump()

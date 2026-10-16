@@ -29,6 +29,13 @@ GONE = "这件事已经停了"
 
 # 授权出现或有了答案时调用：(卡的编号, 还在等的授权编号或 None)。
 Changed = Callable[[str, Optional[str]], None]
+# 授权的每次变化都从和消息、卡同一个计数器取一个序号（见统一消息结构），/v1/sync 按它增量给。
+Sequence = Callable[[], int]
+# 授权的结局：等着、允许、拒绝、收回（那件事停了、电脑上处理了或过期了、没人答）。
+STATUSES = ("pending", "allowed", "denied", "withdrawn")
+FIELDS = ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind",
+          "source", "session_id", "project", "remote_actionable", "expires_at",
+          "request_id", "subagent_id", "turn_id")
 
 
 def describe(agent: str, tool: str, tool_input: Any) -> Tuple[str, str]:
@@ -66,7 +73,8 @@ def progress_line(tool: str, tool_input: Any) -> str:
 
 
 class Approvals:
-    def __init__(self, changed: Optional[Changed] = None):
+    def __init__(self, changed: Optional[Changed] = None, sequence: Optional[Sequence] = None):
+        self._sequence = sequence
         self._changed = threading.Condition()
         self._items: Dict[str, Dict[str, Any]] = {}
         self._next = 1
@@ -98,6 +106,7 @@ class Approvals:
                         self._items[approval_id][key] = context[key]
             if responder is not None:
                 self._responders[approval_id] = responder
+            self._mark(self._items[approval_id], "pending")
             # 答过的只留最近一些，够回答“这个已经答过了”就行。
             answered = [key for key, item in self._items.items() if item["decision"] is not None]
             for key in answered[:-50]:
@@ -128,14 +137,17 @@ class Approvals:
                 self._changed.wait(1.0 if deadline is None else max(
                     0.01, min(1.0, deadline - time.monotonic())))
 
-    def withdraw(self, approval_id: str) -> None:
-        """这个问题不用答了（没人答，或者已经不成问题）：收回弹窗。"""
+    def withdraw(self, approval_id: str, reason: str = "unanswered") -> None:
+        """这个问题不用答了（没人答，或者已经不成问题）：收回弹窗。
+
+        reason 记下为什么收回：unanswered 没人答，desktop 电脑上处理了或过期了，gone 那件事停了。"""
         with self._changed:
             item = self._items.get(approval_id)
             if item is None or item["decision"] is not None:
                 return
             item["decision"] = DENY
             item["gone"] = True
+            self._mark(item, "withdrawn", reason=reason)
             card = item["card"]
             waiting = self._waiting(card)
             self._changed.notify_all()
@@ -146,8 +158,10 @@ class Approvals:
         with self._changed:
             return self._waiting(card) is not None
 
-    def answer(self, approval_id: str, decision: str) -> Optional[bool]:
-        """回答一个授权。没有这个编号返回 None；已经答过了返回 False。"""
+    def answer(self, approval_id: str, decision: str, by: str = "phone") -> Optional[bool]:
+        """回答一个授权。没有这个编号返回 None；已经答过了返回 False。
+
+        by 记下在哪答的：phone（手机，设备上的回答也经手机送来）或 computer（电脑上的命令行）。"""
         if decision not in (ALLOW, DENY):
             raise ValueError("invalid approval decision")
         accepted = True
@@ -167,8 +181,10 @@ class Approvals:
                     accepted = False
                 if not accepted:
                     item["decision"], item["gone"] = DENY, True
+                    self._mark(item, "withdrawn", reason="desktop")
             if accepted:
                 item["decision"] = decision
+                self._mark(item, "allowed" if decision == ALLOW else "denied", by=by)
             card = item["card"]
             waiting = self._waiting(card)
             self._changed.notify_all()
@@ -183,6 +199,7 @@ class Approvals:
                 if item["card"] == card and item["decision"] is None:
                     item["decision"] = DENY
                     item["gone"] = True
+                    self._mark(item, "withdrawn", reason="gone")
                     dropped = True
             self._changed.notify_all()
         if dropped:
@@ -199,20 +216,38 @@ class Approvals:
             item = self._items.get(approval_id)
             return dict(item) if item is not None else None
 
+    def _mark(self, item: Dict[str, Any], status: str, **extra: Any) -> None:
+        """记下这次变化：状态、序号、时间，以及谁答的或者为什么收回。调用方持有锁。"""
+        item.update(status=status, updated_at=time.time(), **extra)
+        item["seq"] = self._sequence() if self._sequence is not None else 0
+
     def pending(self, conversation: Optional[str] = None, *,
                 include_desktop: bool = False) -> List[Dict[str, Any]]:
         """还在等回答的授权，按出现的先后。"""
         with self._changed:
             return [
-                {key: item[key] for key in
-                 ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind",
-                  "source", "session_id", "project", "remote_actionable", "expires_at",
-                  "request_id", "subagent_id", "turn_id") if key in item}
+                {key: item[key] for key in FIELDS if key in item}
                 for item in self._items.values()
                 if item["decision"] is None
                 and (conversation is None or item["conversation"] == conversation
                      or (include_desktop and item.get("source") == "desktop"))
             ]
+
+    def since(self, conversation: str, after: int, *, include_desktop: bool = True) -> List[Dict[str, Any]]:
+        """序号比 after 大的授权变化，含已经有结局的（/v1/sync 增量给）：出现又消失的授权，
+        客户端也能看到它的结局。按序号排。"""
+        with self._changed:
+            changed = [
+                dict({key: item[key] for key in FIELDS if key in item},
+                     status=item.get("status", "pending"), seq=item.get("seq", 0),
+                     updated_at=item.get("updated_at", item["created_at"]),
+                     **{key: item[key] for key in ("by", "reason") if key in item})
+                for item in self._items.values()
+                if item.get("seq", 0) > after
+                and (item["conversation"] == conversation
+                     or (include_desktop and item.get("source") == "desktop"))
+            ]
+        return sorted(changed, key=lambda item: item["seq"])
 
 
 class Gate:

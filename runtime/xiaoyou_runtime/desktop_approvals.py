@@ -320,7 +320,7 @@ class DesktopApprovals:
                 existing = self.requests.get(path)
                 if not _current(self.state_dir, request, self.clock()):
                     if existing:
-                        self.approvals.withdraw(existing[0])
+                        self.approvals.withdraw(existing[0], "desktop")
                         self.requests.pop(path, None)
                     continue
                 if existing:

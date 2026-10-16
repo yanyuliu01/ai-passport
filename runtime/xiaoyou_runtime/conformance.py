@@ -49,7 +49,7 @@ class Client:
 
 
 def run(base: str, token: str, conversation: Optional[str] = None,
-        reply_timeout: float = 120.0) -> List[Result]:
+        reply_timeout: float = 120.0, reports: bool = False) -> List[Result]:
     client = Client(base, token)
     conversation = conversation or "conformance-" + uuid.uuid4().hex[:8]
     results: List[Result] = []
@@ -189,7 +189,43 @@ def run(base: str, token: str, conversation: Optional[str] = None,
 
     check("sync.epoch_mismatch_resets", snapshot_after_reset(sync(cursor, "not-this-epoch")))
     check("sync.cursor_ahead_resets", snapshot_after_reset(sync(cursor + 10 ** 9)))
+    if reports and "reports" in (info.get("capabilities") or []):
+        check_reports(client, sync, check)
     return results
+
+
+def check_reports(client: "Client", sync: Any, check: Any) -> None:
+    """外部上报（--with-reports 时才测）：会在主人的电脑会话列表里留下一张“一致性测试”的只读卡。"""
+    session = "conformance-" + uuid.uuid4().hex[:12]
+    base = {"origin": "conformance", "session_id": session, "title": "一致性测试（可忽略）"}
+    status, first = client.call("POST", "/v1/reports", dict(base, state="working", text="第一版",
+                                                             upstream_id="u1"))
+    if not check("reports.accepted", status == 200 and isinstance(first, dict) and first.get("card"),
+                 "status %s" % status):
+        return
+    client.call("POST", "/v1/reports", dict(base, state="turn_ended", text="第二版", upstream_id="u1"))
+
+    def everything() -> Dict[str, Any]:
+        page, found, tasks = sync(0), {}, {}
+        while True:
+            found.update({item["id"]: item for item in page["messages"]})
+            tasks.update({item["id"]: item for item in page["tasks"]})
+            if not page.get("more"):
+                return {"messages": found, "tasks": tasks}
+            page = sync(page["seq"])
+
+    seen = everything()
+    mine = [item for item in seen["messages"].values() if item.get("task") == first["card"]]
+    check("reports.visible_once", len(mine) == 1 and mine[0]["text"] == "第二版",
+          "%d 条：%s" % (len(mine), [item.get("text") for item in mine]))
+    check("reports.marked_external", bool(mine) and (mine[0].get("source") or {}).get("type") == "external")
+    task = seen["tasks"].get(first["card"]) or {}
+    check("reports.turn_ended", task.get("state") == "turn_ended", "state %s" % task.get("state"))
+    status, _ = client.call("POST", "/v1/messages", {"text": "接着说", "card": first["card"], "pin": True,
+                                                     "client_id": uuid.uuid4().hex})
+    check("reports.read_only", status == 400, "status %s" % status)
+    status, _ = client.call("POST", "/v1/reports", dict(base, state="nonsense"))
+    check("reports.rejects_bad_state", status == 400, "status %s" % status)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -198,9 +234,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--token", required=True)
     parser.add_argument("--conversation")
     parser.add_argument("--reply-timeout", type=float, default=120.0)
+    parser.add_argument("--with-reports", action="store_true",
+                        help="也测外部上报（会在电脑会话列表里留一张只读的“一致性测试”卡）")
     options = parser.parse_args(argv)
     try:
-        results = run(options.url, options.token, options.conversation, options.reply_timeout)
+        results = run(options.url, options.token, options.conversation, options.reply_timeout,
+                      options.with_reports)
     except Exception as error:  # 回答缺字段、格式不对等：都算不通过，不打印堆栈
         print("FAIL  连不上或者回答不符合契约：%s: %s" % (type(error).__name__, error))
         return 1

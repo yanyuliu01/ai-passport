@@ -29,8 +29,9 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
-from .identity import CAPABILITIES, PROTOCOL, runtime_id
+from .identity import CAPABILITIES, PROTOCOL, runtime_id, subject_id
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
+from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -85,6 +86,11 @@ class Service:
         self._changed = threading.Condition()
         # 这台 Runtime 的固定编号：客户端拿它和消息编号拼成全局编号。
         self.runtime_id = runtime_id(store.state_dir)
+        # 小幽这个主体的编号（统一主体的预留）：和电脑无关，跟着 state 目录走。
+        self.subject_id = subject_id(store.state_dir)
+        xiaoyou.cards.set_origin(self.runtime_id)
+        # 不在这台电脑上的会话报进来的进展（POST /v1/reports）
+        self._reports = Reports(xiaoyou.cards)
         self._ledger = Ledger(store.state_dir / "messages.json")
         messages, dedupe, seq = self._ledger.load()
         self._messages = messages  # type: OrderedDict[str, Dict[str, Any]]
@@ -107,7 +113,7 @@ class Service:
         xiaoyou.cards.subscribe(self._card_changed)
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
         if seq > xiaoyou.cards.seq:
-            xiaoyou.cards.bump(at_least=seq)
+            xiaoyou.record.sequence(at_least=seq)
         self._recover()
 
     def _recover(self) -> None:
@@ -121,6 +127,7 @@ class Service:
             else:
                 unfinished.append(message["id"])
         cards = self._xiaoyou.cards
+        record = self._xiaoyou.record
         answered = {}  # 消息编号 → (卡, 小幽那句回复)：回复已经记在卡上的
         for card in cards.recent(None, 10 ** 6):
             for entry in card["entries"]:
@@ -133,9 +140,7 @@ class Service:
                 card_id, reply = answered[message_id]
                 message.update(status="done", reply=reply, card=card_id, stage=None,
                                helper=None, partial="", finished_at=time.time())
-                message["rev"] += 1
-                message["seq"] = cards.bump()
-                self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+                self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 (requeue if message_id in requeue else unfinished).remove(message_id)
         for message_id in unfinished:
@@ -150,20 +155,18 @@ class Service:
                 card_id = existing["id"]
             elif existing is not None and message.get("pin"):
                 # 主人是在那件事里面说的：没做完的原因也记在那件事上。
-                cards.update(existing["id"], said=said, say=note, turn_id=message_id,
+                record.exchange(existing["id"], said=said, say=note, turn_id=message_id,
                              scope="task", kind="note")
                 card_id = existing["id"]
             else:
-                card = cards.open(message["conversation"], message["text"] or "语音消息",
+                card = record.task_open(message["conversation"], message["text"] or "语音消息",
                                   "failed")
-                cards.update(card["id"], said=said, say=note, brief=note, mood="oops",
+                record.exchange(card["id"], said=said, say=note, brief=note, mood="oops",
                              turn_id=message_id, scope="main", kind="note")
                 card_id = card["id"]
             message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
                            card=card_id, partial="", finished_at=time.time())
-            message["rev"] += 1
-            message["seq"] = cards.bump()
-            self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+            self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
             self._remember(message)
         if answered or unfinished or requeue:
             with self._changed:
@@ -246,6 +249,8 @@ class Service:
             observed = self._xiaoyou.cards.get(card)
             if observed is not None and observed.get("monitoring_only"):
                 # 电脑上的会话可以从手机接着聊，但只能在它里面说，而且这一轮要已经停下。
+                if observed.get("source") == "external":
+                    raise RequestError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
                 if not pin:
                     raise RequestError("要接着电脑上的会话，请打开那个会话再发")
                 if observed.get("desktop_status") in ("running", "waiting") and not observed.get("stale"):
@@ -356,8 +361,7 @@ class Service:
                                        % error)
             with self._changed:
                 if message_id in self._messages:
-                    message["seq"] = self._xiaoyou.cards.bump()
-                    self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+                    self._xiaoyou.record.request_changed(message, revise=False)  # 序号、日志一起变
                     if not self._closed:
                         self._line_up(conversation, message_id)
                 snapshot = self._snapshot(message)
@@ -467,6 +471,7 @@ class Service:
             raise RequestError("usage 应该是整数")
         meter = self._xiaoyou.usage
         meter.poke()  # 有人在看：太久没问过额度就在后台问一次
+        self._sweep_reports()
         cards_store = self._xiaoyou.cards
         deadline = time.monotonic() + max(0.0, wait)
         while True:
@@ -488,9 +493,22 @@ class Service:
         result["usage"] = meter.snapshot()
         return result
 
+    def _sweep_reports(self) -> None:
+        """太久没报的外部会话不再显示“在做”。"""
+        reports = getattr(self, "_reports", None)
+        if reports is not None:
+            reports.sweep()
+
+    def report(self, payload: Any) -> Dict[str, Any]:
+        """别处的会话报一次进展（见 reports.py）。"""
+        try:
+            return self._reports.report(payload)
+        except ReportError as error:
+            raise RequestError(str(error))
+
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
-        return {"runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
+        return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
                 "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
@@ -512,6 +530,7 @@ class Service:
             raise RequestError("usage 应该是整数")
         meter = self._xiaoyou.usage
         meter.poke()
+        self._sweep_reports()
         if epoch is not None and (not isinstance(epoch, str) or len(epoch) > MAX_NAME_CHARS):
             raise RequestError("epoch 应该是字符串")
         cards_store = self._xiaoyou.cards
@@ -526,8 +545,10 @@ class Service:
                 # 等的时候日志挤掉了游标之后的消息：改给全量快照。
                 after, reset = 0, True
                 continue
+            # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
+            approvals = self._xiaoyou.approvals.since(conversation, after)
             remaining = deadline - time.monotonic()
-            if (tasks or messages or reset or remaining <= 0
+            if (tasks or messages or approvals or reset or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
             cards_store.wait_beyond(seq, remaining if usage is None
@@ -541,11 +562,13 @@ class Service:
                 items, seq, more = items[:index], items[index - 1][1]["seq"], True
                 break
         return {
-            "protocol": PROTOCOL, "runtime_id": self.runtime_id, "epoch": cards_store.epoch,
+            "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
+            "epoch": cards_store.epoch,
             "seq": seq, "reset": reset, "more": more,
             "messages": [item for kind, item in items if kind == "message"],
             "tasks": [item for kind, item in items if kind == "task"],
-            "approvals": self._xiaoyou.approvals.pending(conversation, include_desktop=True),
+            # 序号比 after 大的授权变化，含已经有结局的（status：pending / allowed / denied / withdrawn）。
+            "approvals": approvals,
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
             "removed": [],
             "usage": meter.snapshot(),
@@ -699,9 +722,7 @@ class Service:
             message = self._messages.get(message_id)
             if message is not None:
                 message.update(fields)
-                message["rev"] += 1
-                message["seq"] = self._xiaoyou.cards.bump()
-                self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+                self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 captured = self._capture()
             self._changed.notify_all()
@@ -720,9 +741,7 @@ class Service:
                 # 回复还在生成：到目前为止的那段，整段替换（不是追加），空串是收回。
                 if message["status"] == "running" and message["partial"] != text:
                     message["partial"] = text
-                    message["rev"] += 1
-                    message["seq"] = self._xiaoyou.cards.bump()
-                    self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+                    self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
                     self._changed.notify_all()
                 return
             if len(message["events"]) < MAX_EVENTS:
@@ -735,9 +754,7 @@ class Service:
             if kind in ("handoff", "result"):
                 message["stage"] = text[:MAX_EVENT_CHARS]
                 message["helper"] = agent if kind == "handoff" else None
-            message["rev"] += 1
-            message["seq"] = self._xiaoyou.cards.bump()
-            self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
+            self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
             self._changed.notify_all()
 
     def _drain(self, conversation: str) -> None:
@@ -831,8 +848,8 @@ class Service:
 
     def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
-        card = self._xiaoyou.cards.open(conversation, text, "failed")
-        self._xiaoyou.cards.update(card["id"], said=text, say=error, brief=error, mood="oops",
+        card = self._xiaoyou.record.task_open(conversation, text, "failed")
+        self._xiaoyou.record.exchange(card["id"], said=text, say=error, brief=error, mood="oops",
                                   turn_id=message_id, scope="task" if pin else "main")
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
