@@ -1722,7 +1722,10 @@ class CardsTests(TempDirCase):
         card = cards.get("c1")
         self.assertEqual([(entry["role"], entry["text"]) for entry in card["entries"]],
                          [("you", "问"), ("xiaoyou", "答")])
-        self.assertEqual((card["brief"], card["mood"], card["seq"]), ("b", "happy", 2))
+        # 序号只保证越来越大（消息也从同一个计数器取号），不保证连续。
+        self.assertEqual((card["brief"], card["mood"]), ("b", "happy"))
+        self.assertGreater(card["seq"], first["seq"])
+        self.assertLess(card["seq"], second["seq"])
         self.assertIsNone(cards.update("c9", say="x"))
         for number in range(8):
             cards.update("c2", progress="Bash  step\n%d" % number + "x" * 300)
@@ -1745,7 +1748,9 @@ class CardsTests(TempDirCase):
         thread.start()
         cards.update("c1", say="后来的话")
         thread.join(5)
-        self.assertEqual(([card["id"] for card in waiter["cards"]], waiter["seq"]), (["c1"], 3))
+        self.assertEqual([card["id"] for card in waiter["cards"]], ["c1"])
+        self.assertEqual(waiter["seq"], waiter["cards"][0]["seq"])
+        self.assertGreater(waiter["seq"], 2)
         seen = []
         cards.subscribe(seen.append)
         cards.update("c2", state="failed")

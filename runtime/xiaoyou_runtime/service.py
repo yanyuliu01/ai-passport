@@ -29,6 +29,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
+from .identity import CAPABILITIES, PROTOCOL, runtime_id
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from .stt import Stt, SttError, describe_wav
 from .store import Store
@@ -82,6 +83,8 @@ class Service:
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
+        # 这台 Runtime 的固定编号：客户端拿它和消息编号拼成全局编号。
+        self.runtime_id = runtime_id(store.state_dir)
         self._ledger = Ledger(store.state_dir / "messages.json")
         messages, dedupe, seq = self._ledger.load()
         self._messages = messages  # type: OrderedDict[str, Dict[str, Any]]
@@ -132,6 +135,7 @@ class Service:
                                helper=None, partial="", finished_at=time.time())
                 message["rev"] += 1
                 message["seq"] = cards.bump()
+                self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
                 self._remember(message)
                 (requeue if message_id in requeue else unfinished).remove(message_id)
         for message_id in unfinished:
@@ -159,6 +163,7 @@ class Service:
                            card=card_id, partial="", finished_at=time.time())
             message["rev"] += 1
             message["seq"] = cards.bump()
+            self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
             self._remember(message)
         if answered or unfinished or requeue:
             with self._changed:
@@ -348,6 +353,7 @@ class Service:
             with self._changed:
                 if message_id in self._messages:
                     message["seq"] = self._xiaoyou.cards.bump()
+                    self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
                     if not self._closed:
                         self._line_up(conversation, message_id)
                 snapshot = self._snapshot(message)
@@ -477,6 +483,55 @@ class Service:
         result["approvals"] = self._xiaoyou.approvals.pending(conversation, include_desktop=True)
         result["usage"] = meter.snapshot()
         return result
+
+    def info(self) -> Dict[str, Any]:
+        """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
+        return {"runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
+                "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
+
+    def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
+             wait: float = 0.0) -> Dict[str, Any]:
+        """统一同步接口（见 docs/development/unified-message-model）。
+
+        返回序号比 after 大的消息（messages）和事（tasks，卡去掉 entries、换成 members），
+        以及现在等回答的授权。after 为 0 是全量快照。客户端带来的 epoch 和这里不一样、
+        游标比这里现在的序号还大（记录换过）、或者比日志的 floor 还旧时，reset 为 true，
+        并且从 0 给全量快照：客户端应该丢掉这台 Runtime 的游标（缓存的消息按编号合并即可）。
+        没有变化时最多等 wait 秒。"""
+        conversation = _name(conversation, "conversation")
+        if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+            raise RequestError("after 应该是不小于 0 的整数")
+        if epoch is not None and (not isinstance(epoch, str) or len(epoch) > MAX_NAME_CHARS):
+            raise RequestError("epoch 应该是字符串")
+        cards_store = self._xiaoyou.cards
+        reset = False
+        if after > 0 and ((epoch and epoch != cards_store.epoch) or after > cards_store.seq
+                          or after < cards_store.log_floor):
+            after, reset = 0, True
+        deadline = time.monotonic() + max(0.0, wait)
+        while True:
+            seq, tasks, messages, _ = cards_store.sync_since(conversation, after)
+            remaining = deadline - time.monotonic()
+            if tasks or messages or reset or remaining <= 0:
+                break
+            cards_store.wait_beyond(seq, remaining)
+        items = sorted([("task", item) for item in tasks] + [("message", item) for item in messages],
+                       key=lambda pair: pair[1]["seq"])
+        more, size = False, 0
+        for index, (_, item) in enumerate(items):
+            size += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if size > FEED_BUDGET_BYTES and index > 0:
+                items, seq, more = items[:index], items[index - 1][1]["seq"], True
+                break
+        return {
+            "protocol": PROTOCOL, "runtime_id": self.runtime_id, "epoch": cards_store.epoch,
+            "seq": seq, "reset": reset, "more": more,
+            "messages": [item for kind, item in items if kind == "message"],
+            "tasks": [item for kind, item in items if kind == "task"],
+            "approvals": self._xiaoyou.approvals.pending(conversation, include_desktop=True),
+            # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
+            "removed": [],
+        }
 
     def _messages_since(self, conversation: str, after: int, upto: int) -> List[Dict[str, Any]]:
         with self._changed:
@@ -628,6 +683,7 @@ class Service:
                 message.update(fields)
                 message["rev"] += 1
                 message["seq"] = self._xiaoyou.cards.bump()
+                self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
                 self._remember(message)
                 captured = self._capture()
             self._changed.notify_all()
@@ -648,6 +704,7 @@ class Service:
                     message["partial"] = text
                     message["rev"] += 1
                     message["seq"] = self._xiaoyou.cards.bump()
+                    self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
                     self._changed.notify_all()
                 return
             if len(message["events"]) < MAX_EVENTS:
@@ -662,6 +719,7 @@ class Service:
                 message["helper"] = agent if kind == "handoff" else None
             message["rev"] += 1
             message["seq"] = self._xiaoyou.cards.bump()
+            self._xiaoyou.cards.request(message)  # 消息日志里的那两句话跟着变
             self._changed.notify_all()
 
     def _drain(self, conversation: str) -> None:

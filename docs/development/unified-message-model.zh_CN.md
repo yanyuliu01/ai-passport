@@ -72,15 +72,20 @@
 ### 日志和序号
 
 消息、事、授权的每一次变化都从同一个计数器取一个 `seq`。在同一个 `epoch` 里 `seq` 只增不减，
-重启也一样（PR #2 已经做到）。删除和裁剪写成墓碑记录，不悄悄消失。
+重启也一样；只保证越来越大，不保证连续。
+
+日志存在 `state/cards.log.jsonl`（一行一条消息的最新样子，追加写），最多留 5000 条。超出时挤掉
+最早的、已经不在任何卡上的消息。**挤掉不是删除**：不发墓碑，客户端缓存里的旧消息照留，
+否则手机上的聊天记录会跟着 Runtime 的裁剪消失。被挤掉的最大序号记成 `floor`，游标比它还旧的
+客户端会被要求重拉快照。只有将来主动删除消息时，才会出现在 `removed` 里。
 
 ## 同步接口：新的 Runtime 只要实现这个就能接进来
 
 | 接口 | 契约 |
 | --- | --- |
-| `GET /healthz` | 返回 `runtime_id`、`epoch`、协议版本、能力列表 |
+| `GET /v1/info`（要令牌） | 返回 `runtime_id`、`epoch`、`protocol`、`capabilities`、`name`、`version`。`/healthz` 不需要令牌，所以不放这些 |
 | `POST /v1/messages`（带 `client_id`） | 落盘后才回 `202`；同一对话同一 `client_id`：内容相同返回原消息，不同返回 `409`；写不下去 `503` |
-| `GET /v1/sync?conversation=&after=&epoch=&wait=` | 返回 `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`；`after=0` 是全量快照；`epoch` 不对或者 `after` 早于保留范围时 `reset: true`。快照和后续增量之间不能漏 |
+| `GET /v1/sync?conversation=&after=&epoch=&wait=` | 返回 `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`；`after=0` 是全量快照；`epoch` 不对、`after` 比现在的 `seq` 还大、或者早于 `floor` 时 `reset: true`，并从 0 给快照。事（`tasks`）是卡去掉 `entries`、换成成员编号 `members`。快照和后续增量之间不能漏 |
 | `POST /v1/approvals/<编号>` | 回答授权，不变 |
 
 客户端规则：先应用、再推进游标；按全局编号合并；`rev` 大的赢；定稿不会被 `partial` 覆盖；
@@ -102,7 +107,8 @@
 
 1. **新的 Runtime**（另一台电脑、云上的虚拟机、或另一种实现）：实现上面的同步接口。手机不需要
    为它写专门的代码，像加一台电脑一样添加；数据按 `runtime_id` 区分，不会和别的电脑撞号。
-   之后会补一套对着 URL 跑的一致性测试，接入前先跑通它。
+   接入前先跑一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`
+   （会在一个单独的对话里发两句话，真的调用一次模型）。
 2. **新的 agent 接到某台 Runtime 后面**：适配器只需要报告“开始了 / 生成到这里了 / 一行进展 /
    要授权 / 做完了 / 失败了”（就是现在 `Control` 的那几个回调），并声明能做什么（中途追加、
    取消、续上会话）。编号、序号、落盘、同步都由 Runtime 负责，agent 不碰。
@@ -120,7 +126,8 @@
 | 步 | 内容 | 状态 |
 | --- | --- | --- |
 | 1 | 收下的消息落盘，消息和卡共用一条序号，`epoch`，`/v1/feed?messages=1`（PR #2） | 已提交，待上线 |
-| 2 | Runtime：`runtime_id`，消息日志成为权威记录（卡和 transcript 改成从日志算），`/v1/sync`，墓碑，一致性测试 | 下一步 |
+| 2 | Runtime：`runtime_id`，消息日志成为权威记录（卡上的条目是它的副本，启动时以日志为准），`/v1/info`、`/v1/sync`，一致性测试（Runtime 0.8.0） | 已提交，待上线 |
+| 2b | transcript（给模型的上下文）改成从日志算。它只在 Runtime 内部用，不影响同步接口 | 之后 |
 | 3 | 手机 App：聊天和任务改成按全局编号存的缓存，改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算 | 第 2 步之后 |
 | 4 | 设备：手机负责全局编号到短编号的映射，设备协议先不变 | 随第 3 步 |
 | 5 | 旧 App 都升级后，删掉兼容路径 | 最后 |

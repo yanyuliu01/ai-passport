@@ -15,6 +15,9 @@
                                         之后变过的卡，和现在的用量；没有变化时最多等 wait 秒。
                                         带 messages=1 时还给之后变过的消息（同一条序号）；
                                         epoch 变了说明换了一份记录，要从 0 重新拉
+  GET  /v1/info                         runtime_id、epoch、同步协议版本和能力
+  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>
+                                        统一同步：变了的消息、事、授权（见统一消息结构说明）
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
   GET  /v1/artifacts/<编号>/content     按附件编号取得已保存的文件快照
@@ -355,6 +358,28 @@ def make_server(config: Config, service: Service,
                     self._fail(400, str(error))
                     return
                 self._send(200, {"cards": cards})
+                return
+            if parts == ["v1", "info"]:
+                info = service.info()
+                info.update(name=config.name, version=__version__)
+                self._send(200, info)
+                return
+            if parts == ["v1", "sync"]:
+                asked = self._wait_and_rev(query)
+                if asked is None:
+                    return
+                try:
+                    after = int(query.get("after", ["0"])[0])
+                except ValueError:
+                    self._fail(400, "after 应该是整数")
+                    return
+                try:
+                    body = service.sync(query.get("conversation", ["default"])[0], after,
+                                        query.get("epoch", [None])[0], asked[0])
+                except RequestError as error:
+                    self._fail(400, str(error))
+                    return
+                self._send(200, body)
                 return
             if parts == ["v1", "feed"]:
                 asked = self._wait_and_rev(query)

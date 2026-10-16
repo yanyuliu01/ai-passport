@@ -79,16 +79,22 @@ second record.
 ### Log and sequence
 
 Every change to a message, task or approval takes a `seq` from one counter. Within an `epoch`
-the sequence only grows, also across restarts (done in PR #2). Deletion and trimming are
-written as tombstones instead of disappearing silently.
+the sequence only grows, also across restarts; it is increasing, not necessarily contiguous.
+
+The log is stored in `state/cards.log.jsonl` (one line per latest version of a message,
+appended) and keeps up to 5000 messages. Beyond that the oldest messages that are no longer on
+any card are dropped. **Dropping is not deletion**: no tombstone is sent and clients keep their
+cached copies, otherwise the phone's chat history would vanish with the runtime's trimming. The
+highest dropped sequence is kept as `floor`; a client whose cursor is older is asked to fetch a
+snapshot again. Only an explicit deletion, should one exist later, appears in `removed`.
 
 ## Sync interface: a new runtime implements this to join
 
 | Interface | Contract |
 | --- | --- |
-| `GET /healthz` | returns `runtime_id`, `epoch`, protocol version and capabilities |
+| `GET /v1/info` (token required) | returns `runtime_id`, `epoch`, `protocol`, `capabilities`, `name` and `version`; `/healthz` needs no token, so it does not carry them |
 | `POST /v1/messages` with `client_id` | `202` only after the message is on disk; same conversation and `client_id`: the original message when the content matches, `409` when it differs; `503` when it cannot be written |
-| `GET /v1/sync?conversation=&after=&epoch=&wait=` | returns `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`; `after=0` is a full snapshot; `reset: true` when the `epoch` does not match or `after` is older than what is retained. Nothing may be lost between the snapshot and the following increments |
+| `GET /v1/sync?conversation=&after=&epoch=&wait=` | returns `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`; `after=0` is a full snapshot; `reset: true` (with a snapshot from 0) when the `epoch` does not match, `after` is above the current `seq`, or older than `floor`. A task is a card without `entries` and with the ids of its messages in `members`. Nothing may be lost between the snapshot and the following increments |
 | `POST /v1/approvals/<id>` | answers an approval, unchanged |
 
 Client rules: apply first, then advance the cursor; merge by global id; the higher `rev`
@@ -111,8 +117,9 @@ for older apps and gets nothing new.
 
 1. **A new runtime** (another computer, a cloud virtual machine, or another implementation)
    implements the sync interface above. The phone needs no code for it and adds it like
-   another computer; data is keyed by `runtime_id`, so ids never collide. A conformance test
-   that runs against a URL will be added; a new runtime passes it before it is connected.
+   another computer; data is keyed by `runtime_id`, so ids never collide. Before connecting it,
+   run the conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`
+   (it sends two sentences in a separate conversation, so it calls a model once).
 2. **A new agent behind a runtime**: its adapter only reports started, text so far, a progress
    line, an approval request, finished and failed (the existing `Control` callbacks), and
    declares what it supports (steering, cancellation, resuming a session). Ids, sequence,
@@ -132,7 +139,8 @@ for older apps and gets nothing new.
 | Step | Content | Status |
 | --- | --- | --- |
 | 1 | Accepted messages on disk, one sequence for messages and cards, `epoch`, `/v1/feed?messages=1` (PR #2) | committed, not deployed |
-| 2 | Runtime: `runtime_id`, the message log becomes the authoritative record (cards and transcript computed from it), `/v1/sync`, tombstones, conformance test | next |
+| 2 | Runtime: `runtime_id`, the message log becomes the authoritative record (card entries are copies of it and it wins on startup), `/v1/info`, `/v1/sync`, conformance test (runtime 0.8.0) | committed, not deployed |
+| 2b | Compute the transcript (model context) from the log. It is internal to the runtime and does not affect the sync interface | later |
 | 3 | Phone app: chat and tasks become a cache keyed by global id, use `/v1/sync`; legacy text matching only as a one-time migration; drop the plain "me:" text list and compute ChatTurn from the cache | after step 2 |
 | 4 | Device: the phone maps global ids to short ids; the device protocol stays as is for now | with step 3 |
 | 5 | Remove compatibility paths once every app has been upgraded | last |

@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .message_log import MessageLog
 from .store import _write
 from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
@@ -99,8 +100,39 @@ class Cards:
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
-        if interrupted or fresh_epoch:
+        # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
+        self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
+        migrated = self._adopt_log()
+        if interrupted or fresh_epoch or migrated:
             self._save()
+
+    def _adopt_log(self) -> bool:
+        """启动时：卡上的副本以日志为准；日志里还没有的（旧版本的卡）补进日志。"""
+        changed = False
+        for card in self._cards.values():
+            for entry in card["entries"]:
+                record = self._log.get(entry["id"]) if entry.get("id") else None
+                if record is not None and (record["text"] != entry["text"]
+                                           or record["attachments"] != entry["attachments"]):
+                    entry.update(text=record["text"],
+                                 attachments=[dict(item) for item in record["attachments"]])
+                    changed = True
+            before = [entry.get("id") for entry in card["entries"]]
+            self._log.observe(card)
+            changed = changed or before != [entry["id"] for entry in card["entries"]]
+        return changed
+
+    def _issue(self) -> int:
+        """调用时已经拿着锁：发一个新序号；用到预留的那段号的末尾时先占下下一段。"""
+        self._seq += 1
+        if self._seq >= self._reserved:
+            try:
+                self._save()
+            except OSError as error:
+                # 照样往下走；下一次取号再试着占下一段。磁盘一直坏着时，断电重启后
+                # 序号可能比客户端手里的小：那种情况下客户端靠“返回的序号变小”从头同步。
+                sys.stderr.write("卡片记录写不下去：%s\n" % error)
+        return self._seq
 
     @staticmethod
     def _clean(card: Dict[str, Any]) -> Dict[str, Any]:
@@ -204,16 +236,10 @@ class Cards:
         at_least 用在启动时：消息记录里见过的最大序号比这里大时，从它往后接着发。
         平时不落盘；只有用到了预留的那段号的末尾时才写一次文件，占下下一段（见 SEQ_BLOCK）。"""
         with self._changed:
-            self._seq = max(self._seq, at_least) + 1
-            if self._seq >= self._reserved:
-                try:
-                    self._save()
-                except OSError as error:
-                    # 消息照样往下走；下一次取号再试着占下一段。磁盘一直坏着时，断电重启后
-                    # 序号可能比客户端手里的小：那种情况下客户端靠“返回的序号变小”从头同步。
-                    sys.stderr.write("卡片记录写不下去：%s\n" % error)
+            self._seq = max(self._seq, at_least)
+            seq = self._issue()
             self._changed.notify_all()
-            return self._seq
+            return seq
 
     def since(self, conversation: str, after: int,
               include_desktop: bool = False) -> Any:
@@ -225,6 +251,39 @@ class Cards:
                      and card["seq"] > after]
             cards.sort(key=lambda card: card["seq"])
             return self._seq, cards
+
+    @property
+    def log_floor(self) -> int:
+        with self._changed:
+            return self._log.floor
+
+    def message(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """日志里的一条消息（没有返回 None）。"""
+        with self._changed:
+            return self._log.get(message_id)
+
+    def request(self, message: Dict[str, Any]) -> None:
+        """Service 收下的一次请求变了（见 MessageLog.request）。"""
+        with self._changed:
+            self._log.request(message)
+            self._changed.notify_all()
+
+    @staticmethod
+    def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
+        """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。"""
+        view = Cards._copy(card)
+        view["members"] = [entry["id"] for entry in view.pop("entries")]
+        return view
+
+    def sync_since(self, conversation: str, after: int) -> Any:
+        """（现在的序号, 变了的事, 变了的消息, floor）：同一刻、同一把锁里取的，不会漏。"""
+        with self._changed:
+            tasks = [self.task_view(card) for card in self._cards.values()
+                     if (card["conversation"] == conversation or card.get("monitoring_only"))
+                     and card["seq"] > after]
+            tasks.sort(key=lambda task: task["seq"])
+            messages = self._log.since(conversation, after, self._seq, include_desktop=True)
+            return self._seq, tasks, messages, self._log.floor
 
     def wait_beyond(self, seq: int, timeout: float) -> int:
         """等到序号超过 seq（任何卡或消息变了），最多等 timeout 秒；返回现在的序号。"""
@@ -238,10 +297,12 @@ class Cards:
             return self._seq
 
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
-        """调用时已经拿着锁：记下这张卡变了，落盘，叫醒在等的人。"""
+        """调用时已经拿着锁：记下这张卡变了（连同它的消息），落盘，叫醒在等的人。"""
+        self._log.observe(card)
         self._seq += 1
         card["seq"] = self._seq
         card["updated_at"] = time.time()
+        self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
         self._save()
         self._changed.notify_all()
         return self._copy(card)
