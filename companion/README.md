@@ -282,6 +282,13 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.17.3)
+
+- A computer session or reported session that has stopped updating stays in the
+  current list as "state unknown" instead of looking finished: the app asks `/v1/sync`
+  for the `unavailable` state. Needs runtime 0.9.1; with an older runtime nothing
+  changes.
+
 ## App fixes (0.17.1)
 
 - Sessions reported through `/v1/reports` from elsewhere (claude.ai on the web, cloud

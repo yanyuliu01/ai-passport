@@ -301,7 +301,9 @@ final class RuntimeClient {
         // 参数，照常等卡的变化）。
         long usageRev = store.usageRev();
         String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait
-                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
+                        + (usageRev >= 0 ? "&usage=" + usageRev : "")
+                        // 认得 unavailable（看不到状态的电脑会话、上报）：见 Card.from。
+                        + "&states=unavailable",
                 target.token, null, null, wait + 15, interruptible);
         Map<String, Object> feed = Json.parseObject(body);
         if (feed == null) {
@@ -343,7 +345,9 @@ final class RuntimeClient {
         String body = requestText("GET", target.url + "/v1/sync?conversation=default&after="
                         + java.net.URLEncoder.encode(cache.cursor(), "UTF-8") + "&wait=" + wait
                         + (cache.epoch().isEmpty() ? "" : "&epoch=" + java.net.URLEncoder.encode(cache.epoch(), "UTF-8"))
-                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
+                        + (usageRev >= 0 ? "&usage=" + usageRev : "")
+                        // 认得 unavailable（看不到状态的电脑会话、上报）：见 Card.from。
+                        + "&states=unavailable",
                 target.token, null, null, wait + 15, interruptible);
         Map<String, Object> page = Json.parseObject(body);
         if (page == null) {
