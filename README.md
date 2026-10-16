@@ -26,28 +26,38 @@ answers on the screen. When the job is bigger than a chat, she hands it to a
 coding agent, shows who is working and which step they're on, and asks you
 before anything that needs your say.
 
-The device talks over encrypted Bluetooth LE to a phone companion app. Without
-the app, it also works with the Claude desktop app in Developer Mode.
+The device talks over encrypted Bluetooth LE to a phone companion app. The app
+also works on its own: its home screen shows Xiaoyou moving with what she is
+really doing, and you hold the microphone to talk. Codex and Claude Code
+conversations already open on your computer can be mirrored to the phone and
+the device, and through Tailscale Funnel the phone reaches the computer at home
+from any network. Without the app, the device also works with the Claude
+desktop app in Developer Mode.
 
 ## Meet Xiaoyou
 
 Xiaoyou is the DeepSeek whale, a whale maid nicknamed *Big Fat Fish*. She is
 the only one you talk to, and the runtime runs her on DeepSeek through the
-DeepSeek Harness CLI (`dsh`).
+DeepSeek Harness CLI (`dsh`), streaming her replies as they are written. The
+app and firmware docs also call her DS.
 
 <p align="center">
-  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="Xiaoyou's pixel sprite bobbing up and down while idle." width="160">
+  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="Xiaoyou's pixel head breathing gently while idle." width="160">
   &nbsp;&nbsp;
-  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="Six moods of Xiaoyou's pixel sprite: asleep, idle, busy with bouncing dots, asking with an exclamation mark, happy with a heart, and failed with crossed eyes." width="480">
+  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="Six moods of Xiaoyou's pixel head: asleep with Zz, idle, busy with bouncing dots, asking for you, happy with a heart, and failed." width="480">
 </p>
 
-On the device she is a 20 × 20 pixel sprite. She sleeps while nothing is
-connected, bobs gently when idle, has three dots bouncing over her head when
-she's busy, raises an exclamation mark when she needs you, gets a heart when
-things go well, and crosses her eyes when something fails.
+On the device she is a 60 × 60 pixel head compiled from the whale-maid artwork
+in the design pack, with six moods: she sleeps while nothing is connected,
+breathes gently when idle, has three dots bouncing over her head when she's
+busy, and has a face of her own for needing you, for things going well, and
+for something failing. On top of the moods she moves with the real state, the
+same way as on the phone's home screen: she sways while you hold the button and
+talk, floats while she thinks, and hops once when her answer arrives. When she
+hands a job to a helper, a letter flies from her to that helper's badge.
 
-> The sprite is moving from the earlier pixel ghost to the whale. These frames
-> are rendered from the work-in-progress `main/pocket_pet.c`.
+> Both images are rendered straight from `main/pocket_pet.c`, the same pixels
+> the device draws.
 
 ## Her helpers
 
@@ -79,31 +89,32 @@ And as pixel heads, sized for a small screen:
 ## Three parts
 
 ```text
- Device (firmware)  ──encrypted BLE──>  Phone app "Pocket Hub"  ──HTTP──>  Xiaoyou Runtime (computer)
- push-to-talk, four screens,            relays voice, cards, usage,        persona · conversation · cards · routing
- approval prompts                       firmware updates                   ├─> claude / tailor (Claude Code)
-                                                                           ├─> codex (Codex app-server)
-                                                                           ├─> deepseek (Claude Code shell + DeepSeek API)
-                                                                           ├─> dsh (DeepSeek Harness)
-                                                                           └─> any command / another runtime
+ Device (firmware)  ──encrypted BLE──>  Phone app "Pocket Hub" ──HTTP(S)──>  Xiaoyou Runtime (computer)
+ push-to-talk, four screens,            chat, tasks, helpers,                persona · conversation · cards · routing
+ approval prompts                       approvals; relays voice,             ├─> dsh (DeepSeek Harness, speaks as Xiaoyou)
+                                        cards, usage, firmware               ├─> claude / tailor (Claude Code)
+                                        LAN / Tailscale Funnel               ├─> codex (Codex app-server)
+                                                                             ├─> deepseek (Claude Code shell + DeepSeek API)
+                                                                             ├─> any command / another runtime
+                                                                             └── watches local Codex and Claude Code chats (--desktop-sync)
 ```
 
 | Part | Directory | What it does | Docs |
 | --- | --- | --- | --- |
 | Firmware | `main/`, `components/` | Four screens (Xiaoyou / conversation / tasks / usage), push-to-talk, approval prompts, firmware updates over Bluetooth (two slots, automatic rollback if not confirmed) | [Claude Pocket](docs/claude-pocket.md) |
-| Phone app | `companion/` | Android. Relays between the device and the runtime: voice, cards, tasks, approvals, usage, firmware; also chat, task views, and an effort picker of its own | [Pocket Hub](companion/README.md) |
-| Runtime | `runtime/` | Xiaoyou herself: one card per request, several requests in parallel, add / change / cancel; picks effort tiers and watches subscription limits when handing work out; watches long tasks for silence; can write to a shared Notion workspace | [Xiaoyou Runtime](runtime/README.md) |
+| Phone app | `companion/` | Android. A sidebar with four places: chat with Xiaoyou, tasks, helpers, connection and settings. The home screen shows Xiaoyou moving with her state, with hold-to-talk on the phone (transcribed on the phone); approval alerts (watching up to eight computers), task images and files, usage; also the relay between the device and the runtime; new versions arrive through the runtime | [DS companion (Pocket Hub)](companion/README.md) |
+| Runtime | `runtime/` | Xiaoyou herself: one card per request, several requests in parallel, add / change / cancel; streamed replies; picks effort tiers and watches subscription limits when handing work out; watches long tasks for silence; downloadable task images and files; mirrors Codex and Claude Code conversations on the computer, with an optional approval bridge; shared history for desktop agents; can write to a shared Notion workspace | [Xiaoyou Runtime](runtime/README.md) |
 
 Claude desktop alone also works: in developer mode the same firmware connects directly
 to Claude desktop's Hardware Buddy (no voice or cards in that mode).
 
-## Where things stand (2026-10-12)
+## Where things stand (2026-10-16)
 
 | Part | Version | Build | On hardware |
 | --- | --- | --- | --- |
-| Firmware | prerelease `firmware-build-19` | passes | Push-to-talk with the phone connected works on the device (`28119d8`); the three screens have been used on the device; the fourth screen and task history have not been checked yet |
-| Phone app | 0.9.1, prerelease `companion-build-15` | passes | 0.2.0 paired and chatted on a phone; later versions have not been checked item by item on a phone |
-| Runtime | 0.6.1 | all tests pass | Runs daily on the author's Mac; Claude Code subscription usage and Codex app-server approvals have not been tested there yet |
+| Firmware | prerelease `firmware-build-22` (`8220106`, whale pixel head plus state-driven motion) | passes | Push-to-talk with the phone connected works on the device (`firmware-build-19`); the three screens have been used; the whale's sleeping face and breathing were confirmed on the device; the state-driven motion, the fourth screen and task history have not been checked on the device yet |
+| Phone app | 0.11.0 (version code 17), prerelease `companion-build-26` | passes | 0.2.0 paired and chatted on a phone; the sidebar version, phone hold-to-talk, approval alerts and updates through the runtime have not been checked item by item on a phone |
+| Runtime | 0.6.1 | all 397 tests pass | Runs daily on the author's Mac; Claude Code subscription usage, Codex app-server approvals and a real round trip through the desktop approval bridge have not been tested there yet |
 
 Each part's document ends with what is and is not verified. Development happens on
 `feature/usage-history`; the other branches are:
@@ -119,9 +130,14 @@ Each part's document ends with what is and is not verified. Development happens 
 
 The protocol between firmware, app, and runtime changes in step, so upgrade all three:
 
-1. Install the newest `companion-build-N` on the phone (`pocket-hub-debug.apk` under Releases).
-2. On the computer, stop the runtime, pull the current line, and start it again:
+1. On the computer, stop the runtime, pull the current line, and start it again
+   (runtime first, so a new app never meets an old API):
    `cd runtime`, `python3 -m xiaoyou_runtime --config config.json`
+2. The phone app updates through the runtime from 0.11.0 on. Under `runtime/`, run
+   `python3 -m xiaoyou_runtime app publish <path to apk> --note "what changed"`, then
+   install from the app's prompt or from Connection and settings → App update. A phone
+   still on a version before 0.11.0 needs the newest `companion-build-N` installed by
+   hand once (`pocket-hub-debug.apk` under Releases).
 3. Push the new firmware to the device over Bluetooth:
    `python3 -m xiaoyou_runtime firmware fetch --push`.
    A device still on the old single-slot firmware needs one flash by cable first:
@@ -135,8 +151,11 @@ number from `firmware list`).
 | I want to… | Start here |
 | --- | --- |
 | Learn what the device does, its controls, protocol, and memory | [Claude Pocket](docs/claude-pocket.md) |
-| Install the phone app and pair the device | [Pocket Hub](companion/README.md) |
+| Install the phone app and pair the device | [DS companion (Pocket Hub)](companion/README.md) |
 | Run Xiaoyou on a computer, register agents, configure tiers and usage | [Xiaoyou Runtime](runtime/README.md) |
+| Mirror Codex and Claude Code conversations on the computer to the phone and device | [Sync existing desktop conversations](runtime/README.md#sync-existing-desktop-conversations) |
+| Reach the runtime at home while you're out | [Tailscale Funnel](runtime/README.md#reaching-the-runtime-from-anywhere-tailscale-funnel) |
+| Ship a new app version to the phone | [App updates](companion/README.md#app-updates) |
 | Change the firmware with an AI coding tool | [AGENTS.md](AGENTS.md) |
 | Read about hardware, pins, and the memory budget | [Hardware guide](docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md) |
 | See the upstream baseline platform and the full documentation map | [docs/README.md](docs/README.md) |
