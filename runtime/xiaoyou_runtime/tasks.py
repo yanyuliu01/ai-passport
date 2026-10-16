@@ -13,6 +13,7 @@
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+import uuid
 from typing import Any, Callable, Deque, Dict, List, Optional
 
 from .agents import Agent, AgentError, Control, Job, Outcome
@@ -56,6 +57,7 @@ class Task:
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     artifact_error: str = ""
     full_reply_saved: bool = False
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def session_key(self) -> str:
@@ -102,7 +104,8 @@ class Tasks:
 
     def amend(self, card: str, mode: str, text: str, effort: Optional[str] = None,
               model: Optional[str] = None) -> Optional[str]:
-        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；没在做返回 None。
+        """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；排着的补充已经
+        有 MAX_PENDING 条、这条没记上时返回 full；没在做返回 None。
 
         effort / model 不是 None 时，之后的几轮换成这一档、这个模型。正在跑的那一轮换不了：
         改要求（redo）时为了换档会停掉重做，不走中途追加。
@@ -118,8 +121,10 @@ class Tasks:
             if model is not None:
                 task.model = model
             if mode == "after":
-                if len(task.after) < MAX_PENDING:
-                    task.after.append(text)
+                if len(task.after) >= MAX_PENDING:
+                    # 排着的补充满了：明说没记上，不能回“after”让人以为记下了。
+                    return "full"
+                task.after.append(text)
                 return "after"
             control = task.control
         # 中途追加要和帮手通信，不拿着锁做。
@@ -226,6 +231,10 @@ class Tasks:
                 # 和“还在不在做”的判断在同一把锁里：之后再来的补充会另起一轮，不会丢。
                 self._active.pop(task.card, None)
             self._finish(task, outcome, error)
+            # Runs after the task's final round and CLI cleanup, never between
+            # queued follow-ups. Opening the app does not change the outcome.
+            from .desktop_handoff import completed
+            completed(task, outcome, error)
             return
 
     def _original(self, task: Task) -> Optional[str]:

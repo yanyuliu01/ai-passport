@@ -70,8 +70,14 @@ class AgentSpec:
     sandbox: Optional[str] = None
     # dsh：替小幽接话（只说话）的那一次直接调 DeepSeek 的流式接口，回复边生成边给手机
     stream: bool = False
+    # dsh: optional model for plain conversation/routing; tool jobs retain model.
+    chat_model: Optional[str] = None
     # app_server：能来问主人、能中途追加；exec：一次性跑完，不会来问
     codex_mode: str = "app_server"
+    # Optional shared Codex service; only the proxy process belongs to Runtime.
+    app_server_socket: Optional[Path] = None
+    # Open the original session in its desktop app after a background task ends.
+    desktop_open: bool = False
     # app_server 模式下什么时候来问：untrusted、on-request、never
     approval_policy: str = "on-request"
     # remote：另一台小幽 Runtime
@@ -287,6 +293,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         aliases=aliases,
         speaks=_expect(raw.get("speaks", kind in SPEAKS_BY_DEFAULT), bool, where + ".speaks"),
         app_recap=_expect(raw.get("app_recap", False), bool, where + ".app_recap"),
+        desktop_open=_expect(raw.get("desktop_open", False), bool, where + ".desktop_open"),
         timeout_seconds=_timeout(
             raw.get("timeout_seconds", default_timeout), where + ".timeout_seconds"
         ),
@@ -297,6 +304,10 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
                 raise ConfigError("%s 是 %s 类型：没有 %s 这一项" % (where, kind, key))
     if common["app_recap"] and kind != "claude_code":
         raise ConfigError("%s.app_recap 只有 claude_code 类型才有" % where)
+    if common["desktop_open"] and kind not in ("codex", "claude_code"):
+        raise ConfigError("%s.desktop_open 只支持 codex 和 claude_code" % where)
+    if raw.get("app_server_socket") is not None and kind != "codex":
+        raise ConfigError("%s.app_server_socket 只支持 codex" % where)
     if kind == "echo":
         return AgentSpec(**common)
     if kind == "remote":
@@ -341,7 +352,11 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
                 where, "、".join(CODEX_APPROVAL_POLICIES)))
         codex_home = _optional_string(raw.get("config_dir"), where + ".config_dir")
         codex_home = env.get("XIAOYOU_CODEX_CONFIG_DIR") or codex_home
+        socket_path = _optional_string(raw.get("app_server_socket"), where + ".app_server_socket")
+        if socket_path and mode != "app_server":
+            raise ConfigError("%s.app_server_socket 需要 mode=app_server" % where)
         return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
+                         app_server_socket=_path(socket_path, base) if socket_path else None,
                          config_dir=_path(codex_home, base) if codex_home else None,
                          **_tiers(raw, kind, where, shared["model"], shared["extra_args"], False),
                          **common, **shared)
@@ -361,6 +376,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         return AgentSpec(
             sandbox=sandbox,
             stream=_expect(raw.get("stream", True), bool, where + ".stream"),
+            chat_model=_optional_string(raw.get("chat_model"), where + ".chat_model"),
             config_dir=_path(dsh_home, base) if dsh_home else None,
             env=extra_env,
             env_files=env_files,

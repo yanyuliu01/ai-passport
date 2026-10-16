@@ -5,6 +5,8 @@
   transcript.json  小幽自己的对话记录：主人说了什么、她答了什么、是谁做的、哪些代理见过
   voice/           还没识别的录音（只在识别前短暂存在）
 
+收下的话（消息）另记在 messages.json，见 ledger.py。
+
 对话记录属于小幽，不属于任何一个代理。代理各自的会话里只有它参与过的部分；换一个
 代理接话时，Runtime 从这里取出它没见过的那几轮先告诉它。手机从别的 Runtime 带过来
 的对话也进这里，对所有本机代理来说都是“没见过”。
@@ -35,6 +37,7 @@ class Store:
     def __init__(self, state_dir: Path, legacy_agent: str = "claude"):
         """legacy_agent：0.3 及更早的会话表没有分代理，读到时把那些会话算在它名下。"""
         state_dir = Path(state_dir)
+        self.state_dir = state_dir
         self._path = state_dir / "sessions.json"
         self._voice_dir = state_dir / "voice"
         self._transcript = Transcript(state_dir / "transcript.json", state_dir / "shared.json")

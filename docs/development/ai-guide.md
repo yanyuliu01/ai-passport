@@ -8,7 +8,7 @@ This guide is for AI coding assistants. `AGENTS.md` is the only mandatory starti
 
 ## Establish context
 
-1. Read `AGENTS.md` and follow its task routing. Do not load every README or the entire hardware guide by default.
+1. Read `AGENTS.md` and follow its task routing. App, Runtime, and firmware work must also follow the [cross-stack reliability rules](cross-stack-reliability.md) before editing. Do not load every README or the entire hardware guide by default.
 2. Run `git status --short --branch` and preserve existing changes. Ensure the five required skills are available as specified in [AGENTS.md](../../AGENTS.md#required-ai-skills); the AI chooses and performs any missing installation, rather than handing setup to the user.
 3. Read affected public headers, implementations, and neighboring code. Do not infer this board's behavior from a generic ESP32-C3 board.
 4. Search `origin/demo/*` for a relevant example and reuse only applicable design ideas.

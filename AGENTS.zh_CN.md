@@ -22,6 +22,16 @@
 五个技能必须可用，不代表每次任务都加载或调用全部技能；只使用匹配当前任务
 的技能。烧录、Git 写操作和发布仍须分别取得相应授权。
 
+## App／Runtime／固件强制可靠性要求
+
+修改 App、Runtime 或固件的代码、配置、提示词、模型或依赖前，必须阅读并遵守
+[三端可靠性准则](docs/development/cross-stack-reliability.zh_CN.md)。保住已有
+功能、3 秒内有实际意义的首回复及多端消息一致性，是每次修改的验收要求。
+指南定义测量方式、失败／恢复行为、兼容性及必需回归证据，不代表现有代码已
+通过这些检查。目录内 `AGENTS.md` 只负责路由，不另立规则。
+目录入口：[App](companion/AGENTS.zh_CN.md)、[Runtime](runtime/AGENTS.zh_CN.md)、
+[固件应用](main/AGENTS.zh_CN.md)、[固件组件](components/AGENTS.zh_CN.md)。
+
 ## 项目与安全基线
 
 在本工作区开始或恢复工作时，先读取保留的小幽 Runtime／Codex／Claude Code
@@ -55,6 +65,7 @@
 | 任务 | 修改前读取 |
 | --- | --- |
 | 任意代码修改 | `docs/development/ai-guide.zh_CN.md`、相关头文件和相邻实现 |
+| App、Runtime 或固件行为／配置 | `docs/development/cross-stack-reliability.zh_CN.md`（强制回归、首回复、连接与同步契约） |
 | 应用工作流或核心技能配置 | `skills/README.zh_CN.md`；确认五个必需技能可用，再使用匹配当前任务的技能 |
 | 环境引导或缺少工具链 | `docs/development/engineering/environment-setup.zh_CN.md` |
 | BSP、引脚、总线、显示、音频、电池 | `docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md`、`components/bsp/include/bsp_pins.h` |
@@ -67,6 +78,7 @@
 | 文档 | `docs/contribution/doc-conventions.zh_CN.md`、`docs/README.zh_CN.md` |
 | Commit 或 PR | `docs/contribution/commit-and-pr.zh_CN.md` |
 | 配套安卓 App | `companion/README.zh_CN.md`（包括[发布一次 App 改动](companion/README.zh_CN.md#发布一次-app-改动开发者和-ai-agent)） |
+| 小幽 Runtime | `runtime/README.zh_CN.md`、相关请求／消息订阅／持久化代码和测试 |
 
 产品概览与文档索引见 `docs/README.zh_CN.md`。详细的 AI 开发工作流（上下文建立、事实来源优先级、应用/BSP 边界、运行时规则、素材放置、交付格式）见 `docs/development/ai-guide.zh_CN.md`。Fork 专用流程见 `docs/fork-guide.zh_CN.md`，普通上游开发无需读取。
 
@@ -88,6 +100,10 @@ Host tests: PASS / FAIL / NOT RUN
 Device tests: PASS / FAIL / NOT RUN
 Unverified: 仍需板卡、仪器或用户确认的事项
 ```
+
+App、Runtime 或固件行为修改还须按[共同交付契约](docs/development/cross-stack-reliability.zh_CN.md#验证与交付)
+报告回归、3 秒首回复、连接恢复及多端同步结果，并附版本与证据。只有构建和
+主机测试 PASS，不能证明这些指标达标。
 
 每次完整实现用户提出的固件需求后，必须主动询问是否将固件刷写到设备中进行
 测试，不能只等到发布时才询问。未检测到设备时，提示用户将设备开机，再用

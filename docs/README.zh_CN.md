@@ -208,7 +208,9 @@ LICENSE                  仓库许可证
 | 入口 | 你可以找到 |
 | --- | --- |
 | [Claude Pocket](claude-pocket.zh_CN.md) | 本分支的应用：配对、按键、文字覆盖范围、验收 |
+| [小幽 Harness 审查](assets/xiaoyou-harness-review.zh_CN.md) | Fork 架构审查、本地可靠性问题、接入能力边界、实验及渐进 PR 计划 |
 | [开发指南](development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
+| [App／Runtime／固件可靠性](development/cross-stack-reliability.zh_CN.md) | 强制回归、3 秒首回复、连接恢复与多端一致性契约 |
 | [AI 技能](../skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
 | [硬件资料](hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |
 | [中文字体](development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |

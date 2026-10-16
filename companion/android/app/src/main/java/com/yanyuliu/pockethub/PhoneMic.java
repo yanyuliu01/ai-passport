@@ -4,66 +4,40 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 
-import java.io.ByteArrayOutputStream;
-
-/**
- * 手机自己的「按住说话」：按下开始录，松开交出一段 16 kHz 单声道 WAV，和设备上按住 OK
- * 录的格式一样，交给 Runtime 识别。录音在自己的线程里，按钮回调不等它。
- */
+/** Native PCM capture; the phone's installed SpeechRecognizer is not a prerequisite. */
 final class PhoneMic {
-    interface Level { void on(float level); }
+    private final VoiceCapture capture = new VoiceCapture();
 
-    private AudioRecord recorder;
-    private Thread worker;
-    private volatile boolean running;
-    private final ByteArrayOutputStream pcm = new ByteArrayOutputStream();
+    boolean start(VoiceCapture.Callback callback) { return capture.start(PhoneMic::source, callback); }
+    void stop() { capture.stop(false); }
+    void cancel() { capture.stop(true); }
+    boolean recording() { return capture.running(); }
 
-    /** 开始录；没有权限或麦克风被占用时返回 false。level 在录音线程里回调 0..1 的音量。 */
-    boolean start(Level level) {
-        if (running) return true;
+    static VoiceCapture.Source source() {
         int min = AudioRecord.getMinBufferSize(VoiceRecording.SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        if (min <= 0) return false;
+        if (min <= 0) throw new IllegalStateException("手机不支持当前录音格式");
+        AudioRecord recorder;
         try {
-            recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, VoiceRecording.SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, min * 2);
-        } catch (SecurityException | IllegalArgumentException refused) {
-            return false;
+            recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, VoiceRecording.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(min * 2, 4096));
+        } catch (SecurityException denied) {
+            throw new IllegalStateException("麦克风权限未允许，请在应用权限中开启麦克风", denied);
         }
-        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) { recorder.release(); recorder = null; return false; }
-        synchronized (pcm) { pcm.reset(); }
-        running = true;
-        recorder.startRecording();
-        final AudioRecord source = recorder;
-        worker = new Thread(() -> {
-            byte[] buffer = new byte[min];
-            while (running) {
-                int read = source.read(buffer, 0, buffer.length);
-                if (read <= 0) continue;
-                synchronized (pcm) {
-                    if (pcm.size() + read <= VoiceRecording.MAX_PCM_BYTES) pcm.write(buffer, 0, read);
-                }
-                int peak = 0;
-                for (int i = 0; i + 1 < read; i += 2) peak = Math.max(peak, Math.abs((short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8))));
-                if (level != null) level.on(Math.min(1f, peak / 12000f));
+        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+            recorder.release(); throw new IllegalStateException("麦克风初始化失败，请检查权限和其他应用的占用");
+        }
+        return new VoiceCapture.Source() {
+            @Override public void start() {
+                recorder.startRecording();
+                if (recorder.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
+                    throw new IllegalStateException("麦克风没有开始录音");
             }
-        }, "phone-mic");
-        worker.start();
-        return true;
+            @Override public int read(byte[] buffer) {
+                return recorder.read(buffer, 0, buffer.length, AudioRecord.READ_NON_BLOCKING);
+            }
+            @Override public void stop() { recorder.stop(); }
+            @Override public void release() { recorder.release(); }
+        };
     }
-
-    /** 停下并交出录音；不到半秒的当作误触，返回 null。 */
-    byte[] stop() {
-        if (!running) return null;
-        running = false;
-        try { if (worker != null) worker.join(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-        try { recorder.stop(); } catch (IllegalStateException ignored) { }
-        recorder.release(); recorder = null; worker = null;
-        byte[] data;
-        synchronized (pcm) { data = pcm.toByteArray(); }
-        if (data.length < VoiceRecording.SAMPLE_RATE) return null;
-        return VoiceRecording.wav(data);
-    }
-
-    boolean recording() { return running; }
 }

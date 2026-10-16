@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tests for streamed replies: the DeepSeek stream, the partial reply, and how the
-message record carries it to the phone. No model or network is called."""
+message record carries it to the phone. No model or external network is called."""
 
 import io
+import dataclasses
+import urllib.request
 import json
 import subprocess
 import sys
@@ -10,6 +12,7 @@ import threading
 import time
 import unittest
 import urllib.error
+from unittest.mock import patch
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent
@@ -20,8 +23,9 @@ from test_runtime import Scripted, TempDirCase, make_xiaoyou, write_config  # no
 from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import dsh_stream  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
-from xiaoyou_runtime.agents import DshAgent, Job, Outcome  # noqa: E402
+from xiaoyou_runtime.agents import AgentError, DshAgent, Job, Outcome  # noqa: E402
 from xiaoyou_runtime.service import Service  # noqa: E402
+from xiaoyou_runtime.server import make_server  # noqa: E402
 from xiaoyou_runtime.xiaoyou import reply_so_far  # noqa: E402
 
 
@@ -83,6 +87,40 @@ class ReplySoFarTests(unittest.TestCase):
 
 
 class DshStreamTests(TempDirCase):
+    def test_silent_response_is_cancelled_without_waiting_for_an_event(self):
+        closed = threading.Event()
+
+        class SilentResponse:
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+            def close(self): closed.set()
+            def __iter__(self):
+                closed.wait(3)
+                return iter(())
+
+        start = time.monotonic()
+        with self.assertRaisesRegex(AgentError, "超过 1 秒"):
+            dsh_stream.run(dsh_spec(self.folder), Job(text="test", plain=True, timeout=1),
+                           {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None,
+                           lambda request, timeout: SilentResponse())
+        self.assertTrue(closed.is_set())
+        self.assertLess(time.monotonic() - start, 2)
+
+    def test_heartbeat_only_stream_cannot_extend_the_total_deadline(self):
+        now = [0.0]
+
+        class Heartbeats(io.BytesIO):
+            def __iter__(self):
+                yield b": keep-alive\n"
+                now[0] = 2.1
+                yield b": keep-alive\n"
+
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(AgentError, "超过 2 秒"):
+                dsh_stream.run(dsh_spec(self.folder), Job(text="test", plain=True, timeout=2),
+                               {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None,
+                               lambda request, timeout: Heartbeats())
+
     def test_streams_text_and_keeps_its_own_session(self):
         spec = dsh_spec(self.folder)
         seen = []
@@ -183,6 +221,50 @@ class DshAgentStreamTests(TempDirCase):
         self.assertFalse(load(stream=False).agent("ds").stream)
         with self.assertRaises(config_module.ConfigError):
             load(stream="yes")
+        self.assertIsNone(load().agent("ds").chat_model)
+        self.assertEqual(load(chat_model="fast").agent("ds").chat_model, "fast")
+        with self.assertRaises(config_module.ConfigError):
+            load(chat_model=23)
+
+    def test_chat_model_applies_only_to_plain_turns_and_respects_explicit_model(self):
+        spec = dataclasses.replace(dsh_spec(self.folder), chat_model="fast")
+        opener = FakeOpener(sse('{"reply":"hi"}'), sse('{"reply":"hi"}'))
+        agent = DshAgent(spec, run=self.headless('{"reply":"work"}'), opener=opener)
+        agent.run(Job(text="hi", system="S", plain=True, on_text=lambda text: None))
+        self.assertEqual(opener.requests[0][1]["model"], "fast")
+        agent.run(Job(text="hi", system="S", plain=True, model="explicit", on_text=lambda text: None))
+        self.assertEqual(opener.requests[1][1]["model"], "explicit")
+        with patch.object(agent, "_headless", return_value=Outcome("work", None)) as headless:
+            agent.run(Job(text="work", plain=False))
+            self.assertIsNone(headless.call_args[0][0].model)
+            self.assertEqual(agent.tier(headless.call_args[0][0])[0], spec.model)
+
+    def test_fallback_uses_only_the_remaining_budget(self):
+        now = [0.0]
+
+        def offline(request, timeout):
+            now[0] = 7.3
+            raise urllib.error.URLError("offline")
+
+        agent = DshAgent(dsh_spec(self.folder), opener=offline)
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(agent, "_headless", return_value=Outcome("fallback", None)) as headless:
+            agent.run(Job(text="test", plain=True, timeout=10, on_text=lambda text: None))
+        self.assertEqual(headless.call_args[0][0].timeout, 2)
+
+    def test_expired_stream_does_not_start_another_full_wait(self):
+        now = [0.0]
+
+        def expired(request, timeout):
+            now[0] = 10.1
+            raise urllib.error.URLError("timeout")
+
+        agent = DshAgent(dsh_spec(self.folder), opener=expired)
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(agent, "_headless") as headless:
+            with self.assertRaisesRegex(AgentError, "总时限"):
+                agent.run(Job(text="test", plain=True, timeout=10, on_text=lambda text: None))
+        headless.assert_not_called()
 
 
 class Streaming(Scripted):
@@ -230,6 +312,54 @@ class ServiceStreamTests(TempDirCase):
         self.assertEqual((done["status"], done["reply"], done["partial"]),
                          ("done", "我在想这件事", ""))
         self.assertEqual(xiaoyou.cards.get(done["card"])["entries"][-1]["text"], "我在想这件事")
+        entries = xiaoyou.cards.get(done["card"])["entries"]
+        self.assertEqual([entry["id"] for entry in entries], [done["id"] + ":you", done["id"] + ":reply"])
+        self.assertTrue(all(entry["scope"] == "main" for entry in entries))
+
+    def test_http_stream_delivers_partial_then_final_and_polling_same_message(self):
+        agent = Streaming("ds")
+        agent.pieces = ['{"reply": "我', '在想"}']
+        agent.script = [{"reply": "我在想", "brief": "b", "mood": "idle"}]
+        xiaoyou, store = make_xiaoyou(self.folder, [agent])
+        service = Service(xiaoyou, store)
+        config = dataclasses.replace(xiaoyou._config, host="127.0.0.1", port=0)
+        server = make_server(config, service)
+        server.RequestHandlerClass.log_message = lambda *args: None
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(service.close)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(agent.finish.set)
+        message = service.submit("hi", client_id="stream-test")
+        base = "http://127.0.0.1:%d" % server.server_address[1]
+        request = urllib.request.Request(base + "/v1/messages/" + message["id"] + "/stream",
+                                         headers={"Authorization": "Bearer " + config.token})
+        snapshots = []
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertIn("text/event-stream", response.headers["Content-Type"])
+            while True:
+                line = response.readline()
+                if not line:
+                    break
+                if not line.startswith(b"data: "):
+                    continue
+                snapshot = json.loads(line[6:])
+                snapshots.append(snapshot)
+                if snapshot["partial"] == "我在想":
+                    agent.finish.set()
+                if snapshot["status"] in ("done", "failed"):
+                    break
+        self.assertTrue(any(item["partial"] for item in snapshots))
+        self.assertEqual((snapshots[-1]["status"], snapshots[-1]["reply"]), ("done", "我在想"))
+        self.assertTrue(all(item["id"] == message["id"] for item in snapshots))
+        self.assertEqual(service.get(message["id"]), snapshots[-1])
+        self.assertEqual(service.submit("hi", client_id="stream-test")["id"], message["id"])
+        for token, expected in (("wrong-token", 401), (config.token, 404)):
+            request = urllib.request.Request(base + "/v1/messages/missing/stream",
+                                             headers={"Authorization": "Bearer " + token})
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertEqual(failure.exception.code, expected)
 
     def test_a_retried_reply_takes_back_what_was_shown(self):
         said = []

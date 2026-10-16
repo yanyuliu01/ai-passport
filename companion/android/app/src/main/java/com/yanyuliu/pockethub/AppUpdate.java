@@ -5,16 +5,13 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Handler;
+import android.os.Build;
 import android.os.Looper;
 import android.provider.Settings;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.security.MessageDigest;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -27,12 +24,12 @@ import java.util.concurrent.Executors;
 final class AppUpdate {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static Handler main;
-    private static final long MAX_BYTES = 128L * 1024 * 1024;
+    private static final long MAX_BYTES = UpdateDownload.MAX_BYTES;
 
     /** 电脑上发布的那一版。 */
     static final class Release {
         final long code;
-        final String name, sha256, note;
+        final String name, sha256, note, abi, downloadUrl;
         final long size;
         final double publishedAt;
         Release(Map<String, String> fields) {
@@ -40,6 +37,8 @@ final class AppUpdate {
             name = text(fields.get("version_name"));
             sha256 = text(fields.get("sha256"));
             note = text(fields.get("note"));
+            abi = preferredAbi(new String[]{fields.get("abi")});
+            downloadUrl = text(fields.get("download_url"));
             size = number(fields.get("size"));
             double at = 0;
             try { at = Double.parseDouble(text(fields.get("published_at"))); } catch (NumberFormatException ignored) { }
@@ -54,6 +53,11 @@ final class AppUpdate {
 
     /** 最近一次检查的结果；null 表示没有更新或还没查过。 */
     static volatile Release available;
+    private static volatile String availableTarget = "";
+
+    static Release availableFor(RuntimeClient.Target target) {
+        return target != null && target.url.equals(availableTarget) ? available : null;
+    }
     static volatile long checkedAt;
     private static String installedSha;
 
@@ -78,10 +82,14 @@ final class AppUpdate {
                 if ("true".equals(fields.get("available"))) {
                     Release release = new Release(fields);
                     PackageInfo info = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
-                    if (newer(release, info.getLongVersionCode(), installedSha(app), info.lastUpdateTime)) found = release;
+                    long installedCode = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+                    if (newer(release, installedCode, installedSha(app), info.lastUpdateTime)) found = release;
                 }
-                available = found;
-                checkedAt = System.currentTimeMillis();
+                RuntimeClient.Target current = RuntimeClient.selected(app);
+                if (current != null && current.url.equals(target.url)) {
+                    available = found; availableTarget = target.url;
+                    checkedAt = System.currentTimeMillis();
+                }
             } catch (Exception failure) { error = failure.getMessage(); }
             Release result = found;
             String detail = error;
@@ -116,7 +124,9 @@ final class AppUpdate {
             try {
                 if (target == null) throw new IOException("还没有连接电脑");
                 File file = file(app, release);
-                if (!file.isFile()) fetch(target, release, file, percent -> main().post(() -> progress.at(percent)));
+                if (!verified(file, release)) fetch(target, release, file, percent -> {
+                    if (progress != null) main().post(() -> progress.at(percent));
+                });
                 done = file;
             } catch (Exception failure) { error = failure.getMessage(); }
             File result = done;
@@ -125,39 +135,44 @@ final class AppUpdate {
         });
     }
 
+    static boolean verified(File file, Release release) throws Exception {
+        if (!file.isFile() || file.length() <= 0 || file.length() > MAX_BYTES
+                || release.size > 0 && file.length() != release.size) return false;
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[65536]; int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+        }
+        return hex(digest.digest()).equals(release.sha256);
+    }
+
     private static void fetch(RuntimeClient.Target target, Release release, File file, Progress progress) throws Exception {
         File folder = file.getParentFile();
         if (!folder.isDirectory() && !folder.mkdirs()) throw new IOException("没地方放安装包");
-        // 只留这一版：旧的安装包装完就没用了。
+        File part = new File(file.getPath() + ".part");
+        // Keep this release's partial bytes across retries and process restarts.
         File[] old = folder.listFiles();
-        if (old != null) for (File stale : old) stale.delete();
-        HttpURLConnection connection = (HttpURLConnection) new URL(target.url + "/v1/app/apk").openConnection();
-        connection.setInstanceFollowRedirects(false);
-        connection.setRequestProperty("Authorization", "Bearer " + target.token);
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(30000);
-        File temp = File.createTempFile("update-", ".part", folder);
-        try {
-            int code = connection.getResponseCode();
-            if (code != 200) throw new IOException(code == 401 ? "连接令牌已失效" : code == 404 ? "电脑上已经没有这个更新了" : "下载失败（" + code + "）");
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            long total = 0;
-            int shown = -1;
-            try (InputStream input = connection.getInputStream(); OutputStream output = new FileOutputStream(temp)) {
-                byte[] buffer = new byte[65536];
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    total += count;
-                    if (total > MAX_BYTES) throw new IOException("安装包太大");
-                    digest.update(buffer, 0, count);
-                    output.write(buffer, 0, count);
-                    int percent = release.size > 0 ? (int) Math.min(99, total * 100 / release.size) : 0;
-                    if (percent != shown) { shown = percent; progress.at(percent); }
-                }
-            }
-            if (!hex(digest.digest()).equals(release.sha256)) throw new IOException("安装包校验没通过，可能电脑上刚发布了新的一版，再试一次");
-            if (!temp.renameTo(file)) throw new IOException("存不下安装包");
-        } finally { connection.disconnect(); if (temp.exists()) temp.delete(); }
+        if (old != null) for (File stale : old)
+            if (!stale.equals(file) && !stale.equals(part)) stale.delete();
+        if (release.downloadUrl.isEmpty()) {
+            UpdateDownload.fetch(target.url + packagePath(release), target.token, release.sha256,
+                    release.size, file, progress::at);
+        } else {
+            // Runtime authenticates the manifest; its private token must never
+            // be included in a public host's request or redirect chain.
+            UpdateDownload.fetchExternal(release.downloadUrl, release.sha256, release.size, file, progress::at);
+        }
+    }
+
+    static String preferredAbi(String[] abis) {
+        if (abis != null) for (String abi : abis)
+            if ("arm64-v8a".equals(abi) || "armeabi-v7a".equals(abi)
+                    || "x86".equals(abi) || "x86_64".equals(abi) || "universal".equals(abi)) return abi;
+        return "universal";
+    }
+
+    static String packagePath(Release release) {
+        return "/v1/app/apk?abi=" + release.abi + "&sha256=" + release.sha256;
     }
 
     /**

@@ -10,8 +10,20 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 17
-        versionName "0.11.0"
+        versionCode 25
+        versionName "0.14.0"
+    }
+
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir("phone-speech/assets")
+    // Compress native libraries so installed 0.12.x updaters can fetch this APK (<128 MB).
+    packaging.jniLibs.useLegacyPackaging = true
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
+            universalApk true
+        }
     }
 
     // A fixed debug key (public, password "android") so that every CI build can be
@@ -41,6 +53,19 @@ android {
     }
 }
 
+def preparePhoneSpeech = tasks.register("preparePhoneSpeech", Exec) {
+    inputs.files(rootProject.file("tools/prepare_phone_speech.py"), rootProject.file("tools/phone-speech.json"))
+    outputs.files(layout.buildDirectory.file("phone-speech/sherpa-onnx-1.13.8.aar"),
+            layout.buildDirectory.file("phone-speech/assets/asr/zh/model.int8.onnx"),
+            layout.buildDirectory.file("phone-speech/assets/asr/zh/tokens.txt"),
+            layout.buildDirectory.file("phone-speech/assets/asr/sense-voice/model.int8.onnx"),
+            layout.buildDirectory.file("phone-speech/assets/asr/sense-voice/tokens.txt"))
+    commandLine "python3", rootProject.file("tools/prepare_phone_speech.py"), layout.buildDirectory.dir("phone-speech").get().asFile
+}
+tasks.named("preBuild").configure { dependsOn preparePhoneSpeech }
+
 dependencies {
+    implementation files(layout.buildDirectory.file("phone-speech/sherpa-onnx-1.13.8.aar")).builtBy(preparePhoneSpeech)
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.20"
     testImplementation "junit:junit:4.13.2"
 }

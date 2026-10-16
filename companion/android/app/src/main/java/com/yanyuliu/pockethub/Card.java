@@ -16,15 +16,23 @@ final class Card {
         final String role;
         final String text;
         final List<Attachment> attachments;
+        final String id, scope, kind, author;
+        final double at;
 
         Entry(String role, String text) {
             this(role, text, Collections.emptyList());
         }
 
         Entry(String role, String text, List<Attachment> attachments) {
+            this(role, text, attachments, "", "", "", "", 0);
+        }
+
+        Entry(String role, String text, List<Attachment> attachments, String id, String scope,
+              String kind, String author, double at) {
             this.role = role;
             this.text = text;
             this.attachments = attachments;
+            this.id = id; this.scope = scope; this.kind = kind; this.author = author; this.at = at;
         }
     }
 
@@ -184,7 +192,9 @@ final class Card {
             Map<String, Object> entry = Json.object(item);
             String role = Json.string(entry, "role");
             if (role.equals("you") || role.equals("xiaoyou")) {
-                entries.add(new Entry(role, Json.string(entry, "text"), Attachment.parse(entry)));
+                entries.add(new Entry(role, Json.string(entry, "text"), Attachment.parse(entry),
+                        Json.string(entry, "id"), Json.string(entry, "scope"), Json.string(entry, "kind"),
+                        Json.string(entry, "author"), Json.number(entry, "at")));
             }
         }
         List<String> progress = new ArrayList<>();
@@ -197,7 +207,7 @@ final class Card {
         String mood = Json.string(raw, "mood");
         Map<String, Object> cost = raw.get("cost") instanceof Map ? Json.object(raw.get("cost"))
                 : null;
-        return new Card(id, Json.string(raw, "title"), state.isEmpty() ? "done" : state,
+        Card card = new Card(id, Json.string(raw, "title"), state.isEmpty() ? "done" : state,
                 Json.string(raw, "agent"), Json.string(raw, "brief"), mood.isEmpty() ? "idle" : mood,
                 entries, progress, Json.number(raw, "created_at"), Json.number(raw, "started_at"),
                 (int) Json.number(raw, "edits"), Json.flag(raw, "queued"),
@@ -213,7 +223,13 @@ final class Card {
                 Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
                 Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
                 Json.flag(raw, "title_truncated"), allAttachments(raw, entries));
+        card.resultReady = Json.flag(raw, "result_ready");
+        card.summaryPartial = Json.string(raw, "summary_partial");
+        return card;
     }
+
+    boolean resultReady;
+    String summaryPartial = "";
 
     private static List<Attachment> allAttachments(Map<String, Object> raw, List<Entry> entries) {
         Map<String, Attachment> items = new java.util.LinkedHashMap<>();

@@ -4,6 +4,11 @@
 
 # 小幽 Runtime
 
+修改本项目的 Agent 必须先读[根目录指令](../AGENTS.zh_CN.md)和
+[App／Runtime／固件强制可靠性准则](../docs/development/cross-stack-reliability.zh_CN.md)。
+其中规定回归、3 秒首回复、连接恢复和多端一致性验收。下文的能力说明不能
+作为这些要求已经通过验证的证据。
+
 小幽是主人唯一的对话对象，也是一个独立的身份：她不是某个模型的别名。这个 Runtime 是
 小幽背后那个一直开着的小服务，属于她的东西都在这里——人设、她和主人的对话记录、
 “这句话交给谁”的判断，以及别人做完之后由她怎么转述。Claude Code、Codex、另一台电脑上
@@ -53,6 +58,56 @@ python3 -m xiaoyou_runtime --config config.json                 # 启动服务
 
 想不调用任何模型先把整条链路跑通，启动时加上环境变量 `XIAOYOU_DEFAULT_AGENT=echo`：
 所有的话都交给一个原样复述的代理，不用改配置文件。
+
+## 在桌面 App 中查看 Runtime 任务
+
+在 `claude_code` 或 `codex` 代理上设置 `"desktop_open": true`，后台任务成功结束后，
+Runtime 会请求原生桌面 App 打开原会话。排队的补充轮次会先做完；日常对话回复、失败或
+取消的任务不会启动 App。默认是 `false`；打开失败会记在 Runtime 日志里，不丢弃任务
+结果。启动命令成功只代表请求已发出，不代表已验证桌面显示。代理使用独立配置目录时，
+只把这一条已完成会话的记录导入桌面端默认目录；不复制账号配置、凭证或其他对话，不改写
+App 数据库。导入保留会话 ID，在完整写入后原子发布；重复导入相同内容没有副作用，已有
+不同内容的会话绝不覆盖。这是本地快照，桌面端的后续操作不会回流到 Runtime 独立会话；
+Runtime 之后继续该任务而内容不同时，会明确报告冲突，不静默合并。记录中引用的外部
+工具产物和子代理文件不会导入。
+
+已有任务可从仓库根目录操作：
+
+```bash
+PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop list
+PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop open --task c149 --agent codex
+```
+
+使用配置中的代理名，例如 `cc`，不一定叫 `claude`。任务仍在工作、等待或状态未知时会拒绝
+打开。这些命令只读取 Runtime 状态，不执行启动清理，也不调用模型。同一会话同时只交给
+一方操作：在桌面 App 开始继续处理后，不要同时从 Runtime 给该会话派活。
+
+- **Claude Code：**在代理原工作目录和 `CLAUDE_CONFIG_DIR` 下执行
+  `claude --desktop --resume <session-id>`。需要安装受支持的 Claude Desktop、使用订阅
+  登录，且 macOS 上的 Claude Code 至少为 2.1.285。Runtime 启动器目前只支持 macOS；
+  Windows 请在交互式终端使用原生命令。明确配置了 API 或第三方服务的代理会被拒绝。
+  启动器会移除继承的服务路由变量，使用本地订阅登录，不改变工作进程的环境。
+  自定义配置目录的会话会先导入 `~/.claude/projects/` 再打开。
+  macOS 使用临时终端，因为 CLI 不接受重定向输入输出；不会发送新提示词，启动限时
+  15 秒。已在本机 macOS 验证。这是任务完成后的会话交接，
+  不是实时镜像 `claude -p`。
+  参见 [Claude 桌面文档](https://code.claude.com/docs/en/desktop#coming-from-the-cli)。
+- **Codex：**在 macOS 打开 `codex://threads/<session-id>`。独立 `CODEX_HOME` 中的
+  会话记录会按原日期目录导入 `~/.codex/sessions/`。桌面端继续操作时使用自己的账号和
+  设置；Runtime 的配置和登录保持原样。桌面端的来源筛选仍可能隐藏外部会话，按 ID
+  打开不依赖侧边栏发现。导入和读取成功不等于已验证实时显示。
+
+若桌面客户端确实使用了同一个 Codex 服务，还可设置
+`"app_server_socket": "/absolute/path/to/app-server-control.sock"`，并保留
+`"mode": "app_server"`。Runtime 会使用 `codex app-server proxy --sock <path>`；
+服务必须已运行，桌面端必须使用同一服务和配置目录。不会自动发现 socket；单独启动一个
+daemon 也不等于桌面 App 已连接。服务缺失或不兼容会明确失败，不会悄悄改为私有进程。
+只关闭 Runtime 自己的代理进程；取消时向当前任务的轮次发送中断，并忽略其他线程的事件。
+这个可选连接保留 Runtime 的授权和中途追加协议，但共享服务本身不保证桌面 App 实时显示。
+参见 [App Server 协议](https://learn.chatgpt.com/docs/app-server)。
+
+改配置后，须等没有任务运行时再重启 Runtime；要打断任务须先取得主人批准。这个功能与
+下面的只读观察是两个方向。
 
 ## 同步已有电脑端对话
 
@@ -412,6 +467,11 @@ chmod 600 ~/.config/xiaoyou/deepseek.key
   的 `partial` 里，手机边生成边显示。这几轮自己记一份简短的历史，放在
   `<config_dir>/xiaoyou-stream-sessions/`（编号以 `api-` 开头）。流式没成、或者设了
   `stream: false` 时，退回 `dsh --profile headless --json`：一问一答，关掉工具和思考，求快。
+- 可选 `chat_model` 只用于小幽接话、路由和结果转述；后台工具任务继续使用 `model`，
+  按次明确指定的模型优先。未设置时沿用原有模型。例如可将 `model` 设为 `deepseek-v4-pro`，
+  `chat_model` 设为 `deepseek-flash`；不会删掉人设、会话历史、派活或审批逻辑。
+- 流式保活、空行和无效事件也受同一总时限约束。失败后的 headless 回退只使用剩余时间，
+  总时限已用完时不再重试。日志记录模型、首字和总时长，不记录对话正文或密钥。
 - 没有 Claude Code 那种“每一步都问”的通道，权限只看 `sandbox`（`read-only`、
   `workspace-write`、`danger-full-access`，作为 `DSH_PERMISSION_MODE` 传给它）：沙箱内它
   自己做；越出沙箱时它来问，这一问照常变成设备和手机上的授权弹窗。所以没有
@@ -752,6 +812,8 @@ CODEX_HOME=~/.codex-xiaoyou codex login status
 
 ## HTTP 接口
 
+消息快照的 `processing_started_at` 和 `first_partial_at` 是可选 Unix 时间戳，分别用于区分排队时间和首段可见文字的等待时间。
+
 除 `/healthz` 外，所有请求都要带 `Authorization: Bearer <令牌>`。请求体和响应通常为
 JSON；下列语音、固件和附件二进制接口除外。
 
@@ -760,10 +822,13 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小幽在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
-| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。 |
+| `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。`client_id` 用来防重复（0.7.0 起按对话算，并且重启后仍然有效）：同一个对话里同一个 `client_id` 再来，内容一样返回原来那条，不重做；内容不一样返回 `409`。这条消息落盘后才返回 `202`，见[消息落盘与重启](#消息落盘与重启)。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
-| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。回复还在生成时，`partial` 是到目前为止的整段回复（整段替换，不是追加；空串表示收回）；处理完后是空串。 |
-| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。 |
+| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。回复还在生成时，`partial` 是到目前为止的整段回复（整段替换，不是追加；空串表示收回）；处理完后是空串。0.7.0 起 Runtime 重启后仍然查得到（最近 200 条）。 |
+| `GET /v1/messages/<id>/stream?rev=<n>` | 经过鉴权的 `text/event-stream`，用一条持续连接推送消息快照。每段带相同消息 ID 与完整 `partial`/`rev`，结束状态关闭连接，注释维持心跳。消息记录用 `event_stream: true` 声明支持；连接失败后轮询相同 ID，不重新提交任务。旧 Runtime 继续使用长轮询。 |
+| `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。0.7.0 起：带 `messages=1` 时还多一项 `messages`，是这个对话里序号比 `after` 大的消息记录（和卡共用一条序号，包括还在排队、正在生成回复的），另一台手机能看到这边刚说的话；不带时和以前完全一样。返回里的 `epoch` 是这份记录的编号，和上次看到的不一样说明换了一份记录，也要从 0 重新同步。 |
+| `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}`（0.8.0 起）：这台 Runtime 的固定编号、这份记录的编号、同步协议版本和能力。见[统一消息结构](../docs/development/unified-message-model.zh_CN.md)。 |
+| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed"}`。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
 | `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |
 | `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
@@ -789,6 +854,26 @@ JSON；下列语音、固件和附件二进制接口除外。
 Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `waiting` 本身只是状态信号。
 可选审批桥可以提供独立的审批，是否可远程回答由 `remote_actionable` 决定；普通续聊和
 取消仍在电脑端会话中完成。
+
+### 消息落盘与重启
+
+0.7.0 起，收下的每句话先写进 `state/messages.json`，再回 `202`；状态变了（开始处理、处理完、
+没成）也写。正在生成的那段回复变得太快，不落盘。Runtime 重启后：
+
+- 还在排队、没开始处理的打字消息接着做；
+- 已经在处理的、或者还没识别的录音，不知道做到了哪一步，不自动重做：标成没做完（`failed`），
+  并在对话里留一张卡，写着原来那句话和“Runtime 重启了，这句话没处理完，可以再说一次”；
+- 回复其实已经记在卡上、只是消息记录没来得及写完的，记成 `done`，不会误报没做完；
+- 序号不会往回走（文件里预先占下一段号，重启后从那段的末尾往后数，会跳过一些号），客户端
+  手里的 `after` 仍然有效；
+- 拿着原来的消息编号来问、带原来的 `client_id` 重试，都还是那一条。
+
+消息写不进盘（比如磁盘满了）时返回 `503`，这句话不算收下，可以用同一个 `client_id` 再发。
+写盘先刷到磁盘再换名，断电时要么是旧的一份，要么是新的一份。
+
+去重表比消息本身留得久（最近 2000 个 `client_id`）：消息被挤掉之后再重试，返回同一个编号、
+`expired: true` 的一份最小记录，不会当成新的一句再做一遍。`messages.json` 坏了不会拒绝启动，
+坏文件留在旁边的 `messages.json.broken`。
 
 消息记录说的是“这句话小幽接住了没有”，不是“这件事做完了没有”：小幽答完或者把活派出去，
 `status` 就是 `done`，后面的进展和结果在卡上，用 `/v1/feed` 等。只有别的 Runtime 转过来的
@@ -1025,13 +1110,35 @@ feed 会 gzip 压缩并按 48 KB 分批发，慢线路上也能一点点收完�
 SHA-256 后交给安卓安装，安装要主人在系统界面上点确认：
 
 ```bash
-python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-debug.apk --note "改了什么"
+python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "改了什么"
 python3 -m xiaoyou_runtime app status
 ```
 
 版本号从 apk 旁边 Gradle 写的 `output-metadata.json` 读（或用 `--version-code`）。版本号更大，
 或版本号相同但安装包不同、而且发布得比手机上那份装得晚时，App 提示更新。打开 App 时会问一次
 （最多十分钟一次），也可以在「连接与设置 → App 更新」里手动查。带这个功能的第一版要手动装。
+
+App 0.13.1 增加架构选择和断点续传。默认发布通用包，并用 `--variant ABI=APK` 提供
+Gradle 输出的同版各架构包，见[App 发布流程](../companion/README.zh_CN.md#发布一次-app-改动开发者和-ai-agent)。
+私有 Runtime 上的旧手机都已确认是 ARM64 时，可将 ARM64 包设为默认，并同时提供通用包
+和其他架构包；未知的旧手机仍应使用通用默认包。
+
+`GET /v1/app?abi=arm64-v8a` 仍以普通版本、大小和校验值字段返回选中的包；没有对应
+架构时回退到通用包。不带 `abi` 则保持发布时的默认包。通过
+`GET /v1/app/apk?abi=arm64-v8a&sha256=<expected-hash>` 下载；该版本已被替换时返回
+409，不会混入不同版本。单个字节范围返回 206、`Content-Range`、`Accept-Ranges` 和 ETag；
+非法范围返回 416。If-Range 不匹配时返回完整文件，If-Match 不匹配时返回 412。
+所有请求继续要求 Bearer 鉴权。以哈希命名的不可变包避免正在传输的文件被替换；存储最多
+保留当前和上次发布的哈希包。旧的 `app.apk` 文件名继续供旧 Runtime 进程使用。新 App
+兼容忽略 Range 的旧服务端。这些改动减少传输量与重复下载，不能消除 Funnel 或 DERP
+中继的线路瓶颈，仍需在手机实际链路上测速。
+
+从 App 0.14.0 起，发布时可以用 `--download-url HTTPS_URL` 指定默认安装包的外部地址，
+各架构用 `--variant-download-url ABI=HTTPS_URL` 分别指定。先上传与本地验证过的文件完全一致的
+安装包；版本、文件大小与 SHA-256 仍由 Runtime 提供。App 不向外部地址发送 Runtime 令牌，
+仅接受 HTTPS 跳转，并在续传后核对完整哈希。没有配置地址的架构继续从 Runtime 下载。
+App 和 Runtime 的包体上限为 512 MiB；旧版 App 仍有 128 MiB 限制，首次大包升级需要浏览器安装。
+此配置只改变安装包下载，不改变对话和录音的传输目标。
 
 ## 一句话是怎么走的
 

@@ -6,18 +6,25 @@
 模型（model）、到现在花了多少（cost）。
 
 每次有卡变化，全局的序号加一并记在那张卡上：客户端记住看到的最大序号，带着它来
-等（/v1/feed），就只会拿到之后变过的卡。
+等（/v1/feed），就只会拿到之后变过的卡。消息（Service 里还在处理的那些话）变化时也从
+这里取号（bump），所以卡和消息排在同一条序号上，客户端一个游标就能接着拉两样东西。
+
+序号和这份记录的编号（epoch）都落盘：Runtime 重启后序号接着往上走；记录文件丢了、坏了
+或者换了一份时 epoch 会变，客户端看到 epoch 变了就从头同步。
 
 卡落盘在 state/cards.json，只留最近的若干张。Runtime 重启时还在做的事没法接着做，
 启动时把它们标成没做完。
 """
 
 import json
+import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .message_log import MessageLog
 from .store import _write
 from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
@@ -33,6 +40,10 @@ MAX_ENTRY_CHARS = 8000
 MAX_TITLE_CHARS = MAX_REQUEST_TITLE_CHARS
 MAX_PROGRESS_LINES = 5
 MAX_PROGRESS_CHARS = 200
+# 序号一次预留这么多写进文件：消息的序号变得很快（生成中的回复每变一次取一个号），
+# 不能每次都写盘；但重启后不能从比客户端手里还小的号重新数，所以先把一段号“占下”，
+# 用到头了再占下一段。重启后从占下的那段的末尾往后数：会跳一段，但不会往回走。
+SEQ_BLOCK = 1000
 RESTART_NOTE = "Runtime 重启了，这件事没做完"
 # 一件事花了多少：token（新读的、写的、从缓存读的），和订阅额度两个窗口各少了几个百分点。
 COST_KEYS = ("in", "out", "cached", "d5", "d7")
@@ -52,6 +63,8 @@ class Cards:
         self._cards: Dict[str, Dict[str, Any]] = {}
         self._next = 1
         self._seq = 0
+        self._reserved = 0  # 文件里记着的序号上限：重启后从它往后数
+        self._epoch = ""
         self._listeners: List[Listener] = []
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -63,7 +76,24 @@ class Cards:
                     self._cards[card["id"]] = self._clean(card)
             if isinstance(raw.get("next"), int) and not isinstance(raw.get("next"), bool):
                 self._next = max(1, raw["next"])
-            self._seq = max([card["seq"] for card in self._cards.values()] + [0])
+            saved_seq = raw.get("seq")
+            self._seq = max([card["seq"] for card in self._cards.values()]
+                            + [saved_seq if isinstance(saved_seq, int)
+                               and not isinstance(saved_seq, bool) else 0, 0])
+            if isinstance(raw.get("epoch"), str):
+                self._epoch = raw["epoch"]
+        self._reserved = self._seq
+        fresh_epoch = not self._epoch
+        if fresh_epoch:
+            # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
+            # 只是从这以后它能认出“换了一份记录”。
+            self._epoch = uuid.uuid4().hex
+        # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
+        self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
+        # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
+        if self._log.max_seq() > self._seq:
+            self._seq = self._log.max_seq()
+            self._reserved = self._seq
         interrupted = [card for card in self._cards.values() if card["state"] in ACTIVE]
         for card in interrupted:
             self._seq += 1
@@ -72,12 +102,42 @@ class Cards:
                             brief="电脑会话状态尚未更新", approval=None, queued=False,
                             updated_at=time.time(), finished_at=None, seq=self._seq)
                 continue
-            card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time()})
+            card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time(),
+                                    "kind": "note"})
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
-        if interrupted:
+        migrated = self._adopt_log()
+        if interrupted or fresh_epoch or migrated:
             self._save()
+
+    def _adopt_log(self) -> bool:
+        """启动时：卡上的副本以日志为准；日志里还没有的（旧版本的卡）补进日志。"""
+        changed = False
+        for card in self._cards.values():
+            for entry in card["entries"]:
+                record = self._log.get(entry["id"]) if entry.get("id") else None
+                if record is not None and (record["text"] != entry["text"]
+                                           or record["attachments"] != entry["attachments"]):
+                    entry.update(text=record["text"],
+                                 attachments=[dict(item) for item in record["attachments"]])
+                    changed = True
+            before = [entry.get("id") for entry in card["entries"]]
+            self._log.observe(card)
+            changed = changed or before != [entry["id"] for entry in card["entries"]]
+        return changed
+
+    def _issue(self) -> int:
+        """调用时已经拿着锁：发一个新序号；用到预留的那段号的末尾时先占下下一段。"""
+        self._seq += 1
+        if self._seq >= self._reserved:
+            try:
+                self._save()
+            except OSError as error:
+                # 照样往下走；下一次取号再试着占下一段。磁盘一直坏着时，断电重启后
+                # 序号可能比客户端手里的小：那种情况下客户端靠“返回的序号变小”从头同步。
+                sys.stderr.write("卡片记录写不下去：%s\n" % error)
+        return self._seq
 
     @staticmethod
     def _clean(card: Dict[str, Any]) -> Dict[str, Any]:
@@ -91,6 +151,8 @@ class Cards:
         entries = [
             {"role": entry["role"], "text": entry["text"],
              "at": entry.get("at") if isinstance(entry.get("at"), (int, float)) else 0,
+             **{key: entry.get(key, "") if isinstance(entry.get(key, ""), str) else ""
+                for key in ("id", "scope", "kind", "author")},
              "attachments": clean_attachments(entry.get("attachments"))}
             for entry in card.get("entries", [])
             if isinstance(entry, dict) and entry.get("role") in ("you", "xiaoyou")
@@ -139,6 +201,9 @@ class Cards:
             "stale": card.get("stale") is True,
             "content_scope": text("content_scope"),
             "content_truncated": card.get("content_truncated") is True,
+            "result_ready": card.get("result_ready") is True,
+            "summary_partial": text("summary_partial"),
+            "run_id": text("run_id"),
         }
 
     @staticmethod
@@ -152,13 +217,97 @@ class Cards:
         return copy
 
     def _save(self) -> None:
-        _write(self._path, {"next": self._next, "cards": list(self._cards.values())})
+        reserved = self._reserved
+        if self._seq >= reserved:
+            reserved = self._seq + SEQ_BLOCK
+        _write(self._path, {"next": self._next, "seq": reserved, "epoch": self._epoch,
+                            "cards": list(self._cards.values())})
+        # 写成功了才算占下：写失败时下一次变化还会再试。
+        self._reserved = reserved
+
+    @property
+    def epoch(self) -> str:
+        """这份记录的编号：记录换了（文件丢了、坏了、换了一台）就不一样。"""
+        return self._epoch
+
+    @property
+    def seq(self) -> int:
+        with self._changed:
+            return self._seq
+
+    def bump(self, at_least: int = 0) -> int:
+        """别的东西（消息）变了，要一个新序号：叫醒在等的人，返回这个号。
+
+        at_least 用在启动时：消息记录里见过的最大序号比这里大时，从它往后接着发。
+        平时不落盘；只有用到了预留的那段号的末尾时才写一次文件，占下下一段（见 SEQ_BLOCK）。"""
+        with self._changed:
+            self._seq = max(self._seq, at_least)
+            seq = self._issue()
+            self._changed.notify_all()
+            return seq
+
+    def since(self, conversation: str, after: int,
+              include_desktop: bool = False) -> Any:
+        """现在的序号，和这个对话里序号比 after 大的卡（按序号排）。两样是同一刻的。"""
+        with self._changed:
+            cards = [self._copy(card) for card in self._cards.values()
+                     if (card["conversation"] == conversation
+                         or (include_desktop and card.get("monitoring_only")))
+                     and card["seq"] > after]
+            cards.sort(key=lambda card: card["seq"])
+            return self._seq, cards
+
+    @property
+    def log_floor(self) -> int:
+        with self._changed:
+            return self._log.floor
+
+    def message(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """日志里的一条消息（没有返回 None）。"""
+        with self._changed:
+            return self._log.get(message_id)
+
+    def request(self, message: Dict[str, Any]) -> None:
+        """Service 收下的一次请求变了（见 MessageLog.request）。"""
+        with self._changed:
+            self._log.request(message)
+            self._changed.notify_all()
+
+    @staticmethod
+    def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
+        """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。"""
+        view = Cards._copy(card)
+        view["members"] = [entry["id"] for entry in view.pop("entries")]
+        return view
+
+    def sync_since(self, conversation: str, after: int) -> Any:
+        """（现在的序号, 变了的事, 变了的消息, floor）：同一刻、同一把锁里取的，不会漏。"""
+        with self._changed:
+            tasks = [self.task_view(card) for card in self._cards.values()
+                     if (card["conversation"] == conversation or card.get("monitoring_only"))
+                     and card["seq"] > after]
+            tasks.sort(key=lambda task: task["seq"])
+            messages = self._log.since(conversation, after, self._seq, include_desktop=True)
+            return self._seq, tasks, messages, self._log.floor
+
+    def wait_beyond(self, seq: int, timeout: float) -> int:
+        """等到序号超过 seq（任何卡或消息变了），最多等 timeout 秒；返回现在的序号。"""
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._changed:
+            while self._seq <= seq:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._changed.wait(remaining)
+            return self._seq
 
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
-        """调用时已经拿着锁：记下这张卡变了，落盘，叫醒在等的人。"""
+        """调用时已经拿着锁：记下这张卡变了（连同它的消息），落盘，叫醒在等的人。"""
+        self._log.observe(card)
         self._seq += 1
         card["seq"] = self._seq
         card["updated_at"] = time.time()
+        self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
         self._save()
         self._changed.notify_all()
         return self._copy(card)
@@ -226,6 +375,8 @@ class Cards:
                progress: Optional[str] = None, fresh: bool = False,
                progress_lines: Optional[List[str]] = None,
                attachments: Optional[List[Dict[str, Any]]] = None,
+               turn_id: Optional[str] = None, scope: str = "main", kind: str = "reply",
+               author: str = "xiaoyou",
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。"""
@@ -235,10 +386,14 @@ class Cards:
                 return None
             now = time.time()
             if said is not None:
-                card["entries"].append({"role": "you", "text": said[:MAX_ENTRY_CHARS], "at": now})
+                card["entries"].append({"role": "you", "text": said[:MAX_ENTRY_CHARS], "at": now,
+                                        "id": turn_id + ":you" if turn_id else "", "scope": scope,
+                                        "kind": "user", "author": "you"})
             if say is not None:
                 card["entries"].append(
-                    {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now})
+                    {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now,
+                     "id": turn_id + ":reply" if turn_id else "", "scope": scope,
+                     "kind": kind, "author": author})
             if attachments is not None:
                 incoming = clean_attachments(attachments)
                 self._merge_attachments(card, incoming)
