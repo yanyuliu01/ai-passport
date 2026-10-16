@@ -16,7 +16,7 @@
                                         带 messages=1 时还给之后变过的消息（同一条序号）；
                                         epoch 变了说明换了一份记录，要从 0 重新拉
   GET  /v1/info                         runtime_id、epoch、同步协议版本和能力
-  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>
+  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>&usage=<rev>
                                         统一同步：变了的消息、事、授权（见统一消息结构说明）
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
@@ -374,8 +374,13 @@ def make_server(config: Config, service: Service,
                     self._fail(400, "after 应该是整数")
                     return
                 try:
+                    seen = int(query["usage"][0]) if "usage" in query else None
+                except ValueError:
+                    self._fail(400, "usage 应该是整数")
+                    return
+                try:
                     body = service.sync(query.get("conversation", ["default"])[0], after,
-                                        query.get("epoch", [None])[0], asked[0])
+                                        query.get("epoch", [None])[0], asked[0], seen)
                 except RequestError as error:
                     self._fail(400, str(error))
                     return

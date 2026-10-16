@@ -162,7 +162,10 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 最近需求和回复：`said` 最多 159 个 UTF-8 字节，App 的电脑会话 `reply` 最多 480 字节，
 仍使用设备所有卡共用的 4 KiB 文本池。已经支持电脑卡片的固件不需要为内容同步重新刷写。
 
-电脑端会话卡继续保持只读：继续和停止仍在电脑端 App 中完成。安装并信任下面的可选
+电脑端会话停下（本轮结束）以后，可以从手机在会话页接着聊（0.8.1 起）：Runtime 另开一个「接着：……」
+任务，在那个会话的目录里用它的会话编号跑一轮（Claude 会话交给 `claude_code` 类型的代理，Codex 会话
+交给 `codex` 类型的），不加小幽的人设。这个会话不记成 Runtime 自己的，电脑端照常观察，主人也能回到
+电脑上接着聊。电脑上这一轮还在跑（`running`/`waiting` 且不是 `stale`）时拒绝。停止仍在电脑端完成。安装并信任下面的可选
 审批桥后，可以从手机单独回答有效的操作审批；只有状态信号、或者没有决策通道的通知，
 仍需要在电脑端确认。
 “本轮结束”只表示这次响应结束，不代表整个项目
@@ -828,7 +831,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/messages/<id>/stream?rev=<n>` | 经过鉴权的 `text/event-stream`，用一条持续连接推送消息快照。每段带相同消息 ID 与完整 `partial`/`rev`，结束状态关闭连接，注释维持心跳。消息记录用 `event_stream: true` 声明支持；连接失败后轮询相同 ID，不重新提交任务。旧 Runtime 继续使用长轮询。 |
 | `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。0.7.0 起：带 `messages=1` 时还多一项 `messages`，是这个对话里序号比 `after` 大的消息记录（和卡共用一条序号，包括还在排队、正在生成回复的），另一台手机能看到这边刚说的话；不带时和以前完全一样。返回里的 `epoch` 是这份记录的编号，和上次看到的不一样说明换了一份记录，也要从 0 重新同步。 |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}`（0.8.0 起）：这台 Runtime 的固定编号、这份记录的编号、同步协议版本和能力。见[统一消息结构](../docs/development/unified-message-model.zh_CN.md)。 |
-| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed"}`。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
+| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>&usage=<rev>` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`。0.8.1 起带 `usage`（同 `/v1/feed`），带上 `usage=<rev>` 时用量变了会提前返回；能力里有 `sync_usage`。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
 | `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |
 | `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
@@ -852,8 +855,8 @@ JSON；下列语音、固件和附件二进制接口除外。
 `content_scope: "recent"` 和 `content_truncated`。有大小上限的 `entries` 保存实际提出的
 需求（`role: "you"`）和来源代理的可见输出（`role: "xiaoyou"`，App 上标注 Codex 或
 Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `waiting` 本身只是状态信号。
-可选审批桥可以提供独立的审批，是否可远程回答由 `remote_actionable` 决定；普通续聊和
-取消仍在电脑端会话中完成。
+可选审批桥可以提供独立的审批，是否可远程回答由 `remote_actionable` 决定；停下的会话可以用
+`POST /v1/messages` 带 `card`（这张观察卡）和 `pin: true` 接着聊（见上文），取消仍在电脑端完成。
 
 ### 消息落盘与重启
 

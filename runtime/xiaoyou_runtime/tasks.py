@@ -55,6 +55,10 @@ class Task:
     model: Optional[str] = None
     artifact_dir: Optional[str] = None
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    # 接着别人的会话做（比如主人在电脑上开的）：在那个会话的目录里、用那个会话编号跑，
+    # 但会话不归 Runtime 管，不记进 store：电脑那边照常观察它，主人也能回电脑上接着聊
+    cwd: Optional[str] = None
+    borrowed_session: Optional[str] = None
     artifact_error: str = ""
     full_reply_saved: bool = False
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -185,10 +189,11 @@ class Tasks:
                     task.redo = None
                 task.control = Control()
                 control = task.control
-            session = self._store.session(task.session_key, task.agent.name)
-            # 一拿到会话编号就记下：这一轮中途被停掉，下一轮也能接着用。
-            control.session = lambda session_id, task=task: self._store.remember(
-                task.session_key, task.agent.name, session_id)
+            session = task.borrowed_session or self._store.session(task.session_key, task.agent.name)
+            # 一拿到会话编号就记下：这一轮中途被停掉，下一轮也能接着用。借来的会话不记。
+            if task.borrowed_session is None:
+                control.session = lambda session_id, task=task: self._store.remember(
+                    task.session_key, task.agent.name, session_id)
             outcome: Optional[Outcome] = None
             error: Optional[str] = None
             try:
@@ -208,7 +213,7 @@ class Tasks:
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
                     system=system, schema=task.schema, hop=task.hop, control=control,
-                    effort=task.effort, model=task.model,
+                    effort=task.effort, model=task.model, cwd=task.cwd,
                 ))
             except AgentError as failure:
                 error = str(failure)
@@ -216,7 +221,7 @@ class Tasks:
                 error = "Runtime 内部出错：%s: %s" % (type(failure).__name__, failure)
             finally:
                 self._release(task, control)
-            if outcome is not None and outcome.session_id:
+            if outcome is not None and outcome.session_id and task.borrowed_session is None:
                 self._store.remember(task.session_key, task.agent.name, outcome.session_id)
             with self._lock:
                 if task.cancelled:
@@ -239,6 +244,6 @@ class Tasks:
 
     def _original(self, task: Task) -> Optional[str]:
         """帮手这边没有会话可接（比如第一轮还没跑完就被停掉）时，原来的任务要重新给。"""
-        if self._store.session(task.session_key, task.agent.name):
+        if task.borrowed_session or self._store.session(task.session_key, task.agent.name):
             return None
         return task.text

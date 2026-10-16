@@ -14,7 +14,7 @@ import xiaoyou_runtime.message_log as message_log
 from xiaoyou_runtime import conformance
 from xiaoyou_runtime.cards import Cards
 from xiaoyou_runtime.desktop_sync import CONVERSATION, DesktopSync, Session
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.service import RequestError, Service
 
 
 class ConformanceTests(TempDirCase):
@@ -72,6 +72,23 @@ class UnifiedSyncTests(TempDirCase):
             if not page["more"]:
                 return found
             page = service.sync(conversation, page["seq"])
+
+    def test_sync_carries_usage_and_wakes_up_when_it_changes(self):
+        service, _, xiaoyou = self.start()
+        page = service.sync("default", 0)
+        self.assertEqual(xiaoyou.usage.rev, page["usage"]["rev"])
+        seq = service.sync("default", page["seq"])["seq"]
+        # Nothing changed and the caller already has this usage: it waits the whole time.
+        started = time.monotonic()
+        service.sync("default", seq, None, 0.3, xiaoyou.usage.rev)
+        self.assertGreaterEqual(time.monotonic() - started, 0.25)
+        # An older usage revision returns at once, with the current usage.
+        started = time.monotonic()
+        quick = service.sync("default", seq, None, 5, xiaoyou.usage.rev - 1)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(xiaoyou.usage.rev, quick["usage"]["rev"])
+        with self.assertRaises(RequestError):
+            service.sync("default", seq, None, 0, "3")
 
     def test_a_question_and_its_reply_are_two_messages_with_stable_ids(self):
         service, agent, _ = self.start()

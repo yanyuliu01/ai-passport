@@ -306,7 +306,8 @@ def _limits_after(server: AppServer, control: Control, asked: Any) -> None:
 def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
           watch: Watchdog, tier: Any = (None, None)) -> Outcome:
     handshake(server, time.monotonic() + HANDSHAKE_SECONDS)
-    settings: Dict[str, Any] = {"cwd": str(spec.workdir) if spec.workdir else os.getcwd(),
+    where = job.cwd or (str(spec.workdir) if spec.workdir else os.getcwd())
+    settings: Dict[str, Any] = {"cwd": where,
                                 "approvalPolicy": spec.approval_policy}
     if spec.sandbox:
         settings["sandbox"] = spec.sandbox

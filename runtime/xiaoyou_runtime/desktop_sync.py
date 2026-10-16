@@ -512,7 +512,8 @@ class DesktopSync:
             fields.update(entries=[dict(entry) for entry in session.entries],
                           content_scope="recent", content_truncated=session.content_truncated)
         self.cards.update(session.card, state=STATES[status], source="desktop", project=project,
-                          session_id=session.session_id, monitoring_only=True, desktop_status=status,
+                          session_id=session.session_id, desktop_cwd=session.cwd,
+                          monitoring_only=True, desktop_status=status,
                           observed_at=observed_at, stale=stale, model=session.model or None,
                           started_at=session.started_at, approval=waiting, queued=False,
                           brief=_text(latest_reply, 120) or "%s · %s" % (project, label),

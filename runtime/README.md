@@ -208,8 +208,13 @@ the existing `card` message: `said` is limited to 159 UTF-8 bytes and the App's
 desktop `reply` to 480 bytes, within the device's shared 4 KiB text pool. Firmware
 that already supports desktop cards needs no new flash for content sync.
 
-Desktop conversation cards remain read-only: continue and stop them in the
-desktop app. A live permission request can be answered separately from the phone
+A desktop conversation whose turn has stopped can be continued from the phone on
+its page (since 0.8.1): the runtime opens a new task, titled after that conversation, and runs one turn in that
+session's directory with its session id (Claude sessions go to a `claude_code`
+agent, Codex sessions to a `codex` agent), without Xiaoyou's persona. The session is
+not recorded as the runtime's own, so desktop observation continues and the owner
+can go back to the computer. It is refused while the turn on the computer is still
+running (`running`/`waiting` and not `stale`). Stopping stays in the desktop app. A live permission request can be answered separately from the phone
 when the optional approval bridge below is installed and trusted; a status signal
 or notification without that decision channel still requires desktop confirmation.
 Ending a response means this turn ended, not that the whole project is complete.
@@ -1047,7 +1052,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. Since 0.7.0, `messages=1` adds `messages`: the message records of this conversation with a sequence above `after` (the same sequence as cards, including queued messages and replies still being written), so another phone sees what was just said; without it the response is unchanged. `epoch` identifies the record set: when it differs from the one last seen, the records were replaced and the client must resync from 0. |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}` (since 0.8.0): the runtime's fixed id, the record set id, the sync protocol version and capabilities. See the [unified message model](../docs/development/unified-message-model.md). |
-| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed"}`. `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
+| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
 | `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
 | `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
@@ -1075,7 +1080,9 @@ visible human requests (`role: "you"`) and originating assistant output
 visible content has been collected. A desktop `waiting` state alone is only a
 status signal. The optional permission bridge can supply a separate approval
 whose `remote_actionable` field determines whether it can be answered remotely;
-ordinary continuation and cancellation remain in the desktop conversation.
+a stopped session can be continued with `POST /v1/messages` carrying `card` (this
+observation card) and `pin: true` (see above); cancellation remains in the desktop
+conversation.
 
 ### Messages on disk and restarts
 

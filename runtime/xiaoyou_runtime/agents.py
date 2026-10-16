@@ -323,6 +323,13 @@ class Job:
     model: Optional[str] = None
     # 想边生成边看时：回复每多一块，就把到目前为止的原始全文交给它。代理做不到流式时不调用
     on_text: Optional[Callable[[str], None]] = None
+    # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
+    # Claude Code 只在原项目目录下找得到要 --resume 的会话
+    cwd: Optional[str] = None
+
+
+def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
+    return Path(job.cwd) if job.cwd else spec.workdir
 
 
 @dataclass(frozen=True)
@@ -658,7 +665,7 @@ class ClaudeCodeAgent(Agent):
         if job.control is not None and not job.plain and self._run is subprocess.run:
             return self._work(job, job.control)
         done = run_command(
-            self.command(job), job.text, self.spec.workdir,
+            self.command(job), job.text, workdir(self.spec, job),
             job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Claude Code",
             env=self._env(),
             run=self._run, control=job.control,
@@ -739,7 +746,7 @@ class ClaudeCodeAgent(Agent):
         try:
             done = stream_command(
                 self.command(job, stream=True, mcp_config=config_file), job.text,
-                self.spec.workdir, job.timeout or self.spec.timeout_seconds, "Claude Code",
+                workdir(self.spec, job), job.timeout or self.spec.timeout_seconds, "Claude Code",
                 self._env(), control, on_line, self.spec.idle_seconds,
                 self.spec.idle_command_seconds,
             )
@@ -851,7 +858,7 @@ class CodexAgent(Agent):
         with tempfile.TemporaryDirectory(prefix="xiaoyou-codex-") as folder:
             last_message = Path(folder) / "last.txt"
             done = run_command(
-                self.command(job, last_message), text, self.spec.workdir,
+                self.command(job, last_message), text, workdir(self.spec, job),
                 job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Codex", env=env,
                 run=self._run,
                 control=job.control,
