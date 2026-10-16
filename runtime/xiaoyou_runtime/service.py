@@ -19,6 +19,7 @@
 """
 
 import json
+import re
 import sys
 import threading
 import time
@@ -55,6 +56,7 @@ FEED_BUDGET_BYTES = 48 * 1024
 FINISHED = ("done", "failed")
 RESTART_NOTE = "Runtime 重启了，这句话没处理完，可以再说一次"
 RESTART_VOICE_NOTE = "Runtime 重启了，这段录音没来得及识别，再说一次吧"
+MESH_PREFIX = re.compile(r"^[0-9a-f]{12}\.(.+)$")
 
 
 class RequestError(Exception):
@@ -109,6 +111,8 @@ class Service:
         self._closed = False
         # 卡的编号 → 等这件事结束才算处理完的消息（别的 Runtime 转过来的）。
         self._held: Dict[str, str] = {}
+        # 小幽网络（mesh.py）：加入了网络时由 Mesh 设上。在别的 Runtime 的事里说的话转交给那台。
+        self.mesh: Optional[Any] = None
         xiaoyou.defer = self._defer
         xiaoyou.cards.subscribe(self._card_changed)
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
@@ -121,6 +125,9 @@ class Service:
         requeue, unfinished = [], []
         for message in self._messages.values():
             if message["status"] in FINISHED:
+                continue
+            if message.get("relay_to") and message["status"] == "running":
+                # 转交给别的 Runtime 的话：那台可能已经在做，结果到了 mesh.py 会接上。
                 continue
             if message["status"] == "queued" and message["kind"] == "text":
                 requeue.append(message["id"])
@@ -211,17 +218,20 @@ class Service:
 
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
                agent: Any = None, hop: Any = 0, card: Any = None,
-               pin: Any = False, effort: Any = None, model: Any = None) -> Dict[str, Any]:
+               pin: Any = False, effort: Any = None, model: Any = None,
+               mesh: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
         pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
-        effort / model 是给这句话选的努力程度和模型，交给帮手时用。"""
+        effort / model 是给这句话选的努力程度和模型，交给帮手时用。
+        mesh 只由 mesh.py 给（网络里别的 Runtime 交来的话，不经 HTTP）：{"message_id"：用那台
+        给的编号，两边同一句话同一个编号；"delegated_from"：那台的哪件事交来的}。"""
         if not isinstance(text, str) or not text.strip():
             raise RequestError("text 不能为空")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
         return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
-                             pin is True, effort, model)
+                             pin is True, effort, model, mesh or {})
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
@@ -241,12 +251,20 @@ class Service:
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
                  client_id: Any, agent: Any, hop: Any, card: Any = None,
-                 pin: bool = False, effort: Any = None, model: Any = None) -> Dict[str, Any]:
+                 pin: bool = False, effort: Any = None, model: Any = None,
+                 mesh: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
+        mesh = mesh or {}
+        relay = None
         if card is not None:
             # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
             card = _name(card, "card")
             observed = self._xiaoyou.cards.get(card)
+            if observed is not None and observed.get("mesh_origin") and pin:
+                # 别的 Runtime 的事：这句话交给那台，在那件事里说（mesh.py 转交）。
+                if self.mesh is None:
+                    raise RequestError("这是别的电脑上的事，这台现在不在小幽网络里，转交不了")
+                relay = observed
             if observed is not None and observed.get("monitoring_only"):
                 # 电脑上的会话可以从手机接着聊，但只能在它里面说，而且这一轮要已经停下。
                 if observed.get("source") == "external":
@@ -259,12 +277,13 @@ class Service:
             client_id = _name(client_id, "client_id")
         if agent is not None:
             agent = _name(agent, "agent")
-            if not self._xiaoyou.has(agent):
+            if relay is None and not self._xiaoyou.has(agent):
                 raise RequestError("没有叫 %s 的代理（现在有：%s）" % (
                     agent, "、".join(item["name"] for item in self.agents())))
         if isinstance(hop, bool) or not isinstance(hop, int) or not 0 <= hop <= MAX_HOP:
             raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
-        effort, model = self._tier(agent, effort, model)
+        if relay is None:
+            effort, model = self._tier(agent, effort, model)  # 转交的由那台检查
         fingerprint = content_hash(kind, text, audio)
         # 一次只收一句：收下（落盘）的先后就是排队的先后；同一个 client_id 的重试要等前一次
         # 写完（或者写失败、撤回）才看得到结果，不会对一句还没写下去的话回“收到了”。
@@ -279,7 +298,9 @@ class Service:
                             raise ConflictError(
                                 "client_id %s 在这个对话里已经用过，内容不一样" % client_id)
                         return self._seen(seen)
-                message_id = uuid.uuid4().hex
+                message_id = mesh.get("message_id") or uuid.uuid4().hex
+                if message_id in self._messages:
+                    return self._snapshot(self._messages[message_id])  # 同一个转交又来了一次
                 if audio is not None:
                     # 先落盘再登记：格式不对的录音直接拒绝，不进队列。
                     path = self._store.voice_file(message_id)
@@ -328,6 +349,12 @@ class Service:
                     "created_at": time.time(),
                     "finished_at": None,
                 }
+                if relay is not None:
+                    # 转交给别的 Runtime：那台的哪件事。这句话的记录以那台为准（同一个编号）。
+                    message.update(relay_to=relay["mesh_origin"], relay_card=relay.get("mesh_id"),
+                                   relay_name=relay.get("origin_name") or "")
+                if mesh.get("delegated_from"):
+                    message["delegated_from"] = dict(mesh["delegated_from"])
                 self._messages[message["id"]] = message
                 if client_id is not None:
                     self._dedupe[dedupe_key(conversation, client_id)] = {
@@ -508,8 +535,9 @@ class Service:
 
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
+        capabilities = list(CAPABILITIES) + (["mesh"] if self.mesh is not None else [])
         return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
-                "protocol": PROTOCOL, "capabilities": list(CAPABILITIES)}
+                "protocol": PROTOCOL, "capabilities": capabilities}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
              wait: float = 0.0, usage: Any = None, states: Any = ()) -> Dict[str, Any]:
@@ -648,6 +676,26 @@ class Service:
             self._update(message_id, status="failed", error=reply or "这件事没做成",
                          mood="oops", stage=None, helper=None, finished_at=time.time())
 
+    def relayed(self) -> List[Dict[str, Any]]:
+        """转交给别的 Runtime、还在等那台结果的话（mesh.py 启动时接上它们）。"""
+        with self._changed:
+            return [self._snapshot(message) for message in self._messages.values()
+                    if message.get("relay_to") and message["status"] not in FINISHED]
+
+    def relay_done(self, message_id: str, ok: bool, text: str, card: Optional[str] = None) -> None:
+        """转交给别的 Runtime 的话有了结果（mesh.py 调用）：ok 时 text 是那台的回答，否则是原因。"""
+        with self._changed:
+            message = self._messages.get(message_id)
+            if message is None or message["status"] in FINISHED:
+                return
+        fields: Dict[str, Any] = dict(stage=None, helper=None, partial="", finished_at=time.time())
+        if card:
+            fields["card"] = card
+        if ok:
+            self._update(message_id, status="done", reply=text, brief=text[:120], mood="idle", **fields)
+        else:
+            self._update(message_id, status="failed", error=text or "那台没说明原因", mood="oops", **fields)
+
     @staticmethod
     def _snapshot(message: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = dict(message)
@@ -696,8 +744,12 @@ class Service:
                     or not reply.strip() or isinstance(at, bool)
                     or not isinstance(at, (int, float))):
                 raise RequestError("turns 里的每一项要有非空的 text 和 reply")
+            turn_id = _name(turn.get("id"), "turns[].id")
+            # 小幽网络里别的 Runtime 的话在这里带着产地前缀（mesh.local_id）；去掉前缀就是那句话
+            # 本来的编号，这台的对话记录按它认出已经知道的，不会把同一轮记两次。
+            prefixed = MESH_PREFIX.match(turn_id)
             cleaned.append({
-                "id": _name(turn.get("id"), "turns[].id"),
+                "id": prefixed.group(1) if prefixed else turn_id,
                 "text": text[:MAX_SHARED_TEXT_CHARS],
                 "reply": reply[:MAX_SHARED_REPLY_CHARS],
                 "at": at,
@@ -791,6 +843,7 @@ class Service:
             asked, hop, card = message["asked"], message["hop"], message["card"]
             pin = bool(message.get("pin"))
             effort, model = message.get("effort"), message.get("model")
+            relay_to, delegated = message.get("relay_to"), message.get("delegated_from")
             audio = self._audio.pop(message_id, None)
             message["processing_started_at"] = time.time()
         if audio is not None:
@@ -822,12 +875,25 @@ class Service:
             self._update(message_id, status="failed", mood="oops", finished_at=time.time(),
                          error="消息记录写不下去，这句话没处理：%s" % error)
             return
+        if relay_to:
+            # 在别的 Runtime 的事里说的：交给那台。结果由 mesh.py 收到那台的记录后填回来。
+            mesh = self.mesh
+            problem = mesh.relay(self.get(message_id)) if mesh is not None else "这台不在小幽网络里"
+            if problem:
+                self._update(message_id, status="failed", error=problem, mood="oops", stage=None,
+                             finished_at=time.time())
+            else:
+                with self._changed:
+                    name = self._messages.get(message_id, {}).get("relay_name") or "别的电脑"
+                self._update(message_id, stage="交给 %s 了" % name, mood="busy")
+            return
         try:
-            turn = self._xiaoyou.hear(
-                text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
-                effort=effort, model=model,
-                report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
-            )
+            with self._xiaoyou.record.opening(**({"delegated_from": delegated} if delegated else {})):
+                turn = self._xiaoyou.hear(
+                    text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
+                    effort=effort, model=model,
+                    report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
+                )
         except AgentError as error:
             self._fail(message_id, conversation, text, str(error), pin)
             return

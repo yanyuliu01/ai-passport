@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -482,6 +483,7 @@ class Xiaoyou:
         self._workspace = workspace if workspace is not None else Workspace()
         self._agents: Dict[str, Agent] = {agent.name: agent for agent in agents}
         self._order = [agent.name for agent in agents]
+        self._agents_lock = threading.Lock()
         self._store = store
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
@@ -497,6 +499,20 @@ class Xiaoyou:
         # 只会干活的帮手做完后，转述要回到那个对话自己的线上排队；没有人排队（命令行里
         # 说一句就走）时就地做。Service 启动时把它换成“排到这个对话的线上”。
         self.defer: Callable[[str, Callable[[], None]], None] = lambda conversation, work: work()
+        # 小幽网络（mesh.py）：别的 Runtime 的事在这里只有副本，补充、取消要交给那台。
+        # 没加入网络时是 None。
+        self.mesh: Optional[Any] = None
+
+    def set_remote_agents(self, agents: List[Agent]) -> None:
+        """换上网络里别的 Runtime 的帮手（mesh.py 按谁在线随时更新）；本机的不动。"""
+        with self._agents_lock:
+            for name in [name for name, agent in self._agents.items() if agent.type == "mesh"]:
+                del self._agents[name]
+            self._order = [name for name in self._order if name in self._agents]
+            for agent in agents:
+                if agent.name not in self._agents:
+                    self._agents[agent.name] = agent
+                    self._order.append(agent.name)
 
     @property
     def default_agent(self) -> str:
@@ -520,7 +536,8 @@ class Xiaoyou:
         return self._usage
 
     def agents(self) -> List[Agent]:
-        return [self._agents[name] for name in self._order]
+        with self._agents_lock:
+            return [self._agents[name] for name in self._order if name in self._agents]
 
     def has(self, name: str) -> bool:
         return name in self._agents
@@ -532,11 +549,12 @@ class Xiaoyou:
 
     def _available(self, hop: int) -> List[Agent]:
         # 已经是别的 Runtime 转过来的话，不再往外转：两台互相登记时不会来回踢。
-        return [agent for agent in self.agents() if hop == 0 or agent.type != "remote"]
+        return [agent for agent in self.agents() if hop == 0 or agent.type not in ("remote", "mesh")]
 
     def _voice(self, available: List[Agent]) -> Optional[Agent]:
-        """替小幽转述的代理：配置里指定的那个；它这一轮用不了就找第一个能说话的。"""
-        speakers = [agent for agent in available if agent.speaks]
+        """替小幽转述的代理：配置里指定的那个；它这一轮用不了就找第一个能说话的。
+        网络里别的 Runtime 的帮手不替这台说话。"""
+        speakers = [agent for agent in available if agent.speaks and agent.type != "mesh"]
         for agent in speakers:
             if agent.name == self._config.voice_agent:
                 return agent
@@ -711,6 +729,16 @@ class Xiaoyou:
             reply = {"start": "交给 %s 了", "amend": "好，告诉 %s 了",
                      "cancel": "好，这件事不做了%s"}[kind] % (
                          plan.get("agent") or (target or {}).get("agent") or "")
+        if target is not None and target.get("mesh_origin"):
+            # 别的 Runtime 的事：这里只有副本。补充、取消交给那台做；这句话和回答记在这里
+            # 另开的一张卡上，不写进副本（副本的内容只由那台决定）。
+            if kind == "amend" and self.mesh is not None:
+                self.mesh.amend(target, plan["task"])
+            elif kind == "cancel" and self.mesh is not None:
+                self.mesh.cancel(target["id"])
+            if kind in ("amend", "cancel"):
+                kind = "none"
+            target = None
         started = False
         worker = lead.name
         if kind == "none":
@@ -926,10 +954,14 @@ class Xiaoyou:
             schema=reply_schema() if speaking else None, effort=effort, model=model,
             borrowed_session=borrowed, cwd=opened.get("borrowed_cwd") if borrowed else None,
         )
+        # 交给网络里别的 Runtime 的帮手：卡上记着交给了哪台（那台替这件事开的卡会记着替谁做）。
+        remote = ({"delegated_to": {"runtime": agent.peer, "name": agent.peer_name}}
+                  if agent.type == "mesh" else {})
         card = self._record.task(card_id, state="working", agent=agent.name,
                                   started_at=time.time(), queued=self._config.max_parallel > 0,
                                   fresh=True, effort=effort, model=model or known, model_asked=model,
-                                  run_id=task_run.run_id, result_ready=False, summary_partial="")
+                                  run_id=task_run.run_id, result_ready=False, summary_partial="",
+                                  **remote)
         if card is not None:
             self._workspace.task(card, agent.name, task)
         self._tasks.start(task_run)
@@ -1008,8 +1040,8 @@ class Xiaoyou:
     def _approval_changed(self, card_id: str, approval_id: Optional[str]) -> None:
         """一件事在等主人点头，或者不用等了。"""
         card = self._cards.get(card_id)
-        if card is None:
-            return
+        if card is None or card.get("mesh_origin"):
+            return  # 别的 Runtime 的事：卡上的授权和状态由那台报来
         if card.get("monitoring_only"):
             # The desktop adapter owns its observed state; an approval is a
             # separate response channel, not control of the desktop card.
@@ -1136,6 +1168,9 @@ class Xiaoyou:
         card = self._cards.get(card_id)
         if card is None or card["state"] not in ACTIVE:
             return False
+        if card.get("mesh_origin"):
+            # 别的 Runtime 的事：叫那台停，状态等它报回来。
+            return bool(self.mesh is not None and self.mesh.cancel(card_id))
         self._record.task(card_id, state="cancelled", brief="取消了", mood="idle",
                            approval=None, queued=False)
         self._tasks.cancel(card_id)

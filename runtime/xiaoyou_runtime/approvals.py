@@ -81,6 +81,40 @@ class Approvals:
         self._notify: Changed = changed or (lambda card, approval: None)
         self._desktop_prefix = "d" + secrets.token_hex(6)
         self._responders: Dict[str, Callable[[str], bool]] = {}
+        # 别的 Runtime 的授权在这里有副本（小幽网络，mesh.py）。在这里回答时交给它：
+        # (副本, allow/deny) → 送出去了没有。结局等那台报回来。
+        self.forward: Optional[Callable[[Dict[str, Any], str], bool]] = None
+
+    def mirror(self, approval_id: str, fields: Dict[str, Any]) -> None:
+        """别的 Runtime 的一个授权在这里的副本：整段换成那台报来的样子，取一个这里的序号。"""
+        status = fields.get("status", "pending")
+        with self._changed:
+            item = dict(self._items.get(approval_id) or {})
+            item.update({key: fields[key] for key in FIELDS + ("status", "by", "reason", "mesh_origin",
+                                                              "mesh_id", "origin_name")
+                         if key in fields})
+            item["id"] = approval_id
+            item.setdefault("created_at", time.time())
+            item["decision"] = None if status == "pending" else (ALLOW if status == "allowed" else DENY)
+            item["gone"] = status == "withdrawn"
+            item["updated_at"] = time.time()
+            item["seq"] = self._sequence() if self._sequence is not None else 0
+            self._items[approval_id] = item
+            card = item["card"]
+            waiting = self._waiting(card)
+            self._changed.notify_all()
+        self._notify(card, waiting)
+
+    def own_since(self, after: int) -> List[Dict[str, Any]]:
+        """这台自己的授权里序号比 after 大的变化（所有对话），交给网络里的别的 Runtime。"""
+        with self._changed:
+            return sorted((dict({key: item[key] for key in FIELDS if key in item},
+                                status=item.get("status", "pending"), seq=item.get("seq", 0),
+                                updated_at=item.get("updated_at", item["created_at"]),
+                                **{key: item[key] for key in ("by", "reason") if key in item})
+                           for item in self._items.values()
+                           if item.get("seq", 0) > after and not item.get("mesh_origin")),
+                          key=lambda item: item["seq"])
 
     def ask(self, card: str, conversation: str, agent: str, tool: str, detail: str,
             kind: str = TOOL, *, context: Optional[Dict[str, Any]] = None,
@@ -171,6 +205,16 @@ class Approvals:
                 return None
             if item["decision"] is not None:
                 return False
+            mirrored = dict(item) if item.get("mesh_origin") else None
+        if mirrored is not None:
+            # 别的 Runtime 的授权：交给那台去答，结局由它报回来。
+            return bool(self.forward is not None and self.forward(mirrored, decision))
+        with self._changed:
+            item = self._items.get(approval_id)
+            if item is None:
+                return None
+            if item["decision"] is not None:
+                return False
             if item.get("source") == "desktop":
                 if item.get("remote_actionable") is not True:
                     return False
@@ -196,7 +240,7 @@ class Approvals:
         with self._changed:
             dropped = False
             for item in self._items.values():
-                if item["card"] == card and item["decision"] is None:
+                if item["card"] == card and item["decision"] is None and not item.get("mesh_origin"):
                     item["decision"] = DENY
                     item["gone"] = True
                     self._mark(item, "withdrawn", reason="gone")

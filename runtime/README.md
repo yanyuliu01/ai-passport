@@ -153,6 +153,11 @@ cd runtime
 python3 -m xiaoyou_runtime --config config.json --desktop-sync
 ```
 
+To keep it on however the runtime is started (a keepalive script, login items,
+a service manager), set it in the configuration instead (since 0.10.0):
+`"desktop_sync": true`, or `"desktop_sync": {"enabled": true, "projects": [...],
+"codex_dir": "...", "claude_dir": "..."}`. Command-line options take precedence.
+
 The observer checks changes every two seconds and discovers new transcript files
 every ten seconds. It reads the newest 32 local transcript files changed in the
 last 24 hours, under `~/.codex/sessions` and `~/.claude/projects`. Subagents and
@@ -1335,6 +1340,60 @@ belongs on that computer is then handed over by Xiaoyou, or sent there when the
 owner names it, and the transcript stays on the main runtime. A message that
 another runtime has already passed on is not passed on again, so two runtimes
 that list each other do not bounce it back and forth.
+
+### The Xiaoyou mesh: every runtime has everything (since 0.10.0)
+
+Both arrangements above depend on the phone. With the mesh, the runtimes sync
+with each other directly, so the runtime you start anywhere, and whichever one
+the phone happens to reach, holds the same conversation, tasks, observed desktop
+sessions and approvals. Give every runtime of the same owner the same secret
+and at least one address of another member:
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "peers": ["https://home.tail1234.ts.net"],
+  "advertise": ["https://laptop.tail1234.ts.net"]
+}
+```
+
+- `secret` (or `secret_file`, or `XIAOYOU_MESH_SECRET`): at least 16 characters,
+  identical on every member. Without it the runtime does not join. Xiaoyou's
+  `subject_id` is derived from it, so all members report the same subject.
+- `peers` (or `XIAOYOU_MESH_PEERS`, comma separated): where to look first. One
+  reachable member is enough; members tell each other about the rest.
+- `advertise` (or `XIAOYOU_MESH_ADVERTISE`): how others reach this runtime.
+  When omitted it is derived from `server.host`; a runtime that only listens on
+  `127.0.0.1` advertises nothing and still takes part by connecting out, pushing
+  its records and pulling the others' (useful in a cloud sandbox or behind NAT).
+
+The exchange endpoint `POST /v1/mesh/exchange` takes the mesh secret, not the
+phone token; `GET /v1/mesh` (phone token) lists the members and when each was
+last reached. Members long-poll each other, so a change usually arrives within
+a second.
+
+What each member sees: another runtime's task is a local card (`cN`, with
+`mesh_origin`, `mesh_id` and `origin_name`), its messages keep their ids with the
+origin's first 12 hex digits in front, and its approvals appear like local ones.
+Records are only ever changed by the runtime that made them, so there are no
+write conflicts; records reach members that cannot reach their origin through
+the others. Xiaoyou on every member is told what was said on the others before
+she answers next.
+
+What you can do from any member: talking inside another runtime's task,
+cancelling it and answering its approvals are sent to that runtime as commands
+and done there (a sentence keeps the same id on both sides, so it shows once).
+Xiaoyou can also hand work to a helper on another runtime: those helpers are
+listed as `<helper>@<runtime name>`, for example `@codex@Mac check the logs`. The other
+runtime's card for that work records `delegated_from`, and progress and the result
+come back to the card here. A member that has not been reached for five minutes
+is offline: its unfinished tasks show as `unavailable`, its helpers are no longer
+offered, and a sentence for it is refused with the reason instead of being lost.
+Commands that are not delivered within ten minutes expire.
+
+Not shared: subscription quota (`/v1/usage`), firmware and app releases, and
+attachment files (an attachment of another runtime's task is listed but its
+content stays on that runtime).
 
 ## Voice
 

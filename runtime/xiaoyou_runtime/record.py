@@ -6,7 +6,9 @@ MessageLog 决定。授权的序号也从这里取。卡、/v1/feed、/v1/sync�
 不写；tests/test_record.py 检查别的模块没有绕过这里直接写卡或取序号。
 """
 
-from typing import Any, Dict, List, Optional
+import threading
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional
 
 from .cards import Cards
 
@@ -17,7 +19,7 @@ KINDS = ("reply", "handoff", "worker_result", "summary", "note")
 TASK_FIELDS = {"state", "agent", "brief", "mood", "started_at", "queued", "fresh", "effort", "model",
                "model_asked", "run_id", "result_ready", "summary_partial", "approval", "cost", "edits",
                "title", "title_source", "attachments", "progress_lines", "borrowed_session",
-               "borrowed_cwd", "desktop_card", "finished_at", "error"}
+               "borrowed_cwd", "desktop_card", "finished_at", "error", "delegated_to"}
 
 
 class RecordError(ValueError):
@@ -27,13 +29,26 @@ class RecordError(ValueError):
 class Record:
     def __init__(self, cards: Cards):
         self._cards = cards
+        self._local = threading.local()
 
     # ---- 事 ----
+
+    @contextmanager
+    def opening(self, **fields: Any) -> Iterator[None]:
+        """这段时间里、这个线程上开的卡都带上这些字段（小幽网络：替别的 Runtime 做的事
+        开卡时就记着 delegated_from，那台第一次看到这张卡就知道不用另外显示）。"""
+        previous = getattr(self._local, "fields", {})
+        self._local.fields = dict(previous, **fields)
+        try:
+            yield
+        finally:
+            self._local.fields = previous
 
     def task_open(self, conversation: str, title: str, state: str = "done",
                   agent: Optional[str] = None, **fields: Any) -> Dict[str, Any]:
         """开一件事（一张卡）。"""
-        return self._cards.open(conversation, title, state, agent, **fields)
+        return self._cards.open(conversation, title, state, agent,
+                                **dict(getattr(self._local, "fields", {}), **fields))
 
     def task(self, card_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
         """一件事的状态、谁在做、用量、授权这些字段变了。不含说的话。"""
@@ -80,6 +95,24 @@ class Record:
         if card is not None and not (card.get("monitoring_only") or fields.get("monitoring_only")):
             raise RecordError("observed() 只用于电脑上观察到的会话或外部上报的会话")
         return self._cards.update(card_id, **fields)
+
+    # ---- 别的 Runtime 的记录（小幽网络，mesh.py）：只读副本，内容由那台决定 ----
+
+    def replica_task(self, card_id: Optional[str], fields: Dict[str, Any],
+                     entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """别的 Runtime 的一件事在这里的副本；card_id 为 None 时开一张新的本地卡。"""
+        if not fields.get("mesh_origin"):
+            raise RecordError("replica_task() 只用于别的 Runtime 的事，要带 mesh_origin")
+        current = self._cards.get(card_id) if card_id else None
+        if current is not None and current.get("mesh_origin") != fields["mesh_origin"]:
+            raise RecordError("这张卡不是那台 Runtime 的副本")
+        return self._cards.replica(card_id, fields, entries)
+
+    def replica_message(self, record: Dict[str, Any]) -> bool:
+        """别的 Runtime 的一条消息在这里的副本；变了返回 True。"""
+        if not record.get("mesh_origin"):
+            raise RecordError("replica_message() 只用于别的 Runtime 的消息，要带 mesh_origin")
+        return self._cards.replicate_message(record)
 
     # ---- 请求和序号 ----
 

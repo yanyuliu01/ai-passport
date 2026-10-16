@@ -326,6 +326,8 @@ class Job:
     # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
     # Claude Code 只在原项目目录下找得到要 --resume 的会话
     cwd: Optional[str] = None
+    # 这是哪件事（卡的编号）；交给网络里别的 Runtime 时，那台替这件事开的卡记着它
+    card: Optional[str] = None
 
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
