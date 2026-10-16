@@ -17,7 +17,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Callable, Any, Dict, List, Optional
 
 MAX_TURNS = 200
 MAX_KNOWN_TURNS = 400
@@ -113,15 +113,22 @@ class Store:
 
 
 class Transcript:
-    """小幽的对话记录，以及每一轮有哪些代理见过。
+    """小幽的对话记录（给模型续上下文用），以及每一轮有哪些代理见过。
 
     一轮是 {"id", "text", "reply", "at", "by", "seen"}：by 是做这件事的代理（从别的
     Runtime 带来的是 elsewhere），seen 是已经知道这一轮的本机代理。
+
+    内容以消息日志为准（统一消息结构第 4 步）：本机产生的一轮只存问和答的消息编号
+    （"you_ref"、"reply_ref"），文字读的时候从日志取；日志里取不到（比如被裁掉了）的那轮
+    不再拿出来。只有日志里没有的才存文字：合成的提示语（“后台的事有结果了”）、从别的电脑
+    带来的对话，以及这一版之前留下的旧记录（迁移来源）。
     """
 
     def __init__(self, path: Path, legacy_shared: Optional[Path] = None):
         self._path = path
         self._lock = threading.Lock()
+        # 消息编号 -> 日志里这条定稿消息的文字（没有、没定稿返回 None）；没设时一律用存的文字。
+        self._resolve: Callable[[str], Optional[str]] = lambda message_id: None
         # 对话名 → {"turns": [...], "known": [...]}；known 是见过的轮次编号，
         # 包括已经被清掉的，用来认出手机重复带来的旧话。
         self._data: Dict[str, Dict[str, List[Any]]] = {}
@@ -137,15 +144,19 @@ class Transcript:
                     continue
                 turns = []
                 for turn in entry.get("turns", []):
-                    if (isinstance(turn, dict) and isinstance(turn.get("id"), str)
-                            and isinstance(turn.get("text"), str)
-                            and isinstance(turn.get("reply"), str)):
-                        turns.append({
-                            "id": turn["id"], "text": turn["text"], "reply": turn["reply"],
-                            "at": turn.get("at") if isinstance(turn.get("at"), (int, float)) else 0,
-                            "by": turn.get("by") if isinstance(turn.get("by"), str) else ELSEWHERE,
-                            "seen": [x for x in turn.get("seen", []) if isinstance(x, str)],
-                        })
+                    if not (isinstance(turn, dict) and isinstance(turn.get("id"), str)):
+                        continue
+                    kept = {
+                        "id": turn["id"],
+                        "at": turn.get("at") if isinstance(turn.get("at"), (int, float)) else 0,
+                        "by": turn.get("by") if isinstance(turn.get("by"), str) else ELSEWHERE,
+                        "seen": [x for x in turn.get("seen", []) if isinstance(x, str)],
+                    }
+                    for key in ("text", "reply", "you_ref", "reply_ref"):
+                        if isinstance(turn.get(key), str):
+                            kept[key] = turn[key]
+                    if ("text" in kept or "you_ref" in kept) and ("reply" in kept or "reply_ref" in kept):
+                        turns.append(kept)
                 self._data[conversation] = {
                     "turns": turns,
                     "known": [x for x in entry.get("known", []) if isinstance(x, str)],
@@ -179,16 +190,30 @@ class Transcript:
             entry["known"].append(turn_id)
             del entry["known"][:-MAX_KNOWN_TURNS]
 
+    def resolve_with(self, resolve: Callable[[str], Optional[str]]) -> None:
+        """从消息日志取定稿文字的办法（Xiaoyou 启动时设）。"""
+        self._resolve = resolve
+
     def add(self, conversation: str, turn_id: str, text: str, reply: str, by: str,
-            seen: List[str]) -> None:
-        """记下这台 Runtime 自己答的一轮；seen 是这一轮里听到了问和答的代理。"""
+            seen: List[str], you_ref: Optional[str] = None, reply_ref: Optional[str] = None) -> None:
+        """记下这台 Runtime 自己答的一轮；seen 是这一轮里听到了问和答的代理。
+
+        问和答在日志里是 turn_id:you / turn_id:reply（或者 you_ref / reply_ref 指的那条）时只记
+        编号，文字以日志为准；日志里没有、或者文字对不上（合成的提示语）时才存文字。"""
+        record: Dict[str, Any] = {"id": turn_id, "at": time.time(), "by": by, "seen": sorted(set(seen))}
+        for key, ref_key, given, ref, value in (
+                ("text", "you_ref", you_ref, you_ref or turn_id + ":you", text),
+                ("reply", "reply_ref", reply_ref, reply_ref or turn_id + ":reply", reply)):
+            same = self._resolve(ref) == value
+            if same or given:
+                record[ref_key] = ref
+            if not same:
+                # 日志里还没有（马上就写）或者文字不同（比如卡上只显示了截短的版本）：存原文。
+                record[key] = value
         with self._lock:
             entry = self._entry(conversation)
             entry["turns"] = [turn for turn in entry["turns"] if turn["id"] != turn_id]
-            entry["turns"].append({
-                "id": turn_id, "text": text, "reply": reply, "at": time.time(), "by": by,
-                "seen": sorted(set(seen)),
-            })
+            entry["turns"].append(record)
             del entry["turns"][:-MAX_TURNS]
             self._note(entry, turn_id)
             self._save()
@@ -218,11 +243,23 @@ class Transcript:
                 self._save()
             return len(unique)
 
+    def _view(self, turn: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """一轮给模型看的样子：问和答的文字从日志取（存了文字的就用存的）；日志里取不到的不给。"""
+        text = turn["text"] if "text" in turn else self._resolve(turn["you_ref"])
+        reply = turn["reply"] if "reply" in turn else self._resolve(turn["reply_ref"])
+        if text is None or reply is None:
+            return None
+        return {"id": turn["id"], "text": text, "reply": reply, "at": turn["at"], "by": turn["by"],
+                "seen": list(turn["seen"])}
+
+    def _views(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [view for view in (self._view(turn) for turn in turns) if view is not None]
+
     def unseen(self, conversation: str, agent: str) -> List[Dict[str, Any]]:
         """这个代理还没见过的轮次，按时间从早到晚（不改动记录；转告成功后调用 mark）。"""
         with self._lock:
-            return [dict(turn) for turn in self._entry(conversation)["turns"]
-                    if agent not in turn["seen"]]
+            turns = [dict(turn) for turn in self._entry(conversation)["turns"] if agent not in turn["seen"]]
+        return self._views(turns)
 
     def mark(self, conversation: str, agent: str, turn_ids: List[str]) -> None:
         with self._lock:
@@ -237,7 +274,8 @@ class Transcript:
 
     def turns(self, conversation: str) -> List[Dict[str, Any]]:
         with self._lock:
-            return [dict(turn) for turn in self._entry(conversation)["turns"]]
+            turns = [dict(turn) for turn in self._entry(conversation)["turns"]]
+        return self._views(turns)
 
     def clear(self, conversation: str) -> bool:
         """对话重新开始：记录清掉，但仍然记得见过哪些轮次，手机再带回来也不会重新算进来。

@@ -36,6 +36,8 @@
 
 ## 现在的架构（2026-10-16 对照代码）
 
+> 这一节记的是 Runtime 0.9.0 之前的样子，问题已按下面的“目标架构”和实施步骤处理，见文末进度表。
+
 先回答“现在有没有一个统一管理的模块”：**有一份统一的记录，但还没有统一的写入口。**
 
 ```text
@@ -290,9 +292,9 @@ Runtime 没有能力去读。方案是开一个上报接口，让对方主动报
 | --- | --- | --- | --- |
 | 1 | 收下的消息落盘，消息和卡共用一条序号，`epoch`，`/v1/feed?messages=1` | Runtime | 已上线（0.8.0） |
 | 2 | `runtime_id`，消息日志成为权威记录，`/v1/info`、`/v1/sync`，一致性测试（Runtime 0.8.0） | Runtime | 已上线（0.8.0），一致性测试 22 项通过 |
-| 3 | **记录中心**：新增 `Record`，49 处写卡改成发事件，去掉外面的 `bump()`；授权进日志、取序号；`/v1/sync` 的授权改成增量；电脑会话 `idle` → `turn_ended`（`/v1/feed` 仍给 `done`；`/v1/sync` 里已在 Runtime 0.8.2 提前做了）；统一主体的预留：`subject_id`、日志每条写产地 `runtime_id` | Runtime | 下一步，约 2–3 天 |
-| 4 | transcript 和电脑端共享历史改成从日志算（原 2b），`transcript.json` 只作为迁移来源 | Runtime | 随第 3 步或紧接着，约 1 天 |
-| 5 | 外部上报：`/v1/reports`、`xiaoyou_runtime.report` 命令、一致性测试补上报用例 | Runtime | 约 1 天，可和第 4 步并行 |
+| 3 | **记录中心**：新增 `Record`，49 处写卡改成发事件，去掉外面的 `bump()`；授权进日志、取序号；`/v1/sync` 的授权改成增量；电脑会话 `idle` → `turn_ended`（`/v1/feed` 仍给 `done`；`/v1/sync` 里已在 Runtime 0.8.2 提前做了）；统一主体的预留：`subject_id`、日志每条写产地 `runtime_id` | Runtime | 已上线（Runtime 0.9.0）：`record.Record` 是唯一写入口（有测试强制），请求的修订号、序号、写日志一步完成；授权取序号并带结局，`/v1/sync` 增量给；`subject_id`、记录写产地。卡和 `MessageLog` 仍是记录中心下面的存储 |
+| 4 | transcript 和电脑端共享历史改成从日志算（原 2b），`transcript.json` 只作为迁移来源 | Runtime | 已上线（Runtime 0.9.0）：给模型的对话记录只存消息编号，文字从日志取；合成提示语、从别的电脑带来的对话和旧记录仍存文字。电脑端共享历史还没改 |
+| 5 | 外部上报：`/v1/reports`、`xiaoyou_runtime.report` 命令、一致性测试补上报用例 | Runtime | 已上线（Runtime 0.9.0、App 0.17.1）：`POST /v1/reports`、`python3 -m xiaoyou_runtime report`，一致性测试加 `--with-reports` 时测上报；App 里上报的会话只读 |
 | 6 | 手机 App：按 `runtime_id` 认电脑、多地址合并；每台一份缓存和游标，游标原样存取；改用 `/v1/sync`；旧的按文字匹配只做一次迁移；去掉 `"我：……"` 列表，ChatTurn 改成从缓存算；显示 `turn_ended`、`unavailable` 和外部来源的只读标记 | App | 基本完成（App 0.16.0、Runtime 0.8.2）：改用 `/v1/sync`、按 `runtime_id` 认电脑并合并地址、每台电脑一份卡和同步进度（在内存里，App 重启后从头取）、发消息前不再上传历史、去掉纯文字列表、显示别处还没上卡的消息、认得 `turn_ended`、ChatTurn 从各台电脑的聊天记录算。还没做：`unavailable` 和外部来源的只读标记（等第 5 步） |
 | 7 | 设备：手机负责全局编号到短编号的映射，设备协议先不变 | App | 随第 6 步 |
 | 8 | 多台 Runtime 同时完整同步 | App | 看需要 |

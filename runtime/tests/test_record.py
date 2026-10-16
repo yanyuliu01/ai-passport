@@ -83,5 +83,45 @@ class RecordTest(TempDirCase):
         self.assertGreater(self.record.sequence(), message["seq"])
 
 
+class TranscriptFromLogTest(TempDirCase):
+    """Step 4: the model's conversation record takes its text from the message log."""
+
+    def test_turns_keep_only_references_and_read_the_log(self):
+        from test_runtime import Scripted, make_xiaoyou
+        import json
+        claude = Scripted("claude")
+        xiaoyou, store = make_xiaoyou(self.folder, [claude, Scripted("codex", speaks=False)])
+        self.addCleanup(xiaoyou.close)
+        xiaoyou.hear("你好", "default", "t1")
+        turn = store.transcript.turns("default")[-1]
+        self.assertEqual(("你好", "re:你好"), (turn["text"], turn["reply"]))
+        saved = json.loads((self.folder / "state" / "transcript.json").read_text("utf-8"))["default"]["turns"][-1]
+        self.assertEqual(("t1:you", "t1:reply"), (saved.get("you_ref"), saved.get("reply_ref")))
+        self.assertNotIn("text", saved)
+        self.assertNotIn("reply", saved)
+
+    def test_text_not_in_the_log_is_kept_and_missing_log_entries_are_dropped(self):
+        from xiaoyou_runtime.store import Transcript
+        log = {"a:you": "问", "a:reply": "答"}
+        transcript = Transcript(self.folder / "transcript.json")
+        transcript.resolve_with(log.get)
+        transcript.add("default", "a", "问", "答", "claude", [])
+        # A synthesized prompt is not a message: its text is kept; the reply is linked to the log.
+        transcript.add("default", "r", "（后台的事「x」有结果了）", "结果", "codex", [], reply_ref="run-summary:reply")
+        log["run-summary:reply"] = "结果"
+        turns = transcript.turns("default")
+        self.assertEqual([("问", "答"), ("（后台的事「x」有结果了）", "结果")],
+                         [(turn["text"], turn["reply"]) for turn in turns])
+        # A reference whose message left the log is no longer shown.
+        del log["a:you"]
+        self.assertEqual(["r"], [turn["id"] for turn in transcript.turns("default")])
+        # Records written before this version (text only) still load and show.
+        legacy = self.folder / "legacy.json"
+        legacy.write_text('{"default": {"turns": [{"id": "old", "text": "旧问", "reply": "旧答", "at": 1, "by": "claude", "seen": []}], "known": ["old"]}}', "utf-8")
+        old = Transcript(legacy)
+        old.resolve_with(lambda message_id: None)
+        self.assertEqual(("旧问", "旧答"), (old.turns("default")[0]["text"], old.turns("default")[0]["reply"]))
+
+
 if __name__ == "__main__":
     unittest.main()

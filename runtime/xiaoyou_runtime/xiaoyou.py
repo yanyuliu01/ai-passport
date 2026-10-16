@@ -487,6 +487,8 @@ class Xiaoyou:
         self._cards = Cards(config.state_dir / "cards.json")
         # 记录中心：这里写卡、说话、改状态都经过它（record.py）；_cards 只用来读。
         self._record = Record(self._cards)
+        # 给模型的对话记录：本机产生的每一轮，文字以消息日志为准（store.Transcript）。
+        store.transcript.resolve_with(self._final_text)
         self.artifacts = ArtifactStore(config)
         self._approvals = Approvals(self._approval_changed, self._record.sequence)
         self._gate = Gate(self._approvals)
@@ -1117,15 +1119,17 @@ class Xiaoyou:
         if task.artifact_error:
             display_reply = display_reply[:MAX_ENTRY_CHARS - len(task.artifact_error) - 2] + (
                 "\n\n" + task.artifact_error)
+        # 先记进对话记录，再让卡结束：看到这件事结束的人，接着就能在对话记录里看到结果。
+        # 说话的代理下次接话时会被告知这个结果。
+        self._store.transcript.add(
+            task.conversation, "%s-%d" % (task.card, int(time.time() * 1000)),
+            "（后台的事「%s」有结果了）" % card["title"], turn.reply, task.agent.name, seen,
+            reply_ref=task.run_id + "-summary:reply")
         self._record.reply(task.card, say=display_reply, brief=turn.brief, mood=turn.mood,
                            state=state, approval=None, queued=False, attachments=task.artifacts,
                            turn_id=task.run_id + "-summary", scope="main", kind="summary",
                            result_ready=True, summary_partial="")
-        # 记进对话记录：说话的代理下次接话时会被告知这个结果。
         self._workspace.closed(card, state, turn.brief, turn.reply, turn.mood)
-        self._store.transcript.add(
-            task.conversation, "%s-%d" % (task.card, int(time.time() * 1000)),
-            "（后台的事「%s」有结果了）" % card["title"], turn.reply, task.agent.name, seen)
 
     def cancel(self, card_id: str) -> bool:
         """取消一件正在做的事；它不在做时返回 False。"""
@@ -1150,6 +1154,13 @@ class Xiaoyou:
         """让这个对话从头开始：所有代理的会话都忘掉，对话记录清空。"""
         had_turns = self._store.transcript.clear(conversation)
         return self._store.forget(conversation) or had_turns
+
+    def _final_text(self, message_id: str) -> Optional[str]:
+        """消息日志里这条定稿消息的文字；没有、还没定稿时是 None。"""
+        message = self._cards.message(message_id)
+        if message is None or message.get("status", "final") != "final":
+            return None
+        return message.get("text")
 
     def share(self, conversation: str, turns: List[Dict[str, Any]]) -> int:
         return self._store.transcript.offer(conversation, turns)

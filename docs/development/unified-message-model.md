@@ -41,6 +41,8 @@ were unique on one computer only, and every new view added another copy to keep 
 
 ## Current architecture (checked against the code, 2026-10-16)
 
+> This section records the state before runtime 0.9.0; the issues were addressed by the target architecture and the steps below (see the progress table at the end).
+
 Is there one module that manages everything today? **There is one record, but not yet one way
 to write it.**
 
@@ -339,9 +341,9 @@ reservations above must stay intact.
 | --- | --- | --- | --- |
 | 1 | Accepted messages on disk, one sequence for messages and cards, `epoch`, `/v1/feed?messages=1` | runtime | deployed (0.8.0) |
 | 2 | `runtime_id`, the message log becomes authoritative, `/v1/info`, `/v1/sync`, conformance test (runtime 0.8.0) | runtime | deployed (0.8.0); the 22 conformance checks pass |
-| 3 | **Record hub**: add `Record`, turn the 49 card writes into events, remove outside `bump()` calls; approvals enter the log with a sequence; incremental approvals in `/v1/sync`; computer session `idle` → `turn_ended` (`/v1/feed` still says `done`; done early for `/v1/sync` in runtime 0.8.2); unified subject reservations: `subject_id`, every log record stores its origin `runtime_id` | runtime | next, about 2–3 days |
-| 4 | Compute the transcript and the shared desktop history from the log (formerly 2b); `transcript.json` becomes a migration source only | runtime | with step 3 or right after, about 1 day |
-| 5 | External reports: `/v1/reports`, the `xiaoyou_runtime.report` command, report cases in the conformance test | runtime | about 1 day, parallel to step 4 |
+| 3 | **Record hub**: add `Record`, turn the 49 card writes into events, remove outside `bump()` calls; approvals enter the log with a sequence; incremental approvals in `/v1/sync`; computer session `idle` → `turn_ended` (`/v1/feed` still says `done`; done early for `/v1/sync` in runtime 0.8.2); unified subject reservations: `subject_id`, every log record stores its origin `runtime_id` | runtime | deployed (runtime 0.9.0): `record.Record` is the only write path (enforced by a test); a request's revision, sequence and log write happen in one step; approvals take sequence numbers and keep their outcome, incremental in `/v1/sync`; `subject_id` and record origins. Cards and `MessageLog` remain the storage under the hub |
+| 4 | Compute the transcript and the shared desktop history from the log (formerly 2b); `transcript.json` becomes a migration source only | runtime | deployed (runtime 0.9.0): the model's conversation record stores message ids and reads the text from the log; synthesized prompts, turns brought from other computers and older records still keep text. The shared desktop history is not changed yet |
+| 5 | External reports: `/v1/reports`, the `xiaoyou_runtime.report` command, report cases in the conformance test | runtime | deployed (runtime 0.9.0, app 0.17.1): `POST /v1/reports`, `python3 -m xiaoyou_runtime report`; the conformance test checks reports with `--with-reports`; the app shows reported sessions read-only |
 | 6 | Phone app: identify computers by `runtime_id` and merge their addresses; one cache and cursor per computer, cursor stored as is; use `/v1/sync`; legacy text matching only as a one-time migration; drop the plain "me:" list and compute ChatTurn from the cache; show `turn_ended`, `unavailable` and read-only marks for external sources | app | mostly done (app 0.16.0, runtime 0.8.2): `/v1/sync`, computers identified by `runtime_id` with merged addresses, cards and sync progress kept per computer (in memory; fetched again after an app restart), no history upload before sending, plain text list removed, messages not yet on a card shown, `turn_ended` understood, ChatTurn computed from every computer's chat history. Not yet: `unavailable` and read-only marks for external sources (after step 5) |
 | 7 | Device: the phone maps global ids to short ids; the device protocol stays as is for now | app | with step 6 |
 | 8 | Full concurrent sync of several runtimes | app | if needed |

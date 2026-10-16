@@ -282,6 +282,12 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.17.1)
+
+- Sessions reported through `/v1/reports` from elsewhere (claude.ai on the web, cloud
+  sessions, other computers) appear under their helper read-only: no composer, and a
+  note to continue where they run. Needs runtime 0.9.0.
+
 ## App fixes (0.17.0): incremental updates
 
 - An update now has two parts: **the APK carries only code** (about 17 MB for arm64,
