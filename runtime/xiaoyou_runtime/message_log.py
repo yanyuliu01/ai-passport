@@ -41,7 +41,12 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
     """卡上的一个条目对应的消息（不含 rev、seq、status）。"""
     desktop = card.get("monitoring_only") is True
     you = entry["role"] == "you"
-    if desktop:
+    if desktop and card.get("source") == "external":
+        # 别处上报来的会话（reports.py）：只读，标明来源。
+        origin = card.get("origin") or "external"
+        author = {"kind": "owner", "name": "you"} if you else {"kind": "external", "name": origin}
+        source = {"type": "external", "origin": origin, "session_id": card.get("session_id") or ""}
+    elif desktop:
         author = {"kind": "owner", "name": "you"} if you else {
             "kind": "desktop", "name": card.get("agent") or "desktop"}
         source = {"type": "desktop", "session_id": card.get("session_id") or ""}

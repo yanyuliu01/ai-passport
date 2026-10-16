@@ -31,6 +31,7 @@ from .cards import ACTIVE
 from .config import EFFORT_LEVELS
 from .identity import CAPABILITIES, PROTOCOL, runtime_id
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
+from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
 from .store import Store
 from .xiaoyou import Xiaoyou
@@ -85,6 +86,8 @@ class Service:
         self._changed = threading.Condition()
         # 这台 Runtime 的固定编号：客户端拿它和消息编号拼成全局编号。
         self.runtime_id = runtime_id(store.state_dir)
+        # 不在这台电脑上的会话报进来的进展（POST /v1/reports）
+        self._reports = Reports(xiaoyou.cards)
         self._ledger = Ledger(store.state_dir / "messages.json")
         messages, dedupe, seq = self._ledger.load()
         self._messages = messages  # type: OrderedDict[str, Dict[str, Any]]
@@ -246,6 +249,8 @@ class Service:
             observed = self._xiaoyou.cards.get(card)
             if observed is not None and observed.get("monitoring_only"):
                 # 电脑上的会话可以从手机接着聊，但只能在它里面说，而且这一轮要已经停下。
+                if observed.get("source") == "external":
+                    raise RequestError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
                 if not pin:
                     raise RequestError("要接着电脑上的会话，请打开那个会话再发")
                 if observed.get("desktop_status") in ("running", "waiting") and not observed.get("stale"):
@@ -467,6 +472,7 @@ class Service:
             raise RequestError("usage 应该是整数")
         meter = self._xiaoyou.usage
         meter.poke()  # 有人在看：太久没问过额度就在后台问一次
+        self._sweep_reports()
         cards_store = self._xiaoyou.cards
         deadline = time.monotonic() + max(0.0, wait)
         while True:
@@ -487,6 +493,19 @@ class Service:
         result["approvals"] = self._xiaoyou.approvals.pending(conversation, include_desktop=True)
         result["usage"] = meter.snapshot()
         return result
+
+    def _sweep_reports(self) -> None:
+        """太久没报的外部会话不再显示“在做”。"""
+        reports = getattr(self, "_reports", None)
+        if reports is not None:
+            reports.sweep()
+
+    def report(self, payload: Any) -> Dict[str, Any]:
+        """别处的会话报一次进展（见 reports.py）。"""
+        try:
+            return self._reports.report(payload)
+        except ReportError as error:
+            raise RequestError(str(error))
 
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
@@ -512,6 +531,7 @@ class Service:
             raise RequestError("usage 应该是整数")
         meter = self._xiaoyou.usage
         meter.poke()
+        self._sweep_reports()
         if epoch is not None and (not isinstance(epoch, str) or len(epoch) > MAX_NAME_CHARS):
             raise RequestError("epoch 应该是字符串")
         cards_store = self._xiaoyou.cards

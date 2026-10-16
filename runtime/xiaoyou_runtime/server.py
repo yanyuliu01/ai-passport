@@ -42,6 +42,8 @@
   GET  /v1/app                          发布的那一版 {"available","version_code","version_name","sha256","size",
                                          "published_at","note"}
   GET  /v1/app/apk                      安装包本身
+  POST /v1/reports                     {"origin","session_id","state"?,"text"?,"upstream_id"?,"title"?,"role"?}
+                                        不在这台电脑上的会话报进展（只读显示，见 reports.py）
   GET  /v1/app/packs                    资源包清单 {"packs":[{"name","files":[{"path","sha256","size","download_url"}]}]}
   GET  /v1/app/file?sha256=             资源包里的一个文件（ETag 是校验值，支持 Range 续传）
 
@@ -500,6 +502,9 @@ def make_server(config: Config, service: Service,
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")
                     self._send(200, {"accepted": service.share(parts[2], body.get("turns"))})
+                    return
+                if parts == ["v1", "reports"]:
+                    self._send(200, service.report(body))
                     return
                 if parts == ["v1", "messages"]:
                     if not isinstance(body, dict):

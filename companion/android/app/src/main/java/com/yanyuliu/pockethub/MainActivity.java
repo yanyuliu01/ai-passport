@@ -1157,7 +1157,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean inTask = tab == TAB_TASKS && openTask != null;
         Card opened = inTask ? CardViews.find(HubStore.get().cards(), openTask) : null;
         boolean toHelper = tab == TAB_AGENT && agentName(openAgent) != null;
-        composer.setVisibility(tab == TAB_CHAT || (inTask && opened != null) || toHelper ? View.VISIBLE : View.GONE);
+        // 别处上报来的会话（不在任何一台电脑上）只能看，不给输入框。
+        boolean reported = opened != null && opened.source.equals("external");
+        composer.setVisibility(tab == TAB_CHAT || (inTask && opened != null && !reported) || toHelper ? View.VISIBLE : View.GONE);
         String nextContext = AppPresentation.draftKey(runtimeUrl(),
                 inTask ? openTask : toHelper ? "agent:" + openAgent : null, companionChoice);
         if (!nextContext.equals(composerContext)) {
@@ -1475,7 +1477,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         taskPane.addView(steps);
         if (opened.monitoringOnly) {
-            TextView notice = text(desktopBusy(opened)
+            TextView notice = text(opened.source.equals("external")
+                    ? "这是从别处（" + (opened.project.isEmpty() ? "外部" : opened.project) + "）报上来的会话，只能在这里查看，请在它原来的地方继续。"
+                    : desktopBusy(opened)
                     ? "电脑上这一轮还在跑。等它停下，就能在这里接着说，" + AppPresentation.name(owner) + " 会接着这个会话做。"
                     : "在这里说的话，" + AppPresentation.name(owner) + " 会接着这个会话做，回复也会出现在电脑上。", 12, false);
             notice.setTextColor(HINT); notice.setPadding(dp(4), dp(12), dp(4), 0); taskPane.addView(notice);

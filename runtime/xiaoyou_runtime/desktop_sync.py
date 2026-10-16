@@ -128,7 +128,8 @@ class DesktopSync:
         # Reuse the same cards after a Runtime restart; never bind these sessions
         # to the runtime's conversation/session ownership or model context.
         for card in cards.recent(None, 1000):
-            if card.get("monitoring_only") and card.get("session_id"):
+            # 外部上报的会话（reports.py）不在这台电脑上，不归观察器管。
+            if card.get("monitoring_only") and card.get("session_id") and card.get("source") != "external":
                 session = Session(card["agent"], card["session_id"], card=card["id"])
                 self.sessions[(session.agent, session.session_id)] = session
 
@@ -562,7 +563,8 @@ class DesktopSync:
         # change key, so the normal feed wakes for a title-only update.
         owned = self.owned()
         observed = [card for card in self.cards.recent(None, 1000)
-                    if card.get("monitoring_only") and card.get("session_id") not in owned]
+                    if card.get("monitoring_only") and card.get("session_id") not in owned
+                    and card.get("source") != "external"]
         self.titles.refresh({agent: list(dict.fromkeys(
             [session.session_id for session in newest
              if session.agent == agent and not session.skip and session.session_id not in owned] +
