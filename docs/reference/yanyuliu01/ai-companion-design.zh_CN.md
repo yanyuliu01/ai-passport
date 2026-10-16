@@ -110,3 +110,13 @@ Build: NOT RUN（仅素材设计）。Host tests: FAIL（静态门禁在 macOS �
 用户确认以 ChatGPT 白龙形象替换 app 中的 Codex 头像，DS 与 Claude 保持原样。新增[像素源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)，其中待命、开心、思考、专注四格经 `companion/android/tools/PreparePortraits.java` 生成透明 256×256 资源；支持尾随 `codex` 参数只生成这一角色。Codex 绘制使用最近邻缩放保留像素边缘，沿用原有角色身份、状态映射和呼吸动画。只改头像，不改连接、消息、审批或固件协议。
 
 ![Codex 像素头像源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)
+
+### App 接入验证
+
+App 0.14.1（26）基于现有工作区构建。Runtime 源码基线为 `e1f5238` 加已有未提交改动，固件没有修改、未核对设备已装版本。修改前 Android 测试任务通过；修改后强制重跑全部 95 项单元测试并构建所有 ABI，零失败。完整 `./tools/validate.sh` 通过（ESP-IDF 5.5.3）。DS 和 Claude 八个头像哈希不变，APK 中四个 Codex PNG 与生成资源逐像素一致。运行中的本机 Runtime 已提供版本 26 及验证过的安装包哈希，没有重启服务。
+
+Build: PASS。Host tests: PASS。Device tests: NOT RUN。Regression: PASS（主机测试与资源一致性）；手机邻接流程未验收。First response <= 3s: NOT RUN。Connection recovery: NOT RUN。Multi-end sync: NOT RUN。未采集真实客户端延迟或同步收敛样本。
+
+Unverified: 手机安装、四种表情、页面显示、冷启动与前后台、消息/审批、重连、跨端同步和真实首响。Recovery: 如需恢复原头像，回退本次头像资源并以更高版本号重新发布，保留历史与设置；不通过清空数据回退。
+
+交付期间，另一个已授权的工作区会话将头像实现与源素材保存进 `fb621e2`，随后在 `c70c4c4` 合并 Runtime 工作。该合并未改变 app 和固件源码。本次头像更新仍基于 `fb621e2` 中保留的已测试 app 内容；并行 Runtime 合并不代表运行中的服务已经重启或升级。

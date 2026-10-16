@@ -115,3 +115,13 @@ The [user-provided identity reference](../../../assets/images/ai-companions/refe
 The owner selected the ChatGPT white-dragon design to replace the app Codex portraits, preserving DS and Claude. The new [pixel source sheet](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png) supplies reviewed idle, happy, thinking and focused cells. `companion/android/tools/PreparePortraits.java` generates transparent 256-by-256 resources; its optional trailing `codex` argument scopes regeneration to this role. Codex rendering uses nearest-neighbor scaling, preserving existing role identity, mood mapping and breathing animation. This changes portraits only, not connections, messages, approvals or firmware protocols.
 
 ![Codex pixel portrait source](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)
+
+### App integration validation
+
+App 0.14.1 (26) was built from the existing working tree. Runtime source baseline is `e1f5238` plus pre-existing uncommitted work; firmware is unchanged and the installed device version was not inspected. The Android test task passed before editing. After editing, all 95 unit tests and all ABI builds were forcibly rerun with zero failures. The complete `./tools/validate.sh` passed under ESP-IDF 5.5.3. All eight DS and Claude portrait hashes remained unchanged, and the four Codex PNGs packaged in the APK match the generated resources pixel for pixel. The running local Runtime advertises version 26 with the verified APK hash; no restart was needed.
+
+Build: PASS. Host tests: PASS. Device tests: NOT RUN. Regression: PASS for host tests and resource invariants; adjacent phone journeys remain unaccepted. First response <= 3s: NOT RUN. Connection recovery: NOT RUN. Multi-end sync: NOT RUN. No real-client latency or convergence samples were collected.
+
+Unverified: phone installation, four expressions, page rendering, cold start/foreground, messaging/approval, reconnect, multi-end synchronization and rendered first response. Recovery: revert these portrait resources and publish with a higher version code, preserving history/settings; do not clear data to roll back.
+
+During delivery another authorized workspace session retained the avatar implementation and source assets in `fb621e2`, then merged Runtime work in `c70c4c4`. The app and firmware source trees did not change in that merge. The avatar release remains based on the tested app content retained in `fb621e2`; the concurrent Runtime merge is not a claim that the running service was restarted or upgraded.

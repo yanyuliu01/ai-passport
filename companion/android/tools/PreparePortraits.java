@@ -5,7 +5,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import javax.imageio.ImageIO;
 
-/** Run with JDK 17: java -Djava.awt.headless=true companion/android/tools/PreparePortraits.java <repo>.
+/** Run with JDK 17: java -Djava.awt.headless=true companion/android/tools/PreparePortraits.java <repo> [role].
  * Retains source art; explicitly crops reviewed cells and centers each on a transparent 256px square.
  */
 class PreparePortraits {
