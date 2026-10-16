@@ -151,13 +151,13 @@ class Service:
             elif existing is not None and message.get("pin"):
                 # 主人是在那件事里面说的：没做完的原因也记在那件事上。
                 cards.update(existing["id"], said=said, say=note, turn_id=message_id,
-                             scope="task")
+                             scope="task", kind="note")
                 card_id = existing["id"]
             else:
                 card = cards.open(message["conversation"], message["text"] or "语音消息",
                                   "failed")
                 cards.update(card["id"], said=said, say=note, brief=note, mood="oops",
-                             turn_id=message_id, scope="main")
+                             turn_id=message_id, scope="main", kind="note")
                 card_id = card["id"]
             message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
                            card=card_id, partial="", finished_at=time.time())
@@ -510,7 +510,11 @@ class Service:
             after, reset = 0, True
         deadline = time.monotonic() + max(0.0, wait)
         while True:
-            seq, tasks, messages, _ = cards_store.sync_since(conversation, after)
+            seq, tasks, messages, floor = cards_store.sync_since(conversation, after)
+            if after > 0 and after < floor:
+                # 等的时候日志挤掉了游标之后的消息：改给全量快照。
+                after, reset = 0, True
+                continue
             remaining = deadline - time.monotonic()
             if tasks or messages or reset or remaining <= 0:
                 break

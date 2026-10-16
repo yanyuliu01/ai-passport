@@ -59,9 +59,9 @@
 | `reply_to` | 回答的是哪条消息 |
 | `text` / `partial` | 定稿文字 / 还在生成的整段（整段替换；空串表示收回） |
 | `status` | `queued`、`streaming`、`final`、`failed`、`cancelled` |
-| `source` | `{type, runtime_id, session_id?}`：`runtime`（本机产生）、`desktop`（观察来的，只读）、`imported`（从别的 Runtime 带过来的历史） |
+| `source` | `{type, session_id?, runtime_id?}`：`runtime`（本机产生）、`desktop`（观察来的，只读，带 `session_id`）、`imported`（从别的 Runtime 带过来的历史，带原来的 `runtime_id`）。本机产生的不重复写 `runtime_id`，同步回答顶层已经有 |
 | `attachments` | 附件编号 |
-| `created_at`、`rev`、`seq` | 创建时间、这条的修订号、日志序号 |
+| `created_at`、`rev`、`seq` | 创建时间、这条的修订号（只增不减，跨重启也是；实现上直接用序号）、日志序号 |
 
 ### 事（Task，现在叫卡）
 

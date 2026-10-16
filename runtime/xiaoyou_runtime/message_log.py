@@ -28,8 +28,9 @@ MAX_MESSAGES = 5000
 # 文件行数超过保留条数的这么多倍时整份重写。
 COMPACT_FACTOR = 3
 STATUSES = ("queued", "streaming", "final", "failed", "cancelled")
-AUTHOR_KINDS = ("owner", "xiaoyou", "agent", "desktop", "system")
 DESKTOP_CONVERSATION = "__desktop__"
+# 卡条目上的旧叫法 → 消息的 kind（卡条目为了旧 App 保持原样）
+KINDS = {"worker_result": "result"}
 
 # 记录里由卡决定、请求那边不覆盖的字段
 CARD_FIELDS = ("conversation", "task", "scope", "author", "kind", "reply_to", "source",
@@ -63,7 +64,7 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
         "task": card["id"],
         "scope": entry.get("scope") or "main",
         "author": author,
-        "kind": entry.get("kind") or ("user" if you else "reply"),
+        "kind": KINDS.get(entry.get("kind") or "", entry.get("kind") or ("user" if you else "reply")),
         "reply_to": reply_to,
         "text": entry["text"],
         "source": source,
@@ -84,6 +85,7 @@ class MessageLog:
     # ---- 文件 ----
 
     def _load(self) -> None:
+        self._repair_tail()
         try:
             handle = self._path.open("r", encoding="utf-8")
         except FileNotFoundError:
@@ -108,6 +110,36 @@ class MessageLog:
                     item["status"] = "queued"  # 生成到一半没写完的，重启后由 Service 定夺
                 self._messages.pop(item["id"], None)
                 self._messages[item["id"]] = item
+
+    def _repair_tail(self) -> None:
+        """断电时最后一行可能只写了一半：截掉它，免得下一次追加接在这半行后面一起坏掉。"""
+        try:
+            with self._path.open("rb+") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                if size == 0:
+                    return
+                handle.seek(size - 1)
+                if handle.read(1) == b"\n":
+                    return
+                position = size
+                while position > 0:
+                    step = min(65536, position)
+                    handle.seek(position - step)
+                    chunk = handle.read(step)
+                    index = chunk.rfind(b"\n")
+                    if index >= 0:
+                        handle.truncate(position - step + index + 1)
+                        return
+                    position -= step
+                handle.truncate(0)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            sys.stderr.write("消息日志末尾修不了：%s\n" % error)
+
+    def max_seq(self) -> int:
+        return max([record["seq"] for record in self._messages.values()] + [self.floor, 0])
 
     def _append(self, records: Iterable[Dict[str, Any]]) -> None:
         lines = []
@@ -173,8 +205,10 @@ class MessageLog:
     # ---- 写 ----
 
     def _put(self, record: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
-        record["rev"] = record.get("rev", 0) + 1
+        # 修订号就用序号：序号跨重启只增不减（Cards 预留号段），没落盘的生成中修订也不会
+        # 让重启后的修订号比客户端手里的小。
         record["seq"] = self._bump()
+        record["rev"] = record["seq"]
         self._messages.pop(record["id"], None)
         self._messages[record["id"]] = record
         if persist:
@@ -205,7 +239,14 @@ class MessageLog:
             live = run_id + "-summary:reply"
             text = card.get("summary_partial") or ""
             current = self._messages.get(live)
-            if text and card.get("state") in ("talking", "working", "waiting"):
+            active = card.get("state") in ("talking", "working", "waiting")
+            on_card = any(entry.get("id") == live for entry in card["entries"])
+            if current is not None and current["status"] in ("queued", "streaming") \
+                    and not on_card and not active:
+                # 事已经结束，转述却没有上卡（取消了、没成、或者 Runtime 重启了）：收尾。
+                ended = "cancelled" if card.get("state") == "cancelled" else "failed"
+                self._put(dict(current, status=ended, partial=""))
+            elif text and active:
                 if current is None or (current["status"] in ("queued", "streaming")
                                        and current["partial"] != text):
                     record = dict(current) if current is not None else {
@@ -243,7 +284,9 @@ class MessageLog:
             wanted, words = "failed", message.get("error") or ""
         elif status == "done":
             wanted, words = "final", message.get("reply") or ""
-        elif status == "running" and partial:
+        elif status == "running" and (partial or (reply is not None
+                                                  and reply["status"] == "streaming")):
+            # 空的 partial 是把已经生成的那段收回：仍然在生成中，只是现在没有字。
             wanted, words = "streaming", ""
         else:
             wanted, words = "queued", ""

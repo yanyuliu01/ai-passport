@@ -40,6 +40,21 @@ class ConformanceTests(TempDirCase):
         self.assertFalse(results["sync.epoch_mismatch_resets"])
         self.assertFalse(results["sync.cursor_ahead_resets"])
 
+    def test_the_suite_notices_a_reset_without_a_snapshot(self):
+        base, _ = start_runtime(self, self.folder)
+        original = Service.sync
+
+        def empty(service, *args, **kwargs):
+            body = original(service, *args, **kwargs)
+            if body["reset"]:
+                body.update(messages=[], tasks=[])  # 说要重来，却不给快照
+            return body
+        Service.sync = empty
+        self.addCleanup(setattr, Service, "sync", original)
+        results = dict((name, ok) for name, ok, _ in
+                       conformance.run(base, test_runtime.TOKEN, reply_timeout=10))
+        self.assertFalse(results["sync.epoch_mismatch_resets"])
+
 
 class UnifiedSyncTests(TempDirCase):
     def start(self, folder=None):
@@ -148,6 +163,64 @@ class UnifiedSyncTests(TempDirCase):
         final = self.all_messages(service)["r1-summary:reply"]
         self.assertEqual((final["status"], final["text"], final["partial"]),
                          ("final", "转述完了", ""))
+
+    def test_revisions_never_go_back_even_for_streaming_that_was_never_written(self):
+        service, agent, xiaoyou = self.start()
+        agent.gate.clear()
+        message = service.submit("说很久 slow")
+        until(lambda: service.get(message["id"])["status"] == "running")
+        for index in range(50):
+            service._report(message["id"], "partial", None, "第 %d 段" % index)
+        before = self.all_messages(service)[message["id"] + ":reply"]
+        self.assertEqual(before["status"], "streaming")
+        # 断电：之后旧的这一台什么都写不进去了。
+        service._ledger.save = lambda *args: None
+        xiaoyou.cards._save = lambda: None
+        xiaoyou.cards._log._append = lambda records: None
+        again, _, _ = self.start(self.folder)
+        after = self.all_messages(again)[message["id"] + ":reply"]
+        self.assertEqual(after["status"], "failed")
+        self.assertGreater(after["rev"], before["rev"])
+
+    def test_a_lost_card_file_does_not_make_sequence_numbers_repeat(self):
+        path = self.folder / "alone" / "cards.json"
+        cards = Cards(path)
+        for index in range(5):
+            card = cards.open("default", "第 %d 件" % index)
+            cards.update(card["id"], said="问 %d" % index, say="答 %d" % index, turn_id="t%d" % index)
+        highest = max(cards.message("t%d:%s" % (index, role))["seq"]
+                      for index in range(5) for role in ("you", "reply"))
+        path.unlink()  # 卡文件丢了，日志还在
+        again = Cards(path)
+        self.assertGreaterEqual(again.seq, highest)
+        _, _, messages, _ = again.sync_since("default", 0)
+        self.assertEqual(len(messages), 10)
+        card = again.open("default", "新的")
+        again.update(card["id"], said="新问", turn_id="n1")
+        self.assertGreater(again.message("n1:you")["seq"], highest)
+
+    def test_a_summary_that_never_lands_is_closed_when_its_task_ends(self):
+        service, _, xiaoyou = self.start()
+        card = xiaoyou.cards.open("default", "后台的事", "working", "codex")
+        xiaoyou.cards.update(card["id"], run_id="r2", summary_partial="说到一半")
+        xiaoyou.cards.update(card["id"], state="cancelled", summary_partial="")
+        closed = self.all_messages(service)["r2-summary:reply"]
+        self.assertEqual((closed["status"], closed["partial"]), ("cancelled", ""))
+
+    def test_a_torn_last_line_does_not_swallow_the_next_message(self):
+        service, _, xiaoyou = self.start()
+        service.get(service.submit("一")["id"], wait=5)
+        log = xiaoyou._config.state_dir / "cards.log.jsonl"
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write('{"id": "torn", "text": "半')
+        second, _, _ = self.start(self.folder)
+        kept = second.get(second.submit("二")["id"], wait=5)
+        # 之后写的每一行都完整可读：没有接在那半行后面。
+        lines = log.read_text(encoding="utf-8").splitlines()
+        parsed = [json.loads(line) for line in lines]
+        self.assertIn(kept["id"] + ":you", [item.get("id") for item in parsed])
+        third, _, _ = self.start(self.folder)
+        self.assertIn(kept["id"] + ":you", self.all_messages(third))
 
     def test_old_cursors_beyond_the_retained_log_ask_for_a_snapshot(self):
         old = message_log.MAX_MESSAGES

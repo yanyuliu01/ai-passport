@@ -65,9 +65,9 @@ were unique on one computer only, and every new view added another copy to keep 
 | `reply_to` | the message this answers |
 | `text` / `partial` | final text / the whole reply so far (replaced, not appended; empty withdraws it) |
 | `status` | `queued`, `streaming`, `final`, `failed`, `cancelled` |
-| `source` | `{type, runtime_id, session_id?}`: `runtime` (made here), `desktop` (observed, read-only), `imported` (history brought from another runtime) |
+| `source` | `{type, session_id?, runtime_id?}`: `runtime` (made here), `desktop` (observed, read-only, with `session_id`), `imported` (history brought from another runtime, with its original `runtime_id`). Local messages do not repeat `runtime_id`; the sync response carries it at the top level |
 | `attachments` | attachment ids |
-| `created_at`, `rev`, `seq` | creation time, revision of this record, log sequence |
+| `created_at`, `rev`, `seq` | creation time, revision of this record (only grows, also across restarts; implemented as the sequence), log sequence |
 
 ### Task (today's card)
 

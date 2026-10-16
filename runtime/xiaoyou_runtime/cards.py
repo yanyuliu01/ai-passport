@@ -96,12 +96,17 @@ class Cards:
                             brief="电脑会话状态尚未更新", approval=None, queued=False,
                             updated_at=time.time(), finished_at=None, seq=self._seq)
                 continue
-            card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time()})
+            card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time(),
+                                    "kind": "note"})
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
         # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
         self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
+        # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
+        if self._log.max_seq() > self._seq:
+            self._seq = self._log.max_seq()
+            self._reserved = self._seq
         migrated = self._adopt_log()
         if interrupted or fresh_epoch or migrated:
             self._save()

@@ -4,8 +4,10 @@
 
     python3 -m xiaoyou_runtime.conformance --url http://127.0.0.1:8765 --token <令牌>
 
-它会在一个单独的对话（默认 conformance-<随机>）里发两句很短的话，所以会真的调用一次模型；
-不会动别的对话。每一项打印 PASS / FAIL，有 FAIL 时退出码是 1。
+它会在一个单独的对话（默认 conformance-<随机>）里发一句很短的话（再带同一个 client_id 重发
+两次，测去重和 409），所以会真的调用一次模型；不会动别的对话。
+
+它测不了重启：重启前后编号、序号、修订号的规则由 Runtime 自己的单元测试覆盖。每一项打印 PASS / FAIL，有 FAIL 时退出码是 1。
 
 检查的是 docs/development/unified-message-model 里的契约：身份、收下即有编号、按 client_id
 去重和 409、快照加增量不漏、序号只增不减、同一条消息修订号不倒退、定稿不退回生成中、
@@ -126,6 +128,10 @@ def run(base: str, token: str, conversation: Optional[str] = None,
         body = sync(cursor, info["epoch"], wait=1)
         absorb(body, cursor)
         cursor = body["seq"]
+        while body.get("more"):
+            body = sync(cursor, info["epoch"])
+            absorb(body, cursor)
+            cursor = body["seq"]
         if you in seen:
             first_seen = seen[you]
             break
@@ -161,17 +167,26 @@ def run(base: str, token: str, conversation: Optional[str] = None,
         pages.append(sync(pages[-1]["seq"]))
     rebuilt = {message["id"]: message for page in pages for message in page["messages"]}
     check("sync.snapshot_matches_increments",
-          all(rebuilt.get(key, {}).get("text") == seen[key]["text"]
-              and rebuilt.get(key, {}).get("status") == seen[key]["status"]
-              for key in (you, reply) if key in seen))
+          you in seen and reply in seen
+          and all(rebuilt.get(key, {}).get(field) == seen[key][field]
+                  for key in (you, reply) for field in ("text", "status", "rev")))
     tasks = {task["id"]: task for page in pages for task in page["tasks"]}
+    holders = [task for task in tasks.values() if reply in task.get("members", [])]
     task = (answer or {}).get("task")
-    check("task.members", task is None or (task in tasks and reply in tasks[task]["members"]))
+    check("task.members", (task is None and not holders)
+          or (task in tasks and reply in tasks[task]["members"]),
+          "消息说归到 %s，事里登记的是 %s" % (task, [item["id"] for item in holders]))
 
-    wrong = sync(cursor, "not-this-epoch")
-    check("sync.epoch_mismatch_resets", wrong["reset"] is True)
-    ahead = sync(cursor + 10 ** 9)
-    check("sync.cursor_ahead_resets", ahead["reset"] is True)
+    def snapshot_after_reset(body: Dict[str, Any]) -> bool:
+        found = {message["id"] for message in body["messages"]}
+        page = body
+        while page.get("more"):
+            page = sync(page["seq"])
+            found.update(message["id"] for message in page["messages"])
+        return body["reset"] is True and you in found and reply in found
+
+    check("sync.epoch_mismatch_resets", snapshot_after_reset(sync(cursor, "not-this-epoch")))
+    check("sync.cursor_ahead_resets", snapshot_after_reset(sync(cursor + 10 ** 9)))
     return results
 
 
@@ -184,8 +199,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     options = parser.parse_args(argv)
     try:
         results = run(options.url, options.token, options.conversation, options.reply_timeout)
-    except (AssertionError, OSError, ValueError) as error:
-        print("FAIL  连不上或者回答不对：%s" % error)
+    except Exception as error:  # 回答缺字段、格式不对等：都算不通过，不打印堆栈
+        print("FAIL  连不上或者回答不符合契约：%s: %s" % (type(error).__name__, error))
         return 1
     for name, ok, detail in results:
         print("%s  %s%s" % ("PASS" if ok else "FAIL", name, ("  " + detail) if detail and not ok else ""))
