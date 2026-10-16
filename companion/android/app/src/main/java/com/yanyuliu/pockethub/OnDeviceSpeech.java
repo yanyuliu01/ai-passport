@@ -23,6 +23,8 @@ final class OnDeviceSpeech {
         void partial(String text);
         void ended();
         void finished(String text, String error);
+        /** The recorded utterance, delivered just before finished, so it can also go to the computer. */
+        default void recording(byte[] wav) { }
     }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final EmbeddedSpeech speech = new EmbeddedSpeech();
@@ -60,6 +62,7 @@ final class OnDeviceSpeech {
             @Override public void level(float value) { post(() -> callback.level(value)); }
             @Override public void partial(String text) { post(() -> callback.partial(text)); }
             @Override public void limitReached() { post(callback::ended); }
+            @Override public void recording(byte[] wav) { post(() -> callback.recording(wav)); }
             @Override public void finished(String text, String error, boolean cancelled) {
                 // EmbeddedSpeech has closed the utterance streams and cleared its active session.
                 if (disposed && !speech.running()) releaseCachedModels();

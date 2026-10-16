@@ -34,7 +34,12 @@ final class RuntimeClient {
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
-    private static final Map<String, java.util.Set<String>> SHARED_HISTORY = new java.util.HashMap<>();
+    private static final Map<String, java.util.Set<String>> SHARED_HISTORY = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 已经带给这个地址的对话编号（发送线程和后台带历史的线程都会写）。 */
+    private static java.util.Set<String> sharedWith(String url) {
+        return SHARED_HISTORY.computeIfAbsent(url, ignored -> java.util.concurrent.ConcurrentHashMap.newKeySet());
+    }
     /** 回答授权、取消一件事：不排在正在等结果的那句话后面。 */
     private static final ExecutorService QUICK = Executors.newCachedThreadPool();
     private static final int FEED_WAIT_SECONDS = 50;
@@ -126,11 +131,64 @@ final class RuntimeClient {
         return list.isEmpty() ? null : list.get(0);
     }
 
+    // ---- 同一台 Runtime 的几个地址（局域网、Funnel……）按 runtime_id 认成一台 ----
+
+    private static final Map<String, java.util.Set<String>> CAPABILITIES =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 这个地址上的 Runtime 是谁（/v1/info 的 runtime_id）；还没问到或旧版 Runtime 是空串。 */
+    static String runtimeId(Context context, String url) {
+        return prefs(context).getString("rid:" + url, "");
+    }
+
+    /**
+     * 聊天记录、同步缓存用的键：同一台 Runtime 的所有地址共用最早登记的那个地址，
+     * 所以在局域网和 Funnel 之间切换，对话和卡都不会清空。认不出是谁时就用地址自己。
+     */
+    static synchronized String historyKey(Context context, Target target) {
+        if (target == null) return "";
+        String id = runtimeId(context, target.url);
+        if (id.isEmpty()) return target.url;
+        for (Target item : targets(context)) if (id.equals(runtimeId(context, item.url))) return item.url;
+        return target.url;
+    }
+
+    /** 同一台 Runtime 的其他地址（连不上当前这个时换着试）。 */
+    static synchronized List<Target> siblings(Context context, Target target) {
+        List<Target> result = new ArrayList<>();
+        String id = runtimeId(context, target.url);
+        if (id.isEmpty()) return result;
+        for (Target item : targets(context))
+            if (!item.url.equals(target.url) && id.equals(runtimeId(context, item.url))) result.add(item);
+        return result;
+    }
+
+    /** 问这个地址上的 Runtime 是谁、会什么；旧版 Runtime 没有 /v1/info，当作什么新能力都没有。 */
+    private static java.util.Set<String> identify(Context context, Target target) throws IOException {
+        java.util.Set<String> abilities = new java.util.HashSet<>();
+        try {
+            Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info",
+                    target.token, null, null, 10, true));
+            if (info != null) {
+                for (Object item : Json.list(info, "capabilities")) if (item instanceof String) abilities.add((String) item);
+                String id = Json.string(info, "runtime_id");
+                if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
+            }
+        } catch (IOException error) {
+            if (!String.valueOf(error.getMessage()).contains(" 404")) throw error;
+        }
+        CAPABILITIES.put(target.url, abilities);
+        return abilities;
+    }
+
     static synchronized void select(Context context, String url) {
+        Target before = selected(context);
         store(context, targets(context), url);
-        // 手里的卡是上一台的：马上清掉，不等盯着卡的那一路发现。
-        HubStore.get().resetCards();
-        HubStore.get().selectedRuntime(url);
+        Target now = selected(context);
+        // 换成另一台电脑：手里的卡是上一台的，马上清掉；同一台的另一个地址不用清。
+        if (before == null || now == null || !historyKey(context, before).equals(historyKey(context, now)))
+            HubStore.get().resetCards();
+        HubStore.get().selectedRuntime(url, now == null ? url : historyKey(context, now));
         HubStore.get().helpersChanged();
         HttpURLConnection waiting = feedConnection;
         if (waiting != null) {
@@ -157,9 +215,12 @@ final class RuntimeClient {
 
     private static void watchLoop(Context app) {
         HubStore store = HubStore.get();
-        String watched = null;
+        String watched = null, watchedKey = null;
+        java.util.Set<String> abilities = null;
+        SyncCache cache = null;
         String complained = null;
         int failures = 0;
+        boolean more = false;
         while (true) {
             Target target = selected(app);
             if (target == null) {
@@ -169,13 +230,33 @@ final class RuntimeClient {
             }
             if (!target.url.equals(watched)) {
                 watched = target.url;
-                store.resetCards();
+                abilities = null;
             }
             try {
-                fetchFeed(target, FEED_WAIT_SECONDS, true);
+                if (abilities == null) {
+                    abilities = identify(app, target);
+                    String key = historyKey(app, target);
+                    if (!key.equals(watchedKey)) {
+                        // 另一台电脑（或刚开始）：卡从头取，同步缓存也换一份。
+                        if (watchedKey != null) store.resetCards();
+                        watchedKey = key;
+                        cache = new SyncCache("default");
+                    }
+                    store.selectedRuntime(target.url, key);
+                    final Target shared = target;
+                    QUICK.execute(() -> shareHistory(app, shared));
+                }
+                // 0.8.0 的 /v1/sync 还不带用量：那一版继续用 feed，首页的额度才不会停在旧数上。
+                if (abilities.contains("sync") && abilities.contains("sync_usage")) {
+                    more = fetchSync(target, cache, more ? 0 : FEED_WAIT_SECONDS, true);
+                } else {
+                    more = false;
+                    fetchFeed(target, FEED_WAIT_SECONDS, true);
+                }
                 failures = 0;
                 complained = null;
             } catch (IOException | RuntimeException error) {
+                more = false;
                 Target now = selected(app);
                 if (now != null && !now.url.equals(watched)) {
                     continue;  // 是换 Runtime 时自己断开的
@@ -186,6 +267,15 @@ final class RuntimeClient {
                     // 经中继连着时偶尔断一次是常事：先悄悄重连一次，连续失败才算离线。
                     failures++;
                     pause(2);
+                    continue;
+                }
+                List<Target> others = siblings(app, target);
+                if (!others.isEmpty() && failures < 1 + others.size()) {
+                    // 同一台电脑还有别的地址（比如局域网连不上就走 Funnel）：换一个试，不清空卡。
+                    Target next = others.get(0);
+                    synchronized (RuntimeClient.class) { store(app, targets(app), next.url); }
+                    store.log("连不上 " + target.url + "，改用 " + next.url);
+                    failures++;
                     continue;
                 }
                 store.desktopDisconnected();
@@ -240,10 +330,63 @@ final class RuntimeClient {
                 cards.add(card);
             }
         }
-        store.selectedRuntime(target.url);
         store.applyFeed(seq, cards, null);
         store.setUsage(Usage.from(feed.get("usage")), epoch);
         store.runtimeConnected(true);
+    }
+
+    /**
+     * 用 /v1/sync 取一页变化并交给中枢；没有变化时最多等 wait 秒。返回 true 表示还有下一页，
+     * 应该马上接着取。游标、epoch 由 cache 管，整页应用完才往前走。
+     */
+    private static boolean fetchSync(Target target, SyncCache cache, int wait, boolean interruptible)
+            throws IOException {
+        HubStore store = HubStore.get();
+        long epoch = store.cardsEpoch();
+        long usageRev = store.usageRev();
+        String body = requestText("GET", target.url + "/v1/sync?conversation=default&after="
+                        + java.net.URLEncoder.encode(cache.cursor(), "UTF-8") + "&wait=" + wait
+                        + (cache.epoch().isEmpty() ? "" : "&epoch=" + java.net.URLEncoder.encode(cache.epoch(), "UTF-8"))
+                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
+                target.token, null, null, wait + 15, interruptible);
+        Map<String, Object> page = Json.parseObject(body);
+        if (page == null) {
+            throw new IOException("Runtime 返回的内容看不懂");
+        }
+        if (store.cardsEpoch() != epoch) {
+            return false;  // 等的时候换了 Runtime：这是上一台的回答
+        }
+        SyncCache.Result result = cache.apply(page);
+        if (result.replaced) {
+            // Runtime 换了一份记录：手里的卡不算数了。聊天记录按编号留着。
+            store.resetCards();
+            epoch = store.cardsEpoch();
+        }
+        store.applyFeed(result.seq, result.cards, null);
+        store.applyPending(result.pending);
+        if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
+        store.runtimeConnected(true);
+        return result.more;
+    }
+
+    /**
+     * 把这台手机上别处的对话带给这台 Runtime（它已经知道的会自己跳过）。连上时在后台做一次，
+     * 不再挡在每次发消息前面。
+     */
+    private static void shareHistory(Context app, Target target) {
+        java.util.Set<String> shared = sharedWith(target.url);
+        List<ChatTurn> history = new ArrayList<>();
+        for (ChatTurn turn : turns(app)) if (!shared.contains(turn.id)) history.add(turn);
+        if (history.isEmpty()) return;
+        try {
+            request("POST", target.url + "/v1/conversations/default/history", target.token,
+                    ChatTurn.historyJson(history).getBytes(StandardCharsets.UTF_8),
+                    "application/json; charset=utf-8", 15);
+            for (ChatTurn turn : history) shared.add(turn.id);
+        } catch (IOException | RuntimeException error) {
+            // 旧版 Runtime 没有这个接口：照常聊，只是它接不上别处的话。
+            HubStore.get().log("没能把之前的对话带给 " + target.name + "：" + error.getMessage());
+        }
     }
 
     /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
@@ -521,8 +664,7 @@ final class RuntimeClient {
     /** App 刚启动时把存着的对话放回聊天框。 */
     static void restoreChat(Context context) {
         Target target = selected(context);
-        HubStore.get().initializeHistory(context, target == null ? "" : target.url, turns(context));
-        HubStore.get().restoreChat(turns(context));
+        HubStore.get().initializeHistory(context, historyKey(context, target), turns(context));
     }
 
     static final String VOICE_PLACEHOLDER = "（语音）";
@@ -581,36 +723,19 @@ final class RuntimeClient {
         final HubStore store = HubStore.get();
         final String url = target == null ? null : target.url;
         final String token = target == null ? null : target.token;
-        if (store.monitoringOnly(card)) {
-            store.log("电脑端对话只读同步，请在电脑端继续操作");
-            return;
-        }
+        // 电脑上的会话也能从这里接着聊（Runtime 0.8.1 起）：是否接得上由 Runtime 判断并回答。
         if (target == null) {
             store.chatFailed(text, "还没有设置 Runtime 的连接串");
             return;
         }
         final String clientId = retryId == null ? UUID.randomUUID().toString().replace("-", "") : retryId;
-        store.selectedRuntime(url);
+        store.selectedRuntime(url, historyKey(app, target));
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);
         WORKER.execute(() -> {
             MessageStream events = null;
             try {
-                // 先把最近的对话带过去：这台 Runtime 已经知道的它会自己跳过。
-                java.util.Set<String> shared = SHARED_HISTORY.computeIfAbsent(url, ignored -> new java.util.HashSet<>());
-                List<ChatTurn> history = new ArrayList<>();
-                for (ChatTurn turn : turns(app)) if (!shared.contains(turn.id)) history.add(turn);
-                if (!history.isEmpty()) {
-                    try {
-                        request("POST", url + "/v1/conversations/default/history", token,
-                                ChatTurn.historyJson(history).getBytes(StandardCharsets.UTF_8),
-                                "application/json; charset=utf-8", 15);
-                        for (ChatTurn turn : history) shared.add(turn.id);
-                    } catch (IOException error) {
-                        // 旧版 Runtime 没有这个接口：照常发消息，只是它接不上别处的话。
-                        store.log("没能把之前的对话带给 " + target.name + "：" + error.getMessage());
-                    }
-                }
+                // 别处的对话在连上时已经在后台带过去了（shareHistory），这里不再等它。
                 Map<String, String> message;
                 if (wav != null) {
                     message = request("POST", url + "/v1/voice?client_id=" + clientId
@@ -658,7 +783,8 @@ final class RuntimeClient {
                         if (!pin && reply != null && !reply.isEmpty()) {
                             remember(app, new ChatTurn(id, said, reply,
                                     System.currentTimeMillis() / 1000L));
-                            shared.add(id);
+                            // 这一句本来就是在这台 Runtime 上说的：不用再带过去。
+                            sharedWith(url).add(id);
                         }
                         return;
                     }

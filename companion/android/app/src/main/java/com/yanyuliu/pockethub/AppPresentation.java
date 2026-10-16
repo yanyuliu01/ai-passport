@@ -155,10 +155,23 @@ final class AppPresentation {
             return false;
         }
 
-        String status(boolean connected) {
+        /**
+         * One answer for every view of this helper (home chip, sidebar, helper page):
+         * waiting, working (work DS handed over), desktop (a session on the computer is running) or idle.
+         */
+        String mode(boolean connected) {
             Card now = current(connected);
-            if (now != null) return DsState.state(now, connected).equals("waiting") ? "等你确认" : "工作中";
-            return desktopRunning(connected) ? "电脑上在跑" : "空闲";
+            if (now != null) return DsState.state(now, connected).equals("waiting") ? "waiting" : "working";
+            return desktopRunning(connected) ? "desktop" : "idle";
+        }
+
+        String status(boolean connected) {
+            switch (mode(connected)) {
+                case "waiting": return "等你确认";
+                case "working": return "工作中";
+                case "desktop": return "电脑上在跑";
+                default: return "空闲";
+            }
         }
     }
 

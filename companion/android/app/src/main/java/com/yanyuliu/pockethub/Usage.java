@@ -165,19 +165,40 @@ final class Usage {
         return energy(role, now, 0, zone);
     }
 
-    String energy(String role, long now, long extraSeconds, TimeZone zone) {
-        Agent helper = null;
+    private Agent helper(String role) {
         for (Agent candidate : agents) {
-            if (candidate.name.equals(role)) { helper = candidate; break; }
+            if (candidate.name.equals(role)) return candidate;
         }
-        if (helper == null) for (Agent candidate : agents) {
-            if (AppPresentation.role(candidate.name).equals(AppPresentation.role(role))) { helper = candidate; break; }
+        for (Agent candidate : agents) {
+            if (AppPresentation.role(candidate.name).equals(AppPresentation.role(role))) return candidate;
         }
-        Account account = null;
+        return null;
+    }
+
+    private Account account(Agent helper, String role) {
         for (Account candidate : accounts) {
             if (helper != null && candidate.id.equals(helper.account)
-                    || candidate.agents.contains(helper == null ? role : helper.name)) { account = candidate; break; }
+                    || candidate.agents.contains(helper == null ? role : helper.name)) return candidate;
         }
+        return null;
+    }
+
+    /**
+     * 这位帮手还剩百分之几：5 小时和本周两个窗口里更紧的那个。已经过了重置时间的窗口不算；
+     * 按量计费、没有额度账号或都不知道时是 -1。
+     */
+    int left(String role, long now) {
+        Account account = account(helper(role), role);
+        if (account == null) return -1;
+        int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;
+        int weekLeft = account.reset7d > 0 && account.reset7d <= now ? -1 : account.left7d;
+        if (shortLeft < 0) return weekLeft;
+        return weekLeft < 0 ? shortLeft : Math.min(shortLeft, weekLeft);
+    }
+
+    String energy(String role, long now, long extraSeconds, TimeZone zone) {
+        Agent helper = helper(role);
+        Account account = account(helper, role);
         if (account == null) return helper != null && helper.account.isEmpty() && !helper.model.isEmpty()
                 ? "精力值：按量计费" : "精力值：未知";
         int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;

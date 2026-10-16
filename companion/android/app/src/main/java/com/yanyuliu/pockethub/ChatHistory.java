@@ -74,7 +74,10 @@ final class ChatHistory {
         if (user != null) { user.status = failed ? "failed" : "done"; user.card = card == null ? user.card : card; }
         if (reply != null) { reply.text = text; reply.status = failed ? "failed" : "done"; reply.card = card == null ? reply.card : card; }
         if (snapshot == null || failed) return;
-        // The message response identifies the card. Bind its exact returned pair, including old runtimes.
+        // Runtimes that number card entries use the message ids themselves: ingest matches by id.
+        for (Card.Entry entry : snapshot.entries)
+            if (!entry.id.isEmpty() && (entry.id.equals(id + ":you") || entry.id.equals(id + ":reply"))) return;
+        // Older runtimes: the message response identifies the card; bind its returned pair by text.
         boolean boundReply = false;
         for (int index = snapshot.entries.size() - 1; index >= 0; index--) {
             Card.Entry entry = snapshot.entries.get(index);
@@ -156,6 +159,31 @@ final class ChatHistory {
             put(new Message(partialId, card.id, "main", "xiaoyou", card.summaryPartial, "streaming",
                     "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true));
         } else messages.remove(partialId);
+    }
+
+    /**
+     * A message another client sent (or Xiaoyou's reply still being written) that is not on a card
+     * yet. Local sends keep their own bubble; anything already final is left alone.
+     */
+    boolean pending(SyncCache.Pending item) {
+        Message known = messages.get(item.id);
+        if (known != null && (!known.synced || known.status.equals("done"))) return false;
+        boolean you = item.role.equals("you");
+        String status = you ? "sent" : item.text.isEmpty() ? "thinking" : "streaming";
+        if (known != null && known.text.equals(item.text) && known.status.equals(status)) return false;
+        Message next = new Message(item.id, item.task, item.scope, item.role, item.text, status,
+                you ? "user" : "reply", known != null ? known.at : item.at, true);
+        next.clientId = "";
+        put(next);
+        return true;
+    }
+
+    /** Adds the other history's messages this one does not have (same id = same message). */
+    boolean absorb(ChatHistory other) {
+        boolean added = false;
+        for (Message message : other.messages.values())
+            if (!messages.containsKey(message.id)) { put(message); added = true; }
+        return added;
     }
 
     List<Message> main() { return select("main", null, false); }

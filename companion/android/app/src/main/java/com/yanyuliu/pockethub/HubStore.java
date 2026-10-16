@@ -152,7 +152,6 @@ public final class HubStore {
 
     private static final int EVENT_LIMIT = 40;
     private static final int LOG_LIMIT = 60;
-    private static final int CHAT_LIMIT = 60;
     private static final String CHAT_SOURCE = "小幽";
     private static final HubStore INSTANCE = new HubStore();
 
@@ -162,7 +161,6 @@ public final class HubStore {
     private final List<String> log = new ArrayList<>();
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final List<String> chat = new ArrayList<>();
     private String linkState = "未启动";
     /** 已经发给 Runtime、还没等到结果的消息数。 */
     private int pending;
@@ -197,6 +195,20 @@ public final class HubStore {
         history = historyPrefs == null ? new ChatHistory() : ChatHistory.restore(
                 historyPrefs.getString(ArtifactDownload.key(historyRuntime), "{}"));
         historyLoaded = true;
+    }
+
+    /**
+     * Before addresses of one Runtime shared a history, each address kept its own. Fold the one
+     * kept under this address into the shared history once, then drop it.
+     */
+    private void adoptHistory(String url) {
+        if (historyPrefs == null || url == null || url.equals(historyRuntime)) return;
+        String alias = ArtifactDownload.key(url);
+        String stored = historyPrefs.getString(alias, null);
+        if (stored == null) return;
+        history.absorb(ChatHistory.restore(stored));
+        saveHistory();
+        historyPrefs.edit().remove(alias).apply();
     }
 
     private void saveHistory() {
@@ -339,11 +351,22 @@ public final class HubStore {
     }
 
     public synchronized void selectedRuntime(String url) {
+        selectedRuntime(url, url);
+    }
+
+    /**
+     * url is the address in use; history is the key the chat history is kept under: the same for
+     * every address of one Runtime (see RuntimeClient.historyKey), so switching between its LAN and
+     * remote address keeps the conversation.
+     */
+    public synchronized void selectedRuntime(String url, String history) {
         selectedRuntime = url;
-        if (!historyRuntime.equals(url == null ? "" : url)) {
-            loadHistory(url); pending = 0; streaming = ""; messageKey = "";
+        String key = history == null ? url : history;
+        if (!historyRuntime.equals(key == null ? "" : key)) {
+            loadHistory(key); pending = 0; streaming = ""; messageKey = "";
             turn = new Turn("idle", "", "", "", "", "idle");
         }
+        adoptHistory(url);
     }
 
     /** Independent origins are merged without changing the selected Runtime's task cards. */
@@ -403,6 +426,16 @@ public final class HubStore {
             }
         }
         return count;
+    }
+
+    /** /v1/sync 给的、还没上卡的消息（别的手机刚发的话、小幽正在写的回复）：画在聊天里。 */
+    public void applyPending(List<SyncCache.Pending> items) {
+        boolean dirty = false;
+        synchronized (this) {
+            for (SyncCache.Pending item : items) dirty |= history.pending(item);
+            if (dirty) historyChanged();
+        }
+        if (dirty) notifyChanged();
     }
 
     /** 手里的卡都不算数了（换了一台 Runtime，或者它换了一份记录）：清掉，从头再取。 */
@@ -585,20 +618,6 @@ public final class HubStore {
 
     // ---- 和小幽聊天 ----
 
-    /** App 刚启动、聊天框还空着时，把存着的对话放回来。 */
-    public void restoreChat(List<ChatTurn> turns) {
-        synchronized (this) {
-            if (!chat.isEmpty()) {
-                return;
-            }
-            for (ChatTurn turn : turns) {
-                appendChat("我：" + turn.text);
-                appendChat(CHAT_SOURCE + "：" + turn.reply);
-            }
-        }
-        notifyChanged();
-    }
-
     /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
     public void chatAsked(String text) {
         chatAsked(text, "local-" + java.util.UUID.randomUUID(), null);
@@ -610,7 +629,6 @@ public final class HubStore {
             busyText = text;
             streaming = "";
             turnCard = null;
-            appendChat("我：" + text);
             messageKey = clientId;
             history.begin(clientId, card, text, System.currentTimeMillis() / 1000.0);
             saveHistory();
@@ -717,12 +735,6 @@ public final class HubStore {
     /** 语音识别出了我刚才说的话：把聊天记录里的占位换成原话。 */
     public void chatHeard(String placeholder, String heard) {
         synchronized (this) {
-            for (int position = chat.size() - 1; position >= 0; --position) {
-                if (chat.get(position).equals("我：" + placeholder)) {
-                    chat.set(position, "我：" + heard);
-                    break;
-                }
-            }
             if (pending > 0) {
                 busyText = heard;
                 history.heard(messageKey, heard);
@@ -749,7 +761,6 @@ public final class HubStore {
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));
             trimEvents();
-            appendChat(CHAT_SOURCE + "：" + shown);
             Card snapshot = null;
             Long order = card == null ? null : cardOrder.get(card);
             if (order != null) snapshot = cards.get(order);
@@ -763,7 +774,6 @@ public final class HubStore {
     public void chatFailed(String asked, String error) {
         synchronized (this) {
             if (asked != null) {
-                appendChat("我：" + asked);
                 turn = new Turn("failed", RuntimeClient.VOICE_PLACEHOLDER.equals(asked) ? "" : asked,
                         error, "", "", "oops");
                 if (pending == 0) {
@@ -778,7 +788,6 @@ public final class HubStore {
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", "没成功：" + error,
                     System.currentTimeMillis(), "没成功：" + error));
             trimEvents();
-            appendChat("（没成功）" + error);
             appendLog("聊天失败：" + error);
             history.finish(messageKey, null, error, true, null);
             saveHistory();
@@ -792,18 +801,6 @@ public final class HubStore {
 
     public synchronized String busyText() {
         return busyText;
-    }
-
-    /** 聊天记录，旧的在前。 */
-    public synchronized List<String> chatLines() {
-        return new ArrayList<>(chat);
-    }
-
-    private void appendChat(String line) {
-        chat.add(line);
-        while (chat.size() > CHAT_LIMIT) {
-            chat.remove(0);
-        }
     }
 
     private void trimEvents() {

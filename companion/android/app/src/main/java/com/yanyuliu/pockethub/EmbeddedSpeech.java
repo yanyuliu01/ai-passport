@@ -18,6 +18,8 @@ final class EmbeddedSpeech {
         void partial(String text);
         void limitReached();
         void finished(String text, String error, boolean cancelled);
+        /** The whole utterance as 16-bit mono WAV, before finished; not called when capture failed. */
+        default void recording(byte[] wav) { }
     }
 
     private final VoiceCapture capture;
@@ -51,6 +53,7 @@ final class EmbeddedSpeech {
         private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
         private boolean cancelled, captureDone, ending;
         private String captureError;
+        private byte[] captured;
 
         Session(Factory factory, Callback callback) { this.factory = factory; this.callback = callback; }
 
@@ -71,7 +74,7 @@ final class EmbeddedSpeech {
         }
         @Override public void limitReached() { if (canReport()) callback.limitReached(); }
         @Override public synchronized void finished(byte[] wav, String error, boolean didCancel) {
-            captureError = error; captureDone = true; cancelled |= didCancel;
+            captureError = error; captureDone = true; cancelled |= didCancel; captured = wav;
             if (cancelled) pending.clear();
             notifyAll();
         }
@@ -132,8 +135,10 @@ final class EmbeddedSpeech {
                 }
                 synchronized (EmbeddedSpeech.this) { if (active == this) active = null; }
                 boolean didCancel;
-                synchronized (this) { didCancel = cancelled; }
+                byte[] wav;
+                synchronized (this) { didCancel = cancelled; wav = captured; captured = null; }
                 if (interrupted) Thread.currentThread().interrupt();
+                if (!didCancel && wav != null) callback.recording(wav);
                 callback.finished(didCancel ? null : text, error, didCancel);
             }
         }

@@ -105,6 +105,22 @@ public class AppPresentationTest {
         assertEquals("空闲", helpers.get(2).status(true));
     }
 
+    @Test public void homeAndSidebarShareOneHelperMode() {
+        // Codex only busy in a session on the computer: not idle anywhere (the home chip used to say idle).
+        Card desktop = card("\"id\":\"c1\",\"agent\":\"codex\",\"source\":\"desktop\",\"state\":\"working\"");
+        Card ended = card("\"id\":\"c2\",\"agent\":\"cc\",\"source\":\"desktop\",\"state\":\"done\"");
+        Card asking = card("\"id\":\"c3\",\"agent\":\"tailor\",\"state\":\"waiting\"");
+        List<AppPresentation.Helper> helpers = AppPresentation.helpers(
+                Arrays.asList(desktop, ended, asking), Arrays.asList("codex", "cc", "tailor"));
+        assertEquals("desktop", helpers.get(0).mode(true));
+        assertEquals("电脑上在跑", helpers.get(0).status(true));
+        assertEquals("idle", helpers.get(1).mode(true));
+        assertEquals("waiting", helpers.get(2).mode(true));
+        assertEquals("等你确认", helpers.get(2).status(true));
+        // Offline: nothing is claimed to be running.
+        assertEquals("idle", helpers.get(0).mode(false));
+    }
+
     @Test public void stateWordsOnlyForOutstandingWork() {
         assertEquals("进行中", AppPresentation.stateWord(card("\"id\":\"c1\",\"agent\":\"codex\",\"state\":\"working\""), true));
         assertEquals("等你确认", AppPresentation.stateWord(card("\"id\":\"c1\",\"agent\":\"codex\",\"state\":\"waiting\""), true));

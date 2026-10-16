@@ -37,7 +37,10 @@ class PreparePortraits {
                         ? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR : RenderingHints.VALUE_INTERPOLATION_BICUBIC);
                 double scale = 240.0 / Math.max(width, height);
                 int w = (int)Math.round(width * scale), h = (int)Math.round(height * scale);
-                g.drawImage(crop, (256 - w) / 2, 248 - h, w, h, null);
+                // Busts stand on the bottom edge; Codex's pixel head is wider than tall, so it is
+                // centered instead of sinking toward the bottom of round frames.
+                int top = roles[role].equals("codex") ? (256 - h) / 2 : 248 - h;
+                g.drawImage(crop, (256 - w) / 2, top, w, h, null);
                 g.dispose();
                 File file = new File(output, "portrait_" + roles[role] + "_" + moods[mood] + ".png");
                 if (!ImageIO.write(portrait, "png", file)) throw new IllegalStateException("No PNG encoder");

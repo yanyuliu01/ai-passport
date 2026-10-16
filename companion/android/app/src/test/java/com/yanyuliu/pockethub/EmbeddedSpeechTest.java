@@ -32,8 +32,9 @@ public class EmbeddedSpeechTest {
     private static final class Result implements EmbeddedSpeech.Callback {
         final CountDownLatch ready = new CountDownLatch(1);
         final CountDownLatch partial = new CountDownLatch(1), done = new CountDownLatch(1), limit = new CountDownLatch(1);
-        String text, error; boolean cancelled;
+        String text, error; boolean cancelled; byte[] wav; boolean wavBeforeDone;
         @Override public void ready() { ready.countDown(); }
+        @Override public void recording(byte[] value) { wav = value; wavBeforeDone = done.getCount() == 1; }
         @Override public void level(float value) { }
         @Override public void partial(String value) { assertEquals("测试", value); partial.countDown(); }
         @Override public void limitReached() { limit.countDown(); }
@@ -52,6 +53,26 @@ public class EmbeddedSpeechTest {
         assertEquals("测试完成", result.text); assertNull(result.error);
         assertEquals(1, decoder.finishes); assertEquals(1, decoder.closes); assertEquals(1, mic.closes);
     }
+    @Test public void recordingIsHandedOverBeforeFinishedEvenWhenDecodingFails() throws Exception {
+        EmbeddedSpeech speech = new EmbeddedSpeech(new VoiceCapture(4, 100));
+        Result ok = new Result();
+        speech.start(Mic::new, Decoder::new, ok);
+        assertTrue(ok.partial.await(2, TimeUnit.SECONDS)); speech.stop(false); ok.await();
+        assertNotNull(ok.wav); assertTrue(ok.wavBeforeDone);
+        assertEquals(44 + 4, ok.wav.length);  // WAV header plus the two captured samples
+        // A decoder failure still leaves the recording, so the computer can recognize it instead.
+        Decoder broken = new Decoder() { @Override public String finish() { throw new IllegalStateException("识别引擎出错"); } };
+        Result failed = new Result();
+        speech.start(Mic::new, () -> broken, failed);
+        assertTrue(broken.samples.await(2, TimeUnit.SECONDS)); speech.stop(false); failed.await();
+        assertEquals("识别引擎出错", failed.error); assertNotNull(failed.wav);
+        // Cancelled recordings go nowhere.
+        Result cancelled = new Result(); Decoder decoder = new Decoder();
+        speech.start(Mic::new, () -> decoder, cancelled);
+        assertTrue(decoder.samples.await(2, TimeUnit.SECONDS)); speech.stop(true); cancelled.await();
+        assertNull(cancelled.wav);
+    }
+
     @Test public void cancelNeverFinalizesOrReturnsRecognizedText() throws Exception {
         EmbeddedSpeech speech = new EmbeddedSpeech(new VoiceCapture(4, 100));
         Decoder decoder = new Decoder(); Result result = new Result();
