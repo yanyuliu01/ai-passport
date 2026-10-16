@@ -282,6 +282,23 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.17.0): incremental updates
+
+- An update now has two parts: **the APK carries only code** (about 17 MB for arm64,
+  down from about 194 MB) and **the speech models are the `speech` resource pack**.
+  Packs are published per file by checksum; the phone compares with what it has and
+  downloads only files that changed, so an update without model changes downloads no
+  models. Other large resources can use the same mechanism later.
+- Both the APK and the speech models can be downloaded from the internet (GitHub) or
+  from the computer, chosen each time; without an internet address the computer is
+  used directly. Both resume, and files replace the old ones only after verification.
+- Download the speech models under Connections and settings → Phone speech models.
+  Until then, holding the microphone only records and the computer recognizes it.
+- Needs runtime 0.8.3 (`/v1/app/packs`, `/v1/app/file`). After upgrading from 0.16.0
+  the models are downloaded once.
+- Covered by build and host tests; downloading, loading and recognizing on a phone
+  still need on-device acceptance.
+
 ## App fixes (0.16.0)
 
 - Cards and sync progress are kept per computer: switching to another computer and
@@ -336,6 +353,8 @@ stability and the Android installation flow still require phone acceptance.
 
 ## Bundled phone speech dependencies
 
+From 0.17.0 these models are no longer packaged in the APK; they are the `speech`
+resource pack, downloaded once (see "App fixes (0.17.0)").
 From 0.14.0, final recognition uses the same unchanged SenseVoice int8
 2024-07-17 model as the computer's configured recognizer: automatic language
 selection, inverse text normalization, and two CPU threads. The small Chinese
@@ -420,9 +439,23 @@ way, not as an APK file to sideload:
      --variant "armeabi-v7a=$apk_dir/app-armeabi-v7a-debug.apk" \
      --variant "x86=$apk_dir/app-x86-debug.apk" \
      --variant "x86_64=$apk_dir/app-x86_64-debug.apk" \
-     --note "one line the owner understands"
+     --note "one line the owner understands" --github
    python3 -m xiaoyou_runtime app status
    ```
+
+   `--github` uploads the arm64 package (the phone's) to GitHub Releases (the owner
+   authorized public hosting of the APK), so the phone can choose "download from the
+   internet" or "download from the computer" on each update; both are the same file
+   with the same checksum. Add ABIs with `--github arm64-v8a,universal`. The upload
+   uses the credential git pushes to GitHub with (or `GITHUB_TOKEN`) and uploads files
+   only, never code. Publish the `speech` resource pack again only when the models change:
+
+   ```bash
+   python3 -m xiaoyou_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr --github
+   ```
+
+   Pack files are stored and uploaded by checksum: unchanged files are never uploaded
+   again, and the phone downloads only files that changed.
 
    The note is shown on the phone, so write what changed for the owner, not
    commit jargon. Publishing only replaces the file the running runtime serves;

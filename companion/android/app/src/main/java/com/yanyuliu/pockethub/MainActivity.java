@@ -128,6 +128,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String deviceKey = null;
     private String busyKey = null;
     private final OnDeviceSpeech mic = new OnDeviceSpeech();
+    /** 手机语音模型还没下载时只录音，松开后交给电脑识别。 */
+    private final PhoneMic plainMic = new PhoneMic();
     private boolean listening;
     /** 松开之后、手机识别的最后结果还没到。 */
     private boolean transcribing;
@@ -695,7 +697,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         for (Card card : store.cards()) if (card.active() || (card.monitoringOnly && card.state.equals("working"))) running++;
         AppUpdate.Release update = AppUpdate.availableFor(RuntimeClient.selected(this));
         String key = store.linkState() + (target == null ? "" : target.name + target.url) + store.runtimeConnected()
-                + running + companionChoice + (update == null ? "" : update.sha256) + updateProgress;
+                + running + companionChoice + (update == null ? "" : update.sha256) + updateProgress
+                + "|" + packProgress + "|" + System.identityHashCode(AppUpdate.packs);
         if (key.equals(mineKey)) return;
         mineKey = key;
         minePane.removeAllViews();
@@ -718,6 +721,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         settings.addView(groupRow(null, "偏好与运行记录", null, "›", HINT, view -> openSettings(2), true));
         String installed = "";
         try { installed = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        settings.addView(speechPackRow());
         settings.addView(groupRow(null, "App 更新",
                 update == null ? "现在是 " + installed : update.label() + (update.note.isEmpty() ? "" : " · " + update.note),
                 updateProgress >= 0 ? "下载中 " + updateProgress + "%" : update != null ? "安装 ›" : "检查 ›",
@@ -729,6 +733,64 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     /** 下载新版时的进度（0–99）；不在下载时是 -1。 */
     private int updateProgress = -1;
+    /** 下载语音模型时的进度（0–99）；不在下载时是 -1。 */
+    private int packProgress = -1;
+
+    interface SourceChoice { void picked(boolean external); }
+
+    /**
+     * 每次下载前选从哪里下：网上（GitHub，发布时传上去的同一个文件）或者这台电脑。只有电脑能下时
+     * （what 为 null）直接从电脑下，不多问。
+     */
+    private void chooseSource(String what, SourceChoice choice) {
+        if (what == null) { choice.picked(false); return; }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("从哪里下载" + what + "？")
+                .setItems(new String[] {"从网上下载（GitHub）", "从电脑下载"}, (dialog, which) -> choice.picked(which == 0))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private static String mb(long bytes) {
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1048576.0);
+    }
+
+    /** 语音模型这一行：电脑上发布的语音资源包，和手机上装好的比，只下载变了的文件。 */
+    private View speechPackRow() {
+        AppPacks.Pack pack = AppPacks.find(AppUpdate.packs, AppPacks.SPEECH);
+        boolean ready = AppPacks.ready(this, AppPacks.SPEECH, AppPacks.SPEECH_FILES);
+        List<AppPacks.Item> todo = pack == null ? new ArrayList<>() : AppPacks.missing(pack, AppPacks.installed(this, AppPacks.SPEECH));
+        String detail = pack == null ? (ready ? "已装好；电脑上没有新的" : "还没下载；先交给电脑识别")
+                : todo.isEmpty() ? "已是最新" : (ready ? "有更新，" : "还没下载，") + "要下 " + mb(AppPacks.bytes(todo));
+        String end = packProgress >= 0 ? "下载中 " + packProgress + "%" : pack != null && !todo.isEmpty() ? (ready ? "更新 ›" : "下载 ›") : "检查 ›";
+        return groupRow(null, "手机语音模型", detail, end, pack != null && !todo.isEmpty() ? BLUE : HINT,
+                view -> updateSpeechPack(), true);
+    }
+
+    private void updateSpeechPack() {
+        RuntimeClient.Target target = RuntimeClient.selected(this);
+        if (target == null) { toast("先添加电脑"); return; }
+        if (packProgress >= 0) return;
+        AppPacks.Pack pack = AppPacks.find(AppUpdate.packs, AppPacks.SPEECH);
+        List<AppPacks.Item> todo = pack == null ? null : AppPacks.missing(pack, AppPacks.installed(this, AppPacks.SPEECH));
+        if (pack == null || todo.isEmpty()) {
+            toast("正在问电脑有没有新的语音模型…");
+            AppUpdate.check(this, target, (newer, error) -> {
+                if (error != null) toast("没问到：" + error);
+                mineKey = null; onHubChanged();
+            });
+            return;
+        }
+        chooseSource(pack.hosted() ? "语音模型 " + mb(AppPacks.bytes(todo)) : null, external -> {
+            packProgress = 0; mineKey = null; refreshMine();
+            AppPacks.update(this, target, pack, external, percent -> {
+                packProgress = percent; mineKey = null; refreshMine();
+            }, error -> {
+                packProgress = -1; mineKey = null; refreshMine();
+                toast(error == null ? "手机语音模型已就绪" : "没下载成：" + error);
+            });
+        });
+    }
 
     /** 没有更新时去问一次；有更新时下载、校验，再交给系统安装（主人要在系统界面点确认）。 */
     private void updateApp() {
@@ -746,8 +808,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
             });
             return;
         }
-        updateProgress = 0; mineKey = null; refreshMine();
-        AppUpdate.download(this, target, update, percent -> {
+        chooseSource(update.downloadUrl.isEmpty() ? null : "安装包 " + mb(update.size), external -> {
+            updateProgress = 0; mineKey = null; refreshMine();
+            downloadApp(target, update, external);
+        });
+    }
+
+    private void downloadApp(RuntimeClient.Target target, AppUpdate.Release update, boolean external) {
+        AppUpdate.download(this, target, update, external, percent -> {
             updateProgress = percent; mineKey = null; refreshMine();
         }, (apk, error) -> {
             updateProgress = -1; mineKey = null; refreshMine();
@@ -884,7 +952,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (listening || transcribing) {
             // 切走了就不算说完：丢掉这段，不发出去。
             ++voiceSession; listening = false; transcribing = false; heard = "";
-            mic.cancel();
+            mic.cancel(); plainMic.cancel();
             micButton.setBackground(surface(BLUE, BLUE, 42)); micButton.setScaleX(1); micButton.setScaleY(1);
             micHint.setText("按住说话");
         }
@@ -1616,7 +1684,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** Recognize on the phone; only released, final text goes to Runtime. */
     private void startListening() {
         if (RuntimeClient.selected(this) == null) { toast("先连上电脑，小幽才能回答"); show(TAB_MINE); return; }
-        if (listening || mic.recording()) return;
+        if (listening || mic.recording() || plainMic.recording()) return;
         if (HubStore.get().busy() || transcribing) { toast(companionName() + "还在回上一句"); return; }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             micHint.setText("请先允许麦克风权限");
@@ -1631,6 +1699,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         micButton.setBackground(surface(0xffe2564a, 0xffe2564a, 42));
         micButton.animate().scaleX(1.12f).scaleY(1.12f).setDuration(150).start();
         micHint.setText("正在打开手机麦克风…");
+        if (!AppPacks.ready(this, AppPacks.SPEECH, AppPacks.SPEECH_FILES)) { recordForComputer(session); return; }
         final byte[][] recorded = new byte[1][];
         mic.start(this, new OnDeviceSpeech.Callback() {
             @Override public void recording(byte[] wav) { if (session == voiceSession) recorded[0] = wav; }
@@ -1668,12 +1737,40 @@ public class MainActivity extends Activity implements HubStore.Listener {
         refreshHome(HubStore.get(), HubStore.get().cards());
     }
 
+    /** 手机上还没有语音模型：只录音，松开后把录音交给电脑识别（和设备录音同一个识别）。 */
+    private void recordForComputer(long session) {
+        plainMic.start(new VoiceCapture.Callback() {
+            @Override public void ready() { runOnUiThread(() -> {
+                if (session == voiceSession && listening) micHint.setText("手机正在录音 · 松开交给电脑识别");
+            }); }
+            @Override public void level(float value) { runOnUiThread(() -> { if (session == voiceSession) micLevel(value); }); }
+            @Override public void samples(byte[] bytes, int count) { }
+            @Override public void limitReached() { runOnUiThread(() -> {
+                if (session == voiceSession && listening) micHint.setText("已录满 30 秒 · 松开交给电脑识别");
+            }); }
+            @Override public void finished(byte[] wav, String error, boolean cancelled) { runOnUiThread(() -> {
+                if (session != voiceSession || isFinishing() || isDestroyed() || cancelled) return;
+                releaseMic(); transcribing = false;
+                if (error != null) { micHint.setText(error); toast(error); }
+                else if (wav != null && HubStore.get().runtimeConnected()) {
+                    HubStore.get().log("手机语音模型还没下载，录音交给电脑识别");
+                    RuntimeClient.sendVoice(MainActivity.this, wav, null, false);
+                } else {
+                    String why = "电脑没连上，手机语音模型也还没下载：去「连接与设置 → App 更新」下载后可离线识别";
+                    micHint.setText(why); toast(why);
+                }
+                refreshHome(HubStore.get(), HubStore.get().cards());
+            }); }
+        });
+        refreshHome(HubStore.get(), HubStore.get().cards());
+    }
+
     private boolean voiceOnComputer() {
         return getSharedPreferences("ds_ui", MODE_PRIVATE).getBoolean("voice_on_computer", false);
     }
 
     private void cancelListening() {
-        ++voiceSession; mic.cancel(); releaseMic(); transcribing = false; heard = "";
+        ++voiceSession; mic.cancel(); plainMic.cancel(); releaseMic(); transcribing = false; heard = "";
         refreshHome(HubStore.get(), HubStore.get().cards());
     }
 
@@ -1692,8 +1789,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private void stopListening() {
         if (!listening) return;
         releaseMic(); transcribing = true;
-        micHint.setText(voiceOnComputer() && HubStore.get().runtimeConnected() ? "正在交给电脑识别…" : "正在手机上转成文字…");
-        mic.stop();
+        boolean computer = plainMic.recording() || voiceOnComputer() && HubStore.get().runtimeConnected();
+        micHint.setText(computer ? "正在交给电脑识别…" : "正在手机上转成文字…");
+        mic.stop(); plainMic.stop();
         refreshHome(HubStore.get(), HubStore.get().cards());
     }
 
@@ -2052,7 +2150,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     @Override protected void onDestroy() {
-        ++voiceSession; mic.dispose();
+        ++voiceSession; mic.dispose(); plainMic.cancel();
         super.onDestroy();
     }
 

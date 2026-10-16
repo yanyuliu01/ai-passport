@@ -53,6 +53,8 @@ final class AppUpdate {
 
     /** 最近一次检查的结果；null 表示没有更新或还没查过。 */
     static volatile Release available;
+    /** 最近一次检查时电脑上发布的资源包（增量更新的那部分）。 */
+    static volatile java.util.List<AppPacks.Pack> packs = new java.util.ArrayList<>();
     private static volatile String availableTarget = "";
 
     static Release availableFor(RuntimeClient.Target target) {
@@ -85,9 +87,10 @@ final class AppUpdate {
                     long installedCode = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
                     if (newer(release, installedCode, installedSha(app), info.lastUpdateTime)) found = release;
                 }
+                java.util.List<AppPacks.Pack> listed = RuntimeClient.appPacks(target);
                 RuntimeClient.Target current = RuntimeClient.selected(app);
                 if (current != null && current.url.equals(target.url)) {
-                    available = found; availableTarget = target.url;
+                    available = found; availableTarget = target.url; packs = listed;
                     checkedAt = System.currentTimeMillis();
                 }
             } catch (Exception failure) { error = failure.getMessage(); }
@@ -115,8 +118,9 @@ final class AppUpdate {
         return new File(new File(context.getFilesDir(), ArtifactProvider.UPDATES), release.sha256 + ".bin");
     }
 
-    static void download(Context context, RuntimeClient.Target target, Release release, Progress progress,
-                         DownloadCallback callback) {
+    /** external：从网上的镜像下（发布时传到了 GitHub 才有）；否则从电脑下。两处是同一个文件。 */
+    static void download(Context context, RuntimeClient.Target target, Release release, boolean external,
+                         Progress progress, DownloadCallback callback) {
         Context app = context.getApplicationContext();
         WORKER.execute(() -> {
             File done = null;
@@ -124,7 +128,7 @@ final class AppUpdate {
             try {
                 if (target == null) throw new IOException("还没有连接电脑");
                 File file = file(app, release);
-                if (!verified(file, release)) fetch(target, release, file, percent -> {
+                if (!verified(file, release)) fetch(target, release, external, file, percent -> {
                     if (progress != null) main().post(() -> progress.at(percent));
                 });
                 done = file;
@@ -146,7 +150,8 @@ final class AppUpdate {
         return hex(digest.digest()).equals(release.sha256);
     }
 
-    private static void fetch(RuntimeClient.Target target, Release release, File file, Progress progress) throws Exception {
+    private static void fetch(RuntimeClient.Target target, Release release, boolean external, File file,
+                              Progress progress) throws Exception {
         File folder = file.getParentFile();
         if (!folder.isDirectory() && !folder.mkdirs()) throw new IOException("没地方放安装包");
         File part = new File(file.getPath() + ".part");
@@ -154,7 +159,7 @@ final class AppUpdate {
         File[] old = folder.listFiles();
         if (old != null) for (File stale : old)
             if (!stale.equals(file) && !stale.equals(part)) stale.delete();
-        if (release.downloadUrl.isEmpty()) {
+        if (!external || release.downloadUrl.isEmpty()) {
             UpdateDownload.fetch(target.url + packagePath(release), target.token, release.sha256,
                     release.size, file, progress::at);
         } else {

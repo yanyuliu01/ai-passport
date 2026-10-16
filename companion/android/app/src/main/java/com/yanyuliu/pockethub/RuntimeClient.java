@@ -880,6 +880,18 @@ final class RuntimeClient {
     private static final int FIRMWARE_MAX_BYTES = 8 * 1024 * 1024;
 
     /** 电脑上发布的 App 更新（一层的对象；没有时 available 是 false）。 */
+    /** 电脑上发布的资源包（语音模型等）；旧版 Runtime 没有这个接口时是空的。 */
+    static List<AppPacks.Pack> appPacks(Target target) throws IOException {
+        try {
+            Map<String, Object> raw = Json.parseObject(requestText("GET", target.url + "/v1/app/packs",
+                    target.token, null, null, 15));
+            return raw == null ? new ArrayList<>() : AppPacks.parse(raw);
+        } catch (IOException error) {
+            if (String.valueOf(error.getMessage()).contains(" 404")) return new ArrayList<>();
+            throw error;
+        }
+    }
+
     static Map<String, String> appRelease(Target target) throws IOException {
         return request("GET", target.url + "/v1/app?abi=" + AppUpdate.preferredAbi(android.os.Build.SUPPORTED_ABIS),
                 target.token, null, null, 15);
