@@ -21,6 +21,7 @@ import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 from .message_log import DESKTOP_CONVERSATION
+from .record import Record
 
 ORIGIN = re.compile(r"[a-z][a-z0-9-]{0,31}")
 SESSION = re.compile(r"[A-Za-z0-9._:-]{1,128}")
@@ -49,6 +50,7 @@ def _agent(origin: str) -> str:
 class Reports:
     def __init__(self, cards: Any, clock: Any = time.time):
         self._cards, self._clock = cards, clock
+        self._record = Record(cards)
         self._lock = threading.Lock()
         self._index: Dict[Tuple[str, str], str] = {}
         for card in cards.recent(None, 1000):
@@ -84,7 +86,7 @@ class Reports:
             card = self._cards.get(card_id) if card_id else None
             if card is None:
                 name = (title or "%s %s" % (origin, session[-8:])).strip()[:MAX_TITLE_CHARS]
-                card = self._cards.open(DESKTOP_CONVERSATION, name, card_state, _agent(origin),
+                card = self._record.observed_open(DESKTOP_CONVERSATION, name, card_state, _agent(origin),
                                         title_source="external")
                 card_id = card["id"]
                 self._index[(origin, session)] = card_id
@@ -113,7 +115,7 @@ class Reports:
                 fields.update(title=title.strip()[:MAX_TITLE_CHARS], title_source="external")
             latest = next((item["text"] for item in reversed(entries) if item["role"] == "xiaoyou"), "")
             fields["brief"] = (latest or "%s · %s" % (origin, state))[:120]
-            self._cards.update(card_id, **fields)
+            self._record.observed(card_id, **fields)
         # 回给上报方的是它报的状态（turn_ended 在卡上记成 done，只在 /v1/sync 里如实给出）。
         return {"card": card_id, "state": state}
 
@@ -126,7 +128,7 @@ class Reports:
             card = self._cards.get(card_id)
             if (card and card.get("state") in ("working", "waiting") and not card.get("stale")
                     and now - (card.get("observed_at") or 0) > STALE_SECONDS):
-                self._cards.update(card_id, stale=True)
+                self._record.observed(card_id, stale=True)
 
 
 # ---- 命令行：在报告方那台机器上跑，发给这台 Runtime ----

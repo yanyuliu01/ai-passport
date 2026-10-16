@@ -32,6 +32,7 @@ from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, 
                      Outcome, clip, span)
 from .approvals import STALL, Approvals, Gate
 from .artifacts import ArtifactError, ArtifactStore
+from .record import Record
 from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
@@ -484,8 +485,10 @@ class Xiaoyou:
         self._store = store
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
+        # 记录中心：这里写卡、说话、改状态都经过它（record.py）；_cards 只用来读。
+        self._record = Record(self._cards)
         self.artifacts = ArtifactStore(config)
-        self._approvals = Approvals(self._approval_changed, self._cards.bump)
+        self._approvals = Approvals(self._approval_changed, self._record.sequence)
         self._gate = Gate(self._approvals)
         self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun,
                             self._prepare, self._release)
@@ -500,6 +503,11 @@ class Xiaoyou:
     @property
     def cards(self) -> Cards:
         return self._cards
+
+    @property
+    def record(self) -> Record:
+        """记录中心：别的模块要写记录走它。"""
+        return self._record
 
     @property
     def approvals(self) -> Approvals:
@@ -576,8 +584,8 @@ class Xiaoyou:
                 turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
                 model: Optional[str] = None) -> Turn:
         reply = "交给 %s 了" % agent.name
-        card = self._cards.open(conversation, route.text, "working", agent.name)
-        self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff", brief=reply, mood="busy")
+        card = self._record.task_open(conversation, route.text, "working", agent.name)
+        self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff", brief=reply, mood="busy")
         task = route.text
         if route.reason == "mention" and agent.speaks:
             # 话里点的名还留在话里，要告诉它说的就是它自己；接口里指定的不用。
@@ -608,13 +616,13 @@ class Xiaoyou:
                 recent = self._store.transcript.turns(conversation)[-BACKGROUND_TURNS:]
                 if recent:
                     task = background(recent, task)
-            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", brief=reply, mood="busy",
+            self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", brief=reply, mood="busy",
                                state="working", edits=card["edits"] + 1)
             self._launch(card["id"], agent, task, conversation, hop, effort, model)
         elif done == "full":
-            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff")
+            self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff")
         else:
-            self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", edits=card["edits"] + 1)
+            self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, scope="task", kind="handoff", edits=card["edits"] + 1)
             self._workspace.note(card, agent.name, task, done)
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
@@ -643,8 +651,8 @@ class Xiaoyou:
             raise AgentError("电脑上这一轮还在跑，等它停下再发")
         name = desktop.get("title") or "电脑上的会话"
         reply = "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
-        card = self._cards.open(conversation, "接着：" + name, "working", agent.name)
-        self._cards.update(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff",
+        card = self._record.task_open(conversation, "接着：" + name, "working", agent.name)
+        self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff",
                            brief=reply, mood="busy", borrowed_session=session,
                            borrowed_cwd=where, desktop_card=desktop["id"])
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
@@ -705,15 +713,15 @@ class Xiaoyou:
         worker = lead.name
         if kind == "none":
             if target is None:
-                target = self._cards.open(conversation, text)
+                target = self._record.task_open(conversation, text)
             quiet = target["state"] in ACTIVE
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
             # 那件事还在做时，卡上的简报和表情留给它的结果，不被一句闲聊盖掉。
             extra = {} if quiet else {"brief": turn.brief, "mood": turn.mood}
-            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
+            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
         elif kind == "cancel":
             self.cancel(target["id"])
-            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
+            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
         elif kind == "amend":
             worker = target["agent"] or lead.name
@@ -721,16 +729,16 @@ class Xiaoyou:
                                plan.get("effort") or effort, plan.get("model") or model)
             if done == "full":
                 reply = QUEUE_FULL_NOTE
-                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
+                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             elif done is None:
                 # 那件事已经不在做了：接着它原来的会话再做一轮。
-                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
+                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
                     reply, self._config.brief_max_chars), mood="busy", state="working",
                     edits=target["edits"] + 1)
                 self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop,
                              plan.get("effort") or effort, plan.get("model") or model)
             else:
-                self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", edits=target["edits"] + 1)
+                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", edits=target["edits"] + 1)
                 self._workspace.note(target, worker, plan["task"], done)
             say("handoff", worker, reply)
             started = True
@@ -740,10 +748,10 @@ class Xiaoyou:
             helper = self._agents[plan["agent"]]
             worker = helper.name
             if target is None:
-                target = self._cards.open(
+                target = self._record.task_open(
                     conversation, plan.get("title") or text, "working", helper.name,
                     title_source="task" if plan.get("title") else "request")
-            self._cards.update(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
+            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._config.brief_max_chars))
             say("handoff", helper.name, reply)
@@ -898,7 +906,7 @@ class Xiaoyou:
             if model is not None and model != card.get("model_asked"):
                 changes.update(model_asked=model, model=model)
             if changes:
-                self._cards.update(card["id"], **changes)
+                self._record.task(card["id"], **changes)
         return done
 
     def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int,
@@ -916,7 +924,7 @@ class Xiaoyou:
             schema=reply_schema() if speaking else None, effort=effort, model=model,
             borrowed_session=borrowed, cwd=opened.get("borrowed_cwd") if borrowed else None,
         )
-        card = self._cards.update(card_id, state="working", agent=agent.name,
+        card = self._record.task(card_id, state="working", agent=agent.name,
                                   started_at=time.time(), queued=self._config.max_parallel > 0,
                                   fresh=True, effort=effort, model=model or known, model_asked=model,
                                   run_id=task_run.run_id, result_ready=False, summary_partial="")
@@ -927,11 +935,11 @@ class Xiaoyou:
     def _begun(self, task: Task) -> None:
         """轮到这件事了（设了并行上限时，前面可能排过队）。"""
         if self._config.max_parallel > 0:
-            self._cards.update(task.card, queued=False, started_at=time.time())
+            self._record.task(task.card, queued=False, started_at=time.time())
 
     def _prepare(self, task: Task, control: Control) -> None:
         """一轮开始前：进展记到卡上；要问“可以吗”的帮手，给它一把通到主人那里的钥匙。"""
-        control.progress = lambda line, card=task.card: self._cards.update(card, progress=line)
+        control.progress = lambda line, card=task.card: self._record.progress(card, line)
         control.scratch = self._config.state_dir
         if task.agent.type in ("claude_code", "codex", "dsh"):
             task.artifact_dir = str(self.artifacts.task_dir(task.card))
@@ -942,7 +950,7 @@ class Xiaoyou:
             self._usage.saw_model(task.agent.name, seen, usual=task.model is None)
             card = self._cards.get(task.card)
             if card is not None and card["model"] != seen:
-                self._cards.update(task.card, model=seen)
+                self._record.task(task.card, model=seen)
 
         control.model = model
         control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
@@ -993,7 +1001,7 @@ class Xiaoyou:
             cost = dict(card["cost"] or {})
             for key, value in spent.items():
                 cost[key] = cost.get(key, 0) + value
-            self._cards.update(task.card, cost=cost)
+            self._record.task(task.card, cost=cost)
 
     def _approval_changed(self, card_id: str, approval_id: Optional[str]) -> None:
         """一件事在等主人点头，或者不用等了。"""
@@ -1003,13 +1011,13 @@ class Xiaoyou:
         if card.get("monitoring_only"):
             # The desktop adapter owns its observed state; an approval is a
             # separate response channel, not control of the desktop card.
-            self._cards.update(card_id, approval=approval_id)
+            self._record.task(card_id, approval=approval_id)
             return
         if card["state"] not in ACTIVE:
             if card["approval"] is not None:
-                self._cards.update(card_id, approval=None)
+                self._record.task(card_id, approval=None)
             return
-        self._cards.update(card_id, approval=approval_id,
+        self._record.task(card_id, approval=approval_id,
                            state="waiting" if approval_id is not None else "working")
 
     def _finished(self, task: Task, outcome: Optional[Outcome], error: Optional[str]) -> None:
@@ -1039,7 +1047,7 @@ class Xiaoyou:
                     task.artifact_error = "完整回复保存失败，请稍后重试"
             note = "\n\n（内容较长，完整原文见附件。）" if task.full_reply_saved else ""
             original = full if not note else full[:MAX_ENTRY_CHARS - len(note)] + note
-            self._cards.update(task.card, say=original, turn_id=task.run_id + "-result",
+            self._record.reply(task.card, say=original, turn_id=task.run_id + "-result",
                                scope="task", kind="worker_result", author=name,
                                result_ready=True, attachments=task.artifacts)
         card = self._cards.get(task.card)
@@ -1068,7 +1076,7 @@ class Xiaoyou:
         def report(kind: str, agent: Optional[str], text: str) -> None:
             current = self._cards.get(task.card)
             if kind == "partial" and current and current.get("run_id") == task.run_id and current["state"] in ACTIVE:
-                self._cards.update(task.card, summary_partial=text)
+                self._record.task(task.card, summary_partial=text)
         voice = self._voice(self._available(task.hop))
         if voice is not None and voice.name != task.agent.name:
             try:
@@ -1109,7 +1117,7 @@ class Xiaoyou:
         if task.artifact_error:
             display_reply = display_reply[:MAX_ENTRY_CHARS - len(task.artifact_error) - 2] + (
                 "\n\n" + task.artifact_error)
-        self._cards.update(task.card, say=display_reply, brief=turn.brief, mood=turn.mood,
+        self._record.reply(task.card, say=display_reply, brief=turn.brief, mood=turn.mood,
                            state=state, approval=None, queued=False, attachments=task.artifacts,
                            turn_id=task.run_id + "-summary", scope="main", kind="summary",
                            result_ready=True, summary_partial="")
@@ -1124,7 +1132,7 @@ class Xiaoyou:
         card = self._cards.get(card_id)
         if card is None or card["state"] not in ACTIVE:
             return False
-        self._cards.update(card_id, state="cancelled", brief="取消了", mood="idle",
+        self._record.task(card_id, state="cancelled", brief="取消了", mood="idle",
                            approval=None, queued=False)
         self._tasks.cancel(card_id)
         self._approvals.drop(card_id)

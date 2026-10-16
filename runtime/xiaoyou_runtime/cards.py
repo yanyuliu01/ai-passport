@@ -278,6 +278,15 @@ class Cards:
             self._log.request(message)
             self._changed.notify_all()
 
+    def request_changed(self, message: Dict[str, Any], revise: bool = True) -> None:
+        """修订号加一（revise）、取序号、写进日志、叫醒等待的人：一把锁里做完（见 record.py）。"""
+        with self._changed:
+            if revise:
+                message["rev"] = message.get("rev", 0) + 1
+            message["seq"] = self._issue()
+            self._log.request(message)
+            self._changed.notify_all()
+
     @staticmethod
     def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
         """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。

@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from .cards import Cards
 from .approvals import Approvals
 from .desktop_approvals import DesktopApprovals
+from .record import Record
 from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 from .desktop_titles import DesktopTitles
 from .task_titles import select_title
@@ -111,6 +112,8 @@ class DesktopSync:
                  clock: Callable[[], float] = time.time):
         home = home or Path.home()
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
+        # 观察到的会话经记录中心写（record.py）；self.cards 只用来读。
+        self.record = Record(cards)
         self.roots = [("codex", (codex_dir or home / ".codex") / "sessions"),
                       ("claude", (claude_dir or home / ".claude") / "projects")]
         self.titles = DesktopTitles(self.roots[0][1].parent, self.roots[1][1].parent)
@@ -463,7 +466,7 @@ class DesktopSync:
             if session.card and session.session_id in self.owned():
                 card = self.cards.get(session.card)
                 if card and card["state"] in ("working", "waiting", "unknown"):
-                    self.cards.update(session.card, state="cancelled", desktop_status="interrupted",
+                    self.record.observed(session.card, state="cancelled", desktop_status="interrupted",
                                       brief="此会话现由 Runtime 管理", stale=False)
             return
         if self.projects and str(Path(session.cwd).expanduser().resolve()) not in self.projects:
@@ -494,7 +497,7 @@ class DesktopSync:
         if existing and major == session.published_major and now - session.published_at < MINOR_SECONDS:
             return
         if existing is None:
-            card = self.cards.open(CONVERSATION, title.title, "unknown", session.agent,
+            card = self.record.observed_open(CONVERSATION, title.title, "unknown", session.agent,
                                    title_source=title.source)
             session.card = card["id"]
         label = LABELS[status]
@@ -512,7 +515,7 @@ class DesktopSync:
         if session.content_loaded:
             fields.update(entries=[dict(entry) for entry in session.entries],
                           content_scope="recent", content_truncated=session.content_truncated)
-        self.cards.update(session.card, state=STATES[status], source="desktop", project=project,
+        self.record.observed(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, desktop_cwd=session.cwd,
                           monitoring_only=True, desktop_status=status,
                           observed_at=observed_at, stale=stale, model=session.model or None,
@@ -583,7 +586,7 @@ class DesktopSync:
             fields = self._title(identity[0], identity[1], card.get("project", ""),
                                  card.get("entries", [])).fields()
             if any(card.get(key) != value for key, value in fields.items()):
-                self.cards.update(card["id"], **fields)
+                self.record.observed(card["id"], **fields)
         for key, session in self.sessions.items():
             if key not in retained and session.card:
                 card = self.cards.get(session.card)

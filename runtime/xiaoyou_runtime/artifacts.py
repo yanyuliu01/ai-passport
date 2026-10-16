@@ -344,7 +344,8 @@ class ArtifactStore:
                                        or not 0 <= entry_index < len(card["entries"])):
             raise ArtifactError("entry_index 应该是现有消息的序号")
         attachments = self.register(card_id, manifest, agent=agent or card.get("agent"))
-        return cards.add_attachments(card_id, attachments, entry_index)
+        from .record import Record  # 在这里引入：cards 要用这个模块，避免循环引入
+        return Record(cards).attach(card_id, attachments, entry_index)
 
     def register_task(self, cards: Any, card_id: str, text: str = "",
                       fields: Optional[Dict[str, Any]] = None, agent: Optional[str] = None) -> List[Dict[str, Any]]:
