@@ -214,12 +214,18 @@ desktop `reply` to 480 bytes, within the device's shared 4 KiB text pool. Firmwa
 that already supports desktop cards needs no new flash for content sync.
 
 A desktop conversation whose turn has stopped can be continued from the phone on
-its page (since 0.8.1): the runtime opens a new task, titled after that conversation, and runs one turn in that
+its page (since 0.8.1). Since 0.10.1, what the owner says on that page goes to
+Xiaoyou first: she sees the session's recent content and answers questions about it
+(explain, translate, summarize) herself, filing her answer on a new card. The
+session is continued only when the owner names the agent that can take it over
+(`agent` in the request, or its name in the text), or when Xiaoyou decides the
+owner wants it to keep working (her `amend` on that card). Continuing opens a new
+task, titled after that conversation, and runs one turn in that
 session's directory with its session id (Claude sessions go to a `claude_code`
 agent, Codex sessions to a `codex` agent), without Xiaoyou's persona. The session is
 not recorded as the runtime's own, so desktop observation continues and the owner
-can go back to the computer. It is refused while the turn on the computer is still
-running (`running`/`waiting` and not `stale`). Stopping stays in the desktop app. A live permission request can be answered separately from the phone
+can go back to the computer. Continuing is refused while the turn on the computer is still
+running (`running`/`waiting` and not `stale`); asking Xiaoyou about it is not. Stopping stays in the desktop app. A live permission request can be answered separately from the phone
 when the optional approval bridge below is installed and trusted; a status signal
 or notification without that decision channel still requires desktop confirmation.
 Ending a response means this turn ended, not that the whole project is complete.

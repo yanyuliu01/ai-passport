@@ -716,13 +716,14 @@ class Mesh:
             "model": message.get("model"), "message_id": message["id"]})
         return None
 
-    def amend(self, card: Dict[str, Any], text: str) -> bool:
-        """小幽决定对别的 Runtime 的一件事补充一句（xiaoyou._converse）。"""
+    def amend(self, card: Dict[str, Any], text: str, continue_desktop: bool = False) -> bool:
+        """小幽决定对别的 Runtime 的一件事补充一句，或者让那台电脑上的会话接着做（xiaoyou._converse）。"""
         target = card.get("mesh_origin") or ""
         if self._reachable(target):
             return False
         self.command(target, "message", {"conversation": card.get("conversation") or "default", "text": text,
                                          "card": card.get("mesh_id"), "pin": True,
+                                         "continue_desktop": continue_desktop,
                                          "message_id": uuid.uuid4().hex})
         return True
 
@@ -784,10 +785,18 @@ class Mesh:
         if not isinstance(message_id, str) or not ID.match(message_id):
             raise MeshError("message_id 不对")
         card = args.get("card")
+        agent = args.get("agent")
         if card is not None:
             local = self._cards.get(card) if isinstance(card, str) else None
             if local is None or local.get("mesh_origin"):
                 raise MeshError("这台没有这件事（可能已经清掉了）")
+            if args.get("continue_desktop") and local.get("monitoring_only"):
+                # 别的电脑上的小幽判断要这台的电脑会话接着做：点名这台能接它的帮手，
+                # 不再交给这台的小幽重新判断一遍。
+                heir = self._xiaoyou._desktop_agent(local)
+                if heir is None:
+                    raise MeshError("这台没有能接这个会话的帮手")
+                agent = heir.name
         delegated = args.get("delegated_from")
         mesh = {"message_id": message_id}
         if isinstance(delegated, dict) and delegated.get("runtime") == data.get("from"):
@@ -796,7 +805,7 @@ class Mesh:
         hop = args.get("hop", 0)
         snapshot = self._service.submit(
             args.get("text"), args.get("conversation") or "default", client_id=message_id,
-            agent=args.get("agent"), hop=hop if isinstance(hop, int) and not isinstance(hop, bool) else 0,
+            agent=agent, hop=hop if isinstance(hop, int) and not isinstance(hop, bool) else 0,
             card=card, pin=args.get("pin") is True, effort=args.get("effort"), model=args.get("model"),
             mesh=mesh)
         return {"message": snapshot["id"]}

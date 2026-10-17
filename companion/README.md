@@ -282,6 +282,14 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.17.4)
+
+- What you say inside a computer session goes to Xiaoyou first: she explains or
+  summarizes it herself, and the session only continues when you name its helper
+  ("let cc continue…") or she decides it should do work. The composer no longer
+  refuses while the computer is still running a turn; the hint and the notice
+  explain this. Needs runtime 0.10.1.
+
 ## App fixes (0.17.3)
 
 - A computer session or reported session that has stopped updating stays in the

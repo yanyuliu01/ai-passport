@@ -265,14 +265,11 @@ class Service:
                 if self.mesh is None:
                     raise RequestError("这是别的电脑上的事，这台现在不在小幽网络里，转交不了")
                 relay = observed
-            if observed is not None and observed.get("monitoring_only"):
-                # 电脑上的会话可以从手机接着聊，但只能在它里面说，而且这一轮要已经停下。
-                if observed.get("source") == "external":
-                    raise RequestError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
-                if not pin:
-                    raise RequestError("要接着电脑上的会话，请打开那个会话再发")
-                if observed.get("desktop_status") in ("running", "waiting") and not observed.get("stale"):
-                    raise RequestError("电脑上这一轮还在跑，等它停下再发")
+            if observed is not None and observed.get("monitoring_only") and pin \
+                    and observed.get("source") == "external":
+                raise RequestError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
+            # 电脑上的会话在这里不再拦：看着它说的话先给小幽；要它接着做时能不能接（比如电脑上
+            # 这一轮还在跑）由小幽那边判断并回答（xiaoyou.py _continue_desktop）。
         if client_id is not None:
             client_id = _name(client_id, "client_id")
         if agent is not None:

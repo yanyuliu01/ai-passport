@@ -218,6 +218,24 @@ class MeshTests(TempDirCase):
         self.assertEqual(b.service.runtime_id, worker[0]["delegated_from"]["runtime"])
         self.assertIsNone(b.card_from(a, worker[0]["id"]))
 
+    def test_continuing_another_runtimes_desktop_session_happens_on_that_runtime(self):
+        heir = Scripted("cc", kind="claude_code")
+        a = self.node("Mac", agents=[Scripted("claude"), heir])
+        b = self.node("Windows", peers=[a.url])
+        desktop = a.xiaoyou.record.observed_open("__desktop__", "改同步方案", "done", "claude")
+        a.xiaoyou.record.observed(desktop["id"], monitoring_only=True, source="desktop", session_id="s-mac",
+                                  desktop_cwd=str(self.folder), desktop_status="idle", entries=[
+                                      {"id": "e1", "role": "you", "text": "先出方案", "at": 1.0}])
+        self.assertTrue(until(lambda: b.card_from(a, desktop["id"]) is not None))
+        mirrored = b.card_from(a, desktop["id"])
+        self.assertTrue(b.mesh.amend(mirrored, "照方案改代码", continue_desktop=True))
+        # Mac 自己开一件「接着：…」，交给它能接 Claude 会话的帮手，在那个会话里接着做。
+        self.assertTrue(until(lambda: any(card["title"].startswith("接着：") and card["agent"] == "cc"
+                                          for card in a.xiaoyou.cards.recent(None, 100)), 10))
+        self.assertTrue(until(lambda: heir.jobs and heir.jobs[-1].session_id == "s-mac", 10))
+        self.assertFalse(any(card["title"].startswith("接着：") for card in b.xiaoyou.cards.recent(None, 100)
+                             if not card.get("mesh_origin")))
+
     def _refresh(self, node, name):
         node.mesh.sweep()
         return until(lambda: node.xiaoyou.has(name))

@@ -58,6 +58,9 @@ BACKGROUND_TURNS = 6
 ACTIONS = ("none", "start", "amend", "cancel")
 # 小幽接话时提示里列出的事：还在做的全列，另外带上最近结束的几件（主人常会接着问）。
 RECENT_FINISHED_CARDS = 5
+# 主人看着电脑上的会话说话时，提示里带上它最近的内容：每条最多这么多字，合起来最多这么多字。
+DESKTOP_ENTRY_CHARS = 1500
+DESKTOP_CONTEXT_CHARS = 6000
 # 一件事排着的补充已经满了（见 tasks.MAX_PENDING），这句补充没记上时小幽这样说。
 QUEUE_FULL_NOTE = "这件事排着的补充已经有好几条了，这句没记上，等它做完这一轮再说吧"
 
@@ -303,11 +306,11 @@ def tier_rules(helpers: List[Agent], quota: bool) -> List[str]:
 def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                 cards: List[Dict[str, Any]], focus: Optional[str], now: float,
                 pinned: bool = False, notes: Optional[Dict[str, str]] = None,
-                quota: bool = False) -> str:
+                quota: bool = False, desktop: Optional[Dict[str, Any]] = None) -> str:
     """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。
 
     notes 是每个帮手的模型、档位和额度（一句话），有就写在它后面；quota 表示帮手里有
-    订阅额度可看的。"""
+    订阅额度可看的。desktop 是主人正看着的电脑上的会话（focus 就是它）。"""
     notes = notes or {}
     parts = [persona, ""]
     parts.append("## 你怎么做事")
@@ -383,7 +386,41 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     elif focus is not None:
         parts.append(
             "主人说这句话时正看着 %s。没有别的线索时，“这个”“它”“这件事”指的就是它。" % focus)
+    if desktop is not None:
+        parts.extend(describe_desktop(desktop, helpers))
     return "\n".join(parts)
+
+
+def describe_desktop(card: Dict[str, Any], helpers: List[Agent]) -> List[str]:
+    """主人正看着的电脑上的会话：它是什么、最近说了什么，以及什么时候才让它接着做。"""
+    wanted = "codex" if card.get("agent") == "codex" else "claude_code"
+    heir = next((agent.name for agent in helpers if agent.type == wanted), None)
+    parts = ["", "## 主人正看着的电脑会话",
+             "%s「%s」是主人电脑上的 %s 会话，你只是在旁边看着，它不归你管。" % (
+                 card["id"], card["title"], card.get("agent") or "代理")]
+    if heir is not None:
+        parts.append(
+            "主人问它的情况、要你解释、翻译、总结它说的内容，你直接答，card 写 new，action 用 none。"
+            "只有主人明确要电脑上那个会话接着干活（改代码、继续做、照它说的办）时，才用 amend，"
+            "card 写 %s，task 写清要它接着做什么：会交给 %s 在那个会话里接着做。拿不准就先问主人。"
+            % (card["id"], heir))
+    else:
+        parts.append("这台 Runtime 上没有能接这个会话的帮手：你只能回答，不能让它接着做。")
+    recent, size = [], 0
+    for entry in reversed(card.get("entries") or []):
+        text = (entry.get("text") or "").strip()
+        if not text:
+            continue
+        who = "主人" if entry.get("role") == "you" else (card.get("agent") or "代理")
+        line = "%s：%s" % (who, clip(text, DESKTOP_ENTRY_CHARS))
+        if recent and size + len(line) > DESKTOP_CONTEXT_CHARS:
+            break
+        recent.insert(0, line)
+        size += len(line)
+    if recent:
+        parts.append("它最近的内容（旧的在前）：")
+        parts.extend(recent)
+    return parts
 
 
 def voice_prompt(persona: str, brief_max_chars: int) -> str:
@@ -572,21 +609,38 @@ class Xiaoyou:
         直接给主人看。
         """
         say: Report = report if report is not None else (lambda kind, agent, detail: None)
-        desktop = self._cards.get(card) if card and pin else None
-        if desktop is not None and desktop.get("monitoring_only"):
-            # 主人在电脑上那个会话里说的：接着那个会话做，不交给小幽转述。
-            return self._continue_desktop(desktop, text, conversation, turn_id, hop, say, effort, model)
+        desktop = self._cards.get(card) if card else None
+        if desktop is not None and not desktop.get("monitoring_only"):
+            desktop = None
         available = self._available(hop)
+        heir = self._desktop_agent(desktop) if desktop is not None and pin else None
         if not available:
-            raise AgentError("这台 Runtime 上没有能接这句话的代理")
+            if heir is None:
+                raise AgentError("这台 Runtime 上没有能接这句话的代理")
+            return self._continue_desktop(desktop, text, conversation, turn_id, hop, say,
+                                          effort, model)
         route = routing.decide(text, asked, available, self._config.default_agent, self._router)
+        if desktop is not None and pin:
+            # 在电脑上的会话里说的话，默认还是先给小幽：解释、翻译、总结她自己答。只有点名让
+            # 能接这类会话的帮手做（或者她判断要那边接着干活，见 _converse），才接着那个会话做。
+            if heir is not None and route.reason in ("asked", "mention") and route.agent == heir.name:
+                return self._continue_desktop(desktop, text, conversation, turn_id, hop, say,
+                                              route.effort or effort, model, route.text)
+            pin = False  # 会话不归 Runtime：这句话不记到它上面
         # 话里紧跟着名字说的档位，比调用方选的更近。
         effort = route.effort or effort
         first = self._agents[route.agent]
         say("route", first.name, route.reason)
-        focus = self._cards.get(card) if card else None
-        if focus is not None and focus["conversation"] != conversation:
+        # 电脑上的会话在自己的对话里；主人看着它说话时它照样是 focus。
+        focus = desktop if desktop is not None else self._cards.get(card) if card else None
+        if focus is not None and focus["conversation"] != conversation and desktop is None:
             focus = None
+        if desktop is not None and route.reason in ("default", "router"):
+            # 看着电脑上的会话说的：她来接话，不按默认或路由直接交给帮手。
+            lead = first if first.speaks and first.type != "mesh" else self._voice(available)
+            if lead is not None:
+                return self._converse(lead, text, conversation, turn_id, focus, available, hop, say,
+                                      False, effort, model)
         pinned = pin and focus is not None
         if route.reason != "default" or not first.speaks:
             # 指定了由谁做（或者默认代理只会干活）：不用问模型，直接交过去。
@@ -655,30 +709,36 @@ class Xiaoyou:
 
     def _continue_desktop(self, desktop: Dict[str, Any], said: str, conversation: str,
                           turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
-                          model: Optional[str] = None) -> Turn:
-        """主人在手机上接着电脑上的会话说一句：另开一件事，在那个会话的目录里用它的会话编号跑。
+                          model: Optional[str] = None, task: Optional[str] = None,
+                          reply: Optional[str] = None) -> Turn:
+        """接着电脑上的会话做一轮：另开一件事，在那个会话的目录里用它的会话编号跑。
 
-        会话不归 Runtime：不记进会话表，电脑那边照常观察，回复也会出现在那个会话里；主人之后
-        还能回到电脑上接着聊。电脑上这一轮还在跑时不接，免得两边同时改一个会话。
+        主人点名让帮手接着做时 task 就是主人的原话；小幽判断要接着做时 task 是她交代的话，
+        reply 是她先跟主人说的。会话不归 Runtime：不记进会话表，电脑那边照常观察，回复也会
+        出现在那个会话里；主人之后还能回到电脑上接着聊。电脑上这一轮还在跑时不接，免得两边
+        同时改一个会话。
         """
         agent = self._desktop_agent(desktop)
         if agent is None:
             raise AgentError("这台 Runtime 上没有能接 %s 会话的代理" % (desktop.get("agent") or "这个"))
+        if desktop.get("source") == "external":
+            raise AgentError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
         session, where = desktop.get("session_id"), desktop.get("desktop_cwd")
         if not session or not where:
             raise AgentError("这个电脑会话还没同步到会话编号和目录，过几秒再试")
         if desktop.get("desktop_status") in ("running", "waiting") and not desktop.get("stale"):
             raise AgentError("电脑上这一轮还在跑，等它停下再发")
         name = desktop.get("title") or "电脑上的会话"
-        reply = "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
+        reply = reply or "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
         card = self._record.task_open(conversation, "接着：" + name, "working", agent.name)
         self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff",
-                           brief=reply, mood="busy", borrowed_session=session,
-                           borrowed_cwd=where, desktop_card=desktop["id"])
+                           brief=clip(reply, self._config.brief_max_chars), mood="busy",
+                           borrowed_session=session, borrowed_cwd=where, desktop_card=desktop["id"])
         self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
-        self._launch(card["id"], agent, said, conversation, hop, effort, model)
-        return Turn(reply, reply, "busy", agent.name, card["id"], True)
+        self._launch(card["id"], agent, task or said, conversation, hop, effort, model)
+        return Turn(reply, clip(reply, self._config.brief_max_chars), "busy", agent.name,
+                    card["id"], True)
 
     # ---- 没指定：她自己接话 ----
 
@@ -698,7 +758,8 @@ class Xiaoyou:
         system = lane_prompt(self._config.persona, self._config.brief_max_chars, available,
                              listed, focus["id"] if focus is not None else None, now, pinned,
                              self._usage.notes(),
-                             any(self._usage.account(agent.name) for agent in available))
+                             any(self._usage.account(agent.name) for agent in available),
+                             focus if focus is not None and focus.get("monitoring_only") else None)
         schema = lane_schema(available)
         stream = self._streamer(lead.name, say)
         outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True,
@@ -723,22 +784,34 @@ class Xiaoyou:
             mood, brief = "oops", None
         kind = plan["type"]
         target: Optional[Dict[str, Any]] = plan["card"]
+        if target is not None and target.get("mesh_origin"):
+            # 别的 Runtime 的事（包括那台电脑上的会话）：这里只有副本。补充、接着做、取消交给那台；
+            # 这句话和回答记在这里另开的一张卡上，不写进副本（副本的内容只由那台决定）。
+            if kind in ("amend", "desktop") and self.mesh is not None:
+                self.mesh.amend(target, plan["task"], continue_desktop=bool(target.get("monitoring_only")))
+            elif kind == "cancel" and self.mesh is not None:
+                self.mesh.cancel(target["id"])
+            if kind in ("amend", "desktop", "cancel"):
+                kind = "none"
+            target = None
+        if kind == "desktop":
+            # 她判断要电脑上的那个会话接着干活：照主人点名时一样，另开一件接着那个会话做。
+            try:
+                return self._continue_desktop(target, text, conversation, turn_id, hop, say,
+                                              plan.get("effort") or effort,
+                                              plan.get("model") or model, plan["task"], reply)
+            except AgentError as error:
+                kind, reply, mood, brief = "none", "电脑上的会话这次接不了：%s" % error, "oops", None
+        if target is not None and target.get("monitoring_only"):
+            # 会话不归 Runtime：她的回答另记一件，不写进它。_plan 只给电脑会话 desktop（上面已经
+            # 处理了）或 none，所以这里不会留下一个没有目标的补充。
+            target = None
         if not reply:
             if kind == "none":
                 raise AgentError("%s 返回了空的回复" % lead.name)
             reply = {"start": "交给 %s 了", "amend": "好，告诉 %s 了",
                      "cancel": "好，这件事不做了%s"}[kind] % (
                          plan.get("agent") or (target or {}).get("agent") or "")
-        if target is not None and target.get("mesh_origin"):
-            # 别的 Runtime 的事：这里只有副本。补充、取消交给那台做；这句话和回答记在这里
-            # 另开的一张卡上，不写进副本（副本的内容只由那台决定）。
-            if kind == "amend" and self.mesh is not None:
-                self.mesh.amend(target, plan["task"])
-            elif kind == "cancel" and self.mesh is not None:
-                self.mesh.cancel(target["id"])
-            if kind in ("amend", "cancel"):
-                kind = "none"
-            target = None
         started = False
         worker = lead.name
         if kind == "none":
@@ -807,7 +880,9 @@ class Xiaoyou:
         target: Optional[Dict[str, Any]] = None
         if wanted and wanted != "new":
             target = self._cards.get(wanted)
-            if target is None or target["conversation"] != conversation:
+            # 主人正看着的电脑上的会话不在这个对话里，也能指它。
+            if target is None or (target["conversation"] != conversation and not (
+                    focus is not None and target["id"] == focus["id"])):
                 return None, "没有编号是 %s 的事" % clip(wanted, 20)
         elif kind in ("amend", "cancel") or (pinned and not (wanted == "new" and kind == "start")):
             # 没说是哪件：主人正看着的那件就是。主人在一件事里面说的话也归到它，
@@ -823,6 +898,18 @@ class Xiaoyou:
         names = [agent.name for agent in available]
         task = action.get("task") if isinstance(action.get("task"), str) else ""
         task = task.strip()[:MAX_TASK_CHARS]
+        if target is not None and target.get("monitoring_only"):
+            # 电脑上的会话：只能让它接着做（amend / start 都是），停要在电脑上停。
+            if kind == "cancel":
+                return None, "%s 是电脑上的会话，只能在电脑上停；要说别的就把 card 写 new" % target["id"]
+            if kind in ("amend", "start"):
+                if not task:
+                    return None, "%s 要在 task 里写清让电脑上的会话接着做什么" % kind
+                if self._desktop_agent(target) is None and not target.get("mesh_origin"):
+                    # 别的 Runtime 的会话由那台去接，这台有没有能接的帮手无所谓。
+                    return None, "这台 Runtime 上没有能接 %s 会话的帮手" % (target.get("agent") or "这个")
+                plan.update(type="desktop", task=task)
+            return plan, None
         if kind == "cancel":
             if target["state"] not in ACTIVE:
                 return None, "%s 这件事已经不在做了，没有可取消的" % target["id"]
