@@ -109,8 +109,13 @@ class DesktopSync:
                  projects: Optional[List[Path]] = None,
                  owned: Callable[[], Set[str]] = lambda: set(),
                  approvals: Optional[Approvals] = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 content_entries: int = MAX_CONTENT_ENTRIES, content_bytes: int = MAX_CONTENT_BYTES,
+                 read_bytes: int = MAX_READ_BYTES):
         home = home or Path.home()
+        # 每个会话留多少可见内容、从多大的转录文件末尾读起。手机卡片用默认的小窗口；
+        # 导出给别的电脑看的完整记录（desktop_history.py）用大一些的。
+        self.content_entries, self.content_bytes, self.read_bytes = content_entries, content_bytes, read_bytes
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
         # 观察到的会话经记录中心写（record.py）；self.cards 只用来读。
         self.record = Record(cards)
@@ -208,13 +213,13 @@ class DesktopSync:
         else:
             session.entries.append(entry)
         session.entries.sort(key=lambda item: item["at"])
-        if len(session.entries) > MAX_CONTENT_ENTRIES:
-            del session.entries[:-MAX_CONTENT_ENTRIES]
+        if len(session.entries) > self.content_entries:
+            del session.entries[:-self.content_entries]
             session.content_truncated = True
         # Independent byte bound keeps initial feeds and disk snapshots bounded,
         # including Chinese text. Always retain the latest visible message.
         while len(session.entries) > 1 and sum(
-                len(item["text"].encode("utf-8")) for item in session.entries) > MAX_CONTENT_BYTES:
+                len(item["text"].encode("utf-8")) for item in session.entries) > self.content_bytes:
             del session.entries[0]
             session.content_truncated = True
         if len(raw) > MAX_MESSAGE_CHARS:
@@ -374,8 +379,8 @@ class DesktopSync:
                     if len(line) > MAX_LINE_BYTES or not line.endswith(b"\n"):
                         break
                     self._line(cursor, line, stat.st_mtime, begin)
-                if stat.st_size > MAX_READ_BYTES:
-                    handle.seek(stat.st_size - MAX_READ_BYTES)
+                if stat.st_size > self.read_bytes:
+                    handle.seek(stat.st_size - self.read_bytes)
                     handle.readline(MAX_LINE_BYTES + 1)  # discard partial first record
                     if cursor.session:
                         cursor.session.content_truncated = True
@@ -383,7 +388,7 @@ class DesktopSync:
                     handle.seek(0)
                 cursor.offset = handle.tell()
             handle.seek(cursor.offset)
-            budget = MAX_READ_BYTES
+            budget = self.read_bytes
             while budget > 0:
                 begin = handle.tell()
                 line = handle.readline(min(MAX_LINE_BYTES + 1, budget))

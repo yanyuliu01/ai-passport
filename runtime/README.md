@@ -153,6 +153,11 @@ cd runtime
 python3 -m xiaoyou_runtime --config config.json --desktop-sync
 ```
 
+To keep it on however the runtime is started (a keepalive script, login items,
+a service manager), set it in the configuration instead (since 0.10.0):
+`"desktop_sync": true`, or `"desktop_sync": {"enabled": true, "projects": [...],
+"codex_dir": "...", "claude_dir": "..."}`. Command-line options take precedence.
+
 The observer checks changes every two seconds and discovers new transcript files
 every ten seconds. It reads the newest 32 local transcript files changed in the
 last 24 hours, under `~/.codex/sessions` and `~/.claude/projects`. Subagents and
@@ -209,12 +214,18 @@ desktop `reply` to 480 bytes, within the device's shared 4 KiB text pool. Firmwa
 that already supports desktop cards needs no new flash for content sync.
 
 A desktop conversation whose turn has stopped can be continued from the phone on
-its page (since 0.8.1): the runtime opens a new task, titled after that conversation, and runs one turn in that
+its page (since 0.8.1). Since 0.10.1, what the owner says on that page goes to
+Xiaoyou first: she sees the session's recent content and answers questions about it
+(explain, translate, summarize) herself, filing her answer on a new card. The
+session is continued only when the owner names the agent that can take it over
+(`agent` in the request, or its name in the text), or when Xiaoyou decides the
+owner wants it to keep working (her `amend` on that card). Continuing opens a new
+task, titled after that conversation, and runs one turn in that
 session's directory with its session id (Claude sessions go to a `claude_code`
 agent, Codex sessions to a `codex` agent), without Xiaoyou's persona. The session is
 not recorded as the runtime's own, so desktop observation continues and the owner
-can go back to the computer. It is refused while the turn on the computer is still
-running (`running`/`waiting` and not `stale`). Stopping stays in the desktop app. A live permission request can be answered separately from the phone
+can go back to the computer. Continuing is refused while the turn on the computer is still
+running (`running`/`waiting` and not `stale`); asking Xiaoyou about it is not. Stopping stays in the desktop app. A live permission request can be answered separately from the phone
 when the optional approval bridge below is installed and trusted; a status signal
 or notification without that decision channel still requires desktop confirmation.
 Ending a response means this turn ended, not that the whole project is complete.
@@ -235,6 +246,10 @@ directories from this Runtime configuration. The common schema includes source,
 actor, task/card/session ID, original message timestamps, state, visible text,
 attachments, and whether content is a recent fragment. Other clients can consume
 the JSON output without depending on either agent's transcript format.
+Since 0.9.1 the Runtime dialogue is read like the model context: a turn stored as
+message ids takes its text from the message log (`state/cards.log.jsonl`), a turn
+the log no longer has is left out, and a turn already shown on a task card is not
+repeated.
 
 From the repository root, query the retained history without calling a model:
 
@@ -1052,7 +1067,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. Since 0.7.0, `messages=1` adds `messages`: the message records of this conversation with a sequence above `after` (the same sequence as cards, including queued messages and replies still being written), so another phone sees what was just said; without it the response is unchanged. `epoch` identifies the record set: when it differs from the one last seen, the records were replaced and the client must resync from 0. |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}` (since 0.8.0): the runtime's fixed id, the record set id, the sync protocol version and capabilities. See the [unified message model](../docs/development/unified-message-model.md). |
-| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. Since 0.8.2 a desktop session that finished its turn has `state` `turn_ended` here (`/v1/feed` and the card still say `done`). Since 0.9.0 `approvals` are the approval changes with a sequence above `after`, each with `status` (`pending`, `allowed`, `denied`, `withdrawn`) and `seq`, answered ones with `by` (`phone`, `computer`) and withdrawn ones with `reason`; the response also carries `subject_id` (the id of Xiaoyou as one subject, kept apart from `runtime_id`). `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
+| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>&states=unavailable` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. Since 0.8.2 a desktop session that finished its turn has `state` `turn_ended` here (`/v1/feed` and the card still say `done`). Since 0.9.0 `approvals` are the approval changes with a sequence above `after`, each with `status` (`pending`, `allowed`, `denied`, `withdrawn`) and `seq`, answered ones with `by` (`phone`, `computer`) and withdrawn ones with `reason`; the response also carries `subject_id` (the id of Xiaoyou as one subject, kept apart from `runtime_id`). `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. Since 0.9.1 a client that sends `states=unavailable` gets `state` `unavailable` for an observed or reported session that has not updated for a while and has not ended (its state cannot be seen now; it is not finished); other clients keep getting the card's state with `stale: true`, as before. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
 | `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
 | `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
@@ -1331,6 +1346,91 @@ belongs on that computer is then handed over by Xiaoyou, or sent there when the
 owner names it, and the transcript stays on the main runtime. A message that
 another runtime has already passed on is not passed on again, so two runtimes
 that list each other do not bounce it back and forth.
+
+### The Xiaoyou mesh: every runtime has everything (since 0.10.0)
+
+Both arrangements above depend on the phone. With the mesh, the runtimes sync
+with each other directly, so the runtime you start anywhere, and whichever one
+the phone happens to reach, holds the same conversation, tasks, observed desktop
+sessions and approvals. Give every runtime of the same owner the same secret
+and at least one address of another member:
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "peers": ["https://home.tail1234.ts.net"],
+  "advertise": ["https://laptop.tail1234.ts.net"]
+}
+```
+
+- `secret` (or `secret_file`, or `XIAOYOU_MESH_SECRET`): at least 16 characters,
+  identical on every member. Without it the runtime does not join. Xiaoyou's
+  `subject_id` is derived from it, so all members report the same subject.
+- `peers` (or `XIAOYOU_MESH_PEERS`, comma separated): where to look first. One
+  reachable member is enough; members tell each other about the rest.
+- `advertise` (or `XIAOYOU_MESH_ADVERTISE`): how others reach this runtime.
+  When omitted it is derived from `server.host`; a runtime that only listens on
+  `127.0.0.1` advertises nothing and still takes part by connecting out, pushing
+  its records and pulling the others' (useful in a cloud sandbox or behind NAT).
+
+The exchange endpoint `POST /v1/mesh/exchange` takes the mesh secret, not the
+phone token; `GET /v1/mesh` (phone token) lists the members and when each was
+last reached. Members long-poll each other, so a change usually arrives within
+a second.
+
+What each member sees: another runtime's task is a local card (`cN`, with
+`mesh_origin`, `mesh_id` and `origin_name`), its messages keep their ids with the
+origin's first 12 hex digits in front, and its approvals appear like local ones.
+Records are only ever changed by the runtime that made them, so there are no
+write conflicts; records reach members that cannot reach their origin through
+the others. Xiaoyou on every member is told what was said on the others before
+she answers next.
+
+What you can do from any member: talking inside another runtime's task,
+cancelling it and answering its approvals are sent to that runtime as commands
+and done there (a sentence keeps the same id on both sides, so it shows once).
+Xiaoyou can also hand work to a helper on another runtime: those helpers are
+listed as `<helper>@<runtime name>`, for example `@codex@Mac check the logs`. The other
+runtime's card for that work records `delegated_from`, and progress and the result
+come back to the card here. A member that has not been reached for five minutes
+is offline: its unfinished tasks show as `unavailable`, its helpers are no longer
+offered, and a sentence for it is refused with the reason instead of being lost.
+Commands that are not delivered within ten minutes expire.
+
+Not shared: subscription quota (`/v1/usage`), firmware and app releases, and
+attachment files (an attachment of another runtime's task is listed but its
+content stays on that runtime).
+
+**Settings, folders and desktop histories (since 0.11.0).** Three more things
+travel as mesh records, so a computer that was offline catches up when it joins
+again:
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "share": {
+    "env": ["DEEPSEEK_API_KEY"],
+    "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
+  }
+}
+```
+
+- `share.env`: only the names listed here are shared, none by default. The value
+  lives in `~/.config/xiaoyou/shared/<NAME>` (readable only by you; seeded from the
+  runtime's environment the first time) and agents read it through `env_files`,
+  for example `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`.
+  A runtime that does not list a name never writes it.
+- `share.folders`: a name mapped to a folder on this computer; the same name can
+  point to a different path on each computer (Claude Code's memory folder differs
+  by user name and OS). Text files up to 512 KB, up to 300 per folder.
+- For both, the latest write wins (ties by runtime id) and deletions follow. A
+  folder whose root is missing is not synced, so it cannot erase files elsewhere.
+- Desktop histories: with `desktop_sync` on, every runtime exports the full visible
+  text of its recent Claude Code and Codex sessions (up to 500 entries / 512 KB per
+  session, tool output, reasoning and credential-like text removed) to
+  `state/history/`. Other members keep a read-only copy per computer in
+  `state/mesh/history/<computer>/`, and the shared-history hook tells desktop agents
+  where those files are when a session starts.
 
 ## Voice
 

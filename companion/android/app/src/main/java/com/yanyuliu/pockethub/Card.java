@@ -208,6 +208,10 @@ final class Card {
         // “本轮结束”，所以当 done 处理，另外记下真实状态。
         boolean turnEnded = state.equals("turn_ended");
         if (turnEnded) state = "done";
+        // unavailable：电脑会话或别处上报的会话很久没更新，现在看不到状态（不是做完了）。
+        // 界面一直把这种卡显示成“状态未知”，所以当 unknown 处理，并记成过时。
+        boolean unavailable = state.equals("unavailable");
+        if (unavailable) state = "unknown";
         String mood = Json.string(raw, "mood");
         Map<String, Object> cost = raw.get("cost") instanceof Map ? Json.object(raw.get("cost"))
                 : null;
@@ -224,7 +228,7 @@ final class Card {
                 Json.string(raw, "source"), Json.string(raw, "project"),
                 Json.string(raw, "session_id"), Json.flag(raw, "monitoring_only"),
                 Json.string(raw, "desktop_status"), Json.number(raw, "observed_at"),
-                Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
+                unavailable || Json.flag(raw, "stale"), Json.string(raw, "content_scope"),
                 Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
                 Json.flag(raw, "title_truncated"), allAttachments(raw, entries));
         card.resultReady = Json.flag(raw, "result_ready");

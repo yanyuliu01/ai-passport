@@ -1132,6 +1132,16 @@ class CodexAgentTests(TempDirCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
 
+    def test_env_and_env_files_reach_codex_like_claude_code(self):
+        # Without them Codex cannot reach OpenAI behind a local proxy (the owner's Windows machine).
+        (self.folder / "key.txt").write_text("sk-file\n", encoding="utf-8")
+        loaded = config_module.load(write_config(self.folder, agents={"codex": {
+            "type": "codex", "command": ["codex"], "env": {"HTTPS_PROXY": "http://127.0.0.1:7897"},
+            "env_files": {"OPENAI_API_KEY": "key.txt"}}}), {})
+        env = agents_module.create(loaded.agents[0])._env()
+        self.assertEqual(("http://127.0.0.1:7897", "sk-file"), (env["HTTPS_PROXY"], env["OPENAI_API_KEY"]))
+        self.assertIsNone(self.agent._env())
+
     def test_a_task_runs_through_codex_exec(self):
         outcome = self.agent.run(Job("review -- $(x)"))
         # The last message Codex wrote to the -o file wins over the event stream.

@@ -85,6 +85,16 @@ class UnifiedSyncTests(TempDirCase):
         fed = next(item for item in service.feed("default", 0)["cards"] if item["id"] == card["id"])
         self.assertEqual("done", fed["state"])
         self.assertEqual("done", xiaoyou.cards.get(card["id"])["state"])
+        # A session whose state can no longer be seen is unavailable in sync, unknown on the feed.
+        lost = xiaoyou.cards.open(CONVERSATION, "看不到的会话", "unknown", "codex")
+        xiaoyou.cards.update(lost["id"], state="unknown", monitoring_only=True, source="desktop",
+                             desktop_status="unknown", session_id="s2", stale=True)
+        self.assertEqual("unavailable", next(item for item in service.sync("default", 0, states=["unavailable"])["tasks"]
+                                             if item["id"] == lost["id"])["state"])
+        self.assertEqual("unknown", next(item for item in service.sync("default", 0)["tasks"]
+                                         if item["id"] == lost["id"])["state"])
+        self.assertEqual("unknown", next(item for item in service.feed("default", 0)["cards"]
+                                         if item["id"] == lost["id"])["state"])
         # A task the runtime itself finished is simply done.
         own = xiaoyou.cards.open("default", "自己的事", "done", "codex")
         self.assertEqual("done", next(item for item in service.sync("default", 0)["tasks"]

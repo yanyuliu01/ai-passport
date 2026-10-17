@@ -24,13 +24,25 @@ final class ApprovalMonitor {
         Executors.newSingleThreadScheduledExecutor().scheduleWithFixedDelay(() -> reconcile(app), 0, 3, TimeUnit.SECONDS);
     }
 
+    /** 连续失败的地址：同一组里有别的就换别的盯。 */
+    private static final Map<String, Integer> failing = new java.util.concurrent.ConcurrentHashMap<>();
+
     static void reconcile(Context context) {
         List<RuntimeClient.Target> targets = RuntimeClient.targets(context);
+        RuntimeClient.Target selected = RuntimeClient.selected(context);
         synchronized (ApprovalMonitor.class) {
         if (app == null) { start(context); return; }
-        Set<String> registered = new HashSet<>();
+        // 每组只盯一个地址（同一个小幽网络、同一台 Runtime 的几个地址是一组）：同一个授权只出现一次。
+        // 优先现在选中的那个，其次没在连续失败的，再其次排在前面的。
+        Map<String, RuntimeClient.Target> chosen = new java.util.LinkedHashMap<>();
         for (int index = 0; index < Math.min(targets.size(), RuntimeClient.MAX_TARGETS); index++) {
             RuntimeClient.Target target = targets.get(index);
+            String group = RuntimeClient.groupKey(context, target);
+            RuntimeClient.Target best = chosen.get(group);
+            if (best == null || better(target, best, selected)) chosen.put(group, target);
+        }
+        Set<String> registered = new HashSet<>();
+        for (RuntimeClient.Target target : chosen.values()) {
             registered.add(target.url);
             Subscription current = watching.get(target.url);
             if (current != null && !current.target.token.equals(target.token)) { current.stopSubscription(); watching.remove(target.url); current = null; }
@@ -40,6 +52,15 @@ final class ApprovalMonitor {
         }
         for (String url : new ArrayList<>(watching.keySet())) if (!registered.contains(url)) { watching.remove(url).stopSubscription(); HubStore.get().dropApprovalRuntime(url); }
         }
+    }
+
+    private static boolean better(RuntimeClient.Target candidate, RuntimeClient.Target current,
+                                  RuntimeClient.Target selected) {
+        boolean candidateDown = failing.getOrDefault(candidate.url, 0) >= 2;
+        boolean currentDown = failing.getOrDefault(current.url, 0) >= 2;
+        if (candidateDown != currentDown) return currentDown;
+        if (selected != null && candidate.url.equals(selected.url)) return true;
+        return false;
     }
 
     private static final class Subscription extends Thread {
@@ -54,9 +75,15 @@ final class ApprovalMonitor {
 
         @Override public void run() {
             int failures = 0;
+            boolean known = false;
             while (!stopped) {
                 RuntimeClient.Target origin = target;
                 try {
+                    if (!known) {
+                        // 先问一次它是谁（属于哪台 Runtime、哪个小幽网络），好按组只盯一个。
+                        RuntimeClient.learn(app, origin);
+                        known = true;
+                    }
                     connection = (HttpURLConnection) new URL(origin.url + "/v1/feed?after=" + after + "&wait=50").openConnection();
                     connection.setInstanceFollowRedirects(false);
                     connection.setRequestProperty("Authorization", "Bearer " + origin.token);
@@ -77,9 +104,11 @@ final class ApprovalMonitor {
                     }
                     HubStore.get().applyApprovals(origin.url, pending);
                     failures = 0;
+                    failing.remove(origin.url);
                 } catch (Exception failure) {
                     if (!stopped) {
                         HubStore.get().dropApprovalRuntime(origin.url);
+                        failing.put(origin.url, failures + 1);
                         after = 0;
                         try { Thread.sleep(Math.min(30000, 2000L << Math.min(failures++, 4))); }
                         catch (InterruptedException interrupted) { if (stopped) break; }

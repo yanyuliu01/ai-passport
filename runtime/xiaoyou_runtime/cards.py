@@ -94,7 +94,9 @@ class Cards:
         if self._log.max_seq() > self._seq:
             self._seq = self._log.max_seq()
             self._reserved = self._seq
-        interrupted = [card for card in self._cards.values() if card["state"] in ACTIVE]
+        # 别的 Runtime 的事（副本）不归这台管：它的状态等那台再报，不在这里标成没做完。
+        interrupted = [card for card in self._cards.values()
+                       if card["state"] in ACTIVE and not card.get("mesh_origin")]
         for card in interrupted:
             self._seq += 1
             if card.get("monitoring_only"):
@@ -115,6 +117,8 @@ class Cards:
         """启动时：卡上的副本以日志为准；日志里还没有的（旧版本的卡）补进日志。"""
         changed = False
         for card in self._cards.values():
+            if card.get("mesh_origin"):
+                continue  # 副本的消息由 mesh.py 原样写进日志，不从卡上的条目反推
             for entry in card["entries"]:
                 record = self._log.get(entry["id"]) if entry.get("id") else None
                 if record is not None and (record["text"] != entry["text"]
@@ -204,7 +208,23 @@ class Cards:
             "result_ready": card.get("result_ready") is True,
             "summary_partial": text("summary_partial"),
             "run_id": text("run_id"),
+            **Cards._mesh_fields(card),
         }
+
+    @staticmethod
+    def _mesh_fields(card: Dict[str, Any]) -> Dict[str, Any]:
+        """小幽网络（mesh.py）留在卡上的字段：别的 Runtime 的事在这里的副本记着它从哪来，
+        转给别的 Runtime 做的事记着交给了谁、替谁做。没有的不带。"""
+        kept: Dict[str, Any] = {}
+        for key in ("mesh_origin", "mesh_epoch", "mesh_id", "origin_name"):
+            if isinstance(card.get(key), str) and card[key]:
+                kept[key] = card[key]
+        for key in ("delegated_from", "delegated_to"):
+            value = card.get(key)
+            if isinstance(value, dict) and isinstance(value.get("runtime"), str):
+                kept[key] = {name: item for name, item in value.items()
+                             if name in ("runtime", "card", "name") and isinstance(item, str)}
+        return kept
 
     @staticmethod
     def _copy(card: Dict[str, Any]) -> Dict[str, Any]:
@@ -278,6 +298,14 @@ class Cards:
             self._log.request(message)
             self._changed.notify_all()
 
+    def replicate_message(self, record: Dict[str, Any]) -> bool:
+        """别的 Runtime 的一条消息在这里的副本（见 MessageLog.replicate）；变了返回 True。"""
+        with self._changed:
+            changed = self._log.replicate(record)
+            if changed:
+                self._changed.notify_all()
+            return changed
+
     def request_changed(self, message: Dict[str, Any], revise: bool = True) -> None:
         """修订号加一（revise）、取序号、写进日志、叫醒等待的人：一把锁里做完（见 record.py）。"""
         with self._changed:
@@ -288,21 +316,66 @@ class Cards:
             self._changed.notify_all()
 
     @staticmethod
-    def task_view(card: Dict[str, Any]) -> Dict[str, Any]:
+    def task_view(card: Dict[str, Any], unavailable: bool = True) -> Dict[str, Any]:
         """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。
 
         电脑上的会话说完一轮（desktop_status 是 idle）在卡上记成 done，好让旧 App 照常显示；
-        同步接口里如实给 turn_ended：这一轮说完了，那件事本身没完。"""
+        同步接口里如实给 turn_ended：这一轮说完了，那件事本身没完。
+        观察的会话或外部上报很久没更新（stale）、还没结束的，卡上留着最后知道的状态（或 unknown），
+        同步接口里给 unavailable：现在看不到它的状态，不是做完了。认得这个状态的客户端才给
+        （unavailable 为 False 时照旧给卡上的状态和 stale）。"""
         view = Cards._copy(card)
         view["members"] = [entry["id"] for entry in view.pop("entries")]
         if view.get("monitoring_only") and view.get("desktop_status") == "idle" and view.get("state") == "done":
             view["state"] = "turn_ended"
+        elif (unavailable and (view.get("monitoring_only") or view.get("mesh_origin"))
+              and view.get("stale") is True
+              and view.get("state") in ("working", "waiting", "talking", "unknown")):
+            # 别的 Runtime 的事很久没有消息（那台离线了）也一样：看不到，不是做完了。
+            view["state"] = "unavailable"
         return view
 
-    def sync_since(self, conversation: str, after: int) -> Any:
+    def replica(self, card_id: Optional[str], fields: Dict[str, Any],
+                entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """别的 Runtime 的一件事在这里的副本（mesh.py）：没有 card_id 就开一张新的本地卡。
+
+        字段和条目整段换成那台报来的样子；条目对应的消息已经由 mesh.py 原样写进日志
+        （MessageLog.replicate），这里不再从条目反推消息。"""
+        with self._changed:
+            card = self._cards.get(card_id) if card_id else None
+            if card is None:
+                now = time.time()
+                card = {"id": "c%d" % self._next, "conversation": "default", "title": "",
+                        "title_source": "task", "title_truncated": False, "state": "done",
+                        "agent": None, "created_at": now, "updated_at": now, "finished_at": None,
+                        "entries": [], "attachments": [], "brief": "", "mood": "idle",
+                        "progress": [], "started_at": None, "edits": 0, "approval": None,
+                        "queued": False, "effort": None, "model": None, "model_asked": None,
+                        "cost": None, "seq": 0}
+                self._next += 1
+                self._cards[card["id"]] = card
+            for key, value in fields.items():
+                if key not in ("id", "seq", "updated_at", "entries"):
+                    card[key] = value
+            card["entries"] = [dict(entry, attachments=clean_attachments(entry.get("attachments")))
+                               for entry in entries][-MAX_ENTRIES:]
+            self._prune()
+            snapshot = self._touch(card)
+        return self._tell(snapshot)
+
+    def own_since(self, after: int) -> Any:
+        """（现在的序号, 这台自己的事, 这台自己的消息）：序号比 after 大的，所有对话。
+        小幽网络把它们交给别的 Runtime（副本不算：那是别人的）。"""
+        with self._changed:
+            tasks = [self.task_view(card, unavailable=False) for card in self._cards.values()
+                     if card["seq"] > after and not card.get("mesh_origin")]
+            messages = self._log.own_since(after, self._seq)
+            return self._seq, tasks, messages
+
+    def sync_since(self, conversation: str, after: int, unavailable: bool = True) -> Any:
         """（现在的序号, 变了的事, 变了的消息, floor）：同一刻、同一把锁里取的，不会漏。"""
         with self._changed:
-            tasks = [self.task_view(card) for card in self._cards.values()
+            tasks = [self.task_view(card, unavailable) for card in self._cards.values()
                      if (card["conversation"] == conversation or card.get("monitoring_only"))
                      and card["seq"] > after]
             tasks.sort(key=lambda task: task["seq"])
@@ -322,7 +395,8 @@ class Cards:
 
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
         """调用时已经拿着锁：记下这张卡变了（连同它的消息），落盘，叫醒在等的人。"""
-        self._log.observe(card)
+        if not card.get("mesh_origin"):
+            self._log.observe(card)
         self._seq += 1
         card["seq"] = self._seq
         card["updated_at"] = time.time()
@@ -344,27 +418,40 @@ class Cards:
     def _prune(self) -> None:
         """调用时已经拿着锁：只丢已经结束的旧卡，还在做的不能丢；最近做完的
         MAX_HISTORY 件任务要留着，不被别的卡挤掉。"""
-        if len(self._cards) <= MAX_CARDS:
+        # 每台 Runtime 的事各算各的：网络里别的 Runtime 的副本不挤掉这台自己的卡。
+        groups: Dict[str, List[str]] = {}
+        for card_id, card in self._cards.items():
+            groups.setdefault(card.get("mesh_origin", ""), []).append(card_id)
+        for ids in groups.values():
+            self._prune_group(ids)
+
+    def _prune_group(self, ids: List[str]) -> None:
+        group = [self._cards[card_id] for card_id in ids]
+        if len(group) <= MAX_CARDS:
             return
-        finished = [card for card in self._cards.values()
+        finished = [card for card in group
                     if card["agent"] and card["state"] not in ACTIVE + ("unknown",)]
         finished.sort(key=lambda card: card.get("finished_at") or card["updated_at"],
                       reverse=True)
         protected = {card["id"] for card in finished[:MAX_HISTORY]}
-        observed = [card for card in self._cards.values()
+        observed = [card for card in group
                     if card.get("monitoring_only") and card["state"] == "unknown"]
         observed.sort(key=lambda card: card.get("observed_at", 0), reverse=True)
         protected.update(card["id"] for card in observed[:32])
-        for card_id in list(self._cards):
-            if len(self._cards) <= MAX_CARDS:
+        left = len(group)
+        for card in group:
+            if left <= MAX_CARDS:
                 break
-            card = self._cards[card_id]
-            if card["state"] in ACTIVE or card_id in protected:
+            if card["state"] in ACTIVE or card["id"] in protected:
                 continue
-            del self._cards[card_id]
+            del self._cards[card["id"]]
+            left -= 1
 
     def open(self, conversation: str, title: str, state: str = "done",
-             agent: Optional[str] = None, *, title_source: str = "request") -> Dict[str, Any]:
+             agent: Optional[str] = None, *, title_source: str = "request",
+             **extra: Any) -> Dict[str, Any]:
+        """开一张卡。extra 只收小幽网络的字段（delegated_from 这类），开卡时就带上，
+        别的 Runtime 第一次看到这张卡时就知道它是替谁做的。"""
         with self._changed:
             now = time.time()
             name = canonical_title(title, title_source)
@@ -377,7 +464,7 @@ class Cards:
                 "entries": [], "attachments": [], "brief": "", "mood": "idle",
                 "progress": [], "started_at": None, "edits": 0, "approval": None,
                 "queued": False, "effort": None, "model": None, "model_asked": None,
-                "cost": None, "seq": 0,
+                "cost": None, "seq": 0, **self._mesh_fields(extra),
             }
             self._next += 1
             self._cards[card["id"]] = card

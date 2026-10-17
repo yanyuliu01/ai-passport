@@ -71,8 +71,19 @@ class ReportsTest(TempDirCase):
         clock.return_value = 1000.0 + reports.STALE_SECONDS + 1
         board.sweep()
         self.assertTrue(self.xiaoyou.cards.get(card)["stale"])
+        # Not updated for a while: /v1/sync says unavailable (never finished); /v1/feed is unchanged.
+        def synced():
+            return next(task for task in self.service.sync("default", 0, states=["unavailable"])["tasks"]
+                        if task["id"] == card)
+        self.assertEqual("unavailable", synced()["state"])
+        # An app that did not declare the state keeps the last known state and the stale mark.
+        older = next(task for task in self.service.sync("default", 0)["tasks"] if task["id"] == card)
+        self.assertEqual(("working", True), (older["state"], older["stale"]))
+        self.assertEqual("working", next(item for item in self.service.feed("default", 0)["cards"]
+                                         if item["id"] == card)["state"])
         board.report({"origin": "codex-cloud", "session_id": "s", "state": "working"})
         self.assertFalse(self.xiaoyou.cards.get(card)["stale"])
+        self.assertEqual("working", synced()["state"])
         # A restarted runtime finds the same card again.
         self.assertEqual(card, reports.Reports(self.xiaoyou.cards).report(
             {"origin": "codex-cloud", "session_id": "s"})["card"])

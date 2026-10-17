@@ -140,6 +140,21 @@ class Config:
     base_dir: Path = Path(".")
     # 读配置时发现的、不妨碍启动但值得让人知道的事
     notices: List[str] = field(default_factory=list)
+    # 小幽网络（mesh.py）：同一个主人的几台 Runtime 共用的口令；None 表示这台不加入。
+    mesh_secret: Optional[str] = None
+    # 先去找的几台（地址）；找到一台就能从它那里知道其余的。
+    mesh_peers: List[str] = field(default_factory=list)
+    # 告诉别的 Runtime 从哪里连这一台；空的时候按 server.host 推一个，只监听本机时为空（只出不进）。
+    mesh_advertise: List[str] = field(default_factory=list)
+    # 网络里共享的环境变量名（值在 ~/.config/xiaoyou/shared/<名字>）和文件夹（名字 → 这台的路径）。
+    mesh_share_env: List[str] = field(default_factory=list)
+    mesh_share_folders: Dict[str, Path] = field(default_factory=dict)
+    # 把本机 Claude Code、Codex 的会话状态同步到手机和设备（--desktop-sync 也能打开）。
+    # 写在配置里，用什么方式拉起 Runtime（守护脚本、开机自启、手动）都一样。
+    desktop_sync: bool = False
+    desktop_projects: List[Path] = field(default_factory=list)
+    desktop_codex_dir: Optional[Path] = None
+    desktop_claude_dir: Optional[Path] = None
 
     def agent(self, name: str) -> Optional[AgentSpec]:
         for spec in self.agents:
@@ -355,7 +370,11 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         socket_path = _optional_string(raw.get("app_server_socket"), where + ".app_server_socket")
         if socket_path and mode != "app_server":
             raise ConfigError("%s.app_server_socket 需要 mode=app_server" % where)
+        # 代理、接口地址这类环境变量，和 claude_code、dsh 一样可以写（以前写了会被悄悄丢掉）。
+        codex_env = _env(raw.get("env", {}), where + ".env")
+        codex_env_files = _env_files(raw.get("env_files", {}), codex_env, base, where + ".env_files")
         return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
+                         env=codex_env, env_files=codex_env_files,
                          app_server_socket=_path(socket_path, base) if socket_path else None,
                          config_dir=_path(codex_home, base) if codex_home else None,
                          **_tiers(raw, kind, where, shared["model"], shared["extra_args"], False),
@@ -509,6 +528,60 @@ def tailscale_address(source: Any = None) -> str:
     return address
 
 
+def _mesh(raw: Dict[str, Any], env: Mapping[str, str], base: Path, host: str,
+          port: int) -> Tuple[Optional[str], List[str], List[str]]:
+    """小幽网络的设置：（口令，先去找的地址，告诉别人的地址）。没有口令就是不加入。"""
+    mesh = _expect(raw.get("mesh", {}), dict, "mesh")
+    secret = env.get("XIAOYOU_MESH_SECRET") or _optional_string(mesh.get("secret"), "mesh.secret")
+    secret_file = _optional_string(mesh.get("secret_file"), "mesh.secret_file")
+    if secret is None and secret_file is not None:
+        path = _path(secret_file, base)
+        try:
+            secret = path.read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise ConfigError("读不到 mesh.secret_file %s：%s" % (path, error))
+    if secret is not None and len(secret) < MIN_TOKEN_LENGTH:
+        raise ConfigError("mesh.secret 至少要 %d 位；同一个主人的每台 Runtime 写同一个" % MIN_TOKEN_LENGTH)
+
+    def urls(value: Any, where: str) -> List[str]:
+        items = value.split(",") if isinstance(value, str) else _strings(value, where)
+        cleaned = []
+        for item in items:
+            item = item.strip().rstrip("/")
+            if not item:
+                continue
+            if not item.startswith(("http://", "https://")):
+                raise ConfigError("%s 里的 %s 要写成 http:// 或 https:// 开头的地址" % (where, item))
+            cleaned.append(item)
+        return cleaned
+
+    peers = urls(env.get("XIAOYOU_MESH_PEERS") or mesh.get("peers", []), "mesh.peers")
+    advertise = urls(env.get("XIAOYOU_MESH_ADVERTISE") or mesh.get("advertise", []), "mesh.advertise")
+    if secret is None and (peers or advertise):
+        raise ConfigError("写了 mesh.peers / mesh.advertise 就要有 mesh.secret（或环境变量 XIAOYOU_MESH_SECRET）")
+    if secret is not None and not advertise and host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::", ""):
+        advertise = ["http://%s:%d" % ("[%s]" % host if ":" in host else host, port)]
+    return secret, peers, advertise
+
+
+def _mesh_share(raw: Dict[str, Any], base: Path) -> Tuple[List[str], Dict[str, Path]]:
+    """小幽网络里共享什么（mesh_share.py）：点名的环境变量，和按名字对上的文件夹。"""
+    share = _expect(_expect(raw.get("mesh", {}), dict, "mesh").get("share", {}), dict, "mesh.share")
+    names = _strings(share.get("env", []), "mesh.share.env")
+    for name in names:
+        if not ENV_NAME.match(name):
+            raise ConfigError("mesh.share.env 里的 %r 不像环境变量名" % name)
+    folders = _expect(share.get("folders", {}), dict, "mesh.share.folders")
+    paths: Dict[str, Path] = {}
+    for name, value in folders.items():
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", name):
+            raise ConfigError("mesh.share.folders 的名字 %r 只能用字母、数字和 _ . -" % name)
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError("mesh.share.folders.%s 应该是这台电脑上的一个目录" % name)
+        paths[name] = _path(value.strip(), base)
+    return names, paths
+
+
 def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     """读取配置文件。相对路径都相对于配置文件所在的目录。"""
     env = os.environ if env is None else env
@@ -552,6 +625,16 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         env.get("XIAOYOU_STATE_DIR") or _expect(raw.get("state_dir", "state"), str, "state_dir"),
         base,
     )
+    mesh_secret, mesh_peers, mesh_advertise = _mesh(raw, env, base, host, port)
+    mesh_share_env, mesh_share_folders = _mesh_share(raw, base)
+    # desktop_sync 可以只写 true，也可以写成 {"enabled", "projects", "codex_dir", "claude_dir"}。
+    desktop = raw.get("desktop_sync", {})
+    desktop = {"enabled": desktop} if isinstance(desktop, bool) else _expect(desktop, dict, "desktop_sync")
+    desktop_sync = _expect(desktop.get("enabled", False), bool, "desktop_sync.enabled")
+    desktop_projects = [_path(item, base) for item in
+                        _strings(desktop.get("projects", []), "desktop_sync.projects")]
+    desktop_codex_dir = _optional_string(desktop.get("codex_dir"), "desktop_sync.codex_dir")
+    desktop_claude_dir = _optional_string(desktop.get("claude_dir"), "desktop_sync.claude_dir")
 
     persona_file = _path(_expect(raw.get("persona_file", "persona.txt"), str, "persona_file"), base)
     try:
@@ -771,4 +854,13 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         usage_refresh_seconds=usage_refresh,
         base_dir=base,
         notices=notices,
+        mesh_secret=mesh_secret,
+        mesh_peers=mesh_peers,
+        mesh_advertise=mesh_advertise,
+        mesh_share_env=mesh_share_env,
+        mesh_share_folders=mesh_share_folders,
+        desktop_sync=desktop_sync,
+        desktop_projects=desktop_projects,
+        desktop_codex_dir=_path(desktop_codex_dir, base) if desktop_codex_dir else None,
+        desktop_claude_dir=_path(desktop_claude_dir, base) if desktop_claude_dir else None,
     )
