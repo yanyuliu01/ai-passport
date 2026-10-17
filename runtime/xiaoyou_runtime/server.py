@@ -16,8 +16,11 @@
                                         带 messages=1 时还给之后变过的消息（同一条序号）；
                                         epoch 变了说明换了一份记录，要从 0 重新拉
   GET  /v1/info                         runtime_id、epoch、同步协议版本和能力
-  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>&usage=<rev>
-                                        统一同步：变了的消息、事、授权（见统一消息结构说明）
+  GET  /v1/mesh                         小幽网络里有谁、多久前联系上（没加入时 enabled 为 false）
+  POST /v1/mesh/exchange                网络里别的 Runtime 交换记录（用网络口令，见 mesh.py）
+  GET  /v1/sync?conversation=&after=<序号>&epoch=&wait=<秒>&usage=<rev>&states=unavailable
+                                        统一同步：变了的消息、事、授权（见统一消息结构说明）；
+                                        states 声明客户端认得的新状态
   GET  /v1/cards?conversation=          最近的卡
   POST /v1/cards/<编号>/artifacts       {"artifacts":[{"path","name"?}], "entry_index"?} 登记本地产物
   GET  /v1/artifacts/<编号>/content     按附件编号取得已保存的文件快照
@@ -63,6 +66,7 @@ from .app_release import AppRelease, AppReleaseError, byte_range
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
+from .mesh import MAX_BODY_BYTES as MESH_BODY_BYTES, MeshError
 
 # 比这小的回答不值得压。
 GZIP_MIN_BYTES = 2048
@@ -381,6 +385,10 @@ def make_server(config: Config, service: Service,
                     return
                 self._send(200, {"cards": cards})
                 return
+            if parts == ["v1", "mesh"]:
+                mesh = getattr(service, "mesh", None)
+                self._send(200, mesh.status() if mesh is not None else {"peers": [], "enabled": False})
+                return
             if parts == ["v1", "info"]:
                 info = service.info()
                 info.update(name=config.name, version=__version__)
@@ -402,7 +410,8 @@ def make_server(config: Config, service: Service,
                     return
                 try:
                     body = service.sync(query.get("conversation", ["default"])[0], after,
-                                        query.get("epoch", [None])[0], asked[0], seen)
+                                        query.get("epoch", [None])[0], asked[0], seen,
+                                        query.get("states", [""])[0].split(","))
                 except RequestError as error:
                     self._fail(400, str(error))
                     return
@@ -481,9 +490,29 @@ def make_server(config: Config, service: Service,
                 return
             self._send(202, message)
 
+        def _mesh_exchange(self) -> None:
+            """小幽网络里别的 Runtime 来交换记录：用网络口令，不用手机的令牌。"""
+            mesh = getattr(service, "mesh", None)
+            if mesh is None:
+                self._fail(404, "这台不在小幽网络里")
+                return
+            if not mesh.authorized(self.headers.get("Authorization", "")):
+                self._fail(401, "网络口令不对")
+                return
+            ok, body = self._body(MESH_BODY_BYTES)
+            if not ok:
+                return
+            try:
+                self._send(200, mesh.exchange(body))
+            except MeshError as error:
+                self._fail(400, str(error))
+
         def do_POST(self) -> None:
             url = urlsplit(self.path)
             parts = [part for part in url.path.split("/") if part]
+            if parts == ["v1", "mesh", "exchange"]:
+                self._mesh_exchange()
+                return
             if not self._authorized():
                 return
             if parts == ["v1", "voice"]:

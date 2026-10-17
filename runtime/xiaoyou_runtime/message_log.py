@@ -209,6 +209,15 @@ class MessageLog:
                   or (include_desktop and record["conversation"] == DESKTOP_CONVERSATION))),
             key=lambda record: record["seq"])
 
+    def own_since(self, after: int, upto: int) -> List[Dict[str, Any]]:
+        """这台 Runtime 自己的消息（不含别的 Runtime 的副本），所有对话，按序号排。
+        转交给别的 Runtime 的占位（relay_to）也不算：那句话以那台的记录为准。"""
+        return sorted(
+            (self._copy(record) for record in self._messages.values()
+             if after < record["seq"] <= upto and not record.get("mesh_origin")
+             and not record.get("relay_to")),
+            key=lambda record: record["seq"])
+
     @staticmethod
     def _copy(record: Dict[str, Any]) -> Dict[str, Any]:
         copy = dict(record)
@@ -286,6 +295,8 @@ class MessageLog:
         text = message.get("text") or ""
         status = message["status"]
         you = self._messages.get(base + ":you")
+        if you is not None and you.get("mesh_origin"):
+            you = dict(you, status="final")  # 转交给别的 Runtime 的话：那台的记录为准
         if you is None:
             record = self._request_record(message, ":you")
             record.update(text=text, status="final" if text else (
@@ -298,6 +309,8 @@ class MessageLog:
             elif status == "failed" and you["status"] != "failed":
                 self._put(dict(you, status="failed"))
         reply = self._messages.get(base + ":reply")
+        if reply is not None and reply.get("mesh_origin"):
+            return  # 那台的回复已经到了，这里的占位不再改它
         partial = message.get("partial") or ""
         if status == "failed":
             wanted, words = "failed", message.get("error") or ""
@@ -325,10 +338,35 @@ class MessageLog:
         # 生成中的那段不落盘；状态变了才写。
         self._put(record, persist=reply is None or reply["status"] != wanted)
 
+    def replicate(self, record: Dict[str, Any]) -> bool:
+        """别的 Runtime 的一条消息（小幽网络，mesh.py）：编号、所属的事已经换成这里的，
+        mesh_origin 记着它是哪台的。原样记下，序号、修订号用这里的；没变就不记。
+
+        这里转交给那台的话（relay_to 是那台）先有一份占位，那台的那一条来了就替换它，
+        编号不变：手机上同一句话只出现一次。"""
+        current = self._messages.get(record["id"])
+        if current is not None and not current.get("mesh_origin") \
+                and current.get("relay_to") != record.get("mesh_origin"):
+            return False  # 这台自己的消息，不让别人改
+        wanted = dict(record)
+        wanted.pop("seq", None)
+        wanted.pop("rev", None)
+        wanted.setdefault("partial", "")
+        if current is not None and all(current.get(key) == value for key, value in wanted.items()) \
+                and not (set(current) - set(wanted) - {"seq", "rev", "relay_to"}):
+            return False
+        persist = current is None or any(current.get(key) != wanted.get(key)
+                                         for key in wanted if key != "partial")
+        wanted["rev"] = 0
+        self._put(wanted, persist=persist)
+        return True
+
     @staticmethod
     def _request_record(message: Dict[str, Any], suffix: str) -> Dict[str, Any]:
         you = suffix == ":you"
+        extra = {key: message[key] for key in ("relay_to", "delegated_from") if message.get(key)}
         return {
+            **extra,
             "rev": 0, "id": message["id"] + suffix, "conversation": message["conversation"],
             "task": message.get("card") if message.get("pin") else None,
             "scope": "task" if message.get("pin") else "main",

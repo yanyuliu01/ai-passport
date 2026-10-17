@@ -28,6 +28,7 @@ MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_INPUT_BYTES = 64 * 1024
 MAX_CONTEXT_CHARS = 6500
 MAX_DESKTOP_FILES = 32
+MAX_ELSEWHERE = 20
 EVENTS = ("SessionStart", "UserPromptSubmit")
 
 
@@ -97,6 +98,31 @@ def _project_file(path, project):
     return False
 
 
+def _final_texts(path):
+    """Final message texts by id from the message log, read only (the log is authoritative).
+
+    The last line of an id wins; a half-written line is skipped. Repairing the
+    file is left to the Runtime, which owns it.
+    """
+    texts = {}
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                    continue
+                if item.get("status", "final") == "final" and isinstance(item.get("text"), str):
+                    texts[item["id"]] = item["text"]
+                else:
+                    texts.pop(item["id"], None)
+    except (OSError, UnicodeError):
+        return {}
+    return texts
+
+
 def _attachments(items, state):
     result = []
     for item in items if isinstance(items, list) else []:
@@ -133,7 +159,7 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
     state = _path(config.get("state_dir", "state"), config_path.parent)
     raw = _json(state / "cards.json")
     cards = raw.get("cards", []) if isinstance(raw, dict) else []
-    tasks, owned, covered = {}, set(), set()
+    tasks, owned, covered, covered_ids = {}, set(), set(), set()
     sessions = _json(state / "sessions.json")
     if isinstance(sessions, dict):
         for agents in sessions.values():
@@ -174,16 +200,34 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
         tasks[key] = task
         covered.update((entry["role"], entry["at"], entry["text"]) for entry in entries
                        if not desktop)
-    dialogs = []
+        if not desktop:
+            covered_ids.update(item["id"] for item in card.get("entries", [])
+                               if isinstance(item, dict) and isinstance(item.get("id"), str))
+    # The model's conversation record keeps message ids and reads the text from the
+    # log (unified message model, step 4); only turns not in the log keep their text.
+    dialogs, logged = [], None
     transcript = _json(state / "transcript.json")
     for conversation, data in transcript.items() if isinstance(transcript, dict) else []:
         if not isinstance(data, dict):
             continue
-        for turn in data.get("turns", []):
+        for turn in data.get("turns", []) if isinstance(data.get("turns"), list) else []:
             if not isinstance(turn, dict):
                 continue
-            for role, field in (("user", "text"), ("assistant", "reply")):
-                entry = _entry(role, turn.get(field), turn.get("at"), "xiaoyou")
+            sides = []
+            for role, field, ref in (("user", "text", "you_ref"), ("assistant", "reply", "reply_ref")):
+                text, ref_id = turn.get(field), turn.get(ref)
+                if not isinstance(text, str) and isinstance(ref_id, str):
+                    if logged is None:
+                        logged = _final_texts(state / "cards.log.jsonl")
+                    text = logged.get(ref_id)
+                sides.append((role, text, ref_id if isinstance(ref_id, str) else ""))
+            # Like the model context: a turn whose text the log no longer has is left out.
+            # A turn already shown on a task card is left out whole, so a synthesized
+            # prompt is not kept without its answer.
+            if any(not isinstance(text, str) or (ref_id and ref_id in covered_ids) for _, text, ref_id in sides):
+                continue
+            for role, text, ref_id in sides:
+                entry = _entry(role, text, turn.get("at"), "xiaoyou")
                 if entry and (entry["role"], entry["at"], entry["text"]) not in covered:
                     dialogs.append(dict(entry, conversation=visible_text(conversation)[:200],
                                         source="runtime"))
@@ -251,7 +295,29 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
     dialogs.sort(key=lambda entry: entry["at"])
     return {"schema_version": 1, "project": str(project), "state_dir": str(state),
             "generated_at": now, "scope": "retained-visible-content",
-            "incomplete_sources": sorted(set(incomplete)), "tasks": tasks, "dialog": dialogs}
+            "incomplete_sources": sorted(set(incomplete)), "tasks": tasks, "dialog": dialogs,
+            "elsewhere": elsewhere(state)}
+
+
+def elsewhere(state, limit=MAX_ELSEWHERE):
+    """小幽网络里别的电脑的电脑会话完整记录（mesh_share.py 存在 state/mesh/history/<那台>/），
+    新的在前。只列出来，全文在文件里。"""
+    found = []
+    root = Path(state) / "mesh" / "history"
+    try:
+        for path in root.glob("*/*.md"):
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    first = handle.readline().strip()
+                found.append({"computer": path.parent.name.rsplit("-", 1)[0],
+                              "title": visible_text(first[2:] if first.startswith("# ") else first)[:200],
+                              "path": str(path), "updated_at": path.stat().st_mtime})
+            except (OSError, UnicodeError):
+                continue
+    except OSError:
+        return []
+    found.sort(key=lambda item: item["updated_at"], reverse=True)
+    return found[:limit]
 
 
 def _when(at):
@@ -312,6 +378,14 @@ def context(data, previous=None):
     if dialog and (previous is None or previous.get("dialog") != digest):
         lines.append("\nRecent Runtime conversation:\n" + "\n".join(
             "%s: %s" % (entry["actor"], entry["text"][:120]) for entry in dialog))
+    others = data.get("elsewhere") or []
+    digest = hashlib.sha256(json.dumps(others, sort_keys=True).encode()).hexdigest()
+    fingerprints["elsewhere"] = digest
+    if others and (previous is None or previous.get("elsewhere") != digest):
+        lines.append("\nConversations on the owner's other computers (full visible text in each file; "
+                     "read one when the owner refers to work done there):\n" + "\n".join(
+                         "- %s · %s · %s · %s" % (item["computer"], item["title"][:100], _when(item["updated_at"]),
+                                                  item["path"]) for item in others[:8]))
     if not lines:
         return "", fingerprints
     text = ("<xiaoyou-history-context>\nShared project history from Runtime, Codex and Claude Code.\n"

@@ -24,6 +24,7 @@ from .config import ConfigError, load
 from .desktop_sync import DesktopSync
 from . import desktop_handoff
 from .firmware import FirmwareStore
+from .mesh import Mesh
 from .server import make_server
 from .service import Service
 from .store import Store
@@ -257,20 +258,27 @@ def main(argv=None) -> int:
             print("注意：代理 %s 还用不了，交给它的事会失败：%s" % (agent.name, problem),
                   file=sys.stderr)
     service = Service(xiaoyou, store, recognizer)
+    # 小幽网络：配置里有 mesh.secret 就加入（同一个主人的几台 Runtime 互相同步，见 mesh.py）。
+    mesh = Mesh(config, service, xiaoyou) if config.mesh_secret else None
     try:
         server = make_server(config, service, FirmwareStore(config.state_dir))
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         service.close()
         return 1
+    if mesh is not None:
+        mesh.start()
+        print("已加入小幽网络：先去找 %s；告诉别人从 %s 连这台" % (
+            "、".join(config.mesh_peers) or "（没写，等别人来连）",
+            "、".join(config.mesh_advertise) or "（不对外，只往外连）"), file=sys.stderr)
     desktop = None
-    if args.desktop_sync:
-        desktop = DesktopSync(xiaoyou.cards, config.state_dir,
-                              codex_dir=args.desktop_codex_dir.expanduser()
-                              if args.desktop_codex_dir else None,
-                              claude_dir=args.desktop_claude_dir.expanduser()
-                              if args.desktop_claude_dir else None,
-                              projects=[Path(path) for path in args.desktop_project],
+    if args.desktop_sync or config.desktop_sync:
+        # 命令行写了的优先，没写的用配置里的。
+        codex_dir = args.desktop_codex_dir.expanduser() if args.desktop_codex_dir else config.desktop_codex_dir
+        claude_dir = args.desktop_claude_dir.expanduser() if args.desktop_claude_dir else config.desktop_claude_dir
+        projects = [Path(path) for path in args.desktop_project] or list(config.desktop_projects)
+        desktop = DesktopSync(xiaoyou.cards, config.state_dir, codex_dir=codex_dir,
+                              claude_dir=claude_dir, projects=projects,
                               owned=store.session_ids, approvals=xiaoyou.approvals)
         desktop.start()
         print("电脑会话同步已开启；审批 Hook 通过手机和设备回应", file=sys.stderr)
@@ -305,6 +313,8 @@ def main(argv=None) -> int:
             loopback.server_close()
         if desktop is not None:
             desktop.close()
+        if mesh is not None:
+            mesh.close()
         service.close()
     return 0
 

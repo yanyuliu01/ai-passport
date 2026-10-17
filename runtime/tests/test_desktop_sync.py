@@ -386,12 +386,16 @@ class DesktopTests(unittest.TestCase):
         self.append(path, [self.cevent("task_started")])
         sync.poll()
         card = service.cards("phone")[0]
-        with self.assertRaises(RequestError):
-            service.submit("continue", "phone", card=card["id"], pin=True)
+        # Talking about a running desktop session goes to Xiaoyou; it never joins that session.
+        message = service.get(service.submit("continue", "phone", card=card["id"], pin=True)["id"],
+                              wait=5)
+        self.assertEqual("done", message["status"])
+        self.assertNotEqual(card["id"], message["card"])
         with self.assertRaises(RequestError):
             service.cancel(card["id"])
         self.assertEqual(service.feed("phone")["cards"][0]["state"], "working")
-        self.assertEqual(store.session_ids(), set())
+        # Xiaoyou's own conversation session only; the desktop session is not taken over.
+        self.assertNotIn(card["session_id"], store.session_ids())
 
     def test_displaced_active_session_cannot_keep_running_badge(self):
         path = self.codex("older-running")

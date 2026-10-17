@@ -213,7 +213,7 @@ class Tasks:
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
                     system=system, schema=task.schema, hop=task.hop, control=control,
-                    effort=task.effort, model=task.model, cwd=task.cwd,
+                    effort=task.effort, model=task.model, cwd=task.cwd, card=task.card,
                 ))
             except AgentError as failure:
                 error = str(failure)

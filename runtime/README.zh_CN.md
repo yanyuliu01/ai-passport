@@ -120,6 +120,10 @@ cd runtime
 python3 -m xiaoyou_runtime --config config.json --desktop-sync
 ```
 
+想不管怎么拉起 Runtime（守护脚本、开机自启、服务管理器）都开着，就写在配置里（0.10.0 起）：
+`"desktop_sync": true`，或者 `"desktop_sync": {"enabled": true, "projects": [...], "codex_dir": "...",
+"claude_dir": "..."}`。命令行写了的优先。
+
 观察器每两秒检查变化，每十秒发现新记录文件。它读取 `~/.codex/sessions` 和
 `~/.claude/projects` 下最近 24 小时发生变化的最新 32 个本机会话记录文件；子代理和
 已经由这台 Runtime 管理的会话会被排除。要只观察指定项目，可以重复添加
@@ -162,10 +166,13 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 最近需求和回复：`said` 最多 159 个 UTF-8 字节，App 的电脑会话 `reply` 最多 480 字节，
 仍使用设备所有卡共用的 4 KiB 文本池。已经支持电脑卡片的固件不需要为内容同步重新刷写。
 
-电脑端会话停下（本轮结束）以后，可以从手机在会话页接着聊（0.8.1 起）：Runtime 另开一个「接着：……」
+电脑端会话停下（本轮结束）以后，可以从手机在会话页接着聊（0.8.1 起）。0.10.1 起，在会话页说的话先给
+小幽：她能看到这个会话最近的内容，解释、翻译、总结这类问题自己答，回答另记一张卡。只有主人点名能接这个
+会话的代理（请求里的 `agent`，或者话里说出它的名字），或者小幽判断主人要它接着干活（她对这张卡用
+`amend`）时，才接着那个会话做：Runtime 另开一个「接着：……」
 任务，在那个会话的目录里用它的会话编号跑一轮（Claude 会话交给 `claude_code` 类型的代理，Codex 会话
 交给 `codex` 类型的），不加小幽的人设。这个会话不记成 Runtime 自己的，电脑端照常观察，主人也能回到
-电脑上接着聊。电脑上这一轮还在跑（`running`/`waiting` 且不是 `stale`）时拒绝。停止仍在电脑端完成。安装并信任下面的可选
+电脑上接着聊。电脑上这一轮还在跑（`running`/`waiting` 且不是 `stale`）时不接着做，但可以问小幽。停止仍在电脑端完成。安装并信任下面的可选
 审批桥后，可以从手机单独回答有效的操作审批；只有状态信号、或者没有决策通道的通知，
 仍需要在电脑端确认。
 “本轮结束”只表示这次响应结束，不代表整个项目
@@ -182,6 +189,9 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 各自独立的 `config_dir`。统一结构保存来源、发言者、任务／卡片／会话编号、原始
 消息时间、状态、可见文字、附件，以及内容是否为近期片段。其他客户端可以直接消费
 JSON 输出，不依赖某个 Agent 的原始记录格式。
+0.9.1 起，Runtime 对话和给模型的上下文一样读：只存消息编号的一轮从消息日志
+（`state/cards.log.jsonl`）取文字，日志里已经没有的那轮不再拿出来，已经在任务卡上
+出现的一轮不重复给。
 
 在仓库根目录查询保留的历史，不调用模型：
 
@@ -831,7 +841,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/messages/<id>/stream?rev=<n>` | 经过鉴权的 `text/event-stream`，用一条持续连接推送消息快照。每段带相同消息 ID 与完整 `partial`/`rev`，结束状态关闭连接，注释维持心跳。消息记录用 `event_stream: true` 声明支持；连接失败后轮询相同 ID，不重新提交任务。旧 Runtime 继续使用长轮询。 |
 | `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。0.7.0 起：带 `messages=1` 时还多一项 `messages`，是这个对话里序号比 `after` 大的消息记录（和卡共用一条序号，包括还在排队、正在生成回复的），另一台手机能看到这边刚说的话；不带时和以前完全一样。返回里的 `epoch` 是这份记录的编号，和上次看到的不一样说明换了一份记录，也要从 0 重新同步。 |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}`（0.8.0 起）：这台 Runtime 的固定编号、这份记录的编号、同步协议版本和能力。见[统一消息结构](../docs/development/unified-message-model.zh_CN.md)。 |
-| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>&usage=<rev>` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`。0.8.1 起带 `usage`（同 `/v1/feed`），带上 `usage=<rev>` 时用量变了会提前返回；能力里有 `sync_usage`。0.8.2 起，说完一轮的电脑会话在这里的 `state` 是 `turn_ended`（`/v1/feed` 和卡上仍是 `done`）。0.9.0 起：`approvals` 改成序号比 `after` 大的授权变化，每项带 `status`（`pending`、`allowed`、`denied`、`withdrawn`）、`seq`，答了的带 `by`（`phone`、`computer`），收回的带 `reason`；回答里还有 `subject_id`（小幽这个主体的编号，和 `runtime_id` 分开）。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
+| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>&usage=<rev>&states=unavailable` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`。0.8.1 起带 `usage`（同 `/v1/feed`），带上 `usage=<rev>` 时用量变了会提前返回；能力里有 `sync_usage`。0.8.2 起，说完一轮的电脑会话在这里的 `state` 是 `turn_ended`（`/v1/feed` 和卡上仍是 `done`）。0.9.0 起：`approvals` 改成序号比 `after` 大的授权变化，每项带 `status`（`pending`、`allowed`、`denied`、`withdrawn`）、`seq`，答了的带 `by`（`phone`、`computer`），收回的带 `reason`；回答里还有 `subject_id`（小幽这个主体的编号，和 `runtime_id` 分开）。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。0.9.1 起，带了 `states=unavailable` 的客户端，对很久没更新、还没结束的观察会话或上报会话拿到的 `state` 是 `unavailable`（现在看不到它的状态，不是做完了）；没带的客户端照旧拿到卡上的状态和 `stale: true`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
 | `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |
 | `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
@@ -1046,6 +1056,70 @@ Android 13 或更新版本的通知提醒需要通知权限。配对另一台电
 另一种接法是不换台：手机只连一台 Runtime，把另一台电脑登记成它的一个 `remote` 代理。
 这样“那台电脑上的事”由小幽转交过去，或者由主人点名，对话记录只在主的那一台上。已经
 被别的 Runtime 转过手的话不会再往外转，所以两台互相登记也不会来回踢。
+
+### 小幽网络：每台 Runtime 都有全部记录（0.10.0 起）
+
+上面两种接法都靠手机。小幽网络让 Runtime 之间直接同步：在哪里拉起的 Runtime、手机正好
+连上的是哪一台，看到的都是同一段对话、同样的任务、电脑会话和授权。同一个主人的每台
+Runtime 写同一个口令，再写上网络里至少一台的地址：
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "peers": ["https://home.tail1234.ts.net"],
+  "advertise": ["https://laptop.tail1234.ts.net"]
+}
+```
+
+- `secret`（或 `secret_file`、环境变量 `XIAOYOU_MESH_SECRET`）：至少 16 个字符，每台一样。
+  没有就不加入。小幽的 `subject_id` 由它算出，所以每台报的主体都相同。
+- `peers`（或 `XIAOYOU_MESH_PEERS`，逗号分隔）：先去找谁。连得上一台就够了，其余的互相转告。
+- `advertise`（或 `XIAOYOU_MESH_ADVERTISE`）：别人从哪里连这一台。不写就按 `server.host` 推；
+  只监听 `127.0.0.1` 的不对外说地址，照样能加入：它主动连出去，推自己的记录、拉别人的
+  （云上的沙盒、别人的网络里都能用）。
+
+交换接口 `POST /v1/mesh/exchange` 用网络口令，不用手机令牌；`GET /v1/mesh`（手机令牌）列出
+网络里有谁、多久前联系上。成员之间长轮询，一般一秒内就同步到。
+
+每台看到的样子：别的 Runtime 的事是这里的一张本地卡（`cN`，带 `mesh_origin`、`mesh_id`、
+`origin_name`），它的消息编号前面加上产地编号的前 12 位，它的授权和本机的一样显示。记录
+只由生成它的那台改，所以没有两边同时改的冲突；连不到产地的成员也能经别的成员拿到。每台
+的小幽接话前都会被告知别的电脑上说过什么。
+
+在任意一台都能做的：在别的 Runtime 的事里说话、取消它、回答它的授权，会变成指令交给那台
+去做（同一句话两边编号相同，只显示一次）。小幽也能把事交给别的 Runtime 上的帮手，名字是
+`帮手@那台的名字`，比如 `@codex@Mac 看看日志`；那台替这件事开的卡记着 `delegated_from`，进展
+和结果回到这台的卡上。五分钟联系不上的成员算离线：它没做完的事显示看不到（`unavailable`），
+它的帮手不再给小幽选，交给它的话会说明原因被拒，不会悄悄丢掉。十分钟内没送到的指令作废。
+
+不共享的：订阅额度（`/v1/usage`）、固件和 App 发布、附件文件（别的 Runtime 的事的附件会
+列出来，但内容留在那台）。
+
+**设置、文件夹和电脑会话记录（0.11.0 起）。** 另外三样也作为网络记录同步，离线的电脑重新
+加入时会补上：
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "share": {
+    "env": ["DEEPSEEK_API_KEY"],
+    "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
+  }
+}
+```
+
+- `share.env`：只共享这里点名的，默认一个都不共享。值放在 `~/.config/xiaoyou/shared/<名字>`
+  （只有本人可读；第一次从 Runtime 的环境里取），代理通过 `env_files` 读，比如
+  `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`。没点名的 Runtime
+  不会写它。
+- `share.folders`：一个名字对应这台电脑上的一个目录；同一个名字在每台电脑上可以是不同的路径
+  （Claude Code 的记忆目录随用户名和系统不同）。只传文字文件，单个不超过 512 KB，每个目录最多 300 个。
+- 两样都以最后写的为准（时间相同按 Runtime 编号），删掉也会同步。目录本身不在时不同步，
+  免得把别处的文件当成被删了。
+- 电脑会话记录：开着 `desktop_sync` 时，每台把最近的 Claude Code、Codex 会话的完整可见内容
+  （每个会话最多 500 条、512 KB，去掉工具输出、思考过程和疑似密钥）导出到 `state/history/`。
+  别的成员按电脑各存一份只读副本，放在 `state/mesh/history/<那台>/`，电脑端共享历史的 Hook 会在
+  开会话时告诉 Claude Code、Codex 这些文件在哪。
 
 ## 语音
 

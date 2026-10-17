@@ -64,6 +64,18 @@ public class SyncCacheTest {
         assertEquals("本轮结束", DsState.label(card, true));
     }
 
+    @Test public void unavailableIsShownAsUnknownNotFinished() {
+        SyncCache cache = new SyncCache("default");
+        Card card = cache.apply(page("{\"epoch\":\"e1\",\"seq\":3,\"messages\":[],\"tasks\":[{\"id\":\"c5\",\"seq\":3,"
+                + "\"title\":\"网页上的会话\",\"state\":\"unavailable\",\"agent\":\"claude-web\",\"source\":\"external\","
+                + "\"monitoring_only\":true,\"desktop_status\":\"running\",\"members\":[]}]}")).cards.get(0);
+        assertEquals("unknown", card.state);
+        assertTrue(card.stale);
+        assertTrue(card.outstanding());
+        assertFalse(card.active());
+        assertEquals("状态未知", card.stateLabel());
+    }
+
     @Test public void acceptedButNotYetFiledMessagesArePending() {
         SyncCache cache = new SyncCache("default");
         SyncCache.Result result = cache.apply(page("{\"epoch\":\"e1\",\"seq\":2,\"messages\":["

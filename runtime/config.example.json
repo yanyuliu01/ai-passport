@@ -6,6 +6,17 @@
     "token": "change-me-to-a-long-random-string"
   },
   "state_dir": "state",
+  "desktop_sync": false,
+  "mesh": {
+    "secret": null,
+    "secret_file": null,
+    "peers": [],
+    "advertise": [],
+    "share": {
+      "env": [],
+      "folders": {}
+    }
+  },
   "persona_file": "persona.txt",
   "brief_max_chars": 120,
   "turn_timeout_seconds": 0,

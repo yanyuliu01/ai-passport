@@ -1058,10 +1058,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String message = chatInput.getText().toString().trim();
         if (message.isEmpty() || HubStore.get().busy()) return;
         if (RuntimeClient.selected(this) == null) { toast("先到侧边栏「连接与设置」添加电脑"); return; }
-        Card opened = CardViews.find(HubStore.get().cards(), openTask);
-        if (tab == TAB_TASKS && opened != null && opened.monitoringOnly && desktopBusy(opened)) {
-            toast("电脑上这一轮还在跑，等它停下再发"); return;
-        }
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
         String targetCard = tab == TAB_TASKS ? openTask : null;
@@ -1072,9 +1068,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             RuntimeClient.send(this, message, null, null, helper);
             show(TAB_CHAT); scrollDown(); return;
         }
-        if (opened != null && opened.monitoringOnly)
-            toast("交给 " + AppPresentation.name(AppPresentation.owner(opened)) + " 接着电脑上的会话做");
-        // 交给谁、用哪一档都由小幽安排；想指定就直接说出来。
+        // 交给谁、用哪一档都由小幽安排；想指定就直接说出来。在电脑上的会话里说的也先给小幽
+        // （Runtime 0.10.1 起）：点名能接它的帮手，或者小幽判断要它接着干活，才接着那个会话做。
         RuntimeClient.send(this, message, targetCard);
         scrollDown();
     }
@@ -1166,7 +1161,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (!composerContext.isEmpty()) drafts.put(composerContext, chatInput.getText().toString());
             composerContext = nextContext; chatInput.setText(drafts.getOrDefault(nextContext, ""));
         }
-        chatInput.setHint(inTask && opened != null && opened.monitoringOnly ? "接着电脑上的会话说…"
+        chatInput.setHint(inTask && opened != null && opened.monitoringOnly ? "问" + companionName() + "这个会话…"
                 : inTask ? "补充要求…" : toHelper ? "直接交给 " + AppPresentation.name(openAgent) + "…"
                 : "跟" + companionName() + "说…");
         updateHeader(); updateSendState();
@@ -1479,9 +1474,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (opened.monitoringOnly) {
             TextView notice = text(opened.source.equals("external")
                     ? "这是从别处（" + (opened.project.isEmpty() ? "外部" : opened.project) + "）报上来的会话，只能在这里查看，请在它原来的地方继续。"
-                    : desktopBusy(opened)
-                    ? "电脑上这一轮还在跑。等它停下，就能在这里接着说，" + AppPresentation.name(owner) + " 会接着这个会话做。"
-                    : "在这里说的话，" + AppPresentation.name(owner) + " 会接着这个会话做，回复也会出现在电脑上。", 12, false);
+                    : "在这里说的话先给" + companionName() + "：解释、总结它自己答。要电脑上的会话接着干活，就说“让 "
+                    + AppPresentation.name(owner) + " 接着做…”"
+                    + (desktopBusy(opened) ? "（电脑上这一轮还在跑，要等它停下才接得上）。" : "，回复也会出现在电脑上。"), 12, false);
             notice.setTextColor(HINT); notice.setPadding(dp(4), dp(12), dp(4), 0); taskPane.addView(notice);
             if (!CardViews.titleNotice(opened).isEmpty()) taskPane.addView(text(CardViews.titleNotice(opened), 12, false));
             taskPane.addView(text(CardViews.contentNotice(opened), 12, false));
