@@ -367,7 +367,11 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         socket_path = _optional_string(raw.get("app_server_socket"), where + ".app_server_socket")
         if socket_path and mode != "app_server":
             raise ConfigError("%s.app_server_socket 需要 mode=app_server" % where)
+        # 代理、接口地址这类环境变量，和 claude_code、dsh 一样可以写（以前写了会被悄悄丢掉）。
+        codex_env = _env(raw.get("env", {}), where + ".env")
+        codex_env_files = _env_files(raw.get("env_files", {}), codex_env, base, where + ".env_files")
         return AgentSpec(sandbox=sandbox, codex_mode=mode, approval_policy=policy,
+                         env=codex_env, env_files=codex_env_files,
                          app_server_socket=_path(socket_path, base) if socket_path else None,
                          config_dir=_path(codex_home, base) if codex_home else None,
                          **_tiers(raw, kind, where, shared["model"], shared["extra_args"], False),

@@ -546,6 +546,19 @@ class Agent:
         """启动时的检查：有问题返回说明，没问题返回 None。不调用模型。"""
         return None
 
+    def _file_env(self) -> Dict[str, str]:
+        """env_files 里的变量：每次现读，换了密钥不用重启。"""
+        values = {}
+        for key, path in self.spec.env_files.items():
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError as error:
+                raise AgentError("读不到 %s 用的文件 %s：%s" % (key, path, error.strerror or error))
+            if not value:
+                raise AgentError("%s 用的文件 %s 是空的" % (key, path))
+            values[key] = value
+        return values
+
     def _command_problem(self) -> Optional[str]:
         if shutil.which(self.spec.command[0]) is None and not Path(self.spec.command[0]).is_file():
             return "找不到命令 %s" % self.spec.command[0]
@@ -618,19 +631,6 @@ class ClaudeCodeAgent(Agent):
             command += ["--resume", job.session_id]
         command += spec.extra_args
         return command
-
-    def _file_env(self) -> Dict[str, str]:
-        """env_files 里的变量：每次现读，换了密钥不用重启。"""
-        values = {}
-        for key, path in self.spec.env_files.items():
-            try:
-                value = path.read_text(encoding="utf-8").strip()
-            except OSError as error:
-                raise AgentError("读不到 %s 用的文件 %s：%s" % (key, path, error.strerror or error))
-            if not value:
-                raise AgentError("%s 用的文件 %s 是空的" % (key, path))
-            values[key] = value
-        return values
 
     def _env(self) -> Optional[Dict[str, str]]:
         if self.spec.config_dir is None and not self.spec.env and not self.spec.env_files:
@@ -827,11 +827,17 @@ class CodexAgent(Agent):
         self._run = run
 
     def _env(self) -> Optional[Dict[str, str]]:
-        if self.spec.config_dir is None:
+        if self.spec.config_dir is None and not self.spec.env and not self.spec.env_files:
             return None
-        # 让这台机器上的 Codex 用一套单独的登录和设置（CODEX_HOME），
-        # 不受（也不影响）使用者平时那套 ~/.codex 配置。
-        return dict(os.environ, CODEX_HOME=str(self.spec.config_dir))
+        env = dict(os.environ)
+        # 配置里写的环境变量（代理、接口地址之类）和 env_files 里的，和 Claude Code 一样带上。
+        env.update(self.spec.env)
+        env.update(self._file_env())
+        if self.spec.config_dir is not None:
+            # 让这台机器上的 Codex 用一套单独的登录和设置（CODEX_HOME），
+            # 不受（也不影响）使用者平时那套 ~/.codex 配置。
+            env["CODEX_HOME"] = str(self.spec.config_dir)
+        return env
 
     def command(self, job: Job, last_message: Path) -> List[str]:
         spec = self.spec
