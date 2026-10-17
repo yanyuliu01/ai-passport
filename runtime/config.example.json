@@ -11,7 +11,11 @@
     "secret": null,
     "secret_file": null,
     "peers": [],
-    "advertise": []
+    "advertise": [],
+    "share": {
+      "env": [],
+      "folders": {}
+    }
   },
   "persona_file": "persona.txt",
   "brief_max_chars": 120,

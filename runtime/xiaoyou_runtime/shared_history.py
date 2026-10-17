@@ -28,6 +28,7 @@ MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_INPUT_BYTES = 64 * 1024
 MAX_CONTEXT_CHARS = 6500
 MAX_DESKTOP_FILES = 32
+MAX_ELSEWHERE = 20
 EVENTS = ("SessionStart", "UserPromptSubmit")
 
 
@@ -294,7 +295,29 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
     dialogs.sort(key=lambda entry: entry["at"])
     return {"schema_version": 1, "project": str(project), "state_dir": str(state),
             "generated_at": now, "scope": "retained-visible-content",
-            "incomplete_sources": sorted(set(incomplete)), "tasks": tasks, "dialog": dialogs}
+            "incomplete_sources": sorted(set(incomplete)), "tasks": tasks, "dialog": dialogs,
+            "elsewhere": elsewhere(state)}
+
+
+def elsewhere(state, limit=MAX_ELSEWHERE):
+    """小幽网络里别的电脑的电脑会话完整记录（mesh_share.py 存在 state/mesh/history/<那台>/），
+    新的在前。只列出来，全文在文件里。"""
+    found = []
+    root = Path(state) / "mesh" / "history"
+    try:
+        for path in root.glob("*/*.md"):
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    first = handle.readline().strip()
+                found.append({"computer": path.parent.name.rsplit("-", 1)[0],
+                              "title": visible_text(first[2:] if first.startswith("# ") else first)[:200],
+                              "path": str(path), "updated_at": path.stat().st_mtime})
+            except (OSError, UnicodeError):
+                continue
+    except OSError:
+        return []
+    found.sort(key=lambda item: item["updated_at"], reverse=True)
+    return found[:limit]
 
 
 def _when(at):
@@ -355,6 +378,14 @@ def context(data, previous=None):
     if dialog and (previous is None or previous.get("dialog") != digest):
         lines.append("\nRecent Runtime conversation:\n" + "\n".join(
             "%s: %s" % (entry["actor"], entry["text"][:120]) for entry in dialog))
+    others = data.get("elsewhere") or []
+    digest = hashlib.sha256(json.dumps(others, sort_keys=True).encode()).hexdigest()
+    fingerprints["elsewhere"] = digest
+    if others and (previous is None or previous.get("elsewhere") != digest):
+        lines.append("\nConversations on the owner's other computers (full visible text in each file; "
+                     "read one when the owner refers to work done there):\n" + "\n".join(
+                         "- %s · %s · %s · %s" % (item["computer"], item["title"][:100], _when(item["updated_at"]),
+                                                  item["path"]) for item in others[:8]))
     if not lines:
         return "", fingerprints
     text = ("<xiaoyou-history-context>\nShared project history from Runtime, Codex and Claude Code.\n"

@@ -1401,6 +1401,37 @@ Not shared: subscription quota (`/v1/usage`), firmware and app releases, and
 attachment files (an attachment of another runtime's task is listed but its
 content stays on that runtime).
 
+**Settings, folders and desktop histories (since 0.11.0).** Three more things
+travel as mesh records, so a computer that was offline catches up when it joins
+again:
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "share": {
+    "env": ["DEEPSEEK_API_KEY"],
+    "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
+  }
+}
+```
+
+- `share.env`: only the names listed here are shared, none by default. The value
+  lives in `~/.config/xiaoyou/shared/<NAME>` (readable only by you; seeded from the
+  runtime's environment the first time) and agents read it through `env_files`,
+  for example `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`.
+  A runtime that does not list a name never writes it.
+- `share.folders`: a name mapped to a folder on this computer; the same name can
+  point to a different path on each computer (Claude Code's memory folder differs
+  by user name and OS). Text files up to 512 KB, up to 300 per folder.
+- For both, the latest write wins (ties by runtime id) and deletions follow. A
+  folder whose root is missing is not synced, so it cannot erase files elsewhere.
+- Desktop histories: with `desktop_sync` on, every runtime exports the full visible
+  text of its recent Claude Code and Codex sessions (up to 500 entries / 512 KB per
+  session, tool output, reasoning and credential-like text removed) to
+  `state/history/`. Other members keep a read-only copy per computer in
+  `state/mesh/history/<computer>/`, and the shared-history hook tells desktop agents
+  where those files are when a session starts.
+
 ## Voice
 
 A voice message is a recording: 16-bit mono WAV, 8 to 48 kHz, 0.2 to 120

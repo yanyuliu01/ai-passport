@@ -13,11 +13,13 @@ import unittest
 import urllib.error
 
 import urllib.request
+from pathlib import Path
 
 from test_runtime import TOKEN, Scripted, TempDirCase, free_port, make_xiaoyou, until, write_config
 
 from xiaoyou_runtime import agents as agents_module
 from xiaoyou_runtime import config as config_module
+from xiaoyou_runtime import shared_history
 from xiaoyou_runtime.mesh import Mesh, local_id, subject_for
 from xiaoyou_runtime.server import make_server
 from xiaoyou_runtime.service import Service
@@ -236,6 +238,78 @@ class MeshTests(TempDirCase):
         self.assertFalse(any(card["title"].startswith("接着：") for card in b.xiaoyou.cards.recent(None, 100)
                              if not card.get("mesh_origin")))
 
+    def sharing(self, node, env=(), folders=None):
+        shares = node.mesh.shares
+        shares.env = list(env)
+        shares.folders = dict(folders or {})
+        shares.shared = self.folder / ("shared-" + node.mesh.name)
+        return shares
+
+    def test_named_environment_values_are_shared_and_the_latest_write_wins(self):
+        a = self.node("Mac")
+        b = self.node("Windows", peers=[a.url])
+        mac, windows = self.sharing(a, ["DEEPSEEK_API_KEY"]), self.sharing(b, ["DEEPSEEK_API_KEY"])
+        mac.shared.mkdir()
+        (mac.shared / "DEEPSEEK_API_KEY").write_text("sk-one", encoding="utf-8")
+        (mac.shared / "NOT_LISTED").write_text("secret", encoding="utf-8")
+        mac.scan()
+        target = windows.shared / "DEEPSEEK_API_KEY"
+        self.assertTrue(until(lambda: target.is_file() and target.read_text(encoding="utf-8") == "sk-one"))
+        self.assertFalse((windows.shared / "NOT_LISTED").exists())
+        target.write_text("sk-two", encoding="utf-8")
+        windows.scan(now=10 ** 10)
+        source = mac.shared / "DEEPSEEK_API_KEY"
+        self.assertTrue(until(lambda: source.read_text(encoding="utf-8") == "sk-two"))
+        # 收到的值不会被当成这台的新值再报回去。
+        self.assertEqual(0, mac.scan())
+
+    def test_folders_are_matched_by_name_and_deletions_follow(self):
+        a = self.node("Mac")
+        b = self.node("Windows", peers=[a.url])
+        c = self.node("Other", peers=[a.url])
+        mac_memory, windows_memory = self.folder / "mac-memory", self.folder / "C--Users-x" / "memory"
+        mac_memory.mkdir()
+        windows_memory.mkdir(parents=True)
+        (mac_memory / "MEMORY.md").write_text("- [偏好](pref.md)\n", encoding="utf-8")
+        (mac_memory / "notes").mkdir()
+        (mac_memory / "notes" / "pref.md").write_text("说中文\n", encoding="utf-8")
+        mac = self.sharing(a, folders={"claude-memory": mac_memory})
+        self.sharing(b, folders={"claude-memory": windows_memory})
+        self.sharing(c)  # 没配这个文件夹：只转，不落地
+        mac.scan()
+        self.assertTrue(until(lambda: (windows_memory / "notes" / "pref.md").is_file()))
+        self.assertEqual("- [偏好](pref.md)\n", (windows_memory / "MEMORY.md").read_text(encoding="utf-8"))
+        (mac_memory / "notes" / "pref.md").unlink()
+        mac.scan()
+        self.assertTrue(until(lambda: not (windows_memory / "notes" / "pref.md").exists()))
+        self.assertTrue((windows_memory / "MEMORY.md").is_file())
+
+    def test_desktop_histories_are_mirrored_per_computer_and_listed_for_desktop_agents(self):
+        a = self.node("Mac")
+        b = self.node("Windows", peers=[a.url])
+        mac = self.sharing(a)
+        mac.history.mkdir(parents=True)
+        (mac.history / "claude-s1.md").write_text("# 改同步方案\n\n### 主人 · 2026\n\n先出方案\n", encoding="utf-8")
+        mac.scan()
+        state = Path(b.xiaoyou._config.state_dir)
+        self.assertTrue(until(lambda: shared_history.elsewhere(state)))
+        listed = shared_history.elsewhere(state)[0]
+        self.assertEqual(("Mac", "改同步方案"), (listed["computer"], listed["title"]))
+        self.assertIn("先出方案", Path(listed["path"]).read_text(encoding="utf-8"))
+        text, _ = shared_history.context({"tasks": [], "dialog": [], "elsewhere": [listed]})
+        self.assertIn(listed["path"], text)
+
+    def test_shared_paths_from_another_runtime_cannot_escape_the_folder(self):
+        a = self.node("Mac")
+        root = self.folder / "memory"
+        root.mkdir()
+        shares = self.sharing(a, folders={"claude-memory": root})
+        for bad in ("../outside.md", "/etc/passwd", "C:/x.md", "a/../../b.md"):
+            shares.apply("f" * 32, "Evil", {"key": "folder:claude-memory/" + bad, "kind": "folder",
+                                           "name": "claude-memory", "path": bad, "text": "x", "at": 10 ** 10})
+        self.assertFalse((self.folder / "outside.md").exists())
+        self.assertEqual([], list(root.rglob("*")))
+
     def _refresh(self, node, name):
         node.mesh.sweep()
         return until(lambda: node.xiaoyou.has(name))
@@ -290,6 +364,16 @@ class MeshConfigTests(TempDirCase):
                             "XIAOYOU_MESH_ADVERTISE": "https://me.test"})
         self.assertEqual((["http://a.test", "https://b.test"], ["https://me.test"]),
                          (loaded.mesh_peers, loaded.mesh_advertise))
+
+    def test_shared_env_names_and_folders_come_from_the_config(self):
+        loaded = self.load(mesh={"secret": SECRET, "share": {"env": ["DEEPSEEK_API_KEY"],
+                                                             "folders": {"claude-memory": "memory"}}})
+        self.assertEqual((["DEEPSEEK_API_KEY"], {"claude-memory": (self.folder / "memory").resolve()}),
+                         (loaded.mesh_share_env, loaded.mesh_share_folders))
+        self.assertEqual(([], {}), (self.load().mesh_share_env, self.load().mesh_share_folders))
+        for bad in ({"env": ["not a name"]}, {"folders": {"../x": "memory"}}, {"folders": {"ok": ""}}):
+            with self.subTest(bad=bad), self.assertRaises(config_module.ConfigError):
+                self.load(mesh={"secret": SECRET, "share": bad})
 
     def test_desktop_sync_can_be_turned_on_in_the_config(self):
         self.assertFalse(self.load().desktop_sync)

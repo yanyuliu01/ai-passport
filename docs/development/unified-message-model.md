@@ -320,6 +320,11 @@ started anywhere be a full member, so the mesh has no home; every member holds e
   `<helper>@<runtime name>` (never as her voice). The work runs there on a card stamped
   `delegated_from` (set when the card is opened, so it is never shown twice); the delegating card
   here gets `delegated_to`, progress and the result.
+- **Settings, folders and desktop histories** (runtime 0.11.0, `mesh_share.py`): environment values
+  the configuration names, folders matched by name (each computer maps the name to its own path,
+  for example Claude Code's memory) and the full visible text of each computer's desktop sessions
+  travel as `share` records. Settings and folders: latest write wins, deletions follow. Histories
+  are mirrored per computer, read-only, and listed for desktop agents by the shared-history hook.
 - **Not shared**: subscription quota, firmware and app releases, attachment content.
 
 ## Which projection each end is

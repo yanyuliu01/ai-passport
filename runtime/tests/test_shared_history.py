@@ -143,6 +143,29 @@ class SharedHistoryTests(unittest.TestCase):
         self.assertEqual([(entry["role"], entry["text"]) for entry in data["dialog"]],
                          [("user", "what changed?"), ("assistant", "the sync view")])
 
+    def test_desktop_history_export_keeps_more_than_the_phone_window(self):
+        from xiaoyou_runtime import desktop_history
+        events = []
+        for index in range(30):
+            events.append({"timestamp": "1970-01-01T00:01:%02dZ" % index, "sessionId": "long", "cwd": str(self.repo),
+                           "type": "user", "uuid": "u%d" % index, "message": {"content": "问题 %d" % index}})
+            events.append({"timestamp": "1970-01-01T00:01:%02dZ" % index, "sessionId": "long", "cwd": str(self.repo),
+                           "type": "assistant", "uuid": "a%d" % index, "message": {
+                               "stop_reason": "end_turn", "content": [{"type": "text", "text": "回答 %d" % index}]}})
+        self.jsonl(self.home / ".claude" / "projects" / "project" / "long.jsonl", events)
+        self.claude("owned-by-runtime")
+        out = self.root / "history"
+        written = desktop_history.export(self.state, out, claude_dir=self.home / ".claude",
+                                         codex_dir=self.home / ".codex", owned=lambda: {"owned-by-runtime"}, now=1000)
+        self.assertEqual(["claude-long.md"], [path.name for path in written])
+        text = (out / "claude-long.md").read_text(encoding="utf-8")
+        self.assertIn("问题 0", text)
+        self.assertIn("回答 29", text)
+        # 内容没变就不重写。
+        self.assertEqual([], desktop_history.export(self.state, out, claude_dir=self.home / ".claude",
+                                                    codex_dir=self.home / ".codex",
+                                                    owned=lambda: {"owned-by-runtime"}, now=1000))
+
     def test_credentials_and_injected_history_are_removed(self):
         self.card["entries"].append({"role": "xiaoyou", "text": "token=private-token-value", "at": 40})
         self.write(self.state / "cards.json", {"cards": [self.card]})

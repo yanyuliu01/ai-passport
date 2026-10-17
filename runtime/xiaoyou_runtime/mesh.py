@@ -36,6 +36,7 @@ from . import __version__
 from .agents import Agent, AgentError, Job, Outcome
 from .config import AgentSpec
 from .message_log import DESKTOP_CONVERSATION, KINDS
+from .mesh_share import Shares
 
 PROTOCOL = 1
 SHORT = 12
@@ -49,7 +50,7 @@ OFFLINE_SECONDS = 300
 # 指令这么久没被执行就作废：主人不会想让一句很久以前的话突然被做。
 COMMAND_SECONDS = 600
 RETRY_SECONDS = (2, 5, 10, 30, 60)
-LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000}
+LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000, "share": 2000}
 ID = re.compile(r"^[0-9a-f]{32}$")
 REVERSE_KINDS = {value: key for key, value in KINDS.items()}
 
@@ -259,6 +260,10 @@ class Mesh:
                 peer = Peer("seed:" + url)
                 peer.urls = [url]
                 self._peers[peer.runtime_id] = peer
+        store = getattr(service, "_store", None)
+        # Runtime 自己起的帮手的会话：不当成电脑会话导出（它们已经在卡上了）。
+        self.owned_sessions: Callable[[], Any] = store.session_ids if store is not None else (lambda: set())
+        self.shares = Shares(self, config)
         service.subject_id = self.subject_id
         service.mesh = self
         xiaoyou.mesh = self
@@ -364,6 +369,8 @@ class Mesh:
         """这台手里各产地的游标（包括这台自己）。"""
         found = {self.runtime_id: {"epoch": self._cards.epoch, "seq": self._cards.seq}}
         for origin in self._replicas.origins():
+            if origin == self.runtime_id:
+                continue  # 这台自己共享的设置也存在那里，但游标以这台的序号为准
             epoch, upto = self._replicas.position(origin)
             found[origin] = {"epoch": epoch, "seq": upto}
         return found
@@ -471,6 +478,11 @@ class Mesh:
                     for item in self._xiaoyou.approvals.own_since(after) if item["seq"] <= seq]
         with self._lock:
             records += [dict(item) for item in self._outbox.values() if after < item["oseq"] <= seq]
+        # 这台共享的设置、文件、会话记录（mesh_share.py），存在以这台为产地的那一份里。
+        stored, _ = self._replicas.position(self.runtime_id)
+        if stored == mine:
+            records += [record for record in self._replicas.since(self.runtime_id, after)
+                        if record["k"] == "share" and record["oseq"] <= seq]
         if not records:
             # 序号涨了但都不是这台自己的记录（比如别人的副本）：没东西给，游标落后一点也无妨。
             return None
@@ -549,6 +561,8 @@ class Mesh:
                     self._command(origin, data)
                 elif kind == "result":
                     self._result(origin, data)
+                elif kind == "share":
+                    self.shares.apply(origin, self._peer_name(origin), data)
             except Exception as error:  # 一条坏记录不能挡住后面的
                 sys.stderr.write("网络记录 %s/%s 没落成：%s: %s\n" % (kind, record["id"], type(error).__name__, error))
         for task_id in touched:
@@ -869,6 +883,14 @@ class Mesh:
         """一条指令在 target 那里的结果（没有时 None）。"""
         return self._replicas.get(target, "result", command_id + ":" + phase)
 
+    def publish_share(self, key: str, data: Dict[str, Any]) -> None:
+        """这台共享的一样东西变了（mesh_share.py）：取一个序号，记下，等着交给别人。"""
+        with self._lock:
+            oseq = self._record.sequence()
+            self._replicas.store(self.runtime_id, self._cards.epoch,
+                                 [{"k": "share", "id": key, "oseq": oseq, "data": data}], oseq)
+            self._changed.notify_all()
+
     def wait(self, seconds: float) -> None:
         with self._changed:
             self._changed.wait(seconds)
@@ -909,6 +931,10 @@ class Mesh:
         for command_id, message_id in pending:
             self._watch(command_id, message_id)
         self._ensure_threads()
+        try:
+            self.shares.scan()
+        except Exception as error:
+            sys.stderr.write("共享设置第一次扫描出错：%s: %s\n" % (type(error).__name__, error))
         threading.Thread(target=self._sweep_loop, daemon=True, name="mesh-sweep").start()
 
     def close(self) -> None:
@@ -1047,6 +1073,7 @@ class Mesh:
         for message_id, target in relays:
             self._finish_relay(message_id, False, "「%s」一直没回应，这句话可能没做" % self._peer_name(target))
         self._refresh_agents()
+        self.shares.scan(now)
 
 
 class MeshAgent(Agent):

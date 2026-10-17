@@ -146,6 +146,9 @@ class Config:
     mesh_peers: List[str] = field(default_factory=list)
     # 告诉别的 Runtime 从哪里连这一台；空的时候按 server.host 推一个，只监听本机时为空（只出不进）。
     mesh_advertise: List[str] = field(default_factory=list)
+    # 网络里共享的环境变量名（值在 ~/.config/xiaoyou/shared/<名字>）和文件夹（名字 → 这台的路径）。
+    mesh_share_env: List[str] = field(default_factory=list)
+    mesh_share_folders: Dict[str, Path] = field(default_factory=dict)
     # 把本机 Claude Code、Codex 的会话状态同步到手机和设备（--desktop-sync 也能打开）。
     # 写在配置里，用什么方式拉起 Runtime（守护脚本、开机自启、手动）都一样。
     desktop_sync: bool = False
@@ -561,6 +564,24 @@ def _mesh(raw: Dict[str, Any], env: Mapping[str, str], base: Path, host: str,
     return secret, peers, advertise
 
 
+def _mesh_share(raw: Dict[str, Any], base: Path) -> Tuple[List[str], Dict[str, Path]]:
+    """小幽网络里共享什么（mesh_share.py）：点名的环境变量，和按名字对上的文件夹。"""
+    share = _expect(_expect(raw.get("mesh", {}), dict, "mesh").get("share", {}), dict, "mesh.share")
+    names = _strings(share.get("env", []), "mesh.share.env")
+    for name in names:
+        if not ENV_NAME.match(name):
+            raise ConfigError("mesh.share.env 里的 %r 不像环境变量名" % name)
+    folders = _expect(share.get("folders", {}), dict, "mesh.share.folders")
+    paths: Dict[str, Path] = {}
+    for name, value in folders.items():
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", name):
+            raise ConfigError("mesh.share.folders 的名字 %r 只能用字母、数字和 _ . -" % name)
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError("mesh.share.folders.%s 应该是这台电脑上的一个目录" % name)
+        paths[name] = _path(value.strip(), base)
+    return names, paths
+
+
 def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     """读取配置文件。相对路径都相对于配置文件所在的目录。"""
     env = os.environ if env is None else env
@@ -605,6 +626,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         base,
     )
     mesh_secret, mesh_peers, mesh_advertise = _mesh(raw, env, base, host, port)
+    mesh_share_env, mesh_share_folders = _mesh_share(raw, base)
     # desktop_sync 可以只写 true，也可以写成 {"enabled", "projects", "codex_dir", "claude_dir"}。
     desktop = raw.get("desktop_sync", {})
     desktop = {"enabled": desktop} if isinstance(desktop, bool) else _expect(desktop, dict, "desktop_sync")
@@ -835,6 +857,8 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         mesh_secret=mesh_secret,
         mesh_peers=mesh_peers,
         mesh_advertise=mesh_advertise,
+        mesh_share_env=mesh_share_env,
+        mesh_share_folders=mesh_share_folders,
         desktop_sync=desktop_sync,
         desktop_projects=desktop_projects,
         desktop_codex_dir=_path(desktop_codex_dir, base) if desktop_codex_dir else None,

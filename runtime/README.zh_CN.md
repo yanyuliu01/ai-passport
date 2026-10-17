@@ -1095,6 +1095,32 @@ Runtime 写同一个口令，再写上网络里至少一台的地址：
 不共享的：订阅额度（`/v1/usage`）、固件和 App 发布、附件文件（别的 Runtime 的事的附件会
 列出来，但内容留在那台）。
 
+**设置、文件夹和电脑会话记录（0.11.0 起）。** 另外三样也作为网络记录同步，离线的电脑重新
+加入时会补上：
+
+```json
+"mesh": {
+  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "share": {
+    "env": ["DEEPSEEK_API_KEY"],
+    "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
+  }
+}
+```
+
+- `share.env`：只共享这里点名的，默认一个都不共享。值放在 `~/.config/xiaoyou/shared/<名字>`
+  （只有本人可读；第一次从 Runtime 的环境里取），代理通过 `env_files` 读，比如
+  `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`。没点名的 Runtime
+  不会写它。
+- `share.folders`：一个名字对应这台电脑上的一个目录；同一个名字在每台电脑上可以是不同的路径
+  （Claude Code 的记忆目录随用户名和系统不同）。只传文字文件，单个不超过 512 KB，每个目录最多 300 个。
+- 两样都以最后写的为准（时间相同按 Runtime 编号），删掉也会同步。目录本身不在时不同步，
+  免得把别处的文件当成被删了。
+- 电脑会话记录：开着 `desktop_sync` 时，每台把最近的 Claude Code、Codex 会话的完整可见内容
+  （每个会话最多 500 条、512 KB，去掉工具输出、思考过程和疑似密钥）导出到 `state/history/`。
+  别的成员按电脑各存一份只读副本，放在 `state/mesh/history/<那台>/`，电脑端共享历史的 Hook 会在
+  开会话时告诉 Claude Code、Codex 这些文件在哪。
+
 ## 语音
 
 语音消息就是一段录音：16 位单声道 WAV，采样率 8 到 48 kHz，时长 0.2 到 120 秒，最大
