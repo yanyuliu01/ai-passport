@@ -153,14 +153,44 @@ final class RuntimeClient {
         return target.url;
     }
 
-    /** 同一台 Runtime 的其他地址（连不上当前这个时换着试）。 */
+    /** 这个地址上的小幽是哪一个（小幽网络里每台都一样，见 Runtime 的 mesh.py）；没加入网络是空串。 */
+    static String subjectId(Context context, String url) {
+        return prefs(context).getString("sid:" + url, "");
+    }
+
+    /**
+     * 哪些地址算“同一个”：同一个小幽网络里的几台（它们的记录都一样），否则同一台 Runtime 的
+     * 几个地址，再否则就是这个地址自己。授权只按组盯一份，免得同一个授权弹两次。
+     */
+    static String groupKey(Context context, Target target) {
+        return groupKeyOf(subjectId(context, target.url), runtimeId(context, target.url), target.url);
+    }
+
+    /** 分组规则本身（不碰 Android，好测）：主体优先，其次 Runtime，最后地址。 */
+    static String groupKeyOf(String subject, String runtime, String url) {
+        if (subject != null && !subject.isEmpty()) return "subject:" + subject;
+        return runtime == null || runtime.isEmpty() ? "url:" + url : "runtime:" + runtime;
+    }
+
+    /**
+     * 连不上当前这个时换着试的：先是同一台 Runtime 的其他地址（局域网、Funnel），再是同一个
+     * 小幽网络里的别的电脑（它们有一样的对话和任务，只是卡的编号各算各的，换过去时从头取一次）。
+     */
     static synchronized List<Target> siblings(Context context, Target target) {
-        List<Target> result = new ArrayList<>();
-        String id = runtimeId(context, target.url);
-        if (id.isEmpty()) return result;
-        for (Target item : targets(context))
-            if (!item.url.equals(target.url) && id.equals(runtimeId(context, item.url))) result.add(item);
-        return result;
+        List<Target> same = new ArrayList<>(), others = new ArrayList<>();
+        String id = runtimeId(context, target.url), subject = subjectId(context, target.url);
+        for (Target item : targets(context)) {
+            if (item.url.equals(target.url)) continue;
+            if (!id.isEmpty() && id.equals(runtimeId(context, item.url))) same.add(item);
+            else if (!subject.isEmpty() && subject.equals(subjectId(context, item.url))) others.add(item);
+        }
+        same.addAll(others);
+        return same;
+    }
+
+    /** 问一次这个地址上的 Runtime 是谁（记下 runtime_id、小幽网络的主体）；问不到就算了。 */
+    static void learn(Context context, Target target) {
+        try { identify(context, target); } catch (IOException | RuntimeException ignored) { }
     }
 
     /** 问这个地址上的 Runtime 是谁、会什么；旧版 Runtime 没有 /v1/info，当作什么新能力都没有。 */
@@ -173,6 +203,9 @@ final class RuntimeClient {
                 for (Object item : Json.list(info, "capabilities")) if (item instanceof String) abilities.add((String) item);
                 String id = Json.string(info, "runtime_id");
                 if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
+                // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
+                String subject = abilities.contains("mesh") ? Json.string(info, "subject_id") : "";
+                prefs(context).edit().putString("sid:" + target.url, subject).apply();
             }
         } catch (IOException error) {
             if (!String.valueOf(error.getMessage()).contains(" 404")) throw error;
@@ -301,9 +334,7 @@ final class RuntimeClient {
         // 参数，照常等卡的变化）。
         long usageRev = store.usageRev();
         String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait
-                        + (usageRev >= 0 ? "&usage=" + usageRev : "")
-                        // 认得 unavailable（看不到状态的电脑会话、上报）：见 Card.from。
-                        + "&states=unavailable",
+                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
                 target.token, null, null, wait + 15, interruptible);
         Map<String, Object> feed = Json.parseObject(body);
         if (feed == null) {

@@ -282,6 +282,15 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## App fixes (0.18.0)
+
+- Computers in one Xiaoyou mesh (runtime 0.10.0 or newer, same `subject_id`) count
+  as one: when the selected one cannot be reached, the app tries its other
+  addresses and then another member, which holds the same conversation and tasks.
+  Approvals are watched once per mesh (and once per computer for several addresses),
+  so the same approval no longer notifies twice; if the watched member keeps
+  failing, another member takes over.
+
 ## App fixes (0.17.4)
 
 - What you say inside a computer session goes to Xiaoyou first: she explains or
