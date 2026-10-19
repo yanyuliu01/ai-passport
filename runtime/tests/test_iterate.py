@@ -14,7 +14,8 @@ from xiaoyou_runtime.iterate.objects import Issue
 from xiaoyou_runtime.iterate.pipeline import Runner
 from xiaoyou_runtime.iterate.scheduler import Scheduler
 from xiaoyou_runtime.iterate.settings import IterateConfigError, parse
-from xiaoyou_runtime.iterate.store import AppEvents, EventError, IssueBook, Lock, Busy, Runs
+from xiaoyou_runtime.iterate.events import EventError, EventStore, EventType, Types, flat
+from xiaoyou_runtime.iterate.store import IssueBook, Lock, Busy, Runs
 from xiaoyou_runtime.model_gateway import Completion, GatewayError
 
 NOW = 1_800_000_000.0
@@ -58,6 +59,7 @@ class IterateCase(TempDirCase):
         self.repo = self.folder / "repo"
         source = self.repo / JAVA
         source.parent.mkdir(parents=True)
+        (self.repo / ".git").mkdir()
         source.write_text("\n".join("line %d" % n for n in range(1, 200)) +
                           "\n    private void show(int next) {\n        toast(\"加载失败\");\n    }\n",
                           encoding="utf-8")
@@ -69,42 +71,104 @@ class IterateCase(TempDirCase):
         self.state.mkdir(parents=True, exist_ok=True)
         (self.state / "cards.json").write_text(json.dumps({"cards": cards}, ensure_ascii=False), encoding="utf-8")
 
-    def runner(self, gateway=None, now=NOW, posted=None, settings=None):
+    def runner(self, gateway=None, now=NOW, posted=None, settings=None, leaser=None):
+        self.leases = []
+        def grant(action, stage, seconds=0):
+            self.leases.append((action, stage))
+            return {"granted": True}
         return Runner(self.config, settings or self.settings, gateway=gateway or FakeGateway([]), now=now,
-                      poster=lambda config, payload: (posted if posted is not None else []).append(payload))
+                      poster=lambda config, payload: (posted if posted is not None else []).append(payload),
+                      leaser=leaser or grant)
 
 
-class AppEventsTest(IterateCase):
-    def test_events_are_cleaned_and_read_after_a_cursor(self):
-        store = AppEvents(self.state)
+class EventsTest(IterateCase):
+    def test_legacy_and_envelope_events_are_cleaned_and_deduplicated(self):
+        store = EventStore(self.state, origin="mac")
         result = store.accept({"events": [
             event("crash", 1, exception="NullPointerException", frames=["a"] * 20, text="私密内容"),
-            event("screen", 2, name="chat", ms=1200),
+            {"id": "e2", "at": int(NOW * 1000), "type": "screen", "session": "s1",
+             "client": {"kind": "desktop", "id": "pc-1", "version": "0.1", "platform": "macos"},
+             "fields": {"name": "chat", "ms": 1200, "typed": "不该收"}},
             {"id": "bad id!", "type": "crash", "at": 1},
             {"id": "x", "type": "keystroke", "at": 1},
+            {"id": "y", "type": "screen", "at": 1, "client": {"kind": "fridge"}},
         ]}, received_at=NOW)
-        self.assertEqual(result, {"accepted": 2, "rejected": 2})
+        self.assertEqual((result["accepted"], result["rejected"], result["duplicates"]), (2, 3, 0))
         events, cursor = store.read_after(None)
         self.assertEqual([e["type"] for e in events], ["crash", "screen"])
-        self.assertNotIn("text", events[0])  # unknown fields are dropped
-        self.assertEqual(len(events[0]["frames"]), 8)
-        self.assertEqual(events[0]["at"], NOW - 59)
-        store.accept({"events": [event("screen", 3, name="home")]}, received_at=NOW)
+        crash, screen = events
+        self.assertEqual(crash["client"], {"kind": "android", "version": "0.18.1"})
+        self.assertNotIn("text", crash["fields"])          # unregistered fields are dropped
+        self.assertEqual(len(crash["fields"]["frames"]), 8)
+        self.assertEqual(screen["client"]["kind"], "desktop")
+        self.assertNotIn("typed", screen["fields"])
+        self.assertEqual((crash["origin"], crash["at"]), ("mac", NOW - 59))
+        self.assertEqual(flat(crash)["app_version"], "0.18.1")
+        again = store.accept({"events": [event("crash", 1, exception="x")]}, received_at=NOW)
+        self.assertEqual((again["accepted"], again["duplicates"]), (0, 1))
+        self.assertEqual(store.ingest(events + [dict(screen, id="e3")], origin="win", received_at=NOW), 1)
         more, _ = store.read_after(cursor)
-        self.assertEqual([e["name"] for e in more], ["home"])
+        self.assertEqual([(e["id"], e["origin"]) for e in more], [("e3", "mac")])
         with self.assertRaises(EventError):
             store.accept({"events": [event("screen", n) for n in range(201)]})
 
-    def test_the_http_endpoint_accepts_events(self):
+    def test_types_can_be_added_and_retention_is_per_type(self):
+        types = Types([EventType("voice_retry", {"count": int}, "usage", 1)])
+        store = EventStore(self.state, types)
+        store.accept({"events": [
+            {"id": "v1", "type": "voice_retry", "at": int((NOW - 2 * 86400) * 1000), "count": 2},
+            {"id": "s1", "type": "screen", "at": int((NOW - 2 * 86400) * 1000), "name": "home"}]},
+            received_at=NOW - 2 * 86400)
+        self.assertEqual(store.prune(NOW), 1)
+        self.assertEqual([e["id"] for e in store.all()], ["s1"])
+        self.assertEqual(store.delete(kind="screen"), 1)
+        self.assertEqual(store.all(), [])
+        self.assertIn("voice_retry", [t["name"] for t in types.describe()["types"]])
+
+    def test_http_endpoints_and_info_declaration(self):
         url, loaded = start_runtime(self, self.folder / "rt")
-        request = urllib.request.Request(
-            url + "/v1/app/events", method="POST",
-            data=json.dumps({"events": [event("error", 1, screen="chat", message="发送失败")]}).encode("utf-8"),
-            headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        def post(path, body):
+            request = urllib.request.Request(url + path, method="POST", data=json.dumps(body).encode("utf-8"),
+                                             headers={"Authorization": "Bearer " + TOKEN,
+                                                      "Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read())
+        self.assertEqual(post("/v1/events", {"events": [event("error", 1, screen="chat", message="发送失败")]}),
+                         {"accepted": 1, "rejected": 0, "duplicates": 0})
+        self.assertEqual(post("/v1/app/events", {"events": [event("error", 1)]})["duplicates"], 1)
+        self.assertTrue(post("/v1/iterate/lease", {"action": "acquire", "stage": "detect"})["granted"])
+        request = urllib.request.Request(url + "/v1/info", headers={"Authorization": "Bearer " + TOKEN})
         with urllib.request.urlopen(request, timeout=5) as response:
-            self.assertEqual(json.loads(response.read()), {"accepted": 1, "rejected": 0})
-        events, _ = AppEvents(loaded.state_dir).read_after(None)
-        self.assertEqual(events[0]["message"], "发送失败")
+            info = json.loads(response.read())
+        self.assertIn("events_v1", info["capabilities"])
+        self.assertIn("crash", [t["name"] for t in info["events"]["types"]])
+        self.assertIn("collect", info["iterate"]["stages"])
+        self.assertEqual(EventStore(loaded.state_dir).all()[0]["fields"]["message"], "发送失败")
+
+
+class MeshEventsTest(IterateCase):
+    def test_events_reach_every_computer_and_leases_exclude_each_other(self):
+        from test_mesh import Network, Node
+        from test_runtime import until
+        network = Network()
+        self.addCleanup(lambda: [mesh.close() for mesh in network.nodes.values()])
+        a = Node(self, network, "Mac")
+        b = Node(self, network, "Windows", peers=[a.url])
+        stored = EventStore(a.xiaoyou._config.state_dir, origin=a.service.runtime_id).accept(
+            {"events": [event("crash", 1, exception="Boom")]})
+        a.mesh.publish_events(stored["events"])
+        b_store = EventStore(b.xiaoyou._config.state_dir)
+        self.assertTrue(until(lambda: len(b_store.all()) == 1))
+        self.assertEqual(b_store.all()[0]["origin"], a.service.runtime_id)
+
+        self.assertTrue(a.mesh.lease("acquire", "detect", 3600)["granted"])
+        self.assertTrue(until(lambda: any(item["holder"] == a.service.runtime_id for item in b.mesh.leases())))
+        refused = b.mesh.lease("acquire", "detect", 3600)
+        self.assertFalse(refused["granted"])
+        self.assertEqual(refused["holder_name"], "Mac")
+        self.assertTrue(a.mesh.lease("renew", "plan", 3600)["granted"])
+        a.mesh.lease("release", "done", 60)
+        self.assertTrue(until(lambda: b.mesh.lease("acquire", "detect", 3600)["granted"]))
 
 
 class PluginTest(IterateCase):
@@ -165,7 +229,7 @@ class PlannerTest(IterateCase):
 
 class PipelineTest(IterateCase):
     def seed(self):
-        AppEvents(self.state).accept({"events": [
+        EventStore(self.state).accept({"events": [
             event("crash", 1, exception="java.lang.NullPointerException: card",
                   frames=["com.yanyuliu.pockethub.MainActivity.show(MainActivity.java:200)"]),
         ] + [event("rage_tap", n, screen="home", region="2,3", count=5) for n in range(2, 6)]},
@@ -230,7 +294,7 @@ class PipelineTest(IterateCase):
         posted = []
         run = self.runner(NoModel([]), posted=posted).run(force=True, dry_run=True)
         self.assertEqual(run["state"], "triaged")
-        self.assertIn("没有可用的模型", run["stages"]["plan"]["skipped"])
+        self.assertIn("可用的模型", run["stages"]["plan"]["skipped"])
         self.assertEqual(Runs(self.state).cursors(), {})
         self.assertEqual(IssueBook(self.state).issues, {})
         self.assertEqual(posted, [])
@@ -244,6 +308,28 @@ class PipelineTest(IterateCase):
                      poster=lambda *a: None).run(force=True)
         self.assertIn("ZeroDivisionError", run["stages"]["collect"]["app_events"]["error"])
         self.assertNotEqual(run["state"], "failed")
+
+    def test_another_computer_holding_the_lease_stops_the_run(self):
+        self.seed()
+        refuse = lambda action, stage, seconds=0: {"granted": False, "holder_name": "Windows", "stage": "plan"}
+        run = self.runner(leaser=refuse).run(force=True)
+        self.assertEqual(run["state"], "elsewhere")
+        self.assertIn("Windows", run["report"])
+        self.assertEqual(IssueBook(self.state).issues, {})  # nothing analysed here
+
+    def test_the_lease_is_renewed_per_stage_and_released(self):
+        self.seed()
+        runner = self.runner(FakeGateway([good_plan()]))
+        runner.gateway.available = lambda purpose: purpose == "iterate.plan"
+        self.assertEqual(runner.run(force=True)["state"], "planned")
+        self.assertEqual(self.leases, [("acquire", "detect"), ("renew", "plan"), ("release", "done")])
+
+    def test_a_computer_without_the_repository_leaves_planning_to_others(self):
+        self.seed()
+        (self.repo / ".git").rmdir()
+        run = self.runner(FakeGateway([good_plan()])).run(force=True)
+        self.assertEqual(run["state"], "triaged")
+        self.assertIn("留给能写方案的电脑", run["stages"]["plan"]["skipped"])
 
     def test_only_one_run_at_a_time(self):
         with Lock(self.state):

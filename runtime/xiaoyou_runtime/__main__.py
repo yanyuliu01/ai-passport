@@ -92,6 +92,7 @@ def main(argv=None) -> int:
     reports_module.add_arguments(commands)
     desktop_handoff.add_arguments(commands)
     iterate_cli.add_arguments(commands)
+    iterate_cli.add_event_arguments(commands)
     model_gateway.add_arguments(commands)
     usage_parser = commands.add_parser(
         "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
@@ -122,6 +123,8 @@ def main(argv=None) -> int:
         return app_release.run(config, args)
     if args.command == "iterate":
         return iterate_cli.run(config, args)
+    if args.command == "events":
+        return iterate_cli.run_events(config, args)
     if args.command == "models":
         return model_gateway.run(config, args)
     if args.command == "usage":

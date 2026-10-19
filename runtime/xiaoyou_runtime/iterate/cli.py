@@ -99,3 +99,73 @@ def run(config: Any, args: Any) -> int:
         print("%s → %s" % (matches[0], book.issues[matches[0]].status))
         return 0
     return 2
+
+
+# ---- python3 -m xiaoyou_runtime events … ----
+
+def add_event_arguments(subparsers: Any) -> None:
+    parser = subparsers.add_parser("events", help="使用事件：登记的类型、存了多少、导出、删除")
+    actions = parser.add_subparsers(dest="action", metavar="动作")
+    actions.add_parser("types", help="登记的事件类型、字段、隐私级别、保留期")
+    actions.add_parser("summary", help="各客户端、各类型、各来源电脑存了多少")
+    export = actions.add_parser("export", help="把事件按行打印成 JSON")
+    export.add_argument("--since", default="7d", help="多久以内，例如 7d、24h（默认 7d）")
+    delete = actions.add_parser("delete", help="删除事件（这台电脑上的；别的电脑上的要在那台也删）")
+    delete.add_argument("--type", dest="kind", help="只删这一类")
+    delete.add_argument("--before", help="只删这个日期之前的，例如 2026-10-01")
+
+
+def _span(text: str) -> float:
+    unit = {"d": 86400, "h": 3600, "m": 60}.get(text[-1:], None)
+    try:
+        return float(text[:-1]) * unit if unit else float(text) * 86400
+    except ValueError:
+        raise SystemExit("时间写成 7d、24h 这样")
+
+
+def run_events(config: Any, args: Any) -> int:
+    from .events import EventStore, types_from_dirs
+    settings = settings_of(config)
+    types = types_from_dirs(settings.plugin_dirs)
+    store = EventStore(config.state_dir, types)
+    if args.action in (None, "types"):
+        for item in types.all():
+            print("%-12s %-10s 保留 %3d 天  %s" % (item.name, item.privacy, item.retention_days,
+                                                 "、".join(item.fields)))
+        return 0
+    if args.action == "summary":
+        from collections import Counter
+        events = store.all()
+        if not events:
+            print("还没有事件。存放位置：%s" % store.folder)
+            return 0
+        by_type = Counter(e.get("type") for e in events)
+        by_client = Counter((e.get("client") or {}).get("kind", "?") for e in events)
+        by_origin = Counter(e.get("origin", "?")[:12] for e in events)
+        print("共 %d 条，存放在 %s" % (len(events), store.folder))
+        print("类型：" + "，".join("%s %d" % item for item in by_type.most_common()))
+        print("客户端：" + "，".join("%s %d" % item for item in by_client.most_common()))
+        print("最先收到的电脑：" + "，".join("%s %d" % item for item in by_origin.most_common()))
+        print("最早 %s，最新 %s" % (_when(min(e.get("at", 0) for e in events)),
+                                  _when(max(e.get("at", 0) for e in events))))
+        return 0
+    if args.action == "export":
+        since = time.time() - _span(args.since)
+        for item in store.all():
+            if float(item.get("at") or 0) >= since:
+                print(json.dumps(item, ensure_ascii=False))
+        return 0
+    if args.action == "delete":
+        before = None
+        if args.before:
+            try:
+                before = time.mktime(time.strptime(args.before, "%Y-%m-%d"))
+            except ValueError:
+                print("--before 写成 2026-10-01 这样")
+                return 2
+        if args.kind is None and before is None:
+            print("至少给 --type 或 --before 之一，免得一下子全删了")
+            return 2
+        print("删掉 %d 条" % store.delete(args.kind, before))
+        return 0
+    return 2

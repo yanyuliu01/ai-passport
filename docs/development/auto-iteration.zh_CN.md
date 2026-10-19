@@ -4,7 +4,7 @@
 
 # 自动迭代与统一采集（设计稿）
 
-> 状态：2026-10-19。每一节都标了**已实现**（现在的代码）或**设计**（还没写）。已实现的部分：插件框架、安卓 App 使用事件上报、四个数据源、六个规则检测器、模型网关、单问题方案插件（`template_plan`，会被版本方案取代）。其余都是设计。
+> 状态：2026-10-19。每一节都标了**已实现**（现在的代码）或**设计**（还没写）。已实现的部分：插件框架、统一采集（`/v1/events`、事件类型表、事件随 mesh 同步到每台电脑、`events` 命令，安卓 App 已改用新格式）、迭代租约与能力声明、四个数据源、六个规则检测器、模型网关、单问题方案插件（`template_plan`，会被版本方案取代）。其余都是设计。
 
 ## 一句话
 
@@ -48,7 +48,7 @@
 | 协商 | Runtime 声明 `gateway_v1` | Runtime 在 `/v1/info` 里声明 `events_v1` 和它认识的事件类型与版本；客户端只发对方认识的 |
 | 存哪 | 记录中心 / 消息日志 | 单独的事件库。**不混进聊天记录**：保留和隐私规则不同 |
 
-### 事件格式（设计）
+### 事件格式（已实现）
 
 ```json
 {"id": "客户端生成的唯一编号", "at": 1800000000000, "type": "screen", "type_version": 1,
@@ -56,8 +56,8 @@
  "session": "这次启动的编号", "fields": {"name": "home", "ms": 3200}}
 ```
 
-- 接口统一为 `POST /v1/events`，一次最多 200 条。现有的 `POST /v1/app/events`（**已实现**）保留为别名，按 `client.kind=android` 处理，已装的 App 不受影响。
-- **事件类型表**登记每种事件允许的字段和长度、隐私级别（`usage` 使用行为、`diagnostic` 错误与崩溃、`content` 含原话）、保留天数。Runtime 只留登记过的字段，别的丢掉（**已实现**：现在是写死在 `iterate/store.py` 里的表，设计是改成可登记的插件）。
+- 接口是 `POST /v1/events`，一次最多 200 条，回复 `accepted`、`rejected`、`duplicates` 三个数。旧名字 `POST /v1/app/events` 是同一个接口；旧版 App 的扁平格式也认，按 `client.kind=android` 处理。代码在 `iterate/events.py`。
+- **事件类型表**登记每种事件允许的字段和长度、隐私级别（`usage` 使用行为、`diagnostic` 错误与崩溃、`content` 含原话）、保留天数。Runtime 只留登记过的字段，别的丢掉，并按各类型的保留天数清理。内置 6 种；插件目录里的文件写 `EVENT_TYPES = [EventType(...)]` 可以加新的。`/v1/info` 里有 `events_v1` 能力和完整的类型表，客户端据此决定发什么。
 - 不采集消息正文、输入内容、截图。`content` 级只用于 Runtime 自己产生的对话抱怨信号，原话本来就在电脑上，且只保留摘要。
 
 ### 上报约定（所有客户端相同）
@@ -78,9 +78,9 @@
 - **能不能跑看能力。** 每台在 `/v1/info` 里声明自己能做哪几步：有没有这个仓库、有没有 JDK 和 Android SDK、能不能连上要用的模型。一台只申请自己能做的步骤：比如一台没有安卓工具链，它可以做归并、找根因、写方案，构建和发布留给有工具链的那台。
 - **接手从最后完成的那一步开始。** 每一步的产物（问题组、根因、版本方案、审核结果、工作项、已完成工作项的补丁）都作为记录同步；补丁用 git bundle 的形式随记录传，接手的电脑在自己的 worktree 里应用后继续。只有正在做、还没提交的那个工作项需要重做。接手前要确认两台的仓库基于同一个提交，不一致就先停下提示主人。
 - **哪台都能把新版本给手机。** 发布记录和安装包随 mesh 同步（大文件按校验值按需拉取），手机连的是哪台都能拿到同一个新版本；撤回也一样。
-- 现在（**已实现**的部分）：手机只发给当前选中的那台 Runtime，事件存在那台的 `state/iterate/app-events/`，还不随 mesh 同步；自动迭代在开了 `iterate.enabled` 的每台电脑上各自跑，还没有租约，所以**多台电脑时先只在一台上打开**。
+- 现在（**已实现**）：使用事件和迭代租约都随 mesh 同步（记录类型 `events`、`lease`，旧版 Runtime 会忽略它们）；每批事件是一条记录、一个序号，按 `id` 去重；`/v1/info` 的 `iterate.stages` 声明这台能做 `collect`、`detect`、`plan`（有仓库和可用模型）、`build`（有 JDK 和 Android SDK）。一轮开跑前向本机 Runtime 申请租约（`POST /v1/iterate/lease`），别的电脑持有就记为"别的电脑正在跑"并停下；这台写不了方案就跳过方案，留给能写的电脑。**还没做**：用 git bundle 在电脑之间接着做补丁、发布的安装包随 mesh 同步、Runtime 自己在记录中心直接写事件（现在仍从卡片推算）、设备事件经手机转发。
 
-### 管理（设计）
+### 管理（已实现）
 
 ```bash
 python3 -m xiaoyou_runtime events types        # 登记的事件类型、字段、隐私级别、保留期
@@ -152,7 +152,7 @@ python3 -m xiaoyou_runtime events delete --type rage_tap --before 2026-10-01
 | **L2 一键确认** | 改交互流程、新增界面元素、碰网络请求或本地缓存的读取逻辑 | 进授权横条，主人点一次才发 |
 | **L3 只出报告** | 同步协议、授权、更新机制本身、Runtime 代码、固件、Manifest / 权限、构建配置 | 只写方案和补丁，不发布；主人可以转给 CC / Codex |
 
-这一级由 harness 按改到的文件定下限（**已实现**：`planner.risk_floor`），模型自评更低不算。
+这一级由 harness 按改到的文件定下限（**已实现**：`planner.risk_floor`），模型自评更低不算。`QuickReview.java` 和 `QuickReviewDialog.java` 控制审批范围和主人决定，下限为 L3；自动迭代不能自动发布对它们的修改。
 
 发布时必须注意：
 
@@ -300,8 +300,8 @@ python3 -m xiaoyou_runtime iterate run [--force]
 python3 -m xiaoyou_runtime iterate status
 python3 -m xiaoyou_runtime iterate issues [--all]
 python3 -m xiaoyou_runtime iterate issue <编号前缀> --open|--ignore
-# 设计
 python3 -m xiaoyou_runtime events types|summary|export|delete
+# 设计
 python3 -m xiaoyou_runtime iterate map                     # 问题地图：分组、根因
 python3 -m xiaoyou_runtime iterate replay <run> --stage <步骤> --plugin <别的插件>
 python3 -m xiaoyou_runtime iterate rollback <run>
@@ -318,7 +318,7 @@ python3 -m xiaoyou_runtime iterate rollback <run>
 | **P0 框架** ✅ | 插件加载、权限、数据对象、Run 目录、`iterate` 命令、后台调度 | `tests/test_iterate.py` |
 | **P1 安卓采集** ✅ 代码 | `UsageEvents` + `/v1/app/events`；四个数据源；六个检测器 | 手机用一天后 `iterate issues` 有带证据的问题——**还没在手机上验证** |
 | **P2 模型网关** ✅ | 本地优先、联网预算、JSON 重问、用量记录 | `tests/test_model_gateway.py`；还没装本地模型 |
-| **P3 统一采集** | `/v1/events`、事件类型表、`/v1/info` 声明、Runtime 直接写事件、事件随 mesh 同步、迭代租约与能力声明、`events` 命令；安卓改用新格式 | 两台电脑切换使用一天，每台都有全部事件、没有重复；关掉正在跑的那台，另一台在租约过期后接手 |
+| **P3 统一采集** 大半 ✅ | `/v1/events`、事件类型表、`/v1/info` 声明、Runtime 直接写事件、事件随 mesh 同步、迭代租约与能力声明、`events` 命令；安卓改用新格式 | 两台电脑切换使用一天，每台都有全部事件、没有重复；关掉正在跑的那台，另一台在租约过期后接手 |
 | **P4 外层循环** | 使用路径、归并、找根因、版本方案、产品原则文档、方案审核卡 | 只出方案模式跑两批，主人认为方案是完整的而不是零散补丁 |
 | **P5 内层循环** | 工作项、版本分支、补丁循环、整版门禁 | 用历史问题（头像偏右、首页英文等）回放，能产出通过门禁的版本 |
 | **P6 发布与观察** | 分级、本机发布、版本保留与撤回、主题观察、卡上的撤回 / 暂停 | 先只开 L2 跑两周，再打开 L1 |

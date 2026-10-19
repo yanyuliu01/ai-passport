@@ -226,7 +226,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         super.onCreate(savedInstanceState);
         String versionName = "";
         try { versionName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
-        UsageEvents.init(getFilesDir(), versionName);
+        UsageEvents.init(getFilesDir(), versionName, "android-" + android.os.Build.VERSION.SDK_INT);
         UsageEvents.installCrashHandler();
         rageTap = new UsageEvents.RageTap(dp(48));
         getWindow().setStatusBarColor(BACKGROUND);

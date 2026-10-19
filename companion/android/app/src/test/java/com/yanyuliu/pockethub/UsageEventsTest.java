@@ -14,14 +14,29 @@ public class UsageEventsTest {
         fields.put("screen", "chat");
         fields.put("message", "发送失败：\"超时\"\n重试");
         fields.put("frames", Arrays.asList("a.b(C.java:1)", "x\\y"));
-        String line = UsageEvents.line("id1", "error", 1800000000000L, "0.20.1", "s1", fields);
+        String line = UsageEvents.line("id1", "error", 1800000000000L,
+                UsageEvents.client("phone-1", "0.20.1", "android-34"), "s1", fields);
         Map<String, Object> parsed = Json.parseObject(line);
         assertEquals("error", Json.string(parsed, "type"));
-        assertEquals("发送失败：\"超时\"\n重试", Json.string(parsed, "message"));
         assertEquals(1800000000000.0, Json.number(parsed, "at"), 0);
-        assertEquals("x\\y", Json.list(parsed, "frames").get(1));
+        Map<String, Object> client = Json.object(parsed.get("client"));
+        assertEquals("android", Json.string(client, "kind"));
+        assertEquals("phone-1", Json.string(client, "id"));
+        assertEquals("android-34", Json.string(client, "platform"));
+        Map<String, Object> got = Json.object(parsed.get("fields"));
+        assertEquals("发送失败：\"超时\"\n重试", Json.string(got, "message"));
+        assertEquals("x\\y", Json.list(got, "frames").get(1));
         Map<String, Object> body = Json.parseObject(UsageEvents.body(Arrays.asList(line, line)));
         assertEquals(2, Json.list(body, "events").size());
+    }
+
+    @Test public void clientIdIsKeptAcrossLaunches() throws Exception {
+        java.io.File folder = java.nio.file.Files.createTempDirectory("usage").toFile();
+        java.io.File idFile = new java.io.File(folder, "usage-client-id");
+        String first = UsageEvents.stableId(idFile);
+        assertTrue(first.matches("[a-f0-9]{32}"));
+        assertEquals(first, UsageEvents.stableId(idFile));
+        assertFalse(UsageEvents.client("", "", "").containsKey("id"));
     }
 
     @Test public void crashFieldsKeepTheTopEightFrames() {

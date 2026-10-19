@@ -17,6 +17,8 @@ from .. import model_gateway
 from .objects import FORMAT, Issue, Signal
 from .plugins import Context, Plugin, PluginError, Registry, Skip, builtin_registry
 from .settings import IterateSettings, parse
+from .events import EventStore
+from .lease import LeaseClient, capabilities
 from .store import IssueBook, Lock, Runs, SignalStore, write_json
 
 # 方案出了却一直没人接着做（还没有 implementer 时就是这样）：过这么多天重新放回待选。
@@ -34,7 +36,7 @@ def registry_of(settings: IterateSettings) -> Registry:
 class Runner:
     def __init__(self, config: Any, settings: Optional[IterateSettings] = None,
                  registry: Optional[Registry] = None, gateway: Any = None,
-                 now: Optional[float] = None, poster: Any = None):
+                 now: Optional[float] = None, poster: Any = None, leaser: Any = None):
         self.config = config
         self.state_dir = Path(config.state_dir)
         self.settings = settings or settings_of(config)
@@ -42,6 +44,8 @@ class Runner:
         self.gateway = gateway if gateway is not None else model_gateway.from_config(config)
         self.now = time.time() if now is None else now
         self.poster = poster
+        self.leaser = leaser if leaser is not None else LeaseClient(config)
+        self.leased = False
         self.log: List[str] = []
 
     def _ctx(self, plugin: Plugin) -> Context:
@@ -59,7 +63,25 @@ class Runner:
 
     def run(self, force: bool = False, dry_run: bool = False) -> Dict[str, Any]:
         with Lock(self.state_dir):
-            return self._run(force, dry_run)
+            try:
+                return self._run(force, dry_run)
+            finally:
+                if self.leased:
+                    self.leaser("release", "done")
+                    self.leased = False
+
+    def _lease(self, run: Dict[str, Any], stage: str) -> bool:
+        """申请或续约；别的电脑持有时记下是谁，返回 False。试跑不申请。"""
+        if run.get("dry_run"):
+            return True
+        answer = self.leaser("renew" if self.leased else "acquire", stage)
+        if answer.get("granted"):
+            self.leased = True
+            return True
+        run["state"] = "elsewhere"
+        run["stages"]["lease"] = {"holder": answer.get("holder_name") or answer.get("holder", ""),
+                                  "stage": answer.get("stage", "")}
+        return False
 
     def _run(self, force: bool, dry_run: bool) -> Dict[str, Any]:
         runs = Runs(self.state_dir)
@@ -105,6 +127,7 @@ class Runner:
             store.append(fresh)
             runs.save_cursors(cursors)
             store.prune(self.settings.retention_days, self.now)
+            EventStore(self.state_dir).prune(self.now)
         pending = int(state.get("pending_signals", 0)) + len(fresh)
         last = float(state.get("last_run_at", 0))
         due = pending >= self.settings.min_new_signals or self.now - last >= self.settings.interval_hours * 3600
@@ -113,6 +136,8 @@ class Runner:
             run["stages"]["trigger"] = {"pending_signals": pending, "hours_since_last": round((self.now - last) / 3600, 1)}
             if not dry_run:
                 runs.save_state(dict(state, pending_signals=pending))
+            return
+        if not self._lease(run, "detect"):
             return
         if not dry_run:
             runs.save_state({"last_run_at": self.now, "pending_signals": 0, "last_run": run["id"]})
@@ -156,7 +181,13 @@ class Runner:
         run["state"] = "triaged"
 
         plan: Optional[Dict[str, Any]] = None
-        for plugin in self._plugins("planner")[:1]:
+        planners = self._plugins("planner")[:1]
+        if planners and "plan" not in capabilities(self.settings, self.gateway)["stages"]:
+            run["stages"]["plan"] = {"skipped": "这台电脑没有仓库或可用的模型，留给能写方案的电脑"}
+            planners = []
+        if planners and not self._lease(run, "plan"):
+            return
+        for plugin in planners:
             try:
                 plan = plugin.run(self._ctx(plugin), chosen)
             except Skip as reason:
@@ -200,6 +231,7 @@ def _post_report(config: Any, payload: Dict[str, Any]) -> None:
 
 
 STATE_WORDS = {
+    "elsewhere": "别的电脑正在跑这一轮",
     "waiting": "信号还不够，等下一轮", "detected": "找到了问题", "nothing": "没有需要改的问题",
     "triaged": "选了一个问题，但这次没出方案", "planned": "出了方案（还没改代码）", "failed": "这一轮出错了",
 }
@@ -210,6 +242,9 @@ def report(run: Dict[str, Any]) -> str:
     lines = ["# 自动迭代 %s" % run["id"], "", "结果：%s" % STATE_WORDS.get(run["state"], run["state"])]
     if run.get("dry_run"):
         lines.append("（试跑：没有保存游标和问题簿）")
+    if run["stages"].get("lease"):
+        lease = run["stages"]["lease"]
+        lines.append("由 %s 在跑（%s）" % (lease.get("holder") or "另一台电脑", lease.get("stage") or "-"))
     if run.get("error"):
         lines.append("出错：%s" % run["error"])
     collect = run["stages"].get("collect", {})

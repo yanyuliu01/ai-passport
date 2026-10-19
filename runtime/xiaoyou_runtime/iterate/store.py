@@ -1,6 +1,6 @@
 """自动迭代的数据，都在 state/iterate/ 下：
 
-  app-events/<日期>.jsonl   手机报来的使用事件（POST /v1/app/events），只追加
+  app-events/<日期>.jsonl   各客户端报来的使用事件，见 events.py
   signals/<日期>.jsonl      各 source 插件产生的信号，只追加；超过保留天数整天删掉
   cursors.json              每个 source 读到哪了
   issues.json               问题簿：fingerprint → Issue，跨轮累计
@@ -11,26 +11,12 @@
 
 import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .objects import Issue, Signal
 
-EVENT_TYPES = ("screen", "rage_tap", "error", "crash", "slow", "update")
-MAX_EVENTS_PER_POST = 200
-EVENT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-# 每种事件留哪些字段、各自多长；别的字段丢掉（不收正文、输入内容）。
-EVENT_FIELDS: Dict[str, Dict[str, Any]] = {
-    "screen": {"name": 40, "ms": int},
-    "rage_tap": {"screen": 40, "region": 16, "count": int},
-    "error": {"screen": 40, "message": 120},
-    "crash": {"exception": 160, "frames": list, "thread": 40},
-    "slow": {"metric": 40, "ms": int, "screen": 40},
-    "update": {"result": 40, "version": 32},
-}
-MAX_FRAMES = 8
 LOCK_STALE_SECONDS = 2 * 3600
 
 
@@ -81,84 +67,6 @@ def read_json(path: Path, default: Any) -> Any:
         return default
 
 
-class EventError(ValueError):
-    pass
-
-
-def clean_event(raw: Any) -> Dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise EventError("事件应该是对象")
-    kind = raw.get("type")
-    if kind not in EVENT_TYPES:
-        raise EventError("不认识的事件类型 %r" % kind)
-    event_id = raw.get("id")
-    if not isinstance(event_id, str) or not EVENT_ID.fullmatch(event_id):
-        raise EventError("事件要有 id（字母、数字、_ -，最多 64 个）")
-    at = raw.get("at")
-    if isinstance(at, bool) or not isinstance(at, (int, float)) or at <= 0:
-        raise EventError("事件要有 at（毫秒时间戳）")
-    event: Dict[str, Any] = {"id": event_id, "type": kind, "at": float(at) / 1000.0}
-    for key, limit in (("app_version", 32), ("session", 64)):
-        value = raw.get(key)
-        if isinstance(value, str):
-            event[key] = value[:limit]
-    for key, rule in EVENT_FIELDS[kind].items():
-        value = raw.get(key)
-        if value is None:
-            continue
-        if rule is int:
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                event[key] = int(value)
-        elif rule is list:
-            if isinstance(value, list):
-                event[key] = [str(item)[:160] for item in value[:MAX_FRAMES]]
-        elif isinstance(value, str):
-            event[key] = value[:rule]
-    return event
-
-
-class AppEvents:
-    def __init__(self, state_dir: Path):
-        self.folder = Path(state_dir) / "iterate" / "app-events"
-
-    def accept(self, payload: Any, received_at: Optional[float] = None) -> Dict[str, int]:
-        """收一批事件。坏的单条跳过，不让整批失败（手机会重发整批）。"""
-        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
-            raise EventError("请求体应该是 {\"events\": [...]}")
-        events = payload["events"]
-        if len(events) > MAX_EVENTS_PER_POST:
-            raise EventError("一次最多 %d 条事件" % MAX_EVENTS_PER_POST)
-        received_at = time.time() if received_at is None else received_at
-        accepted, rejected = [], 0
-        for raw in events:
-            try:
-                event = clean_event(raw)
-            except EventError:
-                rejected += 1
-                continue
-            event["received_at"] = round(received_at, 3)
-            accepted.append(event)
-        _append(self.folder / ("%s.jsonl" % _day(received_at)), accepted)
-        return {"accepted": len(accepted), "rejected": rejected}
-
-    def read_after(self, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """从游标往后读；游标是 {"file": 文件名, "line": 读过几行}。"""
-        cursor = cursor or {}
-        done_file, done_line = cursor.get("file", ""), int(cursor.get("line", 0))
-        events: List[Dict[str, Any]] = []
-        last = dict(cursor)
-        if not self.folder.is_dir():
-            return events, last
-        for path in sorted(self.folder.glob("*.jsonl")):
-            if path.name < done_file:
-                continue
-            rows = _read_lines(path)
-            start = done_line if path.name == done_file else 0
-            events.extend(rows[start:])
-            last = {"file": path.name, "line": len(rows)}
-        return events, last
-
-
 class SignalStore:
     def __init__(self, state_dir: Path):
         self.folder = Path(state_dir) / "iterate" / "signals"
@@ -190,12 +98,11 @@ class SignalStore:
     def prune(self, keep_days: int, now: Optional[float] = None) -> int:
         cutoff = _day((time.time() if now is None else now) - keep_days * 86400)
         removed = 0
-        for folder in (self.folder, self.folder.parent / "app-events"):
-            if folder.is_dir():
-                for path in folder.glob("*.jsonl"):
-                    if path.stem < cutoff:
-                        path.unlink()
-                        removed += 1
+        if self.folder.is_dir():
+            for path in self.folder.glob("*.jsonl"):
+                if path.stem < cutoff:
+                    path.unlink()
+                    removed += 1
         return removed
 
 

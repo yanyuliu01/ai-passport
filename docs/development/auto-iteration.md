@@ -4,7 +4,7 @@
 
 # Auto-iteration and unified collection (design draft)
 
-> Status: 2026-10-19. Every section is marked **implemented** (current code) or **design** (not written yet). Implemented: the plugin framework, Android app usage event reporting, four sources, six rule detectors, the model gateway, and a single-issue planner (`template_plan`, to be replaced by version plans). Everything else is design.
+> Status: 2026-10-19. Every section is marked **implemented** (current code) or **design** (not written yet). Implemented: the plugin framework, unified collection (`/v1/events`, the event type registry, events synced to every computer over the mesh, the `events` command, the Android app on the new format), iteration leases and capability declarations, four sources, six rule detectors, the model gateway, and a single-issue planner (`template_plan`, to be replaced by version plans). Everything else is design.
 
 ## In one sentence
 
@@ -48,7 +48,7 @@ It mirrors the agent gateway: the agent gateway connects the runtime **outward**
 | Negotiation | runtime declares `gateway_v1` | runtime declares `events_v1` and its known event types and versions in `/v1/info`; clients send only those |
 | Storage | record hub / message log | a separate event store, **not mixed into chat records**: retention and privacy rules differ |
 
-### Event format (design)
+### Event format (implemented)
 
 ```json
 {"id": "client-generated unique id", "at": 1800000000000, "type": "screen", "type_version": 1,
@@ -56,8 +56,8 @@ It mirrors the agent gateway: the agent gateway connects the runtime **outward**
  "session": "launch id", "fields": {"name": "home", "ms": 3200}}
 ```
 
-- One endpoint, `POST /v1/events`, at most 200 events per request. The existing `POST /v1/app/events` (**implemented**) stays as an alias treated as `client.kind=android`, so installed apps keep working.
-- The **event type registry** lists each type's allowed fields and lengths, privacy class (`usage` behaviour, `diagnostic` errors and crashes, `content` contains the owner's words) and retention days. The runtime keeps only registered fields (**implemented** as a fixed table in `iterate/store.py`; the design makes it a pluggable registry).
+- The endpoint is `POST /v1/events`, at most 200 events per request, answering `accepted`, `rejected` and `duplicates` counts. The old name `POST /v1/app/events` is the same endpoint, and the old app's flat format is still accepted as `client.kind=android`. Code: `iterate/events.py`.
+- The **event type registry** lists each type's allowed fields and lengths, privacy class (`usage` behaviour, `diagnostic` errors and crashes, `content` contains the owner's words) and retention days. The runtime keeps only registered fields and prunes by each type's retention. Six types are built in; a plugin file with `EVENT_TYPES = [EventType(...)]` adds more. `/v1/info` declares the `events_v1` capability and the full registry so clients know what to send.
 - No message text, typed input or screenshots. The `content` class is only for complaint signals the runtime derives itself; the words are already on the computer and only excerpts are kept.
 
 ### Reporting contract (same for every client)
@@ -78,9 +78,9 @@ The Android app already does this (`UsageEvents.java`). A desktop client will fo
 - **Capability decides who may run what.** Each computer declares in `/v1/info` which stages it can do: whether it has the repository, JDK and Android SDK, and access to the models needed. A computer only applies for stages it can do; one without the Android toolchain can group, analyse and plan, leaving build and release to one that has it.
 - **Take-over resumes from the last finished stage.** Every stage's output (groups, root causes, version plan, review result, work items, patches of finished items) is a synced record; patches travel as git bundles, and the computer taking over applies them in its own worktree. Only the uncommitted work item in progress is redone. Before taking over, both repositories must be on the same base commit; otherwise it stops and tells the owner.
 - **Any computer can give the phone the new version.** Release records and packages sync over the mesh (large files fetched on demand by checksum), so whichever computer the phone is connected to offers the same new version; rollback likewise.
-- Today (**implemented**): the phone sends only to the selected runtime; events stay in that runtime's `state/iterate/app-events/` and are not synced over the mesh. Auto-iteration runs separately on every computer with `iterate.enabled` and has no lease yet, so **with several computers, enable it on only one for now**.
+- Today (**implemented**): usage events and iteration leases sync over the mesh (record kinds `events` and `lease`; older runtimes ignore them); each batch is one record with one sequence number, deduplicated by `id`; `iterate.stages` in `/v1/info` declares whether this computer can `collect`, `detect`, `plan` (repository and an available model) and `build` (JDK and Android SDK). A run asks the local runtime for the lease (`POST /v1/iterate/lease`) before starting; if another computer holds it, the run is recorded as "running elsewhere" and stops; a computer that cannot plan skips planning for one that can. **Not yet**: continuing patches across computers via git bundles, syncing published packages over the mesh, the runtime writing its own events in the record hub (still derived from cards), and device events forwarded by the phone.
 
-### Management (design)
+### Management (implemented)
 
 ```bash
 python3 -m xiaoyou_runtime events types        # registered types, fields, privacy class, retention
@@ -152,7 +152,7 @@ A version's tier is the highest tier among its work items.
 | **L2 one-tap approval** | interaction flow changes, new UI elements, network request or local cache read logic | goes to the approval bar; publishes after one tap |
 | **L3 report only** | sync protocol, approvals, the update mechanism itself, runtime code, firmware, manifest / permissions, build configuration | plan and patch only, no release; the owner can hand it to CC / Codex |
 
-The harness sets a floor from the files touched (**implemented**: `planner.risk_floor`); a lower self-assessment from the model does not count.
+The harness sets a floor from the files touched (**implemented**: `planner.risk_floor`); a lower self-assessment from the model does not count. `QuickReview.java` and `QuickReviewDialog.java` have an L3 floor because they control approval scope and owner decisions; the iteration pipeline cannot automatically publish changes to them.
 
 Release rules:
 
@@ -300,8 +300,8 @@ python3 -m xiaoyou_runtime iterate run [--force]
 python3 -m xiaoyou_runtime iterate status
 python3 -m xiaoyou_runtime iterate issues [--all]
 python3 -m xiaoyou_runtime iterate issue <prefix> --open|--ignore
-# design
 python3 -m xiaoyou_runtime events types|summary|export|delete
+# design
 python3 -m xiaoyou_runtime iterate map                     # issue map: groups and root causes
 python3 -m xiaoyou_runtime iterate replay <run> --stage <stage> --plugin <other>
 python3 -m xiaoyou_runtime iterate rollback <run>
@@ -318,7 +318,7 @@ The 10-16 discussion with Codex about collecting the owner's conversations with 
 | **P0 framework** ✅ | plugin loading, permissions, data objects, run directories, `iterate` command, background scheduling | `tests/test_iterate.py` |
 | **P1 Android collection** ✅ code | `UsageEvents` + `/v1/app/events`; four sources; six detectors | a day of phone use yields issues with evidence — **not yet verified on the phone** |
 | **P2 model gateway** ✅ | local first, network budget, JSON retries, usage ledger | `tests/test_model_gateway.py`; no local model installed yet |
-| **P3 unified collection** | `/v1/events`, event type registry, `/v1/info` declaration, runtime-written events, events synced over the mesh, iteration leases and capability declarations, `events` commands; Android moves to the new format | a day of switching between two computers: every computer has every event, no duplicates; switching off the running computer lets another take over after the lease expires |
+| **P3 unified collection** mostly ✅ | `/v1/events`, event type registry, `/v1/info` declaration, runtime-written events, events synced over the mesh, iteration leases and capability declarations, `events` commands; Android moves to the new format | a day of switching between two computers: every computer has every event, no duplicates; switching off the running computer lets another take over after the lease expires |
 | **P4 outer loop** | journeys, grouping, root causes, version plans, product principles document, plan review card | two batches in plan-only mode; the owner finds the plans complete rather than scattered patches |
 | **P5 inner loop** | work items, version branch, patch loop, whole-version gates | replaying past issues (avatar offset, English on the home page, …) yields versions that pass the gates |
 | **P6 release and observation** | tiers, local release, version retention and rollback, theme observation, rollback / pause on the card | two weeks with L2 only, then L1 |

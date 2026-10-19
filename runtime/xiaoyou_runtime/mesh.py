@@ -50,7 +50,10 @@ OFFLINE_SECONDS = 300
 # 指令这么久没被执行就作废：主人不会想让一句很久以前的话突然被做。
 COMMAND_SECONDS = 600
 RETRY_SECONDS = (2, 5, 10, 30, 60)
-LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000, "share": 2000}
+LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000, "share": 2000,
+          "events": 3000, "lease": 20}
+# 自动迭代的租约（iterate/lease.py）：持有者多久不续就算放手。
+LEASE_MAX_SECONDS = 6 * 3600
 ID = re.compile(r"^[0-9a-f]{32}$")
 REVERSE_KINDS = {value: key for key, value in KINDS.items()}
 
@@ -482,7 +485,7 @@ class Mesh:
         stored, _ = self._replicas.position(self.runtime_id)
         if stored == mine:
             records += [record for record in self._replicas.since(self.runtime_id, after)
-                        if record["k"] == "share" and record["oseq"] <= seq]
+                        if record["k"] in ("share", "events", "lease") and record["oseq"] <= seq]
         if not records:
             # 序号涨了但都不是这台自己的记录（比如别人的副本）：没东西给，游标落后一点也无妨。
             return None
@@ -563,6 +566,8 @@ class Mesh:
                     self._result(origin, data)
                 elif kind == "share":
                     self.shares.apply(origin, self._peer_name(origin), data)
+                elif kind == "events":
+                    self._event_store().ingest(data.get("events") or [], origin)
             except Exception as error:  # 一条坏记录不能挡住后面的
                 sys.stderr.write("网络记录 %s/%s 没落成：%s: %s\n" % (kind, record["id"], type(error).__name__, error))
         for task_id in touched:
@@ -890,6 +895,60 @@ class Mesh:
             self._replicas.store(self.runtime_id, self._cards.epoch,
                                  [{"k": "share", "id": key, "oseq": oseq, "data": data}], oseq)
             self._changed.notify_all()
+
+    # ---- 使用事件和自动迭代的租约（见 docs/development/auto-iteration 的"无中心"） ----
+
+    def _event_store(self) -> Any:
+        if getattr(self, "_events", None) is None:
+            from .iterate.events import EventStore
+            self._events = EventStore(Path(self._config.state_dir), origin=self.runtime_id)
+        return self._events
+
+    def publish_events(self, events: List[Dict[str, Any]]) -> None:
+        """这台刚收下的一批使用事件：一批一条记录、一个序号，随网络同步给每台。"""
+        if not events:
+            return
+        with self._lock:
+            oseq = self._record.sequence()
+            self._replicas.store(self.runtime_id, self._cards.epoch,
+                                 [{"k": "events", "id": uuid.uuid4().hex, "oseq": oseq,
+                                   "data": {"events": events}}], oseq)
+            self._changed.notify_all()
+
+    def leases(self) -> List[Dict[str, Any]]:
+        """网络里每台最新的迭代租约（含这台）。"""
+        found = []
+        for origin in self._replicas.origins():
+            data = self._replicas.get(origin, "lease", "iterate")
+            if data is not None:
+                found.append(dict(data, holder=origin))
+        return found
+
+    def lease(self, action: str, stage: str, seconds: float) -> Dict[str, Any]:
+        """申请、续约或放手。申请时别的电脑持有没过期的租约就不给：先申请的赢，同时申请按编号比。"""
+        now = self._clock()
+        seconds = max(60.0, min(float(seconds), LEASE_MAX_SECONDS))
+        with self._lock:
+            mine = self._replicas.get(self.runtime_id, "lease", "iterate") or {}
+            holding = mine.get("until", 0) > now
+            if action == "release":
+                if not holding:
+                    return {"granted": True, "holder": self.runtime_id}
+                data = dict(mine, until=0, stage=stage)
+            else:
+                applied = mine["applied_at"] if holding else now
+                for other in self.leases():
+                    if other["holder"] == self.runtime_id or other.get("until", 0) <= now:
+                        continue
+                    if (other.get("applied_at", now), other["holder"]) < (applied, self.runtime_id):
+                        return {"granted": False, "holder": other["holder"], "holder_name": other.get("name", ""),
+                                "stage": other.get("stage", ""), "until": other["until"]}
+                data = {"name": self.name, "stage": stage, "applied_at": applied, "until": now + seconds}
+            oseq = self._record.sequence()
+            self._replicas.store(self.runtime_id, self._cards.epoch,
+                                 [{"k": "lease", "id": "iterate", "oseq": oseq, "data": data}], oseq)
+            self._changed.notify_all()
+        return {"granted": True, "holder": self.runtime_id, "until": data["until"]}
 
     def wait(self, seconds: float) -> None:
         with self._changed:

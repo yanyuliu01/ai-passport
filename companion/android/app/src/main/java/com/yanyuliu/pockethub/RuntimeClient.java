@@ -1002,9 +1002,9 @@ final class RuntimeClient {
         }
     }
 
-    /** Usage events for the runtime's auto-iteration (UsageEvents). An old runtime answers 404. */
+    /** Usage events in the unified format (UsageEvents). An old runtime answers 404 and they stay queued. */
     static void postAppEvents(Target target, String json) throws IOException {
-        requestText("POST", target.url + "/v1/app/events", target.token,
+        requestText("POST", target.url + "/v1/events", target.token,
                 json.getBytes(java.nio.charset.StandardCharsets.UTF_8), "application/json; charset=utf-8", 15);
     }
 

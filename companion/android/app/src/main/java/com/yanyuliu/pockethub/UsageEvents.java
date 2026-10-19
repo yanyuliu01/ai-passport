@@ -15,7 +15,8 @@ import java.util.UUID;
  * Usage events for the runtime's auto-iteration pipeline (docs/development/auto-iteration):
  * which screen, how long, errors shown, crashes, and repeated taps on one spot. Never message
  * text, typed input or screenshots. Events are appended to a small local file and sent in
- * batches to POST /v1/app/events; a batch is removed only after the runtime accepted it, so a
+ * batches to POST /v1/events (the unified event format, client kind "android"); a batch is
+ * removed only after the runtime accepted it, so a
  * crash or a lost connection keeps them for the next try.
  */
 final class UsageEvents {
@@ -24,14 +25,36 @@ final class UsageEvents {
     private static final Object LOCK = new Object();
     private static File file;
     private static String version = "";
+    private static String clientId = "";
+    private static String platform = "";
     private static final String SESSION = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     private static volatile boolean sending;
     private static boolean crashHandlerInstalled;
 
     private UsageEvents() {}
 
-    static void init(File folder, String appVersion) {
-        synchronized (LOCK) { file = new File(folder, "usage-events.jsonl"); version = appVersion == null ? "" : appVersion; }
+    static void init(File folder, String appVersion, String platformName) {
+        synchronized (LOCK) {
+            file = new File(folder, "usage-events.jsonl");
+            version = appVersion == null ? "" : appVersion;
+            platform = platformName == null ? "" : platformName;
+            clientId = stableId(new File(folder, "usage-client-id"));
+        }
+    }
+
+    /** A random id for this installation, kept across launches, so events from one phone group together. */
+    static String stableId(File idFile) {
+        try {
+            if (idFile.exists()) {
+                String saved = new String(Files.readAllBytes(idFile.toPath()), StandardCharsets.UTF_8).trim();
+                if (saved.matches("[A-Za-z0-9_-]{8,64}")) return saved;
+            }
+            String fresh = UUID.randomUUID().toString().replace("-", "");
+            Files.write(idFile.toPath(), fresh.getBytes(StandardCharsets.UTF_8));
+            return fresh;
+        } catch (IOException | RuntimeException error) {
+            return "";
+        }
     }
 
     /** Records a crash before the process dies, then hands it to the previous handler. */
@@ -78,8 +101,11 @@ final class UsageEvents {
     }
 
     static void record(String type, Map<String, Object> fields) {
-        String line = line(UUID.randomUUID().toString().replace("-", ""), type, System.currentTimeMillis(),
-                version, SESSION, fields);
+        String line;
+        synchronized (LOCK) {
+            line = line(UUID.randomUUID().toString().replace("-", ""), type, System.currentTimeMillis(),
+                    client(clientId, version, platform), SESSION, fields);
+        }
         synchronized (LOCK) {
             if (file == null) return;
             try {
@@ -112,7 +138,7 @@ final class UsageEvents {
                     write(file, dropSent(lines, batch));
                 }
             } catch (IOException ignored) {
-                // Offline or an old runtime without /v1/app/events: keep them and try later.
+                // Offline or an old runtime without /v1/events: keep them and try later.
             } finally {
                 sending = false;
             }
@@ -121,11 +147,20 @@ final class UsageEvents {
 
     // ---- pure helpers (unit-tested) ----
 
-    static String line(String id, String type, long at, String version, String session, Map<String, Object> fields) {
+    static Map<String, Object> client(String id, String appVersion, String platformName) {
+        Map<String, Object> client = new LinkedHashMap<>();
+        client.put("kind", "android");
+        if (id != null && !id.isEmpty()) client.put("id", id);
+        if (appVersion != null && !appVersion.isEmpty()) client.put("version", appVersion);
+        if (platformName != null && !platformName.isEmpty()) client.put("platform", platformName);
+        return client;
+    }
+
+    static String line(String id, String type, long at, Map<String, Object> client, String session,
+                       Map<String, Object> fields) {
         Map<String, Object> event = new LinkedHashMap<>();
-        event.put("id", id); event.put("type", type); event.put("at", at);
-        event.put("app_version", version); event.put("session", session);
-        event.putAll(fields);
+        event.put("id", id); event.put("type", type); event.put("at", at); event.put("type_version", 1);
+        event.put("client", client); event.put("session", session); event.put("fields", fields);
         return json(event);
     }
 

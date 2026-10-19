@@ -45,7 +45,9 @@
   GET  /v1/app                          发布的那一版 {"available","version_code","version_name","sha256","size",
                                          "published_at","note"}
   GET  /v1/app/apk                      安装包本身
-  POST /v1/app/events               {"events":[{"id","type","at",…}]} 手机的使用事件，给自动迭代用（见 iterate/store.py）
+  POST /v1/events                   {"events":[{"id","at","type","client","session","fields"}]} 各客户端的使用事件
+                                       （见 iterate/events.py；/v1/app/events 是旧名字，同一个接口）
+  POST /v1/iterate/lease             {"action","stage","seconds"} 自动迭代申请、续约、放手租约（见 iterate/lease.py）
   POST /v1/reports                     {"origin","session_id","state"?,"text"?,"upstream_id"?,"title"?,"role"?}
                                         不在这台电脑上的会话报进展（只读显示，见 reports.py）
   GET  /v1/app/packs                    资源包清单 {"packs":[{"name","files":[{"path","sha256","size","download_url"}]}]}
@@ -66,7 +68,10 @@ from . import __version__
 from .app_release import AppRelease, AppReleaseError, byte_range
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
-from .iterate.store import AppEvents, EventError
+from .iterate.events import EventError, EventStore, types_from_dirs
+from .iterate import lease as iterate_lease
+from . import model_gateway
+from .iterate.pipeline import settings_of as iterate_settings_of
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from .mesh import MAX_BODY_BYTES as MESH_BODY_BYTES, MeshError
 
@@ -88,7 +93,10 @@ def make_server(config: Config, service: Service,
     if artifacts is None:
         artifacts = getattr(service, "artifacts", None) or ArtifactStore(config)
     release = AppRelease(config.state_dir)
-    app_events = AppEvents(config.state_dir)
+    iterate_settings = iterate_settings_of(config)
+    event_types = types_from_dirs(iterate_settings.plugin_dirs)
+    iterate_gateway = model_gateway.from_config(config)
+    event_store = EventStore(config.state_dir, event_types, getattr(service, "runtime_id", ""))
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -395,6 +403,9 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "info"]:
                 info = service.info()
                 info.update(name=config.name, version=__version__)
+                info["capabilities"] = list(info.get("capabilities", [])) + ["events_v1"]
+                info["events"] = event_types.describe()
+                info["iterate"] = iterate_lease.capabilities(iterate_settings, iterate_gateway)
                 self._send(200, info)
                 return
             if parts == ["v1", "sync"]:
@@ -538,10 +549,25 @@ def make_server(config: Config, service: Service,
                 if parts == ["v1", "reports"]:
                     self._send(200, service.report(body))
                     return
-                if parts == ["v1", "app", "events"]:
+                if parts in (["v1", "events"], ["v1", "app", "events"]):
                     try:
-                        self._send(200, app_events.accept(body))
+                        result = event_store.accept(body)
                     except EventError as error:
+                        self._fail(400, str(error))
+                        return
+                    mesh = getattr(service, "mesh", None)
+                    if mesh is not None:
+                        mesh.publish_events(result["events"])
+                    self._send(200, {key: value for key, value in result.items() if key != "events"})
+                    return
+                if parts == ["v1", "iterate", "lease"]:
+                    if not isinstance(body, dict):
+                        raise RequestError("请求体应该是一个对象")
+                    try:
+                        self._send(200, iterate_lease.local_lease(
+                            body.get("action"), body.get("stage"), body.get("seconds", iterate_lease.LEASE_SECONDS),
+                            getattr(service, "mesh", None), getattr(service, "runtime_id", "")))
+                    except (ValueError, TypeError) as error:
                         self._fail(400, str(error))
                     return
                 if parts == ["v1", "messages"]:

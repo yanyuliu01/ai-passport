@@ -1,6 +1,6 @@
 """内置的 source 插件：把已有的记录变成信号。都只读，不改卡和消息。
 
-  app_events      手机报来的使用事件（POST /v1/app/events）
+  app_events      各客户端报来的使用事件（POST /v1/events，见 iterate/events.py）
   chat_feedback   主人在对话里的抱怨、纠正；有模型时让模型分类，没有时按关键词粗分
   card_failures   失败的事
   reply_latency   每句话从收到到出第一个字用了多久（Runtime 这一侧量的）
@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..objects import Signal
-from ..store import AppEvents, read_json
+from ..events import EventStore, flat
+from ..store import read_json
 
 MAX_TEXT = 200
 # 像是在抱怨或者纠正：先用这个粗筛，筛出来的才可能送去给模型分类（省钱，也少送原话）。
@@ -41,12 +42,13 @@ def _first_cursor(ctx: Any, cursor: Optional[Dict[str, Any]]) -> float:
 # ---- app_events ----
 
 def app_events(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Signal], Dict[str, Any]]:
-    events, new_cursor = AppEvents(ctx.state_dir).read_after(cursor)
+    events, new_cursor = EventStore(ctx.state_dir).read_after(cursor)
     signals = []
     for event in events:
-        data = {key: value for key, value in event.items() if key not in ("id", "type", "at")}
-        signals.append(Signal(id="app:" + event["id"], type="app." + event["type"], at=event["at"],
-                              source="app_events", data=data))
+        if not isinstance(event.get("id"), str) or not isinstance(event.get("type"), str):
+            continue
+        signals.append(Signal(id="app:" + event["id"], type="app." + event["type"],
+                              at=float(event.get("at") or 0), source="app_events", data=flat(event)))
     return signals, new_cursor
 
 
