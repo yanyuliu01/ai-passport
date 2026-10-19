@@ -8,14 +8,14 @@
 
 ## In one sentence
 
-All clients (the phone app, a future desktop client, the pocket device, the runtime itself) report usage data to the **home computer** under one contract. Once a batch has accumulated, the home computer, **mostly with local models**, groups the problems into a few themes and writes a **version-level iteration plan** that the owner reviews once. It then changes code in small steps following the plan, gates the whole version, publishes low-risk versions automatically, watches the themes after release and rolls back if things get worse. Every stage is a pluggable plugin.
+All clients (the phone app, a future desktop client, the pocket device, the runtime itself) report usage data to **any computer** under one contract, and over the mesh every computer holds all of it. Once a batch has accumulated, whichever computer is free and has the tools, **mostly with local models**, groups the problems into a few themes and writes a **version-level iteration plan** that the owner reviews once. It then changes code in small steps following the plan, gates the whole version, publishes low-risk versions automatically, watches the themes after release and rolls back if things get worse. Every stage is a pluggable plugin.
 
 ## Premises
 
 1. **Iterate by version, not by point fix.** Handle a batch of problems at once: group them, find shared root causes, write a complete version plan, then split it into work items. A single issue is evidence, not the unit of change.
 2. **Weak model, heavy harness.** No reliance on agents such as CC or Codex that plan on their own and read the whole repository. The model does narrow jobs: classify a sentence, analyse one group of issues, fill a plan template, write a small patch from given context. Finding files, assembling context, validating, building, testing, judging risk, publishing and rolling back are deterministic code.
 3. **Spend money on judgment, keep volume local.** Frequent jobs (classification, patches, build fixes) use local models; the once-per-batch job that sets direction (the version plan) may use a strong network model within a daily budget. Everything goes through the same [model gateway](#model-gateway-implemented).
-4. **Data lives on the home computer.** Usage data, the issue book and iteration all live on one designated computer; phones and other computers only buffer and forward.
+4. **No centre, free to move.** No host has to stay on: every computer holds all the data, the next stage runs on whichever computer suits it, and computers can join or leave at any time ([product principles](../product-principles.md) P17).
 5. **Everything is pluggable.** Event types, detection, grouping, planning, implementation, gates, release, observation and model backends are plugins or registry entries that configuration enables and replaces; removing a stage degrades the pipeline instead of breaking it.
 6. **Built on existing systems.** Conversations and tasks still follow the [unified message model](unified-message-model.md); client identity, capability declaration and multiple computers reuse the runtime's pairing, `/v1/info` and mesh; release uses the existing `app publish`; owner decisions go through the existing approval bar and quick review.
 7. **The [cross-stack reliability rules](cross-stack-reliability.md) still apply.** An automatically published version must preserve working features, the 3-second first response and multi-end consistency, or it does not ship.
@@ -23,13 +23,13 @@ All clients (the phone app, a future desktop client, the pocket device, the runt
 ## Overall structure
 
 ```text
- Clients                   Collection gateway (home)          Auto-iteration (home)
+ Clients                   Collection gateway (any)           Auto-iteration (lease holder)
  ─────────                ──────────────────────             ─────────────────────────────
  Android app ─┐            POST /v1/events                    Outer: once per batch
  Desktop app ─┤  local     ├ filter fields by type registry     group → root cause → version plan
  Device ──────┤  buffer    ├ deduplicate by id                  → check product principles → owner reviews once
  (via phone)  │ → delete   ├ store (daily, append-only)              ↓
- Runtime ─────┤  after ack └ not home: forward to home         Inner: per work item
+ Runtime ─────┤  after ack └ synced to every computer (mesh)   Inner: per work item
  Agents ──────┘                      ↓                          small patch → build → whole-version gates
                             signals → detectors → issue book          ↓
                                                                tier → release → watch themes → roll back
@@ -70,12 +70,15 @@ It mirrors the agent gateway: the agent gateway connects the runtime **outward**
 
 The Android app already does this (`UsageEvents.java`). A desktop client will follow the same contract. The **pocket device** does not talk to the runtime; its events go to the phone over Bluetooth and the phone forwards them as `client.kind=device`. The **runtime's own** events (reply latency, task failures, delegation) are written by the record hub when they happen instead of being reconstructed later from cards. **Agents**' quality-related execution events (delegation, failure, duration) are written by the agent gateway as well.
 
-### Home computer storage (design)
+### No centre: every computer has all data, whoever suits runs (design)
 
-- Configuration names the home computer: `"iterate": {"home": "<runtime name or runtime_id>"}`. The event store, issue book and iteration exist only there.
-- Other computers queue received events and forward them to the home computer over the existing mesh, deleting them after acknowledgement. While the home computer is off they wait and catch up later.
-- Iteration runs only on the home computer, so two computers never change code or publish at the same time. If it is off, iteration waits; a delay does not matter.
-- Today (**implemented**): the phone sends only to the selected runtime, and events stay in that runtime's `state/iterate/app-events/`. Switching between computers splits the data until forwarding exists.
+- **Every computer holds a full copy.** Usage events are origin records like any other: the computer that received them is their origin, and the mesh copies them to the others by origin sequence (append-only, deduplicated by `id`, changed only by the origin, so no conflicts). The issue book, version plans, review results and run state are records too and sync the same way, so any computer sees the whole picture.
+- **Migration moves no data by hand.** A new computer configured with the same mesh secret pulls all records from any member; an old one can be switched off or removed once at least one other computer has its records (`events summary` shows how many records on each computer nobody else has yet).
+- **A lease decides who runs, not configuration.** Before running a stage a computer writes an "iteration lease" record (which computer, which stage, until when), synced over the mesh. If two apply at once, the earlier application wins, ties broken by `runtime_id`, and the loser backs off. The holder renews while working; if it goes off or offline, the lease expires (2 hours by default) and another computer may take over.
+- **Capability decides who may run what.** Each computer declares in `/v1/info` which stages it can do: whether it has the repository, JDK and Android SDK, and access to the models needed. A computer only applies for stages it can do; one without the Android toolchain can group, analyse and plan, leaving build and release to one that has it.
+- **Take-over resumes from the last finished stage.** Every stage's output (groups, root causes, version plan, review result, work items, patches of finished items) is a synced record; patches travel as git bundles, and the computer taking over applies them in its own worktree. Only the uncommitted work item in progress is redone. Before taking over, both repositories must be on the same base commit; otherwise it stops and tells the owner.
+- **Any computer can give the phone the new version.** Release records and packages sync over the mesh (large files fetched on demand by checksum), so whichever computer the phone is connected to offers the same new version; rollback likewise.
+- Today (**implemented**): the phone sends only to the selected runtime; events stay in that runtime's `state/iterate/app-events/` and are not synced over the mesh. Auto-iteration runs separately on every computer with `iterate.enabled` and has no lease yet, so **with several computers, enable it on only one for now**.
 
 ### Management (design)
 
@@ -115,7 +118,7 @@ Freeze the batch: all unhandled issues in the issue book for the period
 ⑥ Owner reviews once: one card to approve, send back with a note, or drop a theme
 ```
 
-**Product principles document** (design): a document in the repository, approved by the owner and updated with versions, stating what the product is, what it does not do, and its interaction principles (for example: only the approval bar interrupts the owner; first meaningful reply within 3 seconds; Chinese-only UI; the phone controls and computers do the work). Version plans must cite it. The first draft is written by AI from the current code and the owner's past feedback and takes effect after the owner edits it.
+**[Product principles](../product-principles.md)**: what the product is, what it does not do and its interaction principles, numbered P1–P21. A version plan must state which principles it relies on and which it conflicts with. It is currently the AI-drafted v0.1 and takes effect after the owner edits and approves it.
 
 Without a model the outer loop still performs ① and ② and produces an "issue map" report without a plan.
 
@@ -285,7 +288,7 @@ All limits are configuration; a stronger model can loosen them and a weaker one 
 }
 ```
 
-With `enabled` true the runtime checks every 15 minutes: if the owner has nothing running it starts a subprocess for `iterate run`, which decides itself whether enough signals or time have accumulated. A crash there does not affect the runtime. The design adds `home` (the home computer) and the outer-loop plugin names.
+With `enabled` true the runtime checks every 15 minutes: if the owner has nothing running it starts a subprocess for `iterate run`, which decides itself whether enough signals or time have accumulated. A crash there does not affect the runtime. The design adds the iteration lease expiry, each computer's declaration of the stages it can run, and the outer-loop plugin names.
 
 ## Commands
 
@@ -315,7 +318,7 @@ The 10-16 discussion with Codex about collecting the owner's conversations with 
 | **P0 framework** ✅ | plugin loading, permissions, data objects, run directories, `iterate` command, background scheduling | `tests/test_iterate.py` |
 | **P1 Android collection** ✅ code | `UsageEvents` + `/v1/app/events`; four sources; six detectors | a day of phone use yields issues with evidence — **not yet verified on the phone** |
 | **P2 model gateway** ✅ | local first, network budget, JSON retries, usage ledger | `tests/test_model_gateway.py`; no local model installed yet |
-| **P3 unified collection** | `/v1/events`, event type registry, `/v1/info` declaration, runtime-written events, home computer and forwarding, `events` commands; Android moves to the new format | a day of switching between two computers: every event reaches the home computer, no duplicates |
+| **P3 unified collection** | `/v1/events`, event type registry, `/v1/info` declaration, runtime-written events, events synced over the mesh, iteration leases and capability declarations, `events` commands; Android moves to the new format | a day of switching between two computers: every computer has every event, no duplicates; switching off the running computer lets another take over after the lease expires |
 | **P4 outer loop** | journeys, grouping, root causes, version plans, product principles document, plan review card | two batches in plan-only mode; the owner finds the plans complete rather than scattered patches |
 | **P5 inner loop** | work items, version branch, patch loop, whole-version gates | replaying past issues (avatar offset, English on the home page, …) yields versions that pass the gates |
 | **P6 release and observation** | tiers, local release, version retention and rollback, theme observation, rollback / pause on the card | two weeks with L2 only, then L1 |
@@ -324,8 +327,6 @@ Each phase is committed separately and useful on its own.
 
 ## Open decisions for the owner
 
-1. **Which local model.** This Mac has no Ollama, LM Studio or llama.cpp yet. The gateway speaks the OpenAI-compatible protocol, so any of them works.
-2. **Whether version plans use a strong network model**, and the daily budget.
-3. **Which computer is home** (Mac suggested).
-4. **Product principles document**: AI drafts and the owner edits, or the owner writes first.
-5. **L1 auto-publish**: on from the start, or two weeks of L2 first.
+1. **Which local model**, and **whether version plans use a strong network model and the daily budget**: decided at implementation time. The gateway speaks the OpenAI-compatible protocol, so any local server works.
+2. **[Product principles](../product-principles.md) v0.1**: drafted by AI, awaiting the owner's edits.
+3. **L1 auto-publish**: on from the start, or two weeks of L2 first.

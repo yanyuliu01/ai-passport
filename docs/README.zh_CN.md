@@ -212,6 +212,7 @@ LICENSE                  仓库许可证
 | [开发指南](development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
 | [App／Runtime／固件可靠性](development/cross-stack-reliability.zh_CN.md) | 强制回归、3 秒首回复、连接恢复与多端一致性契约 |
 | [自动迭代流水线](development/auto-iteration.zh_CN.md) | 插件化闭环：发现 App 使用问题，本地模型改代码，过门禁后发布，出问题自动撤回 |
+| [产品原则](product-principles.zh_CN.md) | 草稿 v0.1：小幽是什么、不做什么，以及版本方案必须对照的编号原则 |
 | [AI 技能](../skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
 | [硬件资料](hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |
 | [中文字体](development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |
