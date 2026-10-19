@@ -22,7 +22,8 @@ from . import (__version__, agents as agent_module, app_release, firmware_cli, r
 from .agents import AgentError
 from .config import ConfigError, load
 from .desktop_sync import DesktopSync
-from . import desktop_handoff
+from . import desktop_handoff, model_gateway
+from .iterate import cli as iterate_cli
 from .firmware import FirmwareStore
 from .mesh import Mesh
 from .server import make_server
@@ -90,6 +91,8 @@ def main(argv=None) -> int:
     app_release.add_arguments(commands)
     reports_module.add_arguments(commands)
     desktop_handoff.add_arguments(commands)
+    iterate_cli.add_arguments(commands)
+    model_gateway.add_arguments(commands)
     usage_parser = commands.add_parser(
         "usage", help="现在去问一次订阅额度，打印每个账号还剩多少、每个帮手用的模型和档位",
         description="现在去问一次 Claude Code 和 Codex 的订阅额度并打印。不调用模型，不用先启动服务。")
@@ -117,6 +120,10 @@ def main(argv=None) -> int:
         if args.action is None:
             parser.parse_args(["app", "--help"])
         return app_release.run(config, args)
+    if args.command == "iterate":
+        return iterate_cli.run(config, args)
+    if args.command == "models":
+        return model_gateway.run(config, args)
     if args.command == "usage":
         meter = Usage(config, enabled=True)
         meter.refresh()
@@ -282,6 +289,14 @@ def main(argv=None) -> int:
                               owned=store.session_ids, approvals=xiaoyou.approvals)
         desktop.start()
         print("电脑会话同步已开启；审批 Hook 通过手机和设备回应", file=sys.stderr)
+    from .iterate.pipeline import settings_of
+    from .iterate.scheduler import Scheduler
+    iterate_settings = settings_of(config)
+    iterator = None
+    if iterate_settings.enabled:
+        iterator = Scheduler(Path(args.config).resolve(), iterate_settings, xiaoyou.cards)
+        iterator.start()
+        print("自动迭代已开启：空闲时检查使用信号（iterate status 看结果）", file=sys.stderr)
     print("小幽 Runtime %s「%s」已启动：http://%s:%d（代理 %s，默认交给 %s，语音识别 %s）" % (
         __version__, config.name, config.host, config.port, roster, config.default_agent,
         config.stt_engine), file=sys.stderr)
@@ -313,6 +328,8 @@ def main(argv=None) -> int:
             loopback.server_close()
         if desktop is not None:
             desktop.close()
+        if iterator is not None:
+            iterator.close()
         if mesh is not None:
             mesh.close()
         service.close()

@@ -1002,6 +1002,12 @@ final class RuntimeClient {
         }
     }
 
+    /** Usage events for the runtime's auto-iteration (UsageEvents). An old runtime answers 404. */
+    static void postAppEvents(Target target, String json) throws IOException {
+        requestText("POST", target.url + "/v1/app/events", target.token,
+                json.getBytes(java.nio.charset.StandardCharsets.UTF_8), "application/json; charset=utf-8", 15);
+    }
+
     private static Map<String, String> request(String method, String address, String token,
                                                byte[] body, String contentType,
                                                int timeoutSeconds)

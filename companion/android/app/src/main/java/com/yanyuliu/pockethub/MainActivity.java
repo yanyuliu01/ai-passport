@@ -96,6 +96,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private static final int LINE = 0xffeef1f6;
     private static final int BACKGROUND = 0xfff6f8fb;
     private int tab = TAB_HOME;
+    // Usage events for the runtime's auto-iteration (UsageEvents): screen dwell, repeated taps.
+    private long screenSince = System.currentTimeMillis();
+    private long eventsSentAt;
+    private UsageEvents.RageTap rageTap;
     /** 打开的那件事；null 时任务页回到聊天。 */
     private String openTask = null;
     /** 打开的那位帮手（role）。 */
@@ -209,6 +213,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 refreshUsage(HubStore.get());
             if (drawerOpen) refreshDrawer();
             if (HubStore.get().runtimeConnected()) checkForUpdate();
+            if (HubStore.get().runtimeConnected() && System.currentTimeMillis() - eventsSentAt >= 60000L) {
+                eventsSentAt = System.currentTimeMillis();
+                UsageEvents.flush(RuntimeClient.selected(MainActivity.this));
+            }
             uiHandler.postDelayed(this, 1000);
         }
     };
@@ -216,6 +224,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        String versionName = "";
+        try { versionName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        UsageEvents.init(getFilesDir(), versionName);
+        UsageEvents.installCrashHandler();
+        rageTap = new UsageEvents.RageTap(dp(48));
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -451,7 +464,44 @@ public class MainActivity extends Activity implements HubStore.Listener {
         getSharedPreferences("link", MODE_PRIVATE).edit().putBoolean("connect", connect).apply();
     }
 
-    private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); }
+    private void toast(String message) {
+        UsageEvents.error(screenName(tab), message);
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private static String screenName(int tab) {
+        switch (tab) {
+            case TAB_CHAT: return "chat";
+            case TAB_TASKS: return "task";
+            case TAB_USAGE: return "usage";
+            case TAB_SETTINGS: return "settings";
+            case TAB_MINE: return "mine";
+            case TAB_COMPANIONS: return "companions";
+            case TAB_AGENT: return "agent";
+            case TAB_HOME: return "home";
+            case TAB_DEVICE: return "device";
+            default: return "tab" + tab;
+        }
+    }
+
+    private void leaveScreen() {
+        long now = System.currentTimeMillis();
+        UsageEvents.screen(screenName(tab), now - screenSince);
+        screenSince = now;
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+        if (rageTap != null && event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+            int count = rageTap.tap(event.getX(), event.getY(), event.getEventTime());
+            if (count > 0) {
+                View root = getWindow().getDecorView();
+                UsageEvents.rageTap(screenName(tab),
+                        UsageEvents.RageTap.region(event.getX(), event.getY(), root.getWidth(), root.getHeight()), count);
+            }
+        }
+        return super.dispatchTouchEvent(event);
+    }
 
     private void refreshAvatarAnimations(View view) {
         if (view instanceof AvatarView) ((AvatarView)view).refreshAnimation();
@@ -946,6 +996,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     @Override
     protected void onPause() {
+        leaveScreen();
+        UsageEvents.flush(RuntimeClient.selected(this));
         HubStore.get().removeListener(this);
         uiHandler.removeCallbacks(tick);
         if (approvalDialog != null) approvalDialog.dismiss();
@@ -1077,6 +1129,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     // ---- Places: chat, one task, one helper, and the utility pages under 连接与设置 ----
 
     private void show(int next) {
+        if (next != tab) leaveScreen();
         saveUiContext();
         if (next == TAB_TASKS && openTask == null) next = TAB_HOME;
         if (next == TAB_AGENT && openAgent == null) next = TAB_HOME;

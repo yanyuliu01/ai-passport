@@ -10,6 +10,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 
 - [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
 - [unified-message-model.md](unified-message-model.md): the unified message structure: one message log, id rules, the sync interface, and how a new runtime or agent connects.
+- [auto-iteration.md](auto-iteration.md): design draft of the plugin-based auto-iteration pipeline: collect app usage signals, plan and patch with a local model, gate, publish and roll back.
 - [ai-guide.md](ai-guide.md): AI-assisted development workflow.
 - [Core AI skills](../../skills/README.md): development, setup, build, device testing, and diagnosis; installation and usage examples.
 

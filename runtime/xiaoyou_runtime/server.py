@@ -45,6 +45,7 @@
   GET  /v1/app                          发布的那一版 {"available","version_code","version_name","sha256","size",
                                          "published_at","note"}
   GET  /v1/app/apk                      安装包本身
+  POST /v1/app/events               {"events":[{"id","type","at",…}]} 手机的使用事件，给自动迭代用（见 iterate/store.py）
   POST /v1/reports                     {"origin","session_id","state"?,"text"?,"upstream_id"?,"title"?,"role"?}
                                         不在这台电脑上的会话报进展（只读显示，见 reports.py）
   GET  /v1/app/packs                    资源包清单 {"packs":[{"name","files":[{"path","sha256","size","download_url"}]}]}
@@ -65,6 +66,7 @@ from . import __version__
 from .app_release import AppRelease, AppReleaseError, byte_range
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
+from .iterate.store import AppEvents, EventError
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from .mesh import MAX_BODY_BYTES as MESH_BODY_BYTES, MeshError
 
@@ -86,6 +88,7 @@ def make_server(config: Config, service: Service,
     if artifacts is None:
         artifacts = getattr(service, "artifacts", None) or ArtifactStore(config)
     release = AppRelease(config.state_dir)
+    app_events = AppEvents(config.state_dir)
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -534,6 +537,12 @@ def make_server(config: Config, service: Service,
                     return
                 if parts == ["v1", "reports"]:
                     self._send(200, service.report(body))
+                    return
+                if parts == ["v1", "app", "events"]:
+                    try:
+                        self._send(200, app_events.accept(body))
+                    except EventError as error:
+                        self._fail(400, str(error))
                     return
                 if parts == ["v1", "messages"]:
                     if not isinstance(body, dict):

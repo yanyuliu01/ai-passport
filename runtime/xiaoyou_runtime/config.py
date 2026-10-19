@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from . import model_gateway
+from .iterate import settings as iterate_settings
+
 
 class ConfigError(Exception):
     """配置有问题；消息里说明是哪一项、应该怎么改。"""
@@ -155,6 +158,10 @@ class Config:
     desktop_projects: List[Path] = field(default_factory=list)
     desktop_codex_dir: Optional[Path] = None
     desktop_claude_dir: Optional[Path] = None
+    # 模型网关（model_gateway.Settings）：直接调模型时用的端点、选路和联网预算。
+    models: Any = None
+    # 自动迭代（iterate/）：原样保留配置，由 iterate.settings 解释。
+    iterate: Dict[str, Any] = field(default_factory=dict)
 
     def agent(self, name: str) -> Optional[AgentSpec]:
         for spec in self.agents:
@@ -806,6 +813,15 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     usage_refresh = _expect(usage.get("refresh_seconds", 300), int, "usage.refresh_seconds")
     if not 60 <= usage_refresh <= 86400:
         raise ConfigError("usage.refresh_seconds 应该在 60 到 86400 之间")
+    try:
+        models = model_gateway.parse(raw.get("models"), base, env)
+    except model_gateway.GatewayConfigError as error:
+        raise ConfigError(str(error))
+    iterate = _expect(raw.get("iterate", {}), dict, "iterate")
+    try:
+        iterate_settings.parse(iterate, base)  # 只检查；用的时候由 iterate 自己再读
+    except iterate_settings.IterateConfigError as error:
+        raise ConfigError(str(error))
     if workspace_type == "notion":
         if workspace_token is None:
             raise ConfigError(
@@ -863,4 +879,6 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         desktop_projects=desktop_projects,
         desktop_codex_dir=_path(desktop_codex_dir, base) if desktop_codex_dir else None,
         desktop_claude_dir=_path(desktop_claude_dir, base) if desktop_claude_dir else None,
+        models=models,
+        iterate=iterate,
     )

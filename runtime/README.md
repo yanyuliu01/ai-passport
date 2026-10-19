@@ -1565,6 +1565,10 @@ Runtime limit is 512 MiB; older Apps retain their 128 MiB limit, so the first
 large upgrade needs browser installation. This setting changes only APK delivery,
 not conversation or recording destinations.
 
+## Auto-iteration and the model gateway
+
+The runtime can collect usage signals from the phone app (`POST /v1/app/events`), complaints in chat, failed tasks and reply latency, turn them into an issue book with rule detectors, pick one issue per run and ask a model for a small, checked iteration plan. Model calls go through `model_gateway.py`, which prefers local endpoints (Ollama, llama.cpp, LM Studio, vLLM) and uses network endpoints only within a daily budget. Every stage is a plugin. Code changes, gates and automatic release are not implemented yet. See the [auto-iteration design](../docs/development/auto-iteration.md); commands: `python3 -m xiaoyou_runtime iterate --help` and `python3 -m xiaoyou_runtime models --help`.
+
 ## How a sentence is processed
 
 1. Messages queue per conversation: one sentence at a time within a

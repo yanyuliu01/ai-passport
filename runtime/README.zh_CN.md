@@ -1227,6 +1227,10 @@ Gradle 输出的同版各架构包，见[App 发布流程](../companion/README.z
 App 和 Runtime 的包体上限为 512 MiB；旧版 App 仍有 128 MiB 限制，首次大包升级需要浏览器安装。
 此配置只改变安装包下载，不改变对话和录音的传输目标。
 
+## 自动迭代和模型网关
+
+Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对话里的抱怨、失败的事和回复耗时，用规则检测器整理成问题簿，每轮选一个问题，让模型写一份经过校验的小迭代方案。调模型都经过 `model_gateway.py`：优先用本机端点（Ollama、llama.cpp、LM Studio、vLLM），联网端点只在每天预算内使用。每一步都是插件。改代码、门禁、自动发布还没做。见[自动迭代设计](../docs/development/auto-iteration.zh_CN.md)；命令：`python3 -m xiaoyou_runtime iterate --help` 和 `python3 -m xiaoyou_runtime models --help`。
+
 ## 一句话是怎么走的
 
 1. 消息按对话排队：同一个对话里一句一句处理，不同的对话互不等待。

@@ -220,6 +220,7 @@ provide reference material. Choose the entry that matches your task.
 | [Xiaoyou harness review](assets/xiaoyou-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
 | [Development](development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
 | [App / Runtime / firmware reliability](development/cross-stack-reliability.md) | Mandatory regression, 3-second first-response, connection recovery, and multi-end consistency contracts |
+| [Auto-iteration pipeline](development/auto-iteration.md) | Plugin-based loop that finds app usage problems, patches them with a local model, gates, publishes and rolls back |
 | [AI skills](../skills/README.md) | Development, environment setup, builds, device testing, and debugging |
 | [Hardware](hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |
 | [Chinese fonts](development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |
