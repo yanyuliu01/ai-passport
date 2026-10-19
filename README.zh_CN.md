@@ -144,7 +144,29 @@ Buddy（这时没有语音和卡）。
 | 把 App 的新版推到手机上 | [App 更新](companion/README.zh_CN.md#app-更新) |
 | 用 AI 编程工具改固件 | [AGENTS.zh_CN.md](AGENTS.zh_CN.md) |
 | 看硬件、引脚、内存预算 | [硬件指南](docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) |
-| 看上游基线平台和完整的文档地图 | [docs/README.zh_CN.md](docs/README.zh_CN.md) |
+| 找其他文档 | [文档](#文档) |
+
+## 文档
+
+工程与协作文档定义规则，档案与参考提供背景。按当前任务选择入口。
+
+| 入口 | 你可以找到 |
+| --- | --- |
+| [Claude Pocket](docs/claude-pocket.zh_CN.md) | 本分支的应用：配对、按键、文字覆盖范围、验收 |
+| [小幽 Harness 审查](docs/assets/xiaoyou-harness-review.zh_CN.md) | Fork 架构审查、本地可靠性问题、接入能力边界、实验及渐进 PR 计划 |
+| [开发指南](docs/development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
+| [App／Runtime／固件可靠性](docs/development/cross-stack-reliability.zh_CN.md) | 强制回归、3 秒首回复、连接恢复与多端一致性契约 |
+| [自动迭代流水线](docs/development/auto-iteration.zh_CN.md) | 插件化闭环：发现 App 使用问题，本地模型改代码，过门禁后发布，出问题自动撤回 |
+| [产品原则](docs/product-principles.zh_CN.md) | 草稿 v0.1：小幽是什么、不做什么，以及版本方案必须对照的编号原则 |
+| [AI 技能](skills/README.zh_CN.md) | 开发、环境准备、构建、真机测试与故障诊断 |
+| [硬件资料](docs/hardware-design/README.zh_CN.md) | 板卡事实、接口边界、验收清单与排障 |
+| [中文字体](docs/development/engineering/lvgl-chinese-fonts.zh_CN.md) | 字形覆盖、控件字体选择，以及中文空白排查 |
+| [社区作品与经验](docs/reference/README.zh_CN.md) | `docs/reference/<username>/` 下的应用档案和可复用知识 |
+| [参与贡献](docs/contribution/README.zh_CN.md) | 文档、提交与 Pull Request 约定 |
+| [设备图片](docs/brand/README.zh_CN.md) | 画设备时用的实物参考图 |
+| [更新记录](docs/CHANGELOG.zh_CN.md) | 版本历史 |
+
+AI 助手请从 [`AGENTS.md`](AGENTS.md) 开始，再按任务路由读取相关文档。社区：[参与贡献](.github/CONTRIBUTING.zh_CN.md) · [获取帮助](.github/SUPPORT.zh_CN.md) · [行为准则](.github/CODE_OF_CONDUCT.zh_CN.md) · [安全说明](.github/SECURITY.zh_CN.md)。
 
 ## 许可
 

@@ -10,7 +10,7 @@ chat.
 
 The preferred channel is GitHub's private vulnerability reporting form:
 
-<https://github.com/FoloToy/ai-passport/security/advisories/new>
+<https://github.com/yanyuliu01/ai-passport/security/advisories/new>
 
 If that form is unavailable, open a public issue containing only a request for a
 private security contact. Do not include vulnerability details or reproduction

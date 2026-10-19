@@ -83,5 +83,4 @@ consistent.
 
 ## Related documents
 
-- Firmware publishing to the community: [publish-to-community.md](../release/publish-to-community.md)
 - Post-release follow-up: [project-completion.md](../release/project-completion.md)

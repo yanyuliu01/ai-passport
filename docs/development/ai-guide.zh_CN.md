@@ -137,4 +137,4 @@ Unverified: 仍需板卡、仪器或用户确认的事项
 - 构建与验证命令：[build-and-test.zh_CN.md](engineering/build-and-test.zh_CN.md)
 - 代码约定：[coding-conventions.zh_CN.md](engineering/coding-conventions.zh_CN.md)
 - 硬件指南与验收矩阵：[AI 硬件开发指南](../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md)
-- 全部文档索引：[docs/README.zh_CN.md](../README.zh_CN.md)
+- 全部文档索引：[根目录 README 的文档一节](../../README.zh_CN.md#文档)

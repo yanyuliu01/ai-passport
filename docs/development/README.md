@@ -22,16 +22,12 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [firmware-layout.md](engineering/firmware-layout.md): default and user-defined partition layouts and merged-artifact validation.
 - [coding-conventions.md](engineering/coding-conventions.md): source-code and resource conventions, including Chinese font integration, blank/boxed text troubleshooting, and display acceptance.
 - [lvgl-chinese-fonts.md](engineering/lvgl-chinese-fonts.md): step-by-step CJK configuration, font generation/linking, fallback examples, glyph checks, and troubleshooting.
-- [wifi-provisioning.md](engineering/wifi-provisioning.md): Bluetooth-based Wi-Fi setup using the BLUFI reference branch, the companion mini program, and integration checks.
 
 ## CI
 
 - [CI-validation.md](ci/CI-validation.md): pull-request and main-branch checks.
 - [CI-build-and-release.md](ci/CI-build-and-release.md): tagged firmware builds and releases.
-- [CI-sync-main.md](ci/CI-sync-main.md): upstream synchronization for forks.
 
 ## Release
 
-- [publish-to-community.md](release/publish-to-community.md): publishing firmware to the AI Passport community market.
 - [project-completion.md](release/project-completion.md): project completion flow — a menu of optional closing actions.
-- [file-issues.md](release/file-issues.md): filing a suggestion as an upstream GitHub issue.

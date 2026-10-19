@@ -74,10 +74,7 @@ repository language rule: keep the default `.md` path in English and the paired
 An entry is a single `.md` file (with its `.zh_CN.md` peer) stored flat under
 `docs/reference/<username>/` and named after the entry's content summary in
 lowercase-kebab-case (e.g. `audio-compression-trade-offs.md`), describing the
-topic rather than an opaque timestamp. Each entry is routed before submission:
-general, upstream-benefiting experience goes to the upstream
-`FoloToy/ai-passport` as a PR; fork-specific customization stays in the fork per
-[`docs/fork-guide.md`](../fork-guide.md).
+topic rather than an opaque timestamp. Entries are committed in this repository.
 
 ## Archiving an application
 
@@ -85,13 +82,12 @@ When an application is published, archive it under the repository-relative
 `docs/reference/<username>/<app-name>/`
 with an AI-generated bilingual functional summary (`README.md` / `.zh_CN.md`) and
 optionally a how-to guide. The archive is **text-only** — record the cover image
-by file name and format only, and do not store the firmware `.bin`. The `plays-archive`
-skill drives the archive and its convention. Add the application to this index
+by file name and format only, and do not store the firmware `.bin`. Add the application to this index
 and its Simplified Chinese peer in the same change.
 
 ## Related
 
-- Repository overview and demo branches: [`../README.md`](../README.md)
+- Repository overview and documentation index: [`README.md`](../../README.md)
 
 ### yanyuliu01
 

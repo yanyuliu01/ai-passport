@@ -125,4 +125,4 @@ that on-device testing is not applicable; do not flash unrelated firmware just
 to satisfy this workflow. This test invitation does not authorize commits,
 pushes, or any of the optional [project-closing actions](release/project-completion.md).
 
-Related documents: [build and test](engineering/build-and-test.md), [coding conventions](engineering/coding-conventions.md), [hardware guide](../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md), [documentation index](../README.md), and [root `AGENTS.md`](../../AGENTS.md).
+Related documents: [build and test](engineering/build-and-test.md), [coding conventions](engineering/coding-conventions.md), [hardware guide](../hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md), [documentation index](../../README.md#documentation), and [root `AGENTS.md`](../../AGENTS.md).

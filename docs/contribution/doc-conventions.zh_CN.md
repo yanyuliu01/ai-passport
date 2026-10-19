@@ -19,7 +19,7 @@
 GitHub 还会在文件页面之外展示 `.github/` 中的 `CONTRIBUTING`、`CODE_OF_CONDUCT`、
 `SECURITY` 和 `SUPPORT` 文档。两种语言的切换均须放在第一个非空行、HTML 块之外，
 使用仓库根路径的 Markdown 链接，例如 `[简体中文](/.github/CODE_OF_CONDUCT.zh_CN.md)`；其他仓库内链接也使用
-根路径，例如 `/docs/README.md`。HTML 语言切换中的裸文件名在仓库首页可能丢失
+根路径，例如 `/docs/claude-pocket.md`。HTML 语言切换中的裸文件名在仓库首页可能丢失
 `.github/` 目录。不要把上游仓库所有者或 `main` 写死在这些文档链接中，根相对
 链接会保留当前仓库与分支。参见 GitHub 的
 [相对链接规则](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#relative-links)。
@@ -58,24 +58,24 @@ VENDORED_DOC_ROOTS: tuple[str, ...] = (
 
 - 所有任务只强制先读仓库根 `AGENTS.md`。
 - 按 `AGENTS.md` 的路由表读取与当前修改相关的文档和源码，不默认读取全部 README。
-- 产品总览见 `docs/README.md`；需要发现其它文档时再读取 `docs/README.md`。
+- 产品总览见根目录 `README.zh_CN.md`；需要发现其它文档时读它的“文档”一节。
 - 修改某个事实时，更新其权威来源以及直接引用该事实的文档，不复制新的事实源。
 
 ## 文档职责
 
-- **上游基线文档**：描述 AI Passport 硬件、BSP、基线 demo、工程约束和验收方法，可以且应当进入上游。
-- **通用协作与工程规范**：描述代码风格、测试、提交、CI 和 AI 工作流，可以进入上游，但必须以本仓库真实工具和流程为准。
-- **fork 项目文档**：只描述某个 fork 的产品需求、业务逻辑或素材，放在 fork 自己的根 `README.md` 或 `docs/assets/`，不回合上游。
+- **产品文档**：描述小幽做什么、各部分怎么工作：设备、手机 App、Runtime 以及它们的设计决定。
+- **硬件文档**：描述板卡、BSP 行为、工程约束和验收方法。
+- **协作与工程规范**：描述代码风格、测试、提交、CI 和 AI 工作流，必须以本仓库真实工具和流程为准。
 
 ## 放置位置
 
-- 仓库根目录仅保留工具发现入口（`AGENTS.md`、`CLAUDE.md` 及其翻译）、可选的 fork README 配对、许可证、构建清单和 ESP-IDF 配置。
+- 仓库根目录仅保留工具发现入口（`AGENTS.md`、`CLAUDE.md` 及其翻译）、根目录 README 配对、许可证、构建清单和 ESP-IDF 配置。
 - 项目说明与变更历史放入 `docs/`，按协作、开发、硬件和软件职责分类。
 - GitHub 自动识别的社区文档、模板、Issue Form 和 workflow 放入 `.github/`。
 - 可复用资源放入 `assets/`，项目 skill 放入 `skills/`，自动化脚本放入 `tools/`。
-- 仓库检查会拒绝新增其它根目录 Markdown。不要为了显眼而把文档放根目录，应从 `docs/README.md` 建立入口。
+- 仓库检查会拒绝新增其它根目录 Markdown。不要为了显眼而把文档放根目录，应从根目录 README 的“文档”一节建立入口。
 
-不要创建只有目录说明而没有实际用途的空骨架。新增文档必须在 `docs/README.md` 或所属目录索引中登记；删除或移动文档时同步更新所有链接。
+不要创建只有目录说明而没有实际用途的空骨架。新增文档必须在根目录 README 的“文档”一节或所属目录索引中登记；删除或移动文档时同步更新所有链接。
 
 ## 变更日志所有权
 

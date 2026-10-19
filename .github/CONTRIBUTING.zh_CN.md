@@ -3,17 +3,15 @@
 # 贡献指南
 
 感谢你为 FoloToy AI Passport 贡献代码、文档、固件和反馈。本仓库是面向 AI agent 的
-开源可穿戴 AI 硬件的开发基线。它常被 fork 后二次开发，fork 用户约定见
-[`docs/fork-guide.zh_CN.md`](/docs/fork-guide.zh_CN.md)。
+开源可穿戴 AI 硬件的开发基线。
 
 ## 开始之前
 
 - 先读 [`AGENTS.zh_CN.md`](/AGENTS.zh_CN.md)：它是 AI agent 应遵循规则的权威入口与索引，不是本指南的替代品。
-- 先读 [`README.zh_CN.md`](/docs/README.zh_CN.md) 的硬件能力契约，以及
-  [AI 硬件开发指南](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) 的完整硬件上下文。
+- 先读 [AI 硬件开发指南](/docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.zh_CN.md) 里的硬件能力契约和完整硬件上下文。
 - 参与社区时请遵守 [`CODE_OF_CONDUCT.zh_CN.md`](/.github/CODE_OF_CONDUCT.zh_CN.md)；普通使用问题见 [`SUPPORT.zh_CN.md`](/.github/SUPPORT.zh_CN.md)。
 - 不要提交凭证、令牌、授权文件或个人数据。
-- 仓库的 `main` 分支始终与上游基线保持同步；fork 用户在 `feature/*` 分支开发功能（见 `docs/fork-guide.md`）。
+- 在 `feature/*` 分支开发功能，通过 Pull Request 合并。
 
 ## 开发与验证
 

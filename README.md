@@ -158,7 +158,29 @@ number from `firmware list`).
 | Ship a new app version to the phone | [App updates](companion/README.md#app-updates) |
 | Change the firmware with an AI coding tool | [AGENTS.md](AGENTS.md) |
 | Read about hardware, pins, and the memory budget | [Hardware guide](docs/hardware-design/AI_HARDWARE_DEVELOPMENT_GUIDE.md) |
-| See the upstream baseline platform and the full documentation map | [docs/README.md](docs/README.md) |
+| Find any other document | [Documentation](#documentation) |
+
+## Documentation
+
+Engineering and contribution guides define the rules; archives and references provide background. Pick the entry for your task.
+
+| Resource | What you will find |
+| --- | --- |
+| [Claude Pocket](docs/claude-pocket.md) | The application on this branch: pairing, controls, text coverage, acceptance |
+| [Xiaoyou harness review](docs/assets/xiaoyou-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
+| [Development](docs/development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
+| [App / Runtime / firmware reliability](docs/development/cross-stack-reliability.md) | Mandatory regression, 3-second first-response, connection recovery, and multi-end consistency contracts |
+| [Auto-iteration pipeline](docs/development/auto-iteration.md) | Plugin-based loop that finds app usage problems, patches them with a local model, gates, publishes and rolls back |
+| [Product principles](docs/product-principles.md) | Draft v0.1: what Xiaoyou is, what it does not do, and the numbered principles version plans must check against |
+| [AI skills](skills/README.md) | Development, environment setup, builds, device testing, and debugging |
+| [Hardware](docs/hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |
+| [Chinese fonts](docs/development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |
+| [Community projects and experience](docs/reference/README.md) | Playbooks and reusable knowledge under `docs/reference/<username>/` |
+| [Contributing](docs/contribution/README.md) | Documentation, commits, and pull-request conventions |
+| [Device images](docs/brand/README.md) | Reference photos of the device for drawing it |
+| [Changelog](docs/CHANGELOG.md) | Release history |
+
+AI agents: start with [`AGENTS.md`](AGENTS.md) and follow its task-specific routing. Community: [Contribute](.github/CONTRIBUTING.md) · [Get help](.github/SUPPORT.md) · [Code of conduct](.github/CODE_OF_CONDUCT.md) · [Security](.github/SECURITY.md).
 
 ## License
 
