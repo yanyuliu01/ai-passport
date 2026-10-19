@@ -2,123 +2,223 @@
   <a href="auto-iteration.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Auto-iteration pipeline (design draft)
+# Auto-iteration and unified collection (design draft)
 
-> Status: 2026-10-19. **Implemented**: the plugin framework, app usage event reporting, four sources, six rule detectors, triage, the model gateway and the `template_plan` planner (P0, P1 and most of P2). **Not yet**: code changes, gates, release, observation (P3, P4). Each section says what is current code and what is still design.
+> Status: 2026-10-19. Every section is marked **implemented** (current code) or **design** (not written yet). Implemented: the plugin framework, Android app usage event reporting, four sources, six rule detectors, the model gateway, and a single-issue planner (`template_plan`, to be replaced by version plans). Everything else is design.
 
 ## In one sentence
 
-The runtime keeps collecting usage signals from the app. Once enough have accumulated, a **local model** finds a problem, writes an iteration plan, changes the app code and passes the gates. Low-risk changes are published to the phone automatically; higher-risk ones wait for one tap from the owner. After release the runtime keeps watching and rolls back automatically if the problem is not fixed or things got worse. Every stage is a pluggable plugin.
+All clients (the phone app, a future desktop client, the pocket device, the runtime itself) report usage data to the **home computer** under one contract. Once a batch has accumulated, the home computer, **mostly with local models**, groups the problems into a few themes and writes a **version-level iteration plan** that the owner reviews once. It then changes code in small steps following the plan, gates the whole version, publishes low-risk versions automatically, watches the themes after release and rolls back if things get worse. Every stage is a pluggable plugin.
 
 ## Premises
 
-1. **Weak model, heavy harness.** The pipeline does not rely on agents such as CC or Codex that plan on their own and read the whole repository. The model does three narrow jobs: classify a piece of text, fill in a plan template, and write a small patch from context it is given. Finding files, assembling context, validating formats, building, testing, judging risk, publishing and rolling back are deterministic runtime code.
-2. **Everything is pluggable.** Sources, detectors, planning, implementation, verification, release, observation and the model backend are plugins that configuration enables, orders and replaces. Removing a plugin degrades the pipeline instead of breaking it (without an implementer it only produces plan reports).
-3. **Built on existing records.** Conversations and tasks still follow the [unified message model](unified-message-model.md); there is no second source of truth for conversations. Releases use the existing `app publish`; anything that needs the owner goes through the existing approvals / quick review.
-4. **The [cross-stack reliability rules](cross-stack-reliability.md) still apply.** An automatically published version must also preserve working features, the 3-second first response and multi-end consistency. The gates check for this; a version that fails is not published.
+1. **Iterate by version, not by point fix.** Handle a batch of problems at once: group them, find shared root causes, write a complete version plan, then split it into work items. A single issue is evidence, not the unit of change.
+2. **Weak model, heavy harness.** No reliance on agents such as CC or Codex that plan on their own and read the whole repository. The model does narrow jobs: classify a sentence, analyse one group of issues, fill a plan template, write a small patch from given context. Finding files, assembling context, validating, building, testing, judging risk, publishing and rolling back are deterministic code.
+3. **Spend money on judgment, keep volume local.** Frequent jobs (classification, patches, build fixes) use local models; the once-per-batch job that sets direction (the version plan) may use a strong network model within a daily budget. Everything goes through the same [model gateway](#model-gateway-implemented).
+4. **Data lives on the home computer.** Usage data, the issue book and iteration all live on one designated computer; phones and other computers only buffer and forward.
+5. **Everything is pluggable.** Event types, detection, grouping, planning, implementation, gates, release, observation and model backends are plugins or registry entries that configuration enables and replaces; removing a stage degrades the pipeline instead of breaking it.
+6. **Built on existing systems.** Conversations and tasks still follow the [unified message model](unified-message-model.md); client identity, capability declaration and multiple computers reuse the runtime's pairing, `/v1/info` and mesh; release uses the existing `app publish`; owner decisions go through the existing approval bar and quick review.
+7. **The [cross-stack reliability rules](cross-stack-reliability.md) still apply.** An automatically published version must preserve working features, the 3-second first response and multi-end consistency, or it does not ship.
 
-## Pipeline
+## Overall structure
 
 ```text
- ┌──────────── Collect (continuous, background) ────────────┐
- │ app events · complaints/corrections in chat · failed cards · sync/update failures · latency │
- └──────────────────┬───────────────────────┘
-                    ↓ appended to state/iterate/signals/*.jsonl
- Detect (mostly rules) → Issue (fingerprint dedup, count, severity, evidence IDs)
-                    ↓ batch threshold / schedule / owner request
- Triage: score and pick ONE issue for this run (one fix per run)
-                    ↓
- Plan: model fills a template (goal, where, acceptance, risk self-check) → harness validates
-                    ↓
- Implement: in a separate git worktree, model patches file by file → apply → build → feed errors back → bounded retries
-                    ↓
- Gates: unit tests · build · static repo checks · diff scope/size · Chinese text/resources · replay cases
-                    ↓
- Policy: risk tier → auto-publish / one-tap owner approval / report only
-                    ↓
- Release: bump version → app publish (local only by default) → record source commit
-                    ↓
- Observe: compare signals with the same fingerprint N hours after release → close / roll back / requeue
+ Clients                   Collection gateway (home)          Auto-iteration (home)
+ ─────────                ──────────────────────             ─────────────────────────────
+ Android app ─┐            POST /v1/events                    Outer: once per batch
+ Desktop app ─┤  local     ├ filter fields by type registry     group → root cause → version plan
+ Device ──────┤  buffer    ├ deduplicate by id                  → check product principles → owner reviews once
+ (via phone)  │ → delete   ├ store (daily, append-only)              ↓
+ Runtime ─────┤  after ack └ not home: forward to home         Inner: per work item
+ Agents ──────┘                      ↓                          small patch → build → whole-version gates
+                            signals → detectors → issue book          ↓
+                                                               tier → release → watch themes → roll back
+                    ┌────────────── model gateway (local first, network within budget) ──────────────┐
 ```
 
-Each pass is a **Run** with its own ID, state machine and directory `state/iterate/runs/<run>/`, holding the input snapshot, plan, patch, gate logs and conclusion. A run also appears in the app as a read-only card (like an external report card) showing what was found, what changed, whether it shipped and how to undo it.
+## Unified collection (collection gateway)
 
-Run states: `collected → triaged → planned → implemented → verified → (awaiting_owner) → released → observing → closed | rolled_back | abandoned`. A failing stage stops the run there with a reason; the next run starts from scratch and never resumes a half-finished one.
+It mirrors the agent gateway: the agent gateway connects the runtime **outward** to agents; the collection gateway takes data **inward** from clients. Both treat the runtime as the gateway and reuse the same identity, capability declaration and mesh.
 
-## Plugin model
-
-### Kinds
-
-| `kind` | Input → output | Default plugins |
+| Concept | Agent gateway | Collection gateway |
 | --- | --- | --- |
-| `source` | external data → `Signal` | `app_events`, `chat_feedback`, `card_failures`, `sync_health`, `update_health` |
-| `detector` | `Signal[]` → `Issue[]` | `crash`, `error_rate`, `latency_3s`, `rage_tap`, `dead_end`, `complaint_cluster` |
-| `triage` | `Issue[]` → selected `Issue` | `score_by_impact` |
-| `planner` | `Issue` + code context → `Plan` | `template_plan` |
-| `context` | `Plan` → relevant file excerpts | `java_symbol_index`, `layout_resource_index` |
-| `implementer` | `Plan` + context → `Patch` | `search_replace_loop` |
-| `gate` | worktree → pass/fail + evidence | `gradle_unit`, `gradle_assemble`, `validate_static`, `diff_scope`, `strings_zh`, `replay` |
-| `policy` | `Plan` + `Patch` + gate results → tier and action | `risk_tiers` |
-| `releaser` | build output → release record | `app_publish_local` |
-| `observer` | release record + new `Signal` → verdict | `fingerprint_compare` |
+| Who connects | agents / harnesses (Claude Code, Codex, DSH) | clients: `android`, `desktop`, `device`, `runtime`, `agent` |
+| How | one adapter per harness | every client follows one reporting contract; no adapters |
+| Registry | agent instances and capabilities | event type registry: fields, lengths, privacy class, retention |
+| Negotiation | runtime declares `gateway_v1` | runtime declares `events_v1` and its known event types and versions in `/v1/info`; clients send only those |
+| Storage | record hub / message log | a separate event store, **not mixed into chat records**: retention and privacy rules differ |
 
-### What a plugin looks like
+### Event format (design)
 
-Built-in plugins live in `runtime/xiaoyou_runtime/iterate/builtin/`; your own go in directories listed in `iterate.plugin_dirs`, each `.py` file holding a `PLUGINS` list. A plugin with the same kind and name loaded later replaces the earlier one, so your own can replace built-ins; a file that fails to load records one error and does not affect other plugins:
+```json
+{"id": "client-generated unique id", "at": 1800000000000, "type": "screen", "type_version": 1,
+ "client": {"kind": "android", "id": "device id", "version": "0.20.1", "platform": "android-14"},
+ "session": "launch id", "fields": {"name": "home", "ms": 3200}}
+```
+
+- One endpoint, `POST /v1/events`, at most 200 events per request. The existing `POST /v1/app/events` (**implemented**) stays as an alias treated as `client.kind=android`, so installed apps keep working.
+- The **event type registry** lists each type's allowed fields and lengths, privacy class (`usage` behaviour, `diagnostic` errors and crashes, `content` contains the owner's words) and retention days. The runtime keeps only registered fields (**implemented** as a fixed table in `iterate/store.py`; the design makes it a pluggable registry).
+- No message text, typed input or screenshots. The `content` class is only for complaint signals the runtime derives itself; the words are already on the computer and only excerpts are kept.
+
+### Reporting contract (same for every client)
+
+1. Events go to a bounded local buffer first (500 on Android).
+2. Batches are sent when online; **lines are deleted only after the runtime acknowledged them**, so disconnects and crashes lose nothing.
+3. Deduplication is by `id`, so resending is safe.
+4. If the runtime does not support a type (absent from `/v1/info`, or a 404), keep it and do not fail.
+5. Crashes are written before the process exits.
+
+The Android app already does this (`UsageEvents.java`). A desktop client will follow the same contract. The **pocket device** does not talk to the runtime; its events go to the phone over Bluetooth and the phone forwards them as `client.kind=device`. The **runtime's own** events (reply latency, task failures, delegation) are written by the record hub when they happen instead of being reconstructed later from cards. **Agents**' quality-related execution events (delegation, failure, duration) are written by the agent gateway as well.
+
+### Home computer storage (design)
+
+- Configuration names the home computer: `"iterate": {"home": "<runtime name or runtime_id>"}`. The event store, issue book and iteration exist only there.
+- Other computers queue received events and forward them to the home computer over the existing mesh, deleting them after acknowledgement. While the home computer is off they wait and catch up later.
+- Iteration runs only on the home computer, so two computers never change code or publish at the same time. If it is off, iteration waits; a delay does not matter.
+- Today (**implemented**): the phone sends only to the selected runtime, and events stay in that runtime's `state/iterate/app-events/`. Switching between computers splits the data until forwarding exists.
+
+### Management (design)
+
+```bash
+python3 -m xiaoyou_runtime events types        # registered types, fields, privacy class, retention
+python3 -m xiaoyou_runtime events summary      # recent counts per client and type, and where they are
+python3 -m xiaoyou_runtime events export --since 7d
+python3 -m xiaoyou_runtime events delete --type rage_tap --before 2026-10-01
+```
+
+## Outer loop: one version plan per batch (design)
+
+Triggers are unchanged: enough new signals or enough time, and the owner idle. The output is a version plan instead of a single fix.
+
+```text
+Freeze the batch: all unhandled issues in the issue book for the period
+  ↓
+① Rebuild journeys: chain each session's events
+   (which page → what was done → where it got stuck → exit) and attach the journey to issues
+  ↓
+② Group (rules): by page, journey, files likely to change, co-occurrence in a session.
+   "Repeated taps on home + error on home + complaint that an entry is hard to find" form one "home" group
+  ↓
+③ Root cause (once per group, local model): one cause behind these symptoms? Flow design or code?
+   Output: hypothesis, evidence references, confidence
+  ↓
+④ Version plan (once per batch, may use a strong network model):
+   - 2–3 themes for this version, the issues and root cause each covers
+   - how each theme changes the flow, not "add a check on line N"
+   - dependencies and order between themes
+   - what this version does not do, and why
+   - acceptance metrics per theme
+   - which existing features are affected and which regression checks are required
+  ↓
+⑤ Check against product principles: list conflicts; serious ones send the plan back
+  ↓
+⑥ Owner reviews once: one card to approve, send back with a note, or drop a theme
+```
+
+**Product principles document** (design): a document in the repository, approved by the owner and updated with versions, stating what the product is, what it does not do, and its interaction principles (for example: only the approval bar interrupts the owner; first meaningful reply within 3 seconds; Chinese-only UI; the phone controls and computers do the work). Version plans must cite it. The first draft is written by AI from the current code and the owner's past feedback and takes effect after the owner edits it.
+
+Without a model the outer loop still performs ① and ② and produces an "issue map" report without a plan.
+
+## Inner loop: implement the plan in small steps (design)
+
+```text
+Version plan → ordered work items (1–3 files each, with dependencies)
+  ↓
+A version branch auto/v<version> in a separate git worktree, from a commit (never the owner's working tree)
+  ↓
+For each work item, in dependency order:
+  harness finds the code → model writes only search/replace blocks → each search must match exactly once,
+  otherwise rewrite with the closest original → build → feed back only error lines and 20 lines around them
+  → attempts, time and tokens are capped → commit to the version branch only after the item's unit tests pass
+  ↓
+Whole-version gates: diff scope and size, all unit tests, build, static checks, Chinese glyphs,
+                     replay cases, the plan's regression checks
+  ↓
+Tier → release → observe (below)
+```
+
+When a work item cannot be done, nothing is forced: either the whole theme is dropped from this version (other themes ship), or the version stops and the card says where it got stuck so the owner can hand it to CC / Codex.
+
+## Risk tiers and release (design)
+
+A version's tier is the highest tier among its work items.
+
+| Tier | Typical change | Action |
+| --- | --- | --- |
+| **L1 auto-publish** | copy, Chinese hints, layout and alignment, empty states, visibility of existing buttons, null guards at crash sites | the owner already approved the plan; publish when all gates pass |
+| **L2 one-tap approval** | interaction flow changes, new UI elements, network request or local cache read logic | goes to the approval bar; publishes after one tap |
+| **L3 report only** | sync protocol, approvals, the update mechanism itself, runtime code, firmware, manifest / permissions, build configuration | plan and patch only, no release; the owner can hand it to CC / Codex |
+
+The harness sets a floor from the files touched (**implemented**: `planner.risk_floor`); a lower self-assessment from the model does not count.
+
+Release rules:
+
+- **Build from a commit, not the working tree.** The version branch stays local and is **not pushed**. If the owner's working tree has uncommitted app changes and the published version was built from them, auto-publish is refused (the new version would silently drop them); the version becomes L3 and asks the owner to commit first.
+- **Local only by default.** The existing `app publish` uploads to GitHub Releases (public) by default; auto-iteration uses `--local-only`, and public hosting is a separate configuration switch.
+- **Rollback publishes a higher version code.** Android does not install lower version codes, so rollback means rebuilding the last good commit with version code +1. The existing `app_release` keeps only the latest version and must retain source commits of the last few.
+- **Rate limits.** At most one automatic release per day; none while the previous version is under observation; after two consecutive rollbacks automatic publishing turns itself off until the owner re-enables it.
+- **No runtime restart.** Only the app changes at first.
+
+## Observation after release (design)
+
+After a waiting period (24 hours by default, and enough use of the new version), compare **per theme**:
+
+- Theme metrics, for example "frustration signals on the home page" (repeated taps, errors, complaints) as a whole. Down → the theme and its issues close.
+- Global guardrails: crashes, error rate, first meaningful reply time, sync failures. Any regression beyond its threshold → automatic rollback; the theme is marked "fix failed".
+- Insufficient evidence (new version barely used) → keep observing, never claim a fix.
+
+Verdicts are saved in the run directory and feed the next batch; a theme that keeps failing becomes L3 for the owner.
+
+## What the owner sees in the app
+
+**No pop-ups and no system notifications.** Things appear only in existing places, and only when the owner is needed:
+
+| When | Where | Status |
+| --- | --- | --- |
+| A run produced a plan or failed | a read-only card with origin `iterate` in the task list, showing the report | **implemented** (single-issue plans; runs that only collect post nothing) |
+| A version plan awaits review | a card: approve / send back with a note / drop a theme | design |
+| An L2 version awaits release | the approval bar at the top, with quick review | design (existing entry) |
+| A version was published | the card says what changed and how to undo it; the phone shows the usual update prompt | design |
+| Card actions | "Roll back this version", "Pause auto-iteration" | design |
+
+## Plugin model (framework implemented)
+
+| `kind` | Input → output | Plugins | Status |
+| --- | --- | --- | --- |
+| `source` | event store / records → `Signal` | `app_events`, `chat_feedback`, `card_failures`, `reply_latency` | implemented |
+| `detector` | `Signal[]` → `Issue[]` | `crash`, `app_errors`, `rage_tap`, `slow_first_reply`, `complaint_cluster`, `task_failures` | implemented |
+| `journey` | events → journeys | `session_paths` | design |
+| `grouper` | `Issue[]` → issue groups | `by_screen_path_files` | design |
+| `analyst` | group → root cause hypothesis | `group_root_cause` | design |
+| `version_planner` | groups + causes + principles → version plan | `version_plan` | design |
+| `decomposer` | version plan → work items | `work_items` | design |
+| `implementer` | work item + code → patch | `search_replace_loop` | design |
+| `gate` | version branch → pass/fail | `diff_scope`, `gradle_unit`, `gradle_assemble`, `validate_static`, `strings_zh`, `replay` | design |
+| `policy` | plan + patches + gates → tier | `risk_tiers` | design (floor rule implemented) |
+| `releaser` | build output → release | `app_publish_local` | design |
+| `observer` | release + new signals → verdict | `theme_compare` | design |
+| `triage` / `planner` | single-issue pick / single-issue plan | `score_by_impact` / `template_plan` | implemented; superseded by the outer loop and kept as a fallback for single fixes |
+
+Built-ins live in `runtime/xiaoyou_runtime/iterate/builtin/`; your own go in `iterate.plugin_dirs`, each `.py` holding a `PLUGINS` list. A later plugin with the same kind and name replaces an earlier one; a file that fails to load records one error:
 
 ```python
 def detect(ctx, signals):              # ctx opens only the permissions this plugin declared
     ...
     return [Issue(fingerprint=..., title=..., severity=..., evidence=[...])]
 
-PLUGINS = [{
-    "name": "rage_tap", "kind": "detector", "version": 1,
-    "consumes": ["app.rage_tap"],      # only these signal types; a trailing . means prefix
-    "permissions": [],                 # see below
-    "run": detect,
-}]
+PLUGINS = [{"name": "rage_tap", "kind": "detector", "version": 1,
+            "consumes": ["app.rage_tap"], "permissions": [], "run": detect}]
 ```
 
-How `run` is called per kind: source `run(ctx, cursor) -> (signals, new_cursor)`; detector `run(ctx, signals) -> [Issue]`; triage `run(ctx, issues) -> Issue | None`; planner `run(ctx, issue) -> plan`. Raising `Skip` means "cannot do it this time" (for example no model available) and is not an error.
+**Permissions** are declared and checked by `ctx`: `read_state`, `read_repo`, `model`, and later `write_worktree`, `git_commit`, `publish`, `network`. Undeclared means unavailable. No plugin can `git push`. Plugins run in the runtime's process: this guards against accidental overreach and is not a security sandbox.
 
-Plugins talk only through data objects (`Signal`, `Issue`, `Plan`, `Patch`, `GateResult`, `Release`): versioned JSON saved in the run directory. Any stage can therefore be rerun alone, compared against another plugin, or replayed in tests from saved inputs.
+Plugins exchange versioned JSON objects saved in `state/iterate/runs/<id>/`, so any stage can be rerun alone, compared against another plugin, or replayed in tests.
 
-**Permissions** are declared and checked by `ctx`: `read_state` (state directory), `read_repo` (repository path), `model` (model gateway), plus `write_worktree`, `git_commit`, `publish` and `network` for later stages. Anything undeclared raises `PermissionDenied`. Built-in detectors have no permissions; no plugin can `git push`. Plugins run in the runtime's process, so this guards against accidental overreach and is not a security sandbox: do not put plugins of unknown origin in `plugin_dirs`.
+## Model gateway (implemented)
 
-### Configuration
+The goal is cost: **use a local model whenever possible**; network models are a fallback with a daily spending cap. It is not specific to auto-iteration: `model_gateway.py` serves every place in the runtime that calls a model directly.
 
-This is what the current code accepts; every value shown is the default (the whole `iterate` section may be omitted; it then just never runs automatically):
-
-```json
-"iterate": {
-  "enabled": false,
-  "trigger": {"min_new_signals": 50, "interval_hours": 24, "only_when_idle": true},
-  "pipeline": {
-    "source":   ["app_events", "chat_feedback", "card_failures", "reply_latency"],
-    "detector": ["crash", "app_errors", "rage_tap", "slow_first_reply", "complaint_cluster", "task_failures"],
-    "triage": "score_by_impact",
-    "planner": "template_plan",
-    "implementer": null
-  },
-  "plugin_dirs": [],
-  "areas": ["app"],
-  "allow": ["companion/android/app/src/main/**"],
-  "deny": ["**/AndroidManifest.xml", "**/build.gradle"],
-  "repo_dir": "..",
-  "min_issue_count": 3, "window_days": 7, "retention_days": 30, "votes": 3, "max_classify": 40
-}
-```
-
-Removing a plugin from a list unplugs it; `"planner": null` only finds issues and writes no plan. `areas` decides which kinds of issues are picked for change (`app`, `runtime`, `agent`); issues in other areas still go into the issue book. `python3 -m xiaoyou_runtime iterate plugins` lists installed plugins, which are enabled, and their permissions. With `enabled` true the runtime checks every 15 minutes: if the owner has nothing running it starts a subprocess for `iterate run`, which itself decides whether enough signals or time have accumulated.
-
-## Model gateway (shared with the agent gateway)
-
-The goal is cost: **use a local model whenever possible**; network models are only a fallback with a daily spending cap. This layer is not specific to auto-iteration: `model_gateway.py` serves every place in the runtime that calls a model directly.
-
-It is the **Provider/model** layer of the agent gateway proposal (`docs/development/agent-gateway.md`, written in another session and not yet committed). The agent gateway manages how harnesses/CLIs with their own tool loop (Claude Code, Codex, DSH) are installed, probed and enabled; the model gateway manages where inference endpoints are, where their credentials are, which candidates each purpose uses in what order, and what was spent. Both share one endpoint registry:
-
-- Calls where the harness is heavy and the model does narrow jobs, like auto-iteration, use the gateway's `complete()` / `complete_json()` directly.
-- Harnesses with their own tool loop get environment variables pointing at the same endpoint from `binding_env(provider)` (`OPENAI_BASE_URL`/`OPENAI_API_KEY` for the OpenAI protocol, `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` for Anthropic). Today's `claude_gateway.py` is one such binding written by hand (Claude Code on DeepSeek); later an agent instance only needs `"provider": "<name>"` instead of its own address and key. **This is not wired yet**: it touches agent configuration in `agents.py` and `config.py` and should land together with the agent gateway's registry.
+It is the **Provider/model** layer of the agent gateway proposal (`docs/development/agent-gateway.md`, written in another session and not yet committed): the agent gateway manages how harnesses with their own tool loop are installed, probed and enabled; the model gateway manages where inference endpoints and credentials are, which candidates each purpose uses in what order, and what was spent. Both share one endpoint registry; harnesses get environment variables for the same endpoint from `binding_env(provider)`. **Agent configuration does not use it yet**; that lands together with the agent gateway's registry.
 
 ```json
 "models": {
@@ -128,119 +228,104 @@ It is the **Provider/model** layer of the agent gateway proposal (`docs/developm
                  "key_file": "~/.config/xiaoyou/deepseek.key", "price": {"input": 2, "output": 8}}
   },
   "routes": {
-    "default":          ["local/qwen2.5:7b"],
-    "iterate.classify": ["local/qwen2.5:7b"],
-    "iterate.plan":     ["local/qwen2.5-coder:14b", "deepseek/deepseek-v4-flash"]
+    "default":              ["local/qwen2.5:7b"],
+    "iterate.classify":     ["local/qwen2.5:7b"],
+    "iterate.analyze":      ["local/qwen2.5-coder:14b", "deepseek/deepseek-v4-flash"],
+    "iterate.version_plan": ["deepseek/deepseek-v4-pro", "local/qwen2.5-coder:14b"],
+    "iterate.patch":        ["local/qwen2.5-coder:14b"]
   },
   "network": {"allowed": false, "daily_budget": 2}
 }
 ```
 
-- **Protocols**: `openai` (`/chat/completions`, understood by Ollama, llama.cpp server, LM Studio, vLLM, DeepSeek and OpenAI) and `anthropic` (`/v1/messages`).
-- **Local or network**: without `locality` it is inferred from the address; loopback, private and Tailscale (100.64/10) addresses are local. Local endpoints cost nothing; a network endpoint is chosen only when `network.allowed` is true and today's spending is below `daily_budget`.
-- **Routing**: an unknown purpose falls back to its parent (`iterate.plan` → `iterate` → `default`); candidates are tried in order, and a local endpoint that refused a connection is skipped for 60 seconds.
-- **JSON**: `complete_json` extracts the JSON from the answer (small models often wrap it in \`\`\`json) and passes it to the caller's check; if it fails, the problem goes back to the model, with bounded retries.
-- **Usage**: each call appends one line to `state/models/usage.jsonl`: purpose, endpoint, model, tokens, estimated cost, duration, success. No prompts or answers. The price unit is the owner's choice (CNY or USD) and only feeds the budget.
-- Keys come from `key_file` or `key_env`, never from `config.json`.
+- **Protocols**: `openai` (understood by Ollama, llama.cpp server, LM Studio, vLLM, DeepSeek and OpenAI) and `anthropic`.
+- **Local or network**: without `locality` it is inferred from the address; loopback, private and Tailscale (100.64/10) addresses are local. Local costs nothing; a network endpoint is chosen only when `network.allowed` is true and today's spending is below `daily_budget`.
+- **Routing**: an unknown purpose falls back to its parent (`iterate.plan` → `iterate` → `default`); candidates are tried in order, and an unreachable local endpoint is skipped for 60 seconds.
+- **JSON**: the JSON is extracted from the answer and passed to the caller's check; failures go back to the model with bounded retries.
+- **Usage**: each call appends a line to `state/models/usage.jsonl` (purpose, endpoint, model, tokens, estimated cost, duration, success), never prompts or answers.
+- Keys come from `key_file` or `key_env`, never `config.json`.
 
 ```bash
-python3 -m xiaoyou_runtime models list           # endpoints, candidates per purpose, spending today
-python3 -m xiaoyou_runtime models test iterate.plan   # one real call, shows which endpoint answered
-python3 -m xiaoyou_runtime models usage          # today's calls, tokens and cost per endpoint/model
+python3 -m xiaoyou_runtime models list
+python3 -m xiaoyou_runtime models test iterate.plan
+python3 -m xiaoyou_runtime models usage
 ```
-
-## Where the data comes from
-
-The app currently has **no** usage event reporting; this is the first new piece:
-
-- **App side** (implemented, `UsageEvents.java`): events are appended to a small file in the app's private storage (at most 500), and a batch (at most 50) goes to `POST /v1/app/events` every minute while connected and when the app goes to the background. Lines are removed only after the runtime accepted them, so disconnects and crashes lose nothing. Events sent today: `screen` (on leaving a page: page name, dwell milliseconds), `error` (the hint text shown to the owner, at most 120 characters), `crash` (uncaught exception class and message, top 8 frames, thread name; written before the process exits), `rage_tap` (4 or more taps within 2 seconds inside 48dp: page name, cell of a 3×6 grid, count). The runtime also accepts `slow` and `update`, which the app will send later. Each carries `app_version`, `session` (new on every launch) and time. No message text, typed input or screenshots; the runtime also keeps only the registered fields of each type. An old runtime without the endpoint answers 404 and the app keeps the events for later.
-- **Already in the runtime** (implemented, `iterate/builtin/sources.py`): `chat_feedback` reads what the owner said on cards, pre-filters sentences that look like complaints or corrections by keywords, and with a local model lets the model classify them (asking `votes` times and taking the majority); without a model it uses the keywords with low confidence. Observed desktop sessions are excluded. `card_failures` reads failed cards. `reply_latency` reads the time from the runtime receiving a message to its first text (a runtime-side approximation, not the client send-to-first-display measurement the cross-stack reliability rules require). The first run only looks back `window_days` days, so history is not sent for classification wholesale. These plugins only read and never change records.
-
-Signals go to `state/iterate/signals/`, one append-only file per day. Raw signals older than the retention period (30 days by default) are deleted; only issue-level statistics remain. Phone and computer both belong to the owner and the data stays local; `chat_feedback` sends the model only the sentence and one message on each side.
 
 ## Making a small local model sufficient: what the harness does
 
 | Difficulty | What the harness does |
 | --- | --- |
-| Finding problems needs judgment | Rules wherever possible (crashes, error rate, 3 seconds, repeated taps, immediate exits). The model only classifies complaints in chat, constrained by a JSON Schema, three samples with majority vote; disagreement is marked "uncertain" and excluded from the run |
-| The model does not know where to edit | The harness builds indexes: Java classes/methods, layout IDs, string resources, control IDs from events → definitions. An issue carries control IDs and stack frames that locate 1–3 files; only those excerpts go to the model |
-| Plans are vague | A plan is fixed-template JSON: `problem`, `evidence`, `changes[{file, intent}]`, `acceptance`, `out_of_scope`, `risk_self_check`. The harness checks that files exist and are in scope, with at most 3 changes |
-| Malformed patches | Only search/replace blocks are accepted; `search` must match the file **exactly once**. On a miss the closest original excerpt goes back to the model, up to 3 times |
-| Build errors | On failure only the error lines and 20 lines of surrounding code are fed back. Attempts, wall time and tokens are capped; over the cap the run is abandoned |
-| Changes grow | The `diff_scope` gate: only files listed in the plan, a line limit (80 by default), no permissions, network protocol, sync, manifest or build scripts |
-| Deciding whether it worked | Not the model's call: after release the observer compares signal counts for the same fingerprint; issues with replay cases also run them in the worktree |
+| Finding problems needs judgment | rules wherever possible (crashes, error rate, 3 seconds, repeated taps); the model only classifies complaints, asked several times with a majority vote (**implemented**) |
+| Small models are bad at the big picture | rules group issues first so each analysis gets little material; the whole-version plan may use a strong network model |
+| The model does not know where to edit | clues (file and line in stack frames, error text, page name, words in complaints) select 1–3 files and only relevant excerpts go to the model (**implemented**; a symbol index comes later) |
+| Vague plans | fixed-template JSON; the harness checks files exist, are in scope, and item counts (**implemented** for single issues) |
+| Malformed patches | only search/replace blocks that match exactly once, otherwise rewrite with the closest original |
+| Build errors | only error lines and 20 surrounding lines go back; attempts, time and tokens are capped |
+| Growing changes | only the work item's files, a line limit, dangerous files refused |
+| Deciding whether it worked | not the model's call: theme metrics after release |
 
-All limits are configuration. A stronger model can loosen them and a weaker one tighten them without changing pipeline code.
+All limits are configuration; a stronger model can loosen them and a weaker one tighten them.
 
-## Risk tiers and release
+## Configuration (implemented part)
 
-The `risk_tiers` policy puts each change that passed the gates into one of three tiers:
+```json
+"iterate": {
+  "enabled": false,
+  "trigger": {"min_new_signals": 50, "interval_hours": 24, "only_when_idle": true},
+  "pipeline": {
+    "source":   ["app_events", "chat_feedback", "card_failures", "reply_latency"],
+    "detector": ["crash", "app_errors", "rage_tap", "slow_first_reply", "complaint_cluster", "task_failures"],
+    "triage": "score_by_impact", "planner": "template_plan", "implementer": null
+  },
+  "plugin_dirs": [], "areas": ["app"],
+  "allow": ["companion/android/app/src/main/**"],
+  "deny": ["**/AndroidManifest.xml", "**/build.gradle"],
+  "repo_dir": "..",
+  "min_issue_count": 3, "window_days": 7, "retention_days": 30, "votes": 3, "max_classify": 40
+}
+```
 
-| Tier | Typical change | Action |
-| --- | --- | --- |
-| **L1 auto-publish** | copy/Chinese hints, layout spacing and alignment, empty states, visibility conditions of existing buttons, null guards at a crash site; only in-scope UI files; within the line limit | publish once all gates pass |
-| **L2 one-tap approval** | interaction flow changes, new UI elements, touching network request or local cache read logic | create a pending approval through the existing approvals / quick review; one tap in the app publishes it |
-| **L3 report only** | sync protocol, approvals, the update mechanism itself, runtime code, firmware, manifest/permissions, build configuration | write the plan and patch, never publish; the owner can hand it to CC/Codex |
-
-**Release details** (required, otherwise things break):
-
-- **Build from a commit, not the working tree.** Each run starts in a `git worktree` from a commit; its commit stays on the local branch `auto/iter-<run>` and is **not pushed**. If the owner's working tree has uncommitted app changes and the currently published version was built from them, the run must not auto-publish, because the new version would silently drop those changes. The run is downgraded to L3 and asks the owner to commit first.
-- **Local only by default.** The existing `app publish` uploads to GitHub Releases (public) by default; the pipeline uses `--local-only`, and public hosting is a separate configuration switch.
-- **Rollback publishes a higher version code.** Android does not install a lower version code, so rollback means rebuilding the last good commit with version code +1 and publishing it. The existing `app_release` keeps only the latest version; it needs to retain source commits and build outputs of the last few.
-- **Rate limits.** At most one automatic release per day; no new release while the previous one is still under observation; after two consecutive rollbacks automatic publishing turns itself off and only reports until the owner re-enables it.
-- **No runtime restart.** The first phases only change the app; the runtime itself is untouched, so killing running tasks on restart is not an issue.
-
-## Observation after release
-
-After a waiting period (24 hours by default, and the new version must have been used a minimum number of times) `fingerprint_compare` checks:
-
-- the run's issue fingerprint: clearly fewer signals → `closed`;
-- global guardrails: crashes, error rate, first meaningful response time, sync failures. Any regression beyond its threshold → automatic rollback; the issue is marked "fix failed" and loses priority;
-- insufficient evidence (new version barely used) → observe longer and never claim a fix.
-
-Each verdict is saved in the run directory and feeds the next triage: a fingerprint that keeps failing is escalated to L3 for the owner.
-
-## What the owner sees in the app
-
-- One read-only card per run: the issue (with evidence count), plan summary, changed files, gate results, released version and observation verdict.
-- L2 approvals in the existing approvals entry, approved or denied with one tap.
-- "Roll back this version" and "Pause auto-iteration" on the card, mapped to `iterate rollback <run>` and `iterate.enabled=false`.
+With `enabled` true the runtime checks every 15 minutes: if the owner has nothing running it starts a subprocess for `iterate run`, which decides itself whether enough signals or time have accumulated. A crash there does not affect the runtime. The design adds `home` (the home computer) and the outer-loop plugin names.
 
 ## Commands
 
 ```bash
-# available now
-python3 -m xiaoyou_runtime iterate plugins            # plugins, enabled state, permissions, how to write one
-python3 -m xiaoyou_runtime iterate run --dry-run --force   # trial run: no cursors, signals or issue book saved
-python3 -m xiaoyou_runtime iterate run [--force]      # one run; without --force it only collects until due
-python3 -m xiaoyou_runtime iterate status             # recent runs
-python3 -m xiaoyou_runtime iterate issues [--all]     # the issue book
+# implemented
+python3 -m xiaoyou_runtime iterate plugins
+python3 -m xiaoyou_runtime iterate run --dry-run --force   # trial run, saves no state
+python3 -m xiaoyou_runtime iterate run [--force]
+python3 -m xiaoyou_runtime iterate status
+python3 -m xiaoyou_runtime iterate issues [--all]
 python3 -m xiaoyou_runtime iterate issue <prefix> --open|--ignore
-# later
-python3 -m xiaoyou_runtime iterate replay <run> --stage implementer --plugin <other>
+# design
+python3 -m xiaoyou_runtime events types|summary|export|delete
+python3 -m xiaoyou_runtime iterate map                     # issue map: groups and root causes
+python3 -m xiaoyou_runtime iterate replay <run> --stage <stage> --plugin <other>
 python3 -m xiaoyou_runtime iterate rollback <run>
 ```
 
-While the runtime is running, a background thread only checks whether auto-iteration is enabled and the owner is idle, then starts a **separate subprocess** for the run. A crash or timeout there does not affect the runtime and never sits on the message path. When a run produces a plan (or fails), the result appears in the app as a read-only card with origin `iterate` through `POST /v1/reports`; the full text is in `state/iterate/runs/<id>/report.md`.
-
 ## Relation to the earlier proposal
 
-The 10-16 discussion with Codex was about collecting the owner's conversations with Xiaoyou and batch-optimizing the main agent's delegation and the DSH loop. This pipeline is the first application of the same skeleton: `source`, `detector` and `observer` are shared; switching `scope` to the runtime and the `implementer` to a plugin that edits prompts or routing configuration gives that main-flow optimization. So the plugin framework and the app track come first, and main-flow optimization later joins as another set of plugins rather than a separate system.
+The 10-16 discussion with Codex about collecting the owner's conversations with Xiaoyou and batch-optimizing the main agent's delegation and the DSH loop uses the same skeleton: the same collection gateway, the same issue book, the same outer loop. With `areas` set to `agent` and implementation plugins that edit prompts and routing configuration, it becomes main-flow optimization, not a separate system.
 
 ## Phases
 
 | Phase | Content | Done when |
 | --- | --- | --- |
-| **P0 framework** ✅ | plugin loading, permissions, data objects, run directory and state machine, `iterate` command, background scheduling; all unit-tested | `run --dry-run` passes on fake data (`tests/test_iterate.py`) |
-| **P1 collection** ✅ code | app-side `UsageEvents` + `POST /v1/app/events`; four sources; six rule detectors | after one day of real use `iterate issues` lists issues with evidence — **not yet verified on the phone** |
-| **P2 planning** mostly | model gateway ✅, `template_plan` ✅ (code lookup searches files by clues; no symbol index yet) | with a local model installed, report-only mode runs stably for a week and the owner finds the plans sensible |
-| **P3 implementation + gates** | worktree, `search_replace_loop`, all gates, L3 reports | replaying previously fixed issues (avatar offset, English on the home page, …) yields patches that pass the gates |
-| **P4 release + observation** | `risk_tiers`, `app_publish_local`, version retention and rollback, `fingerprint_compare`, run cards in the app | two weeks with L2 only (one tap each time), then L1 auto-publish |
+| **P0 framework** ✅ | plugin loading, permissions, data objects, run directories, `iterate` command, background scheduling | `tests/test_iterate.py` |
+| **P1 Android collection** ✅ code | `UsageEvents` + `/v1/app/events`; four sources; six detectors | a day of phone use yields issues with evidence — **not yet verified on the phone** |
+| **P2 model gateway** ✅ | local first, network budget, JSON retries, usage ledger | `tests/test_model_gateway.py`; no local model installed yet |
+| **P3 unified collection** | `/v1/events`, event type registry, `/v1/info` declaration, runtime-written events, home computer and forwarding, `events` commands; Android moves to the new format | a day of switching between two computers: every event reaches the home computer, no duplicates |
+| **P4 outer loop** | journeys, grouping, root causes, version plans, product principles document, plan review card | two batches in plan-only mode; the owner finds the plans complete rather than scattered patches |
+| **P5 inner loop** | work items, version branch, patch loop, whole-version gates | replaying past issues (avatar offset, English on the home page, …) yields versions that pass the gates |
+| **P6 release and observation** | tiers, local release, version retention and rollback, theme observation, rollback / pause on the card | two weeks with L2 only, then L1 |
 
-Each phase is committed separately and useful on its own: after P1 there is an issue list, after P2 plan reports.
+Each phase is committed separately and useful on its own.
 
 ## Open decisions for the owner
 
-1. **Which local model.** This Mac currently has no Ollama, LM Studio or llama.cpp. The gateway speaks the OpenAI-compatible protocol, so any of them works; without a model the pipeline still finds issues and only skips the plan. The DeepSeek API can be the network fallback under the daily budget.
-2. **Scope of L1 auto-publish**: as in the table above, and whether it is on from the start or only after two weeks of L2.
-3. **Event collection scope**: whether the types under "Where the data comes from" are acceptable.
+1. **Which local model.** This Mac has no Ollama, LM Studio or llama.cpp yet. The gateway speaks the OpenAI-compatible protocol, so any of them works.
+2. **Whether version plans use a strong network model**, and the daily budget.
+3. **Which computer is home** (Mac suggested).
+4. **Product principles document**: AI drafts and the owner edits, or the owner writes first.
+5. **L1 auto-publish**: on from the start, or two weeks of L2 first.
