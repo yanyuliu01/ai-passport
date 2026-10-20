@@ -443,6 +443,10 @@ the model makes the judgement.
 - **Helpers see your preferences**: the memory is appended to what is handed to a helper.
 - **No echo after a reminder** (0.18.1): once she calls the missing tool after a reminder the turn ends; what she
   says in response to the reminder, and any repeat, is not sent.
+- **Handing off once** (0.18.2): when she has already said something and then hands a task off, the turn ends
+  there. She is no longer asked again after the tool result, which mostly produced the same line reworded ("OK,
+  I'll have X look" followed by "Done, X is on it"). If she has said nothing before handing off, she still gets one
+  round to say what she did.
 - **Cutting in**: if you send a message while she is still replying, the reply stops at once (what she already
   said is kept and marked as interrupted) and she answers your new message. Relays of helper results are not
   interrupted. Needs App 0.25.0 (sending while she replies).

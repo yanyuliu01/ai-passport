@@ -198,15 +198,16 @@ class ToolTalkTests(TempDirCase):
                        lambda card: "c3 · 正在做" if card == "c3" else None)
 
     def test_she_talks_calls_a_tool_and_goes_on(self):
-        opener = FakeOpener(tool_sse("好，我让 codex 去查。", "start_task",
+        # 先交出去、还没开口：看了工具结果再说一句，那句话就是这一轮的回复。
+        opener = FakeOpener(tool_sse("", "start_task",
                                      {"agent": "codex", "title": "查日志", "task": "看看日志"}),
-                            sse("有结果我告诉你。"))
+                            sse("交给 codex 了，有结果我告诉你。"))
         tools = self.toolbox()
         seen = []
         outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="查一下", system="S", plain=True,
                                  on_text=seen.append, tools=tools), {"DEEPSEEK_API_KEY": "k"},
                                  "deepseek-v4-pro", seen.append, opener)
-        self.assertEqual(outcome.text, "好，我让 codex 去查。\n\n---\n\n有结果我告诉你。")
+        self.assertEqual(outcome.text, "交给 codex 了，有结果我告诉你。")
         self.assertEqual(outcome.fields["action"], {"type": "start", "agent": "codex", "title": "查日志", "task": "看看日志"})
         self.assertEqual(outcome.fields["mood"], "busy")
         first, second = opener.requests[0][1], opener.requests[1][1]
@@ -215,8 +216,31 @@ class ToolTalkTests(TempDirCase):
         result = second["messages"][-1]["content"][0]
         self.assertEqual((result["type"], result["tool_use_id"]), ("tool_result", "tool-1"))
         self.assertIn("说完就去办", result["content"])
-        # 第二轮的话接在第一轮后面，一起交给手机看。
-        self.assertEqual(seen[-1], "好，我让 codex 去查。\n\n---\n\n有结果我告诉你。")
+        self.assertEqual(seen[-1], "交给 codex 了，有结果我告诉你。")
+
+    def test_having_said_it_and_handed_it_off_she_does_not_say_it_again(self):
+        # 交之前已经跟主人说了：交出去就到此为止，不再问一轮（那一轮多半把同一句话再说一遍）。
+        opener = FakeOpener(tool_sse("好，我让 codex 去查。", "start_task",
+                                     {"agent": "codex", "title": "查日志", "task": "看看日志"}),
+                            sse("好嘞，已经让 codex 去查啦。"))
+        seen = []
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="查一下", system="S", plain=True,
+                                 on_text=seen.append, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", seen.append, opener)
+        self.assertEqual(outcome.text, "好，我让 codex 去查。")
+        self.assertEqual(outcome.fields["action"]["type"], "start")
+        self.assertEqual(len(opener.requests), 1)
+        self.assertEqual(seen[-1], "好，我让 codex 去查。")
+        # 会话里记着工具调用和结果，下一轮她知道这件事已经交出去了。
+        saved = dsh_stream._load(dsh_stream.sessions_dir(dsh_spec(self.folder)), outcome.session_id)
+        kinds = [block["type"] for item in saved if isinstance(item["content"], list) for block in item["content"]]
+        self.assertEqual(kinds[-2:], ["tool_use", "tool_result"])
+        # 查看类工具不算交出去：看完接着说。
+        opener = FakeOpener(tool_sse("我看一眼。", "task_detail", {"card": "c3"}), sse("还在做。"))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="c3 呢", system="S", plain=True,
+                                 on_text=print, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        self.assertEqual(outcome.text, "我看一眼。\n\n---\n\n还在做。")
 
     def test_a_refused_action_comes_back_in_the_same_turn(self):
         opener = FakeOpener(tool_sse("", "start_task", {"agent": "codex", "title": "x", "task": "y"}),

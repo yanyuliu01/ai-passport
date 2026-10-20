@@ -33,6 +33,29 @@ public class ChatHistoryTest {
                 + "\"entries\":" + entries + "," + fields + "}"));
     }
 
+    @Test public void aRetoldResultBeingWrittenIsOneMessageNotTwo() {
+        ChatHistory history = new ChatHistory();
+        String handed = "[{\"role\":\"xiaoyou\",\"text\":\"交给 project 了\",\"at\":11,\"id\":\"m1:reply\",\"scope\":\"main\"}]";
+        history.ingest(card(handed, "\"state\":\"working\",\"summary_partial\":\"我\""));
+        // Older Runtimes: summary_partial is the only copy of the words being written.
+        assertEquals(2, history.main().size());
+        assertEquals("我", history.main().get(1).text);
+        // Newer Runtimes also send it as a message: that one is drawn, the card's copy goes.
+        history.pending(new SyncCache.Pending("r1-summary:reply", "c1", "main", "xiaoyou", "我回顾了", "streaming", 20));
+        history.ingest(card(handed, "\"state\":\"working\",\"summary_partial\":\"我回顾了一下\""));
+        List<ChatHistory.Message> main = history.main();
+        assertEquals(2, main.size());
+        assertEquals("r1-summary:reply", main.get(1).id);
+        // Final: the card entry with the same id replaces the message being written.
+        history.ingest(card("[{\"role\":\"xiaoyou\",\"text\":\"交给 project 了\",\"at\":11,\"id\":\"m1:reply\",\"scope\":\"main\"},"
+                + "{\"role\":\"xiaoyou\",\"text\":\"我回顾了一下，好了\",\"at\":30,\"id\":\"r1-summary:reply\",\"kind\":\"summary\",\"scope\":\"main\"}]",
+                "\"state\":\"done\""));
+        main = history.main();
+        assertEquals(2, main.size());
+        assertEquals("我回顾了一下，好了", main.get(1).text);
+        assertEquals("done", main.get(1).status);
+    }
+
     @Test public void userAppearsBeforeAnyReplyAndBeforeAnyCard() {
         ChatHistory history = new ChatHistory(); history.begin("local", null, "hello", 10);
         assertEquals(2, history.main().size());

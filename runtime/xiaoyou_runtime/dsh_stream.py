@@ -297,6 +297,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             break
         content: List[Dict[str, Any]] = ([{"type": "text", "text": said}] if said else [])
         results: List[Dict[str, Any]] = []
+        acted = tools.action
         for call in calls:
             try:
                 arguments = json.loads(call["json"]) if call["json"].strip() else {}
@@ -319,6 +320,10 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             # （主人已经看到她前面那段），也不用再问一轮。
             spoken = spoken[:nudged_at]
             messages.append({"role": "assistant", "content": "（补上了）"})
+            break
+        if acted is None and tools.action is not None and spoken:
+            # 交出去了，交之前也已经跟主人说过：到此为止。再问一轮她多半把刚才的话换个说法再说
+            # 一遍（“好，我让 X 去…”后面又跟一条“好嘞，已经让 X 去…”）。还没开口的才再问一轮。
             break
         if round_index == MAX_TOOL_ROUNDS - 1:
             break

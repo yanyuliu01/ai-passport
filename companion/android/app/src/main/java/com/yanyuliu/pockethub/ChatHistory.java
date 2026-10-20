@@ -154,7 +154,7 @@ final class ChatHistory {
             put(next);
         }
         String partialId = card.id + ":summary-live";
-        if (!card.summaryPartial.isEmpty() && card.active()) {
+        if (!card.summaryPartial.isEmpty() && card.active() && !liveSummary(card.id)) {
             Message previous = messages.get(partialId);
             put(new Message(partialId, card.id, "main", "xiaoyou", card.summaryPartial, "streaming",
                     "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true));
@@ -175,7 +175,25 @@ final class ChatHistory {
                 you ? "user" : "reply", known != null ? known.at : item.at, true);
         next.clientId = "";
         put(next);
+        if (summary(next)) messages.remove(next.card + ":summary-live");
         return true;
+    }
+
+    /**
+     * A background result being retold: newer Runtimes send it as its own message (id
+     * run-summary:reply, the same id it gets on the card when final) while the card still carries
+     * summary_partial. Drawing both shows the same words twice, each with its own receipt, so the
+     * card's copy is only used when there is no such message (older Runtimes).
+     */
+    private boolean liveSummary(String card) {
+        for (Message message : messages.values())
+            if (summary(message) && message.card.equals(card) && !message.status.equals("done")) return true;
+        return false;
+    }
+
+    private static boolean summary(Message message) {
+        return message.synced && !message.role.equals("you") && !message.card.isEmpty()
+                && message.id.endsWith("-summary:reply");
     }
 
     /**

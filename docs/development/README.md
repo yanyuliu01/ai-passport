@@ -10,6 +10,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 
 - [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
 - [unified-message-model.md](unified-message-model.md): the unified message structure: one message log, id rules, the sync interface, and how a new runtime or agent connects.
+- [decide-then-speak.md](decide-then-speak.md): design draft that replaces the Runtime's promise reminder with a decide step before Xiaoyou speaks; also records the chat fixes of App 0.25.2 / Runtime 0.18.2 and how to hand the work over.
 - [auto-iteration.md](auto-iteration.md): design draft of unified usage collection (all clients report to the home computer) and version-level auto-iteration with local-first models.
 - [ai-guide.md](ai-guide.md): AI-assisted development workflow.
 - [Core AI skills](../../skills/README.md): development, setup, build, device testing, and diagnosis; installation and usage examples.

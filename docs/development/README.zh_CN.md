@@ -19,6 +19,7 @@
 
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [unified-message-model.zh_CN.md](unified-message-model.zh_CN.md)：统一消息结构——唯一的消息日志、编号规则、同步接口，以及新的 Runtime 或 agent 怎么接入。
+- [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小幽说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
 - [auto-iteration.zh_CN.md](auto-iteration.zh_CN.md)：统一采集（所有客户端报给主电脑）与按版本自动迭代（本地模型优先）的设计稿。
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。
 - [核心 AI 技能](../../skills/README.zh_CN.md)：开发、环境准备、构建、真机测试及诊断，包含安装和使用示例。
