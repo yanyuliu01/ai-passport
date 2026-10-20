@@ -161,6 +161,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     timeout = job.timeout or spec.timeout_seconds or 60
     began = time.monotonic()
     first_text: List[Optional[float]] = [None]
+    cut = [False]  # 主人插话，这一次被打断了
 
     def ask(prefix: str) -> Tuple[str, List[Dict[str, Any]], bool]:
         """问一轮。返回（这一轮写的文字，这一轮的工具调用，是不是停在要调工具）。
@@ -213,6 +214,9 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 timer.daemon = True
                 timer.start()
                 for event in events(response, check_deadline):
+                    if job.interrupt is not None and job.interrupt.is_set():
+                        cut[0] = True  # 主人插话了：不再往下读，已经说出的部分照样算
+                        break
                     kind = event.get("type")
                     if kind == "error":
                         error = event.get("error")
@@ -261,6 +265,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         finally:
             if timer is not None:
                 timer.cancel()
+        if cut[0]:
+            return said.strip(), [], False
         if not stopped:
             raise AgentError("DeepSeek 流式接口没有说完就断了")
         return said.strip(), calls, wants_tools and bool(calls)
@@ -272,6 +278,10 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         said, calls, wants_tools = ask(JOIN.join(spoken))
         if said:
             spoken.append(said)
+        if cut[0]:
+            if tools is not None:
+                messages.append({"role": "assistant", "content": (said or "……") + "（被主人打断了）"})
+            break
         if tools is not None and not wants_tools and not nudged and round_index < rounds - 1 \
                 and tools.promised(JOIN.join(spoken)):
             # 说了要去做却一个工具都没调：悄悄提醒一次，让她现在就调（或者改口）。
@@ -305,6 +315,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         if round_index == MAX_TOOL_ROUNDS - 1:
             break
     said = JOIN.join(spoken).strip()
+    if not said and cut[0]:
+        said = "……"
     if not said and (tools is None or tools.action is None):
         raise AgentError("DeepSeek 流式接口没有说完就断了")
     sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs tools=%s\n" % (

@@ -420,6 +420,9 @@ class Service:
                         self._line_up(conversation, message_id)
                 snapshot = self._snapshot(message)
                 self._changed.notify_all()
+            if hop == 0 and not message.get("relay_to"):
+                # 主人插话：她要是还在说上一句，先停下来听这一句（说出的部分照样留着）。
+                self._xiaoyou.interrupt(conversation)
             return snapshot
 
     def _seen(self, entry: Dict[str, Any]) -> Dict[str, Any]:

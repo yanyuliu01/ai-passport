@@ -416,6 +416,35 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## Memory, recall, promises, speaking up and cutting in (0.18.0)
+
+Modelled on how Muse handles memory and delivery: remembering and speaking up are Runtime mechanisms,
+the model makes the judgement.
+
+- **Memory with provenance and history**: each line of `state/memory/owner.md` carries a kind (preference,
+  rule, fact, commitment), a date and your own words; corrections use `replace` (the new line supersedes the
+  old), removals `forget`. Every add, change and removal is appended to `state/memory/log/<date>.md`, so the
+  current wording is unique and older wording stays in the log. Anything that looks like a password, key or
+  verification code is refused. The prompt says memory is past context (check things that change) and that
+  remembering a past approval is not permission now.
+- **`recall`**: searches past chat, the memory log, recent tasks and helper results, using SQLite full-text
+  search from the Python standard library (trigram, no Chinese word splitter needed), falling back to a plain
+  scan on old SQLite or terms under three characters. Vector search can replace `recall.py` later.
+- **Promises `track` / `resolve`**: things she promised that are not helper tasks ("remind me tonight", "send it
+  when the Mac is back"), with a due time and optional daily or weekly repeat, kept in
+  `state/memory/promises.json` and shown every turn. Saying "I'll remind you" without `track` gets the same
+  reminder as promising work. A question (ending in a question mark) is not a promise.
+- **Delivery gate (`proactive.py`)**: replaces the fixed "still working on it" lines. Every 20 seconds it checks;
+  when a helper has worked for 90 seconds with new progress (at least 4 minutes apart, at most three times per
+  task) or a promise comes due, it wakes her with what she recently said, her memory and promises, and she
+  decides whether to speak; answering that she stays quiet sends nothing.
+- **Memory upkeep**: after 10 quiet minutes with new turns she gets a memory-tools-only pass to add what she
+  missed. The first run starts from the latest turn rather than the whole history.
+- **Helpers see your preferences**: the memory is appended to what is handed to a helper.
+- **Cutting in**: if you send a message while she is still replying, the reply stops at once (what she already
+  said is kept and marked as interrupted) and she answers your new message. Relays of helper results are not
+  interrupted. Needs App 0.25.0 (sending while she replies).
+
 ## The companion remembers (0.17.0)
 
 The companion now has a memory: `state/memory/owner.md`, one dated line per item, put into her prompt every

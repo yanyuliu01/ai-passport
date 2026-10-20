@@ -34,6 +34,8 @@ final class RuntimeClient {
     private static final int POLL_SECONDS = 50;
     private static final long GIVE_UP_MS = 15 * 60 * 1000L;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
+    // 说的每句话各用一个线程等回复：回话途中主人又说了一句，不用排在上一句后面才发出去。
+    private static final ExecutorService CHAT = Executors.newCachedThreadPool();
     private static final Map<String, java.util.Set<String>> SHARED_HISTORY = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 已经带给这个地址的对话编号（发送线程和后台带历史的线程都会写）。 */
@@ -788,7 +790,9 @@ final class RuntimeClient {
         store.selectedRuntime(url, historyKey(app, target));
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);
-        WORKER.execute(() -> {
+        // 这句话在聊天记录里的编号：回话途中主人又说了一句时，几句各写各的（HubStore 的 key 版本）。
+        final String[] key = {clientId};
+        CHAT.execute(() -> {
             MessageStream events = null;
             try {
                 // 别处的对话在连上时已经在后台带过去了（shareHistory），这里不再等它。
@@ -810,6 +814,7 @@ final class RuntimeClient {
                 }
                 if (store.cardsEpoch() != epoch) return;
                 store.chatAccepted(clientId, id);
+                key[0] = id;  // 聊天记录里这句话从此按 Runtime 给的编号记
                 long deadline = System.currentTimeMillis() + GIVE_UP_MS;
                 boolean heard = wav == null;
                 boolean streamTried = false;
@@ -819,13 +824,13 @@ final class RuntimeClient {
                     String recognized = message.get("text");
                     if (!heard && recognized != null && !recognized.isEmpty()) {
                         heard = true;
-                        store.chatHeard(VOICE_PLACEHOLDER, recognized);
+                        store.chatHeard(key[0], VOICE_PLACEHOLDER, recognized);
                     }
                     if ("done".equals(status)) {
                         String reply = message.get("reply");
                         String brief = message.get("brief");
                         String filed = message.get("card");
-                        store.chatAnswered(brief == null ? "" : brief, reply == null ? "" : reply,
+                        store.chatAnswered(key[0], brief == null ? "" : brief, reply == null ? "" : reply,
                                 message.get("mood"), filed);
                         if (filed != null) {
                             // Final text is already visible; refresh task details independently.
@@ -844,7 +849,7 @@ final class RuntimeClient {
                     }
                     if ("failed".equals(status)) {
                         String error = message.get("error");
-                        store.chatFailed(null, error == null ? "Runtime 没有说明原因" : error);
+                        store.chatFailed(key[0], null, error == null ? "Runtime 没有说明原因" : error);
                         return;
                     }
                     if (System.currentTimeMillis() > deadline) {
@@ -854,7 +859,7 @@ final class RuntimeClient {
                     store.chatProgress(message.get("helper"), "transcribing".equals(status) ? "正在识别语音…" : message.get("stage"));
                     // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
                     // 旧版 Runtime 没有这一项，就照旧等整段。
-                    store.chatStreaming(message.get("partial"));
+                    store.chatStreaming(key[0], message.get("partial"));
                     // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
                     // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
                     String rev = message.get("rev");
@@ -886,7 +891,7 @@ final class RuntimeClient {
             } catch (IOException | RuntimeException error) {
                 if (store.cardsEpoch() != epoch) return;
                 String detail = error.getMessage();
-                store.chatFailed(null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
+                store.chatFailed(key[0], null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
             } finally {
                 if (events != null) {
                     events.close();

@@ -416,6 +416,27 @@ class ToolTalker(Scripted):
         return Outcome(said, "t1", job.tools.fields(said))
 
 
+class GateTalker(ToolTalker):
+    """A voice for the background pulse: answers gate and upkeep turns from a script."""
+
+    def __init__(self, name="deepseek"):
+        super().__init__(name)
+        self.answers = []
+        self.tool_calls = []
+        self.gate_jobs = []
+
+    def run(self, job):
+        if job.tools is not None and job.session_id is None and "Runtime 叫醒你" in (job.system or "") \
+                or job.tools is not None and "整理记忆" in (job.system or ""):
+            self.gate_jobs.append(job)
+            for name, args in self.tool_calls:
+                job.tools.call(name, args)
+            self.tool_calls = []
+            said = self.answers.pop(0) if self.answers else "（不说）"
+            return Outcome(said, None, None)
+        return super().run(job)
+
+
 def make_xiaoyou(folder, agents, router=None, workspace=None, usage=None, **settings):
     """Xiaoyou over stand-in agents; the first one is the default and the voice."""
     loaded = config_module.load(write_config(folder), {})
@@ -751,6 +772,84 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(memory.forget(9), "没有第 9 条")
         memory.forget(1)
         self.assertEqual(memory.notes(), ["[2026-10-21] 别点帮手的名"])
+
+    def test_memory_keeps_provenance_corrections_and_a_log(self):
+        import shutil
+        import tempfile
+        from xiaoyou_runtime.memory import OwnerMemory
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        memory = OwnerMemory(folder / "owner.md")
+        memory.remember("回复短一点", "2026-10-20", kind="偏好", quote="一次性说太多了")
+        self.assertEqual(memory.notes(), ["[2026-10-20][偏好] 回复短一点（原话：「一次性说太多了」）"])
+        self.assertIn("改好了", memory.replace(1, "闲聊一两句就停", "2026-10-21", quote="再短点"))
+        self.assertEqual(memory.texts(), ["闲聊一两句就停"])
+        log = (folder / "log" / "2026-10-21.md").read_text(encoding="utf-8")
+        self.assertIn("取代：回复短一点", log)  # 旧说法留在日志里
+        # 红线：像密码、密钥的不记。
+        fake_token = "ghp" + "_" + "a1b2c3d4e5" * 4  # 拼出来的假令牌（仓库检查会拦真的样子）
+        for secret in ("GitHub 的 token 是 " + fake_token, "密码是 hunter2abc"):
+            self.assertIn("不能记", memory.remember(secret))
+        self.assertIn("不能记", memory.remember("令牌", quote="sk" + "-proj-" + "abcdefgh" * 3 + "1234"))
+        self.assertEqual(len(memory.notes()), 1)
+
+    def test_recall_finds_old_words_with_or_without_full_text_search(self):
+        from xiaoyou_runtime import recall
+        records = [("聊天", "", 100.0, "主人：短信网关那个方案怎么样\n小幽：备用安卓手机最合适"),
+                   ("聊天", "", 200.0, "主人：今天有点累"),
+                   ("记忆", "2026-10-20", 150.0, "- 10:00 记：回复短一点")]
+        hits = recall.search("短信网关", records)
+        self.assertEqual(hits[0][3][:9], "主人：短信网关那个")
+        self.assertEqual(recall.search("累", records)[0][3], "主人：今天有点累")  # 不到三个字：逐条找
+        with mock.patch.object(recall, "_fts", side_effect=sqlite3.Error("no fts5")):
+            self.assertEqual(len(recall.search("短信网关", records)), 1)
+        self.assertIn("没找到", recall.render("火星", []))
+
+    def test_promises_are_tracked_due_and_resolved(self):
+        import shutil
+        import tempfile
+        from xiaoyou_runtime.promises import Promises
+        from xiaoyou_runtime.voice_tools import Toolbox
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        promises = Promises(folder / "promises.json")
+        tools = Toolbox([], [], [], lambda fields: None, lambda card: None, promises=promises)
+        self.assertTrue(tools.promised("好，到时候我提醒你"))
+        said, failed = tools.call("track", {"title": "提醒喝水", "due": "2020-01-01 09:00"})
+        self.assertFalse(failed)
+        self.assertFalse(tools.promised("好，到时候我提醒你"))
+        self.assertTrue(tools.call("track", {"title": "x", "due": "明天"})[1])
+        item = promises.open()[0]
+        self.assertEqual([entry["id"] for entry in promises.due()], [item["id"]])
+        promises.mark_nudged(item["id"])
+        self.assertEqual(promises.due(), [])
+        self.assertIn("关掉了", tools.call("resolve", {"id": item["id"], "outcome": "喝了"})[0])
+        self.assertEqual(promises.open(), [])
+
+    def test_daily_promises_move_to_the_next_day_and_questions_are_not_promises(self):
+        import shutil
+        import tempfile
+        from xiaoyou_runtime.promises import Promises
+        from xiaoyou_runtime.voice_tools import Toolbox
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        promises = Promises(folder / "promises.json")
+        now = time.time()
+        item = promises.track("提醒喝水", due=now - 60, every="day")
+        self.assertEqual(len(promises.due(now)), 1)
+        promises.mark_nudged(item["id"], now)
+        nxt = promises.open()[0]
+        self.assertTrue(now < nxt["due"] <= now + 86400)
+        self.assertEqual(promises.due(now), [])
+        self.assertEqual(promises.due(nxt["due"] + 1)[0]["id"], item["id"])
+        tools = Toolbox([], [], [], lambda fields: None, lambda card: None, promises=promises)
+        self.assertFalse(tools.promised("要不要我让 Codex 去查一下？"))
+        self.assertFalse(tools.promised("我现在就挺好奇它靠不靠谱"))
+        self.assertTrue(tools.promised("我这就去查。"))
+
+    def test_helpers_get_the_owner_notes(self):
+        self.assertEqual(xiaoyou_module.owner_notes("做事", []), "做事")
+        self.assertIn("- 回复短一点", xiaoyou_module.owner_notes("做事", ["回复短一点"]))
 
     def test_a_reply_wrapped_in_prose_is_still_recognised(self):
         # 真实出过的样子：JSON 前面多说一句，reply 里带转义的换行。
@@ -2565,27 +2664,65 @@ class XiaoyouTests(TempDirCase):
     def words(self, card_id):
         return [(entry["role"], entry["text"]) for entry in self.xiaoyou.cards.get(card_id)["entries"]]
 
-    def test_she_follows_up_while_a_helper_takes_long(self):
+    def test_the_gate_wakes_her_on_progress_and_she_decides_whether_to_speak(self):
+        from xiaoyou_runtime import proactive
+        voice = GateTalker()
+        xiaoyou, _ = make_xiaoyou(self.folder / "gate", [voice, self.codex])
+        self.addCleanup(xiaoyou.close)
         self.codex.gate.clear()
-        turn = self.say("@codex 看看 parse() slow")
-        card = self.xiaoyou.cards.get(turn.card)
-        task = tasks_module.Task(turn.card, "default", self.codex, "x", run_id=card["run_id"])
-        with mock.patch.object(xiaoyou_module, "PING_AFTER", 0), \
-                mock.patch.object(xiaoyou_module, "PING_EVERY", 0):
-            pace = self.xiaoyou._pacer(task)
-            pace("正在读解析器的代码，找慢在哪")
-            pace("Read src/parse.py")
-            for _ in range(5):
-                pace("还在看")
-        notes = [entry["text"] for entry in self.xiaoyou.cards.get(turn.card)["entries"]
-                 if entry.get("kind") == "note"]
-        self.assertEqual(len(notes), xiaoyou_module.PING_MAX)
-        self.assertEqual(notes[0], "codex 还在弄「看看 parse() slow」，刚在正在读解析器的代码，找慢在哪。")
-        # 进展是文件名、命令这类：不照搬，只说做了多久。
-        self.assertNotIn("src/parse.py", notes[1])
-        self.assertIn("有结果我马上说", notes[1])
-        self.codex.gate.set()
-        self.settled(turn.card)
+        self.addCleanup(self.codex.gate.set)
+        turn = xiaoyou.hear("@codex 看看 parse() slow", "default", "t-1", report=lambda *a: None)
+        card = xiaoyou.cards.get(turn.card)
+        pulse = xiaoyou._pulse
+        with mock.patch.object(proactive, "WATCH_AFTER", 0), mock.patch.object(proactive, "WATCH_EVERY", 0):
+            pulse.progress(card["id"], card["run_id"], "codex", "读完解析器了")
+            voice.answers = ["解析器那块看完了，慢在正则。"]
+            pulse.tick()
+            pulse.tick()  # 没有新进展：不再叫她
+            pulse.progress(card["id"], card["run_id"], "codex", "在试改法")
+            voice.answers = ["（不说）"]
+            pulse.tick()  # 她觉得不值得说：什么都不发
+        notes = [entry["text"] for entry in xiaoyou.cards.get(card["id"])["entries"] if entry.get("kind") == "note"]
+        self.assertEqual(notes, ["解析器那块看完了，慢在正则。"])
+        self.assertEqual(len(voice.gate_jobs), 2)
+        self.assertIn("Runtime 叫醒你的", voice.gate_jobs[0].system)
+        self.assertEqual({tool["name"] for tool in voice.gate_jobs[0].tools.definitions()}, {"task_detail", "recall"})
+
+    def test_a_due_promise_wakes_her_once(self):
+        voice = GateTalker()
+        xiaoyou, _ = make_xiaoyou(self.folder / "due", [voice, self.codex])
+        self.addCleanup(xiaoyou.close)
+        xiaoyou.promises.track("提醒主人喝水", due=time.time() - 5)
+        voice.answers = ["该喝水啦。"]
+        xiaoyou._pulse.tick()
+        xiaoyou._pulse.tick()
+        said = [entry["text"] for card in xiaoyou.cards.recent("default") for entry in card["entries"]]
+        self.assertEqual(said, ["该喝水啦。"])
+        self.assertIn("到点了", voice.gate_jobs[0].text)
+
+    def test_upkeep_only_looks_at_new_quiet_turns(self):
+        from xiaoyou_runtime import proactive
+        voice = GateTalker()
+        xiaoyou, store = make_xiaoyou(self.folder / "upkeep", [voice, self.codex])
+        self.addCleanup(xiaoyou.close)
+        old = time.time() - 3600
+        store.transcript.add("default", "u-1", "你好", "在呢", "deepseek", ["deepseek"])
+        later = time.time() + 3600  # 一小时后：对话已经安静了
+        xiaoyou._pulse.tick(now=later)  # 第一次：只记下从哪开始
+        self.assertEqual(voice.gate_jobs, [])
+        store.transcript.add("default", "u-2", "以后回复短一点", "好", "deepseek", ["deepseek"])
+        store.transcript.add("default", "u-3", "晚上别找我", "好", "deepseek", ["deepseek"])
+        xiaoyou._pulse.tick(now=time.time())  # 刚说完：还不安静，不整理
+        self.assertEqual(voice.gate_jobs, [])
+        voice.tool_calls = [("remember", {"note": "回复短一点", "kind": "偏好", "quote": "以后回复短一点"})]
+        voice.answers = ["（好了）"]
+        xiaoyou._pulse.tick(now=later)
+        xiaoyou._pulse.tick(now=later)  # 没有新的轮次：不再整理
+        self.assertEqual(len(voice.gate_jobs), 1)
+        self.assertNotIn("你好", voice.gate_jobs[0].text)
+        self.assertIn("以后回复短一点", voice.gate_jobs[0].text)
+        self.assertTrue(xiaoyou.memory.notes()[-1].startswith("[%s][偏好] 回复短一点" % time.strftime("%Y-%m-%d")))
+        del old
 
     def test_with_tools_she_talks_in_words_and_acts_through_tools(self):
         voice = ToolTalker()

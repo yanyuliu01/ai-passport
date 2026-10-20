@@ -56,9 +56,11 @@ public class ChatPlanTest {
         // 正在做的事不挡补充要求：有字就能发。
         assertEquals("ready", AppPresentation.composerState(true, false, true, false));
         assertEquals("stop", AppPresentation.composerState(false, false, true, false));
-        // 回话中有字也不能再发；能停就给停，不能停就等。
-        assertEquals("stop", AppPresentation.composerState(true, true, true, false));
-        assertEquals("wait", AppPresentation.composerState(true, true, false, false));
+        // 回话中有字也能发（插话）；没字时能停就给停，不能停就等。
+        assertEquals("ready", AppPresentation.composerState(true, true, true, false));
+        assertEquals("ready", AppPresentation.composerState(true, true, false, false));
+        assertEquals("stop", AppPresentation.composerState(false, true, true, false));
+        assertEquals("wait", AppPresentation.composerState(false, true, false, false));
         assertEquals("stopping", AppPresentation.composerState(false, true, true, true));
         // 已经停下了，不再显示「停止中」。
         assertEquals("idle", AppPresentation.composerState(false, false, false, true));

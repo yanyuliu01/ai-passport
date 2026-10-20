@@ -1321,7 +1321,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void sendChat() {
         String message = chatInput.getText().toString().trim();
-        if (message.isEmpty() || HubStore.get().busy()) return;
+        if (message.isEmpty()) return;  // 她还在回上一句时也能发：插话
         if (RuntimeClient.selected(this) == null) { toast("先到侧边栏「连接与设置」添加电脑"); return; }
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
@@ -2409,7 +2409,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private void startListening() {
         if (RuntimeClient.selected(this) == null) { toast("先连上电脑，小幽才能回答"); show(TAB_MINE); return; }
         if (listening || mic.recording() || plainMic.recording()) return;
-        if (HubStore.get().busy() || transcribing) { toast(companionName() + "还在回上一句"); return; }
+        if (transcribing) { toast("上一句还在转成文字，稍等一下"); return; }  // 她在回话时也能按住插话
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             micSay("请先允许麦克风权限");
             requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, 4); return;

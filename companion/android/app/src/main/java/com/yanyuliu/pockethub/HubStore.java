@@ -748,13 +748,24 @@ public final class HubStore {
      * 没在等回复、卡已经到了、或者内容没变时不通知。
      */
     public void chatStreaming(String text) {
+        chatStreaming(null, text);
+    }
+
+    /**
+     * 同上，key 是这句话在聊天记录里的编号（RuntimeClient 自己记着）。回话途中主人又说了一句时，
+     * 好几句可能同时在等回复：各写各的气泡；首页那一句只跟最新的那句。
+     */
+    public void chatStreaming(String key, String text) {
         synchronized (this) {
             String next = text == null ? "" : text;
-            if (pending <= 0 || next.equals(streaming)) {
+            String target = key == null ? messageKey : key;
+            if (pending <= 0) {
                 return;
             }
-            streaming = next;
-            history.streaming(messageKey, next);
+            boolean latest = target.equals(messageKey);
+            if (latest && next.equals(streaming)) return;
+            if (latest) streaming = next;
+            history.streaming(target, next);
         }
         notifyChanged();
     }
@@ -812,10 +823,14 @@ public final class HubStore {
 
     /** 语音识别出了我刚才说的话：把聊天记录里的占位换成原话。 */
     public void chatHeard(String placeholder, String heard) {
+        chatHeard(null, placeholder, heard);
+    }
+
+    public void chatHeard(String key, String placeholder, String heard) {
         synchronized (this) {
             if (pending > 0) {
                 busyText = heard;
-                history.heard(messageKey, heard);
+                history.heard(key == null ? messageKey : key, heard);
                 turn = new Turn(turn.phase, heard, turn.reply, turn.agent, turn.stage, turn.mood);
             }
         }
@@ -829,9 +844,15 @@ public final class HubStore {
 
     /** 同上；card 是这句话归到的那张卡（旧版 Runtime 没有，为 null）。 */
     public void chatAnswered(String brief, String reply, String mood, String card) {
+        chatAnswered(null, brief, reply, mood, card);
+    }
+
+    /** 同上；key 是这句话在聊天记录里的编号（同时有几句在等时各结各的）。 */
+    public void chatAnswered(String key, String brief, String reply, String mood, String card) {
         synchronized (this) {
+            String target = key == null ? messageKey : key;
             pending = Math.max(0, pending - 1);
-            streaming = "";
+            if (target.equals(messageKey) || pending == 0) streaming = "";
             turnCard = card;
             String shown = reply.isEmpty() ? brief : reply;
             turn = new Turn("done", turn.said, BuddyProtocol.chatReply(brief, Markdown.plain(reply)), "", "",
@@ -842,7 +863,7 @@ public final class HubStore {
             Card snapshot = null;
             Long order = card == null ? null : cardOrder.get(card);
             if (order != null) snapshot = cards.get(order);
-            history.finish(messageKey, card, shown, false, snapshot);
+            history.finish(target, card, shown, false, snapshot);
             saveHistory();
         }
         notifyChanged();
@@ -850,6 +871,10 @@ public final class HubStore {
 
     /** 这一轮没成功。asked 不为 null 表示这句话还没来得及记进聊天记录。 */
     public void chatFailed(String asked, String error) {
+        chatFailed(null, asked, error);
+    }
+
+    public void chatFailed(String key, String asked, String error) {
         synchronized (this) {
             if (asked != null) {
                 turn = new Turn("failed", RuntimeClient.VOICE_PLACEHOLDER.equals(asked) ? "" : asked,
@@ -867,7 +892,7 @@ public final class HubStore {
                     System.currentTimeMillis(), "没成功：" + error));
             trimEvents();
             appendLog("聊天失败：" + error);
-            history.finish(messageKey, null, error, true, null);
+            history.finish(key == null ? messageKey : key, null, error, true, null);
             saveHistory();
         }
         notifyChanged();

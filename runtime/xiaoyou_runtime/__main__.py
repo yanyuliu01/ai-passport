@@ -200,6 +200,10 @@ def main(argv=None) -> int:
     xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config),
                       Usage(config, enabled=config.usage_enabled and args.once is None))
 
+    if args.once is None:
+        # 常驻的时候才开后台节拍（事情做到一半值不值得说、答应的事到点、整理记忆）。
+        xiaoyou.start_pulse()
+
     if args.once is not None:
         if args.agent is not None and not xiaoyou.has(args.agent):
             print("没有叫 %s 的代理（现在有：%s）" % (

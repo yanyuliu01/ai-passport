@@ -336,6 +336,8 @@ class Job:
     # 小幽手边的工具（voice_tools.Toolbox）：有它时她直接写给主人的文字就是说的话，要做事就调工具，
     # 不再写 JSON。只交给 talks_with_tools() 为真的代理；None 表示这一次不给工具
     tools: Any = None
+    # 主人插话了（threading.Event 被设上）：边说边出的这一次马上停下，已经说出的部分照样交回
+    interrupt: Any = None
     # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
     # Claude Code 只在原项目目录下找得到要 --resume 的会话
     cwd: Optional[str] = None

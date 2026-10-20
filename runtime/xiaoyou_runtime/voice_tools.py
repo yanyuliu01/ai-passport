@@ -8,14 +8,19 @@ reply 抠出来；模型在 JSON 前后多写一句、或者包进代码块，�
 - 做事：start_task / amend_task / cancel_task。调用时就按 Xiaoyou._plan 的规则检查一遍，
   办不了的当场把原因告诉她，她在同一轮里改；办得了的先记下，这一轮说完以后由 Runtime
   照旧去办（开卡、启动帮手都用原来的代码）。一轮只能有一件要办的事。
-- 查东西：task_detail 当场查、当场把结果给她，她看完接着说。
+- 查东西：task_detail 看一件事，recall 翻以前的记录；当场查、当场把结果给她，她看完接着说。
+- 记事：remember / replace / forget 改她记得的关于主人的事（memory.py）；track / resolve 记下、
+  关掉她答应主人的事（promises.py）。这些当场就生效。
+
+only 可以只给一部分工具（后台整理记忆、主动说话那几轮用）。
 
 这里只管“有哪些工具、调用了怎么样”，不碰网络和模型：dsh_stream 负责和模型来回，
 Xiaoyou 负责把记下的事真的办掉。哪家模型的工具调用格式都能从 definitions() 改写过去。
 """
 
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 # 她要另起一条消息时，单独写一行 ---。Runtime 和手机都按它分开，几条、多长都由她定。
 MESSAGE_BREAK = "---"
@@ -26,17 +31,22 @@ TOOL_SESSION_PREFIX = "apt-"
 
 # 嘴上说了要去做的话。一轮里一个工具都没调、却说了这种话，Runtime 提醒她一次（PROMISE_NUDGE）。
 PROMISE = re.compile(
-    r"(我这就|这就去|我马上|马上去|马上帮|我现在就|我先去|我去(查|看|找|问|拢|整理|弄|做|跑|翻|核|试|盯)"
+    r"(我这就|这就去|马上去|马上帮你|我先去|我去(查|看|找|问|拢|整理|弄|做|跑|翻|核|试|盯)"
     r"|我来(查|看|找|拢|整理|弄|做|跑|翻|核|安排)|交给\s?\w{1,12}|让\s?\w{1,12}\s?(去|来)(查|看|做|弄|跑|改|整理)"
     r"|已经(让|交给|安排))")
 # 嘴上说了要记住、以后照做的话。没调 remember 就说这种话，跟“说了去做却没做”一样，也提醒一次。
 MEMORY_PROMISE = re.compile(
     r"(记下了|记下来|记住了|我记住|记着了|收下这条|收下了|按这个来|照这个来|以后(我|就)|下次(我|就)|往后(我|就)"
     r"|我会注意|长记性)")
+# 答应到时候提醒、到时候再做的话。没调 track 就说这种话，到时候没人记得，也提醒一次。
+LATER_PROMISE = re.compile(
+    r"(到时候(我|再)|我(会|来|再)提醒|提醒你|晚点(我|再)|回头(我|再)|等.{1,12}(了|后|以后)(我|再)(去|发|做|弄|提醒|告诉))")
 PROMISE_NUDGE = (
-    "（Runtime 提醒，主人看不到：你刚才说了要去做或者说记下了，但这一轮没调对应的工具，事情不会发生，"
-    "下一轮你也不会记得。要做事就现在调工具（交给帮手用 start_task，看进展用 task_detail），"
-    "要记住就现在调 remember；不用再跟主人重复或道歉。其实不需要的话，用一句话改口说清楚。）")
+    "（Runtime 提醒，主人看不到：你刚才说了要去做、记下了或者到时候提醒，但这一轮没调对应的工具，"
+    "事情不会发生，下一轮你也不会记得。要做事就现在调工具（交给帮手用 start_task，看进展用 task_detail），"
+    "要记住就调 remember（改旧的用 replace），答应以后办的事用 track 记上；不用再跟主人重复或道歉。"
+    "你要是只是在问主人要不要做，那就不用调工具，直接结束；其实不需要的话，用一句话改口说清楚。）")
+MEMORY_TOOLS = ("remember", "replace", "forget")
 
 ACTION_TOOLS = ("start_task", "amend_task", "cancel_task")
 
@@ -54,9 +64,15 @@ class Toolbox:
 
     def __init__(self, helpers: List[str], efforts: List[str], models: List[str],
                  check: Callable[[Dict[str, Any]], Optional[str]],
-                 lookup: Callable[[str], Optional[str]], memory: Any = None):
+                 lookup: Callable[[str], Optional[str]], memory: Any = None,
+                 recall: Optional[Callable[[str], str]] = None, promises: Any = None,
+                 conversation: str = "default", only: Optional[Iterable[str]] = None):
         self._helpers = helpers
-        self._memory = memory  # memory.OwnerMemory；None 就没有 remember / forget
+        self._memory = memory  # memory.OwnerMemory；None 就没有 remember / replace / forget
+        self._recall = recall  # recall(query) → 给她看的结果；None 就没有 recall
+        self._promises = promises  # promises.Promises；None 就没有 track / resolve
+        self._conversation = conversation
+        self._only = set(only) if only is not None else None
         self._efforts = efforts
         self._models = models
         self._check = check
@@ -106,28 +122,105 @@ class Toolbox:
             "description": "查一件事现在怎么样了：状态、谁在做、最近几步进展、做完的结果。只是看，不改它。",
             "input_schema": {"type": "object", "properties": {"card": card}, "required": ["card"]},
         })
+        if self._recall is not None:
+            tools.append({
+                "name": "recall",
+                "description": "翻以前的记录：跟主人聊过的话、记忆的修改记录、最近的事和帮手交回的结果。"
+                               "主人提到“上次”“之前说的”、或者你记不清的时候用。",
+                "input_schema": {"type": "object", "properties": {
+                    "query": {"type": "string", "description": "要找的关键词，几个词用空格分开"},
+                }, "required": ["query"]},
+            })
         if self._memory is not None:
+            quote = {"type": "string", "description": "主人的原话（出处），一句就够"}
             tools.append({
                 "name": "remember",
-                "description": "记住一条关于主人的事：偏好、定下的规矩、要你以后一直照做的话、长期的情况。"
-                               "每一轮你都会看到记着的事。一次性的小事不用记。",
+                "description": "记住一条关于主人的事：偏好、定下的规矩、长期的情况、答应过的长期约定。"
+                               "每一轮你都会看到记着的事。跟已经记着的某条冲突或者是改口，用 replace 改那一条，"
+                               "不要再记一条。一次性的小事、流水账不用记；密码、密钥、验证码绝不记。",
                 "input_schema": {"type": "object", "properties": {
                     "note": {"type": "string", "description": "要记的一句话，写清楚以后该怎么做"},
-                }, "required": ["note"]},
+                    "kind": {"type": "string", "enum": ["偏好", "规矩", "事实", "承诺"]},
+                    "quote": quote,
+                }, "required": ["note", "kind"]},
+            })
+            tools.append({
+                "name": "replace",
+                "description": "主人改了说法：把记着的第 number 条换成新的（旧的会留在修改记录里）。",
+                "input_schema": {"type": "object", "properties": {
+                    "number": {"type": "integer"},
+                    "note": {"type": "string"},
+                    "quote": quote,
+                }, "required": ["number", "note"]},
             })
             tools.append({
                 "name": "forget",
-                "description": "删掉一条记着的事（主人改主意了、或者记错了）。number 是“你记得的关于主人的事”里的编号。",
+                "description": "删掉一条记着的事（主人不要了、或者记错了）。number 是“你记得的关于主人的事”里的编号。",
                 "input_schema": {"type": "object", "properties": {
                     "number": {"type": "integer"},
                 }, "required": ["number"]},
             })
+        if self._promises is not None:
+            tools.append({
+                "name": "track",
+                "description": "记下你答应主人、要以后办的事（不是交给帮手的任务），比如“晚上提醒我…”"
+                               "“等 Mac 上线再发”。提醒类一定写 due（第一次到点的时间），到时候会叫你决定要不要说；"
+                               "每天、每周重复的再写 every。",
+                "input_schema": {"type": "object", "properties": {
+                    "title": {"type": "string", "description": "答应了什么，一句话"},
+                    "detail": {"type": "string"},
+                    "due": {"type": "string", "description": "什么时候办，写成 YYYY-MM-DD HH:MM（主人所在时区）；没有就不写"},
+                    "every": {"type": "string", "enum": ["day", "week"], "description": "每天或每周重复；不重复就不写"},
+                }, "required": ["title"]},
+            })
+            tools.append({
+                "name": "resolve",
+                "description": "答应的事办完了、或者主人不要了：按编号（p 开头）关掉。",
+                "input_schema": {"type": "object", "properties": {
+                    "id": {"type": "string"},
+                    "outcome": {"type": "string", "description": "怎么了结的，一句话"},
+                }, "required": ["id"]},
+            })
+        if self._only is not None:
+            tools = [tool for tool in tools if tool["name"] in self._only]
         return tools
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
         """执行一次工具调用。返回（给模型看的结果，是不是出错）。"""
         args = args if isinstance(args, dict) else {}
         self.calls.append((name, args))
+        if self._only is not None and name not in self._only:
+            return "这一轮没有 %s 这个工具" % name, True
+        if name == "recall" and self._recall is not None:
+            query = str(args.get("query") or "").strip()
+            return (self._recall(query), False) if query else ("要写想找什么", True)
+        if name == "remember" and self._memory is not None:
+            note = str(args.get("note") or "").strip()
+            said = self._memory.remember(note, kind=str(args.get("kind") or ""),
+                                         quote=str(args.get("quote") or ""))
+            return said, not said.startswith(("记下了", "这条之前"))
+        if name == "replace" and self._memory is not None:
+            try:
+                said = self._memory.replace(int(args.get("number")), str(args.get("note") or ""),
+                                            quote=str(args.get("quote") or ""))
+            except (TypeError, ValueError):
+                return "number 要写记着的那条的编号", True
+            return said, not said.startswith("改好了")
+        if name == "track" and self._promises is not None:
+            due, problem = _due(args.get("due"))
+            if problem:
+                return problem, True
+            try:
+                item = self._promises.track(str(args.get("title") or ""), str(args.get("detail") or ""),
+                                            due, self._conversation, every=str(args.get("every") or ""))
+            except ValueError as error:
+                return str(error), True
+            return ("记上了：%s %s（%s%s）。前面已经跟主人说过的话不用再说一遍，没有别的就直接结束。" % (
+                item["id"], item["title"], time.strftime("%m-%d %H:%M", time.localtime(due)) if due else "没定时间",
+                {"day": "，每天", "week": "，每周"}.get(item.get("every") or "", ""))), False
+        if name == "resolve" and self._promises is not None:
+            item = self._promises.resolve(str(args.get("id") or "").strip(), str(args.get("outcome") or ""))
+            return ("关掉了：%s" % item["title"], False) if item else ("没有这个编号的事（或者已经关掉了）", True)
         if name == "task_detail":
             card = str(args.get("card") or "").strip()
             found = self._lookup(card) if card else None
@@ -163,13 +256,18 @@ class Toolbox:
         return RECORDED % what, False
 
     def promised(self, said: str) -> bool:
-        """嘴上说了却没做：说要去做、却没调做事或查看的工具；说记下了、却没调 remember。"""
+        """嘴上说了却没做：说要去做、却没调做事或查看的工具；说记下了、却没调记忆的工具；
+        说到时候提醒、却没调 track。最后是在问主人（问号结尾）的不算：那是在征求意见，不是答应。"""
         names = {name for name, _ in self.calls}
-        acted = bool(names & set(ACTION_TOOLS + ("task_detail",)))
-        if PROMISE.search(said or "") and not acted:
+        said = said or ""
+        if said.rstrip().endswith(("？", "?")):
+            return False
+        if PROMISE.search(said) and not names & set(ACTION_TOOLS + ("task_detail", "recall")):
             return True
-        return self._memory is not None and MEMORY_PROMISE.search(said or "") is not None \
-            and "remember" not in names
+        if self._memory is not None and MEMORY_PROMISE.search(said) and not names & set(MEMORY_TOOLS + ("track",)):
+            return True
+        return self._promises is not None and LATER_PROMISE.search(said) is not None \
+            and not names & {"track", "start_task"}
 
     def fields(self, said: str) -> Dict[str, Any]:
         """这一轮的结果，写成和以前 JSON 一样的字段，交给 Xiaoyou 照原来的路办。
@@ -181,3 +279,16 @@ class Toolbox:
                     "mood": "happy"}
         return {"reply": said, "card": self.card or "new", "action": self.action,
                 "mood": "busy" if self.action["type"] in ("start", "amend") else "happy"}
+
+
+def _due(value: Any) -> Tuple[Optional[float], Optional[str]]:
+    """track 的 due：YYYY-MM-DD HH:MM（本地时间）。没写是 None；写错了给出原因。"""
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    for form in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return time.mktime(time.strptime(text, form)), None
+        except ValueError:
+            continue
+    return None, "due 要写成 YYYY-MM-DD HH:MM，比如 2026-10-21 09:00"

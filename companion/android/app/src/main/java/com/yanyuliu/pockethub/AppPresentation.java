@@ -207,11 +207,12 @@ final class AppPresentation {
     /**
      * hasText：框里有字；replying：小幽还在回上一句；stoppable：有一件能停的事在做（小幽交办出去的、
      * 不是电脑上同步来的）；stopping：已经叫它停了，还没停下。
-     * 有字又不在回话时总能发，补充要求不被正在做的事挡住；回话中不能再发（Runtime 一次处理一句）。
+     * 有字就能发：补充要求不被正在做的事挡住，她回话途中也能插话（Runtime 0.18 起会打断那一句）。
      */
     static String composerState(boolean hasText, boolean replying, boolean stoppable, boolean stopping) {
         if (stopping && (replying || stoppable)) return COMPOSER_STOPPING;
-        if (hasText && !replying) return COMPOSER_READY;
+        // 有字就能发：她还在回上一句时也能插话，Runtime 会停下没说完的那句先听你的。
+        if (hasText) return COMPOSER_READY;
         if (stoppable) return COMPOSER_STOP;
         if (replying) return COMPOSER_WAIT;
         return COMPOSER_IDLE;

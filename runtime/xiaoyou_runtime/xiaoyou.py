@@ -40,8 +40,12 @@ from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
+from . import recall as recall_search
 from .memory import OwnerMemory
 from .memory import prompt_section as memory_section
+from .proactive import Pulse
+from .promises import Promises
+from .promises import prompt_section as promise_section
 from .voice_tools import JOIN, TOOL_SESSION_PREFIX, Toolbox
 from .usage import EFFORT_NAMES, Usage
 from .workspace import Workspace
@@ -230,11 +234,6 @@ TOOL_WORDING = (
     ("action 写 none", "不调工具"),
     ("用 start 交给帮手", "用 start_task 交给帮手"),
 )
-
-# 帮手做得久时小幽跟进一句：做了多久才说第一句、至少隔多久、一件事最多几句（秒、句）。
-PING_AFTER = 90
-PING_EVERY = 240
-PING_MAX = 3
 
 # 像聊天那样说话：每条消息多长、一轮最多几条（多出来的并进最后一条）。
 BUBBLE_CHARS = 60
@@ -448,7 +447,8 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                 cards: List[Dict[str, Any]], focus: Optional[str], now: float,
                 pinned: bool = False, notes: Optional[Dict[str, str]] = None,
                 quota: bool = False, desktop: Optional[Dict[str, Any]] = None,
-                tools: bool = False, memory: Optional[List[str]] = None) -> str:
+                tools: bool = False, memory: Optional[List[str]] = None,
+                promises: Optional[List[Dict[str, Any]]] = None) -> str:
     """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。
 
     tools 为真时她有工具（voice_tools）：说的话直接写文字，做事调工具，不写 JSON。
@@ -457,6 +457,10 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     订阅额度可看的。desktop 是主人正看着的电脑上的会话（focus 就是它）。"""
     notes = notes or {}
     parts = [persona, ""]
+    # 现在几点：她要算“晚上提醒我”这类到点时间，也要知道主人这会儿是不是该休息了。
+    parts.append("现在是 %s。" % time.strftime("%Y-%m-%d %H:%M（周%%s）", time.localtime(now)).replace(
+        "%s", "一二三四五六日"[time.localtime(now).tm_wday]))
+    parts.append("")
     parts.append("## 你怎么做事")
     if tools:
         parts.append(
@@ -487,6 +491,9 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("")
     if memory:
         parts.extend(memory_section(memory))
+        parts.append("")
+    if promises:
+        parts.extend(promise_section(promises, now))
         parts.append("")
     if tools:
         parts.append("## 怎么回复")
@@ -657,6 +664,14 @@ def recap(turns: List[Dict[str, Any]], text: str) -> str:
     )
 
 
+def owner_notes(task: str, notes: List[str]) -> str:
+    """交给帮手的话后面附上主人的偏好和规矩（主人看不到这段）。"""
+    if not notes:
+        return task
+    return task + "\n\n（主人的偏好和定下的规矩，做事和交回结果时照顾一下：\n%s）" % "\n".join(
+        "- " + note for note in notes)
+
+
 def background(turns: List[Dict[str, Any]], text: str) -> str:
     """把最近的对话作为背景交给只干活的代理。"""
     return (
@@ -714,6 +729,13 @@ class Xiaoyou:
         self._store = store
         # 她记得的关于主人的事（偏好、规矩）：每一轮都放进提示，她用 remember / forget 改。
         self.memory = OwnerMemory(Path(config.state_dir) / "memory" / "owner.md")
+        # 她答应主人、还没办完的事（不是交给帮手的任务）：每一轮放进提示，到点由投递闸叫她。
+        self.promises = Promises(Path(config.state_dir) / "memory" / "promises.json")
+        # 主人没开口时的节拍：事情做到一半值不值得说、答应的事到点、整理记忆（proactive.py）。
+        self._pulse = Pulse(self)
+        # 每个对话里她正在说的那一轮的“停下”开关（主人插话时 interrupt() 设上）。
+        self._speaking: Dict[str, threading.Event] = {}
+        self._speaking_lock = threading.Lock()
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
         # 记录中心：这里写卡、说话、改状态都经过它（record.py）；_cards 只用来读。
@@ -772,6 +794,7 @@ class Xiaoyou:
         return name in self._agents
 
     def close(self) -> None:
+        self._pulse.close()
         self._tasks.close()
         self._gate.close()
         self._workspace.close()
@@ -952,24 +975,52 @@ class Xiaoyou:
             listed, focus["id"] if focus is not None else None, now, pinned,
             self._usage.notes(), any(self._usage.account(agent.name) for agent in available),
             focus if focus is not None and focus.get("monitoring_only") else None, tools,
-            self.memory.notes())
+            self.memory.notes(), self.promises.open())
         schema = lane_schema(available)
         toolbox = self._toolbox(conversation, focus, available, pinned) if lead.talks_with_tools() else None
+        # 她这一轮说话途中主人又说了一句：service 调 interrupt()，正在出的那段马上停下（见 dsh_stream）。
+        cut = threading.Event()
+        with self._speaking_lock:
+            self._speaking[conversation] = cut
+        try:
+            return self._converse_with(lead, text, conversation, turn_id, focus, available, hop, say,
+                                       pinned, effort, model, prompt, schema, toolbox, cut)
+        finally:
+            with self._speaking_lock:
+                if self._speaking.get(conversation) is cut:
+                    self._speaking.pop(conversation, None)
+
+    def interrupt(self, conversation: str) -> bool:
+        """主人在这个对话里又说了一句：她要是正在说话，叫她停下。返回是不是真的打断了。"""
+        with self._speaking_lock:
+            cut = self._speaking.get(conversation)
+        if cut is None or cut.is_set():
+            return False
+        cut.set()
+        return True
+
+    def _converse_with(self, lead: Agent, text: str, conversation: str, turn_id: str,
+                       focus: Optional[Dict[str, Any]], available: List[Agent], hop: int, say: Report,
+                       pinned: bool, effort: Optional[str], model: Optional[str], prompt: Any,
+                       schema: Dict[str, Any], toolbox: Optional[Toolbox], cut: threading.Event) -> Turn:
         outcome = None
         if toolbox is not None:
             # 说的话直接写、做事调工具（voice_tools）。这条路不通（接口出错、超时）就退回写 JSON 的老路。
             try:
                 outcome = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
-                                      on_text=self._streamer(lead.name, say, plain=True), tools=toolbox)
+                                      on_text=self._streamer(lead.name, say, plain=True), tools=toolbox,
+                                      interrupt=cut)
             except AgentError as error:
                 sys.stderr.write("带工具的回话没成，改回写 JSON：%s\n" % error)
                 say("partial", lead.name, "")
                 toolbox = None
         if outcome is None:
             outcome = self._speak(lead, text, conversation, prompt(False), schema, hop, catch_up=True,
-                                  on_text=self._streamer(lead.name, say))
+                                  on_text=self._streamer(lead.name, say), interrupt=cut)
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
         self._trace(outcome, problem)
+        if problem is not None and cut.is_set():
+            plan, problem = {"type": "none", "card": None}, None  # 被打断了：不重问，先听主人的
         if problem is not None:
             # 刚才边说边给主人看的那段不算数了：收回来，重说的那一次从头再显示。
             say("partial", lead.name, "")
@@ -1087,7 +1138,69 @@ class Xiaoyou:
             return self._plan(Outcome("", None, fields), conversation, focus, available, pinned)[1]
 
         return Toolbox([agent.name for agent in available], efforts, models, check,
-                       lambda card: self._detail(card, conversation, focus), self.memory)
+                       lambda card: self._detail(card, conversation, focus), self.memory,
+                       lambda query: self.recall(conversation, query), self.promises, conversation)
+
+    # ---- 给后台节拍（proactive.Pulse）用的几样 ----
+
+    @property
+    def config(self) -> Config:
+        return self._config
+
+    @property
+    def store(self) -> Store:
+        return self._store
+
+    @property
+    def record(self) -> Record:
+        return self._record
+
+    def voice_agent(self) -> Optional[Agent]:
+        return self._voice(self._available(0))
+
+    def voice_name(self) -> str:
+        voice = self.voice_agent()
+        return voice.name if voice is not None else self.default_agent
+
+    def style(self) -> str:
+        return CHAT_STYLE
+
+    def memory_lines(self) -> List[str]:
+        return memory_section(self.memory.notes())
+
+    def promise_lines(self) -> List[str]:
+        return promise_section(self.promises.open())
+
+    def detail(self, card_id: str, conversation: str) -> Optional[str]:
+        return self._detail(card_id, conversation, None)
+
+    @staticmethod
+    def chat_text(text: str) -> str:
+        return chat_text(text)
+
+    def start_pulse(self) -> None:
+        """开始后台节拍（Runtime 启动时调；测试里不调就不会自己跑）。"""
+        self._pulse.start()
+
+    def recall(self, conversation: str, query: str) -> str:
+        """recall 工具：在聊过的话、记忆的修改记录、最近的事和帮手结果里找。"""
+        records: List[recall_search.Record] = []
+        for turn in self._store.transcript.turns(conversation):
+            records.append(("聊天", "", float(turn.get("at") or 0),
+                            "主人：%s\n小幽：%s" % (turn["text"], turn["reply"])))
+        for path in self.memory.log_files():
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+                stamp = path.stat().st_mtime
+            except OSError:
+                continue
+            records.extend(("记忆", path.stem, stamp, line) for line in lines if line.strip())
+        for card in self._cards.recent(conversation, limit=120):
+            said = "\n".join(entry.get("text") or "" for entry in card.get("entries") or [])
+            records.append(("事", "%s %s" % (card["id"], clip(card.get("title") or "", 24)),
+                            float(card.get("updated_at") or card.get("created_at") or 0),
+                            (card.get("title") or "") + "\n" + said[-6000:]))
+        return recall_search.render(query, recall_search.search(query, records))
 
     def _detail(self, card_id: str, conversation: str, focus: Optional[Dict[str, Any]]) -> Optional[str]:
         """task_detail 给她看的：一件事的状态、谁在做、最近几步、最后说的话。别的对话的事看不到。"""
@@ -1216,7 +1329,8 @@ class Xiaoyou:
 
     def _speak(self, agent: Agent, text: str, conversation: str, system: str,
                schema: Optional[Dict[str, Any]], hop: int, catch_up: bool,
-               on_text: Optional[Callable[[str], None]] = None, tools: Any = None) -> Outcome:
+               on_text: Optional[Callable[[str], None]] = None, tools: Any = None,
+               interrupt: Optional[threading.Event] = None) -> Outcome:
         """让能说话的代理在这个对话自己的会话里接一段话。只说话，不给工具。"""
         session = self._store.session(conversation, agent.name)
         missed = self._store.transcript.unseen(conversation, agent.name) if catch_up else []
@@ -1227,7 +1341,7 @@ class Xiaoyou:
             text=recap(missed, text) if missed else text,
             session_id=session,
             conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
-            timeout=self._config.voice_timeout_seconds, on_text=on_text, tools=tools,
+            timeout=self._config.voice_timeout_seconds, on_text=on_text, tools=tools, interrupt=interrupt,
         ))
         if outcome.session_id:
             self._store.remember(conversation, agent.name, outcome.session_id)
@@ -1280,6 +1394,9 @@ class Xiaoyou:
         # 借来的电脑会话是主人自己的：不给它加小幽的人设和回复格式。
         speaking = agent.speaks and borrowed is None
         effort, model = self._tier(agent, self._cards.get(card_id), effort, model)
+        if borrowed is None:
+            # 帮手也照顾主人的偏好（比如交回的结果别太长）；借来的电脑会话是主人自己的，不加。
+            task = owner_notes(task, self.memory.notes())
         known = next((entry["model"] for entry in self._usage.snapshot()["agents"]
                       if entry["name"] == agent.name), None)
         task_run = Task(
@@ -1314,11 +1431,10 @@ class Xiaoyou:
             self._record.activity(task.card, task.agent.name, phase, text, event_id)
 
         control.activity = activity
-        pace = self._pacer(task)
-
         def progress(line: str) -> None:
             self._record.progress(task.card, line)
-            pace(line)
+            # 投递闸（proactive.Pulse）记下这一步；要不要跟主人说由它叫醒她来定。
+            self._pulse.progress(task.card, task.run_id, task.agent.name, line)
 
         control.progress = progress
         control.scratch = self._config.state_dir
@@ -1367,38 +1483,6 @@ class Xiaoyou:
             return WAIT if decision == "allow" else STOP
 
         control.stalled = stalled
-
-    def _pacer(self, task: Task) -> Callable[[str], None]:
-        """帮手做得久的时候，小幽在聊天里隔一阵说一句它到哪了，像聊天里的人那样跟进。
-
-        不再问一次模型（不花钱、不挑用哪家 API）：用帮手报的最近一步拼一句短话。做了
-        PING_AFTER 秒以后才说第一句，之后至少隔 PING_EVERY 秒，一件事最多 PING_MAX 句。
-        进展里没几个中文字（多半是文件名、命令）时不照搬，只说做了多久。"""
-        state = {"started": time.monotonic(), "last": None, "count": 0}
-
-        def pace(line: str) -> None:
-            now = time.monotonic()
-            if state["count"] >= PING_MAX or now - state["started"] < PING_AFTER:
-                return
-            if state["last"] is not None and now - state["last"] < PING_EVERY:
-                return
-            card = self._cards.get(task.card)
-            if card is None or card["state"] not in ACTIVE or card.get("run_id") != task.run_id:
-                return
-            state["last"] = now
-            state["count"] += 1
-            title = clip(card.get("title", ""), 20)
-            step = clean_display(line or "").split("\n")[0].strip()
-            readable = sum(1 for ch in step if "\u4e00" <= ch <= "\u9fff") >= 4
-            if readable:
-                say = "%s 还在弄「%s」，刚在%s。" % (task.agent.name, title, clip(step, 30).rstrip("。"))
-            else:
-                say = "%s 还在弄「%s」，已经%s了，有结果我马上说。" % (
-                    task.agent.name, title, _elapsed(now - state["started"]))
-            self._record.reply(task.card, say=say, turn_id="%s-ping-%d" % (task.run_id, state["count"]),
-                               scope="main", kind="note")
-
-        return pace
 
     def _release(self, task: Task, control: Control) -> None:
         """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了；记下这一轮花了多少。"""

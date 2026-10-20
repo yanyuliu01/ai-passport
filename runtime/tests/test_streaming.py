@@ -309,6 +309,32 @@ class ToolTalkTests(TempDirCase):
         self.assertIn("删掉了", tools.call("forget", {"number": 1})[0])
         self.assertEqual(memory.notes(), [])
 
+    def test_cutting_in_stops_the_reply_and_keeps_what_was_said(self):
+        cut = threading.Event()
+        opener = FakeOpener(sse("我这就去", "把这几天", "的事情拢一拢。"))
+        seen = []
+
+        def heard(text):
+            seen.append(text)
+            cut.set()  # 主人在她说第一块时就插话了
+
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="回顾一下", system="S", plain=True,
+                                 on_text=heard, tools=self.toolbox(), interrupt=cut),
+                                 {"DEEPSEEK_API_KEY": "k"}, "deepseek-v4-pro", heard, opener)
+        self.assertEqual(outcome.text, "我这就去")
+        self.assertEqual(len(opener.requests), 1)  # 不再提醒、不再接着说
+        self.assertEqual(outcome.fields["action"], {"type": "none"})
+
+    def test_xiaoyou_interrupt_only_hits_a_reply_in_progress(self):
+        xiaoyou, _ = make_xiaoyou(self.folder / "cut", [Scripted("claude")])
+        self.addCleanup(xiaoyou.close)
+        self.assertFalse(xiaoyou.interrupt("default"))
+        cut = threading.Event()
+        xiaoyou._speaking["default"] = cut
+        self.assertTrue(xiaoyou.interrupt("default"))
+        self.assertTrue(cut.is_set())
+        self.assertFalse(xiaoyou.interrupt("default"))
+
     def test_old_json_replies_in_the_history_become_plain_words(self):
         history = [{"role": "user", "content": "hi"},
                    {"role": "assistant", "content": '{"reply": "你好", "brief": "b", "mood": "happy"}'}]

@@ -321,6 +321,8 @@ gestures; the Runtime API is unchanged.
 - 0.24.0: replies are no longer split by length; a new bubble starts only where she writes a line with
   only ---, paragraphs stay in one bubble. Bold and lists are rendered; the device, the home line and copied
   text get plain words (needs Runtime 0.16.0).
+- 0.25.0: you can send or hold to talk while she is still replying; Runtime 0.18.0 stops her unfinished reply
+  and answers you. Several messages waiting at once each keep their own bubble.
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)
