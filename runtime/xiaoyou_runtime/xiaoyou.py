@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import router as routing
 from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Job,
-                     Outcome, clip, span)
+                     Outcome, clip, fields_from_text, span)
 from .approvals import STALL, Approvals, Gate
 from .artifacts import ArtifactError, ArtifactStore
 from .record import Record
@@ -185,10 +185,100 @@ def reply_so_far(raw: str) -> str:
 PARTIAL_SECONDS = 0.12
 
 
+# 帮手做得久时小幽跟进一句：做了多久才说第一句、至少隔多久、一件事最多几句（秒、句）。
+PING_AFTER = 90
+PING_EVERY = 240
+PING_MAX = 3
+
+# 像聊天那样说话：每条消息多长、一轮最多几条（多出来的并进最后一条）。
+BUBBLE_CHARS = 60
+MAX_BUBBLES = 6
+_SENTENCE_END = re.compile(r"(?<=[。！？!?；;])")
+_LIST_LINE = re.compile(r"^(· |\d+[.、）)])")
+
+CHAT_STYLE = (
+    "## 说话的样子\n"
+    "像在手机上和主人聊天发消息：一次回 1 到 4 条短消息，每条一两句、不超过 40 个字，"
+    "条与条之间空一行。第一条就说最要紧的结论。能一句说完就只发一条，不要凑数。"
+    "不用标题、编号列表、加粗、代码块和表格；不贴文件路径、行号、命令、代码和英文报错原文，"
+    "主人要了再给。主人要细节、原文或完整解释时可以多说，但还是拆成几条短消息。"
+    "直接对主人说“你”，不要写“主人”“给主人的结论”“下面是”“以下是”这类旁白。"
+)
+
+
+def segments(text: str) -> List[str]:
+    """把一段回复拆成聊天里的几条短消息。
+
+    空行分开的段落各算一条；一段里每行都不是列表时，一行一条；太长的一段在句号、问号、
+    叹号处切开，每条不超过 BUBBLE_CHARS 左右。超过 MAX_BUBBLES 条时，多的并进最后一条
+    （用单个换行连起来，不再被当成新的一条）。列表保持在同一条里。"""
+    out: List[str] = []
+    for paragraph in re.split(r"\n\s*\n", text or ""):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        lines = [line.strip() for line in paragraph.split("\n") if line.strip()]
+        if any(_LIST_LINE.match(line) for line in lines):
+            out.append("\n".join(lines))
+            continue
+        for line in lines:
+            if len(line) <= BUBBLE_CHARS * 3 // 2:
+                out.append(line)
+                continue
+            current = ""
+            for piece in _SENTENCE_END.split(line):
+                if not piece:
+                    continue
+                if current and len(current) + len(piece) > BUBBLE_CHARS:
+                    out.append(current.strip())
+                    current = piece
+                else:
+                    current += piece
+            if current.strip():
+                out.append(current.strip())
+    if len(out) > MAX_BUBBLES:
+        out = out[:MAX_BUBBLES - 1] + ["\n".join(out[MAX_BUBBLES - 1:])]
+    return out
+
+
+def chat_text(text: str) -> str:
+    """整理好、拆成几条的回复：条与条之间空一行（手机按空行画成一个个气泡）。"""
+    return "\n\n".join(segments(text))
+
+
+def reply_text(outcome: Outcome) -> str:
+    """代理这一轮要说给主人的话。认不出结构时，也绝不把整段 JSON 原样给主人看：
+    先在文字里找带 reply 的对象，再退到写了一半的 reply，最后才用原文。"""
+    value = (outcome.fields or {}).get("reply")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    text = outcome.text or ""
+    found = fields_from_text(text)
+    if found is not None and found["reply"].strip():
+        return found["reply"].strip()
+    if _REPLY_KEY.search(text):
+        partial = reply_so_far(text).strip()
+        if partial:
+            return partial
+    return text.strip()
+
+
+def digest(result: str, title: str) -> str:
+    """没有能说话的代理转述时，帮手结果的短版本：第一句话加一句“完整的在哪”。
+    原文仍完整留在任务里，不在聊天里整段贴出来。"""
+    parts = segments(clean_display(result))
+    if len(parts) == 1 and len(parts[0]) <= BUBBLE_CHARS * 2:
+        return parts[0]  # 本来就是一两句话：原样给，不用再说“完整的在哪”
+    first = clip(parts[0], BUBBLE_CHARS * 2) if parts else ""
+    where = "完整结果在「%s」里。" % title if title else "完整结果在任务里。"
+    return first + "\n\n" + where if first else where
+
+
 def shape(reply: str, brief: Any, mood: Any, limit: int, agent: str, card: str = "",
           started: bool = False) -> Turn:
-    """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle。"""
-    reply = clean_display(reply or "")
+    """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle，
+    回复拆成聊天式的几条短消息。"""
+    reply = chat_text(clean_display(reply or ""))
     brief_text = clean_display(brief) if isinstance(brief, str) else ""
     return Turn(
         reply=reply,
@@ -342,6 +432,8 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         "出来的任务。真要派给帮手做事，是因为确实听懂了要做什么，不是为了测帮手能不能通。"
     )
     parts.append("")
+    parts.append(CHAT_STYLE)
+    parts.append("")
     parts.append("## 回复格式")
     parts.append("每一轮只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars)
     parts.append(
@@ -428,8 +520,13 @@ def voice_prompt(persona: str, brief_max_chars: int) -> str:
     """转述帮手的结果时的系统提示：人设和回复格式。"""
     return "\n".join([
         persona, "",
+        CHAT_STYLE, "",
+        "## 转述帮手的结果",
+        "第一条说结论：成了没有、找到了什么。第二条说要主人拿主意的事，没有就不说。"
+        "需要时最后一条说完整的在哪（比如“完整的在任务里”）。不复述帮手的过程、文件名和代码位置，"
+        "帮手原文里的英文和术语换成主人听得懂的话。", "",
         "## 回复格式",
-        "只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars,
+        "只输出一个 JSON 对象，不要在它前后加任何文字，按给定的结构：" + REPLY_FORMAT % brief_max_chars,
     ])
 
 
@@ -440,6 +537,7 @@ def task_prompt(persona: str, brief_max_chars: int) -> str:
         "## 这一次",
         "你正在后台替主人做一件事。把它做完，然后用你自己的话告诉主人：做了什么、结论是什么、"
         "有没有需要主人决定的事。不要原样贴一大段输出。", "",
+        CHAT_STYLE, "",
         "## 回复格式",
         "做完后只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars,
     ])
@@ -494,7 +592,7 @@ def relay(helper: str, title: str, result: str) -> str:
         cut = "\n（以上为原文开头和结尾，请勿声称已阅读省略内容。）"
     return (
         "（后台那件事「%s」，帮手 %s 做完了。下面是它交回的原始结果，主人看不到这段。"
-        "用你自己的话告诉主人：做了什么、结论是什么、有没有需要主人决定的事。"
+        "按“转述帮手的结果”的样子，用你自己的话、像聊天那样告诉主人。"
         "）\n\n%s%s" % (title, helper, result, cut)
     )
 
@@ -776,7 +874,7 @@ class Xiaoyou:
             plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
         fields = outcome.fields or {}
-        reply = (self._field(outcome, "reply") or outcome.text).strip()
+        reply = reply_text(outcome)
         mood, brief = fields.get("mood"), fields.get("brief")
         if problem is not None:
             # 说了两次都办不了：不替她编，照实告诉主人。
@@ -1068,7 +1166,13 @@ class Xiaoyou:
             self._record.activity(task.card, task.agent.name, phase, text, event_id)
 
         control.activity = activity
-        control.progress = lambda line: self._record.progress(task.card, line)
+        pace = self._pacer(task)
+
+        def progress(line: str) -> None:
+            self._record.progress(task.card, line)
+            pace(line)
+
+        control.progress = progress
         control.scratch = self._config.state_dir
         if task.agent.type in ("claude_code", "codex", "dsh"):
             task.artifact_dir = str(self.artifacts.task_dir(task.card))
@@ -1116,6 +1220,38 @@ class Xiaoyou:
 
         control.stalled = stalled
 
+    def _pacer(self, task: Task) -> Callable[[str], None]:
+        """帮手做得久的时候，小幽在聊天里隔一阵说一句它到哪了，像聊天里的人那样跟进。
+
+        不再问一次模型（不花钱、不挑用哪家 API）：用帮手报的最近一步拼一句短话。做了
+        PING_AFTER 秒以后才说第一句，之后至少隔 PING_EVERY 秒，一件事最多 PING_MAX 句。
+        进展里没几个中文字（多半是文件名、命令）时不照搬，只说做了多久。"""
+        state = {"started": time.monotonic(), "last": None, "count": 0}
+
+        def pace(line: str) -> None:
+            now = time.monotonic()
+            if state["count"] >= PING_MAX or now - state["started"] < PING_AFTER:
+                return
+            if state["last"] is not None and now - state["last"] < PING_EVERY:
+                return
+            card = self._cards.get(task.card)
+            if card is None or card["state"] not in ACTIVE or card.get("run_id") != task.run_id:
+                return
+            state["last"] = now
+            state["count"] += 1
+            title = clip(card.get("title", ""), 20)
+            step = clean_display(line or "").split("\n")[0].strip()
+            readable = sum(1 for ch in step if "\u4e00" <= ch <= "\u9fff") >= 4
+            if readable:
+                say = "%s 还在弄「%s」，刚在%s。" % (task.agent.name, title, clip(step, 30).rstrip("。"))
+            else:
+                say = "%s 还在弄「%s」，已经%s了，有结果我马上说。" % (
+                    task.agent.name, title, _elapsed(now - state["started"]))
+            self._record.reply(task.card, say=say, turn_id="%s-ping-%d" % (task.run_id, state["count"]),
+                               scope="main", kind="note")
+
+        return pace
+
     def _release(self, task: Task, control: Control) -> None:
         """一轮结束（做完、被停掉都算）：钥匙作废，还没答的授权不用等了；记下这一轮花了多少。"""
         self._gate.shut(control.gate)
@@ -1157,11 +1293,9 @@ class Xiaoyou:
             return
         if outcome is not None:
             if not outcome.fields:
-                try:
-                    parsed = json.loads(outcome.text)
-                except (ValueError, TypeError):
-                    parsed = None
-                if isinstance(parsed, dict) and isinstance(parsed.get("reply"), str):
+                # JSON 前后多了一句话、或者包在 ``` 里也认得出来（fields_from_text）。
+                parsed = fields_from_text(outcome.text or "")
+                if parsed is not None:
                     outcome = Outcome(outcome.text, outcome.session_id, parsed)
             task.artifacts = self.artifacts.register_task(
                 self._cards, task.card, outcome.text, outcome.fields, name)
@@ -1190,8 +1324,7 @@ class Xiaoyou:
         elif task.system is not None:
             # 帮手是以小幽的身份做的：它的结果就是小幽的话。
             fields = outcome.fields or {}
-            reply = fields.get("reply") if isinstance(fields.get("reply"), str) else ""
-            self._close(task, reply.strip() or outcome.text, fields.get("brief"),
+            self._close(task, reply_text(outcome), fields.get("brief"),
                         fields.get("mood"), "done", [])
         else:
             self.defer(task.conversation, lambda: self._relay(
@@ -1215,7 +1348,7 @@ class Xiaoyou:
                         self._config.persona, self._config.brief_max_chars),
                     reply_schema(), task.hop, catch_up=True,
                     on_text=self._streamer(voice.name, report))
-                reply = (self._field(outcome, "reply") or outcome.text).strip()
+                reply = reply_text(outcome)
                 if reply:
                     fields = outcome.fields or {}
                     self._close(task, reply, fields.get("brief"), fields.get("mood"), "done",
@@ -1223,7 +1356,8 @@ class Xiaoyou:
                     return
             except AgentError:
                 pass  # 说话的代理不在：结果已经有了，原样给主人，好过让这件事白做
-        self._close(task, result, None, "idle", "done", [])
+        # 没有能转述的代理：给一句短的加“完整的在哪”，原文留在任务里，不整段贴进聊天。
+        self._close(task, digest(result, card.get("title", "")), None, "idle", "done", [])
 
     def _close(self, task: Task, reply: str, brief: Any, mood: Any, state: str,
                seen: List[str]) -> None:

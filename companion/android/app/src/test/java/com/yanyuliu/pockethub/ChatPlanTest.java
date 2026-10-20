@@ -36,6 +36,14 @@ public class ChatPlanTest {
         assertTrue(ChatPlan.of("", list(), list(), "0", list("a"), list("x")).rebuild);
     }
 
+    @Test public void replyParagraphsBecomeBubbles() {
+        assertEquals(Arrays.asList("好。", "改完了。"), AppPresentation.bubbles("好。\n\n改完了。"));
+        assertEquals(Arrays.asList("要点：\n· 一\n· 二"), AppPresentation.bubbles("要点：\n· 一\n· 二"));
+        assertEquals(Arrays.asList("一", "二"), AppPresentation.bubbles("  一 \n \n\n二\n"));
+        assertTrue(AppPresentation.bubbles("").isEmpty());
+        assertTrue(AppPresentation.bubbles(null).isEmpty());
+    }
+
     @Test public void composerStates() {
         assertEquals("idle", AppPresentation.composerState(false, false, false, false));
         assertEquals("ready", AppPresentation.composerState(true, false, false, false));

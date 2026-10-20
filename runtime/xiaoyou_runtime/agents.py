@@ -398,14 +398,26 @@ def fields_from_text(text: str) -> Optional[Dict[str, Any]]:
         lines = body.splitlines()
         if len(lines) >= 2 and lines[-1].strip() == "```":
             body = "\n".join(lines[1:-1]).strip()
-    if not (body.startswith("{") and body.endswith("}")):
-        return None
-    try:
-        value = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(value, dict) and isinstance(value.get("reply"), str):
-        return value
+    if body.startswith("{") and body.endswith("}"):
+        try:
+            value = json.loads(body)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict) and isinstance(value.get("reply"), str):
+            return value
+    # 模型常在 JSON 前后多说一句（“下面是给主人的结论：{…}”），或者把它包在一段 ``` 里：
+    # 从每个 { 起试着读一个完整的对象，认第一个带 reply 的。都不是就算认不出。
+    decoder = json.JSONDecoder()
+    at, tries = text.find("{"), 0
+    while at >= 0 and tries < 64:  # 帮手的长结果里可能满是代码花括号：试有限次就停
+        tries += 1
+        try:
+            value, _ = decoder.raw_decode(text, at)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict) and isinstance(value.get("reply"), str):
+            return value
+        at = text.find("{", at + 1)
     return None
 
 

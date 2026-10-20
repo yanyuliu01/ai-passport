@@ -416,6 +416,25 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## How the companion talks (0.14.0)
+
+The companion replies like a chat: one to four short messages per turn, a sentence or two each, separated
+by a blank line, with the conclusion first. No headings, numbered lists, bold, code blocks, file paths, line
+numbers or commands unless you ask. This lives in the prompt the Runtime gives the speaking agent
+(`CHAT_STYLE`), so it holds whichever model is behind it; when a model still writes one long block, the
+Runtime splits it at sentence ends itself (`segments`: about 60 characters a message, at most six per turn,
+lists kept together) before it reaches the phone.
+
+- **Relaying helper results**: conclusion first, then anything you need to decide, then where the full result
+  is if needed; no retelling of steps, file names or code locations. A `reply` is found even when the model
+  writes text around its JSON or wraps it in a code fence, so raw JSON never reaches you; failing that a
+  half-written `reply` is used, and only then the raw text.
+- **No agent that can speak**: the helper's raw output is no longer pasted into the chat; you get its first
+  sentence and "the full result is in …", and the original stays in the task.
+- **Follow-ups on long work**: after a helper has worked for 90 seconds the companion says where it is, then
+  at most every 4 minutes and at most three times per task. The line is built from the helper's latest
+  progress without another model call; when that progress is a file name or command it only says how long.
+
 ## Configuration
 
 Relative paths are resolved against the directory of the configuration file.

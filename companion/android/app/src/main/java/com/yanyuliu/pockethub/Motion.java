@@ -31,12 +31,15 @@ final class Motion {
     }
 
     /** 新出现的一条消息：从下面一点点浮上来。 */
-    static void appear(View view) {
+    static void appear(View view) { appear(view, 0); }
+
+    /** 同上，等 delay 毫秒再浮上来（一组气泡一条接一条地出）。 */
+    static void appear(View view, long delay) {
         if (!enabled()) return;
         float rise = view.getResources().getDisplayMetrics().density * 10;
         view.setAlpha(0f);
         view.setTranslationY(rise);
-        view.animate().alpha(1f).translationY(0f).setDuration(PAGE)
+        view.animate().alpha(1f).translationY(0f).setDuration(PAGE).setStartDelay(delay)
                 .setInterpolator(new DecelerateInterpolator(1.6f)).start();
     }
 

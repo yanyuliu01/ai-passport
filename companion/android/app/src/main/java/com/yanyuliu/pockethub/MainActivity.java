@@ -209,6 +209,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** 聊天窗口里第一条消息的编号（见 refreshChat）。 */
     private String chatAnchor = null;
     private final Map<String, TextView> chatWords = new HashMap<>();
+    /** 小幽每条回复的气泡组（一段一个气泡）。 */
+    private final Map<String, LinearLayout> chatGroups = new HashMap<>();
     private final Map<String, TextView> chatStatus = new HashMap<>();
     private String taskKey = null;
     /** 任务页三段各自的状态（见 refreshTasks）。 */
@@ -1729,7 +1731,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (plan.rebuild && store.catchingUp() && !chatRows.isEmpty()) return false;
         boolean changed = !plan.unchanged(ids.size());
         if (plan.rebuild) {
-            chatHeader = header; chatList.removeAllViews(); chatWords.clear(); chatStatus.clear(); chatRows.clear();
+            chatHeader = header; chatList.removeAllViews(); chatWords.clear(); chatStatus.clear(); chatRows.clear(); chatGroups.clear();
             if (first > 0) chatList.addView(button("查看更早的对话", view -> {
                 int y = scroll.getScrollY(), height = body.getHeight();
                 chatWindow += 80; chatAnchor = null; chatHeader = ""; refreshChat(HubStore.get().cards(), HubStore.get());
@@ -1761,8 +1763,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
             }
         }
         chatIds = ids; chatLooks = looks;
+        boolean animate = !plan.rebuild && tab == TAB_CHAT;
         for (int index = first; index < messages.size(); index++) {
             ChatHistory.Message message = messages.get(index);
+            LinearLayout group = chatGroups.get(message.id);
+            if (group != null) {
+                String said = message.status.equals("streaming") ? message.text : messageText(message);
+                changed |= setBubbles(group, said, animate, !message.status.equals("streaming"));
+                changed |= showStatus(chatStatus.get(message.id), message.status.equals("thinking") ? "" : statusText(message));
+                continue;
+            }
             TextView words = chatWords.get(message.id);
             String shown = message.role.equals("you") || !message.status.equals("streaming") ? messageText(message) : message.text;
             if (words != null && !shown.contentEquals(words.getText())) { words.setText(shown); changed = true; }
@@ -1797,10 +1807,35 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return box;
     }
 
+    /**
+     * 把小幽的一条回复画成几个气泡（Runtime 用空行分开每条短消息）。已有的气泡只改字；新多出来的
+     * 浮上来。一整段一下子到齐（不是边说边出）时一条一条地出，中间隔一小会儿，像对方在接着打字。
+     * 返回是否变了。
+     */
+    private boolean setBubbles(LinearLayout group, String text, boolean animate, boolean whole) {
+        List<String> parts = AppPresentation.bubbles(text);
+        int had = group.getChildCount();
+        boolean changed = false;
+        while (group.getChildCount() > parts.size()) { group.removeViewAt(group.getChildCount() - 1); changed = true; }
+        for (int index = 0; index < parts.size(); index++) {
+            if (index < had) {
+                TextView words = (TextView) ((ViewGroup) group.getChildAt(index)).getChildAt(0);
+                if (!parts.get(index).contentEquals(words.getText())) { words.setText(parts.get(index)); changed = true; }
+                continue;
+            }
+            LinearLayout bubble = bubbleShell(false);
+            TextView words = bubbleWords(false, parts.get(index)); words.setTextIsSelectable(true);
+            bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
+            if (animate) Motion.appear(bubble, whole && had == 0 ? (index - had) * 450L : 0);
+        }
+        return changed;
+    }
+
     /** 一行消息的样子：换了才重画这一行（字的变化不算，流式时直接改字）。 */
     private String chatLook(ChatHistory.Message message, Card card, HubStore store) {
-        // 第一个字符记有没有气泡：换行时只有气泡刚出现才做淡入。
-        StringBuilder look = new StringBuilder().append(hasBubble(message) ? 'B' : '-')
+        // 第一个字符记有没有气泡：换行时只有气泡刚出现才做淡入。小幽的话气泡在行里自己长（G），
+        // 从“在想”到“开始说”不用换掉整行。
+        StringBuilder look = new StringBuilder().append(!message.role.equals("you") ? 'G' : hasBubble(message) ? 'B' : '-')
                 .append(message.status.equals("failed"));
         if (card != null && AppPresentation.dispatched(card))
             look.append(card.title).append(AppPresentation.stateWord(card, store.runtimeConnected())).append(card.resultReady);
@@ -1810,7 +1845,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private View chatRow(ChatHistory.Message message, Card card) {
         LinearLayout row = column();
         boolean mine = message.role.equals("you");
-        if (hasBubble(message)) {
+        if (!mine) {
+            // 小幽的话像聊天那样一段一个气泡；气泡随文字一条条长出来（setBubbles）。
+            LinearLayout group = column(); chatGroups.put(message.id, group); row.addView(group);
+        } else if (hasBubble(message)) {
             LinearLayout bubble = bubbleShell(mine);
             TextView words = bubbleWords(mine, ""); words.setTextIsSelectable(true);
             bubble.addView(words); chatWords.put(message.id, words);

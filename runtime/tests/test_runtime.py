@@ -705,6 +705,43 @@ class ShapeTests(unittest.TestCase):
         for text in ("just words", "{broken", '{"mood": "happy"}', '["reply"]', ""):
             self.assertIsNone(agents_module.fields_from_text(text))
 
+    def test_a_reply_wrapped_in_prose_is_still_recognised(self):
+        # 真实出过的样子：JSON 前面多说一句，reply 里带转义的换行。
+        fields = {"reply": "找到了，频闪是整页重画。\n\n已经改好了。", "brief": "找到频闪原因", "mood": "happy"}
+        text = "查到了，没改任何代码。下面是给主人的结论。\n\n" + json.dumps(fields, ensure_ascii=False)
+        self.assertEqual(agents_module.fields_from_text(text), fields)
+        self.assertEqual(agents_module.fields_from_text("前面\n```json\n%s\n```\n后面" % json.dumps(fields)), fields)
+        self.assertIsNone(agents_module.fields_from_text("代码 {a: 1} 和 {broken"))
+
+    def test_raw_json_never_reaches_the_owner(self):
+        Outcome = agents_module.Outcome
+        half = 'xx {"reply": "第一句。\\n第二句', 
+        self.assertEqual(xiaoyou_module.reply_text(Outcome(half[0], None, None)), "第一句。\n第二句")
+        self.assertEqual(xiaoyou_module.reply_text(Outcome("就一句话", None, None)), "就一句话")
+        self.assertEqual(xiaoyou_module.reply_text(Outcome("x", None, {"reply": " 好 "})), "好")
+
+    def test_replies_are_split_into_short_chat_messages(self):
+        segments = xiaoyou_module.segments
+        self.assertEqual(segments("好。\n\n改完了。"), ["好。", "改完了。"])
+        self.assertEqual(segments("第一行\n第二行"), ["第一行", "第二行"])
+        # 列表留在同一条里。
+        self.assertEqual(segments("要点：\n· 一\n· 二"), ["要点：\n· 一\n· 二"])
+        long = "这是一句比较长的话，用来凑够长度。" * 8
+        parts = segments(long)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(part) <= xiaoyou_module.BUBBLE_CHARS + 20 for part in parts))
+        many = segments("\n\n".join("第%d条。" % index for index in range(10)))
+        self.assertEqual(len(many), xiaoyou_module.MAX_BUBBLES)
+        self.assertNotIn("\n\n", many[-1])
+        self.assertEqual(xiaoyou_module.chat_text("一\n二"), "一\n\n二")
+
+    def test_the_short_version_points_to_the_full_result(self):
+        long = "我在 Mac 上，进不了 Windows 的命令行，所以查不了那边的文件，也没法在那边打包。\n\n" * 4
+        text = xiaoyou_module.digest(long, "加密口令")
+        self.assertTrue(text.endswith("完整结果在「加密口令」里。"))
+        self.assertLess(len(text), 200)
+        self.assertEqual(xiaoyou_module.digest("只显示正文", "x"), "只显示正文")
+
     def test_what_she_may_ask_the_runtime_to_do_depends_on_the_helpers(self):
         plain = xiaoyou_module.reply_schema()
         self.assertEqual(plain["required"], ["reply", "brief", "mood"])
@@ -2482,6 +2519,28 @@ class XiaoyouTests(TempDirCase):
     def words(self, card_id):
         return [(entry["role"], entry["text"]) for entry in self.xiaoyou.cards.get(card_id)["entries"]]
 
+    def test_she_follows_up_while_a_helper_takes_long(self):
+        self.codex.gate.clear()
+        turn = self.say("@codex 看看 parse() slow")
+        card = self.xiaoyou.cards.get(turn.card)
+        task = tasks_module.Task(turn.card, "default", self.codex, "x", run_id=card["run_id"])
+        with mock.patch.object(xiaoyou_module, "PING_AFTER", 0), \
+                mock.patch.object(xiaoyou_module, "PING_EVERY", 0):
+            pace = self.xiaoyou._pacer(task)
+            pace("正在读解析器的代码，找慢在哪")
+            pace("Read src/parse.py")
+            for _ in range(5):
+                pace("还在看")
+        notes = [entry["text"] for entry in self.xiaoyou.cards.get(turn.card)["entries"]
+                 if entry.get("kind") == "note"]
+        self.assertEqual(len(notes), xiaoyou_module.PING_MAX)
+        self.assertEqual(notes[0], "codex 还在弄「看看 parse() slow」，刚在正在读解析器的代码，找慢在哪。")
+        # 进展是文件名、命令这类：不照搬，只说做了多久。
+        self.assertNotIn("src/parse.py", notes[1])
+        self.assertIn("有结果我马上说", notes[1])
+        self.codex.gate.set()
+        self.settled(turn.card)
+
     def test_she_answers_herself_when_she_can(self):
         turn = self.say("几点了")
         self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.card, turn.started),
@@ -2625,7 +2684,8 @@ class XiaoyouTests(TempDirCase):
         self.assertTrue(work.text.endswith("看看 parse() slow"))
         self.assertIsNone(work.system)
         # She still does the talking: the result is voiced on her line.
-        self.assertEqual(self.words("c2")[-1], ("xiaoyou", "re:" + self.claude.jobs[-1].text))
+        # 回复按聊天的样子拆成几条短消息（每行一条，条间空一行）。
+        self.assertEqual(self.words("c2")[-1], ("xiaoyou", xiaoyou_module.chat_text("re:" + self.claude.jobs[-1].text)))
         self.assertIn("帮手 codex 做完了", self.claude.jobs[-1].text)
         # She was not there when it was handed over, so she is told that too.
         self.assertIn("主人：@codex 看看 parse() slow\n小幽：交给 codex 了", self.claude.jobs[-1].text)
@@ -2817,6 +2877,7 @@ class XiaoyouTests(TempDirCase):
         self.claude.fail_on = "帮手 codex 做完了"
         card = self.settled(self.say("@codex list files").card)
         self.assertEqual((card["state"], card["mood"]), ("done", "idle"))
+        # 没人转述：短的原样给；长的只给第一句和“完整的在哪”（见 digest 的测试）。
         self.assertEqual(self.words("c1")[-1], ("xiaoyou", "raw:list files"))
         # No agent that speaks at all: the default agent just gets every sentence.
         alone, _ = make_xiaoyou(self.folder / "b", [self.codex])
@@ -3250,7 +3311,7 @@ class ServiceTests(TempDirCase):
                          ("running", "交给 codex 了", "c1"))
         self.codex.gate.set()
         done = self.finish(message)
-        self.assertEqual((done["status"], done["reply"]), ("done", "re:" + self.agent.jobs[-1].text))
+        self.assertEqual((done["status"], done["reply"]), ("done", xiaoyou_module.chat_text("re:" + self.agent.jobs[-1].text)))
         self.codex.fail_on = "bad"
         failed = self.finish(self.service.submit("bad", agent="codex", hop=1))
         self.assertEqual((failed["status"], failed["error"]), ("failed", "codex 没做成：boom"))
