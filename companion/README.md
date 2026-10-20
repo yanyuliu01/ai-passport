@@ -323,6 +323,8 @@ gestures; the Runtime API is unchanged.
   text get plain words (needs Runtime 0.16.0).
 - 0.25.0: you can send or hold to talk while she is still replying; Runtime 0.18.0 stops her unfinished reply
   and answers you. Several messages waiting at once each keep their own bubble.
+- 0.25.1: the first message after opening the app now shows its reply without leaving and coming back (the
+  chat list identifies messages by an id that does not change).
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)

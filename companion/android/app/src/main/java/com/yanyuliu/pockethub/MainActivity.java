@@ -1724,7 +1724,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
         for (int index = first; index < messages.size(); index++) {
             ChatHistory.Message message = messages.get(index);
-            ids.add(message.id); looks.add(chatLook(message, CardViews.find(all, message.card), store));
+            ids.add(rowKey(message)); looks.add(chatLook(message, CardViews.find(all, message.card), store));
         }
         ChatPlan plan = ChatPlan.of(chatHeader, chatIds, chatLooks, header, ids, looks);
         // 第一次同步时历史一页一页地到，中间的消息会插进来：先不重画，拉完再一次画好。
@@ -1766,18 +1766,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean animate = !plan.rebuild && tab == TAB_CHAT;
         for (int index = first; index < messages.size(); index++) {
             ChatHistory.Message message = messages.get(index);
-            LinearLayout group = chatGroups.get(message.id);
+            LinearLayout group = chatGroups.get(rowKey(message));
             if (group != null) {
                 String said = message.status.equals("streaming") ? message.text : messageText(message);
                 changed |= setBubbles(group, said, animate, !message.status.equals("streaming"));
-                changed |= showStatus(chatStatus.get(message.id), message.status.equals("thinking") ? "" : statusText(message));
+                changed |= showStatus(chatStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
                 continue;
             }
-            TextView words = chatWords.get(message.id);
+            TextView words = chatWords.get(rowKey(message));
             String shown = message.role.equals("you") || !message.status.equals("streaming") ? messageText(message) : message.text;
             if (words != null && !shown.contentEquals(words.getText())) { words.setText(shown); changed = true; }
             String status = message.status.equals("thinking") ? "" : statusText(message);
-            changed |= showStatus(chatStatus.get(message.id), status);
+            changed |= showStatus(chatStatus.get(rowKey(message)), status);
         }
         changed |= refreshMarker();
         return changed;
@@ -1834,6 +1834,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return changed;
     }
 
+    /**
+     * 聊天列表里一条消息的编号：发出去以后，聊天记录里的编号会先换成 Runtime 给的、同步到了又换成
+     * 记录里的；用一直不变的那个（App 发出时起的 clientId），列表才认得出还是同一条——不然新回复
+     * 找不到自己的气泡，第一句话的回复要退出再进来才看得到。
+     */
+    private static String rowKey(ChatHistory.Message message) {
+        if (message.clientId == null || message.clientId.isEmpty()) return message.id;
+        return message.clientId + (message.role.equals("you") ? ":you" : ":reply");
+    }
+
     /** 一行消息的样子：换了才重画这一行（字的变化不算，流式时直接改字）。 */
     private String chatLook(ChatHistory.Message message, Card card, HubStore store) {
         // 第一个字符记有没有气泡：换行时只有气泡刚出现才做淡入。小幽的话气泡在行里自己长（G），
@@ -1850,15 +1860,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean mine = message.role.equals("you");
         if (!mine) {
             // 小幽的话像聊天那样一段一个气泡；气泡随文字一条条长出来（setBubbles）。
-            LinearLayout group = column(); chatGroups.put(message.id, group); row.addView(group);
+            LinearLayout group = column(); chatGroups.put(rowKey(message), group); row.addView(group);
         } else if (hasBubble(message)) {
             LinearLayout bubble = bubbleShell(mine);
             TextView words = bubbleWords(mine, ""); words.setTextIsSelectable(true);
-            bubble.addView(words); chatWords.put(message.id, words);
+            bubble.addView(words); chatWords.put(rowKey(message), words);
             row.addView(bubble, bubbleParams(mine));
         }
         TextView caption = statusCaption(mine);
-        row.addView(caption, captionParams(mine)); chatStatus.put(message.id, caption);
+        row.addView(caption, captionParams(mine)); chatStatus.put(rowKey(message), caption);
         if (!mine && card != null && AppPresentation.dispatched(card)) row.addView(receipt(card));
         if (message.status.equals("failed") && mine && !message.synced) {
             row.addView(button("重试发送", view -> RuntimeClient.retry(this, message.id, message.text,
@@ -2162,7 +2172,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private boolean refreshTaskPending(List<ChatHistory.Message> pending, boolean fresh) {
         List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
         for (ChatHistory.Message message : pending) {
-            ids.add(message.id);
+            ids.add(rowKey(message));
             looks.add((hasBubble(message) ? "B" : "-") + message.status.equals("failed"));
         }
         ChatPlan plan = ChatPlan.of("", taskPendingIds, taskPendingLooks, "", ids, looks);
@@ -2171,7 +2181,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             taskPending.removeAllViews(); taskPendingRows.clear(); taskWords.clear(); taskStatus.clear();
             for (ChatHistory.Message message : pending) {
                 View row = taskPendingRow(message); taskPendingRows.add(row); taskPending.addView(row);
-                if (!fresh && tab == TAB_TASKS && !taskPendingIds.contains(message.id)) Motion.appear(row);
+                if (!fresh && tab == TAB_TASKS && !taskPendingIds.contains(rowKey(message))) Motion.appear(row);
             }
         } else {
             for (int at : plan.replace) {
@@ -2186,7 +2196,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         taskPendingIds = ids; taskPendingLooks = looks;
         for (ChatHistory.Message message : pending) {
-            TextView words = taskWords.get(message.id);
+            TextView words = taskWords.get(rowKey(message));
             String shown = message.role.equals("you") || !message.status.equals("streaming") ? messageText(message) : message.text;
             if (words != null && !shown.equals(words.getTag())) {
                 words.setTag(shown);
@@ -2194,7 +2204,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                         : Markdown.render(String.join("\n\n", Markdown.messages(shown)), dp(16)));
                 changed = true;
             }
-            changed |= showStatus(taskStatus.get(message.id), message.status.equals("thinking") ? "" : statusText(message));
+            changed |= showStatus(taskStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
         }
         ChatHistory.Message last = pending.isEmpty() ? null : pending.get(pending.size() - 1);
         String state = last == null ? ReplyMarker.HIDDEN
@@ -2211,10 +2221,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (hasBubble(message)) {
             LinearLayout bubble = bubbleShell(mine);
             TextView words = bubbleWords(mine, ""); words.setTextIsSelectable(true);
-            bubble.addView(words); taskWords.put(message.id, words);
+            bubble.addView(words); taskWords.put(rowKey(message), words);
             row.addView(bubble, bubbleParams(mine));
         }
-        TextView caption = statusCaption(mine); taskStatus.put(message.id, caption);
+        TextView caption = statusCaption(mine); taskStatus.put(rowKey(message), caption);
         row.addView(caption, captionParams(mine));
         if (mine && message.status.equals("failed")) row.addView(button("重试发送",
                 view -> RuntimeClient.retry(this, message.id, message.text, message.card)));

@@ -241,7 +241,7 @@ class ToolTalkTests(TempDirCase):
 
     def test_a_promise_without_a_tool_gets_one_quiet_reminder(self):
         opener = FakeOpener(sse("我这就去把这几天的事拢一拢。"),
-                            tool_sse("", "start_task", {"agent": "codex", "title": "回顾", "task": "整理这几天做的事"}),
+                            tool_sse("说得对，现在补上。", "start_task", {"agent": "codex", "title": "回顾", "task": "整理这几天做的事"}),
                             sse("交给 codex 了。"))
         tools = self.toolbox()
         outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="这几天做了什么", system="S", plain=True,
@@ -250,6 +250,9 @@ class ToolTalkTests(TempDirCase):
         reminder = opener.requests[1][1]["messages"][-1]["content"]
         self.assertIn("没调对应的工具", reminder)
         self.assertEqual(outcome.fields["action"]["type"], "start")
+        # 补调了工具就到此为止：不再问一轮，也不把回应提醒的话给主人。
+        self.assertEqual(outcome.text, "我这就去把这几天的事拢一拢。")
+        self.assertEqual(len(opener.requests), 2)
         # 只提醒一次：说了不做第二次就照实给出去。
         opener = FakeOpener(sse("我这就去看看。"), sse("我去看一眼。"))
         outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="看看", system="S", plain=True,
