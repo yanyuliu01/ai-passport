@@ -177,6 +177,24 @@ class ReportCardTest(IterateCase):
 
 
 class MeshEventsTest(IterateCase):
+    def test_review_events_sync_without_copying_approval_authority(self):
+        from test_mesh import Network, Node
+        from test_runtime import until
+        network = Network()
+        a = Node(self, network, "Mac")
+        b = Node(self, network, "Windows", peers=[a.url])
+        review = a.service.review
+        snapshot = review.snapshot("default")
+        review.configure("default", dict(epoch=snapshot["epoch"], revision=snapshot["revision"],
+                                         mode="auto_allow", seconds=0))
+        self.assertTrue(until(lambda: any(row["type"] == "review" for row in b.service.events.all())))
+        rows = [row for row in b.service.events.all() if row["type"] == "review"]
+        self.assertEqual(rows[0]["fields"]["action"], "enabled")
+        self.assertEqual(rows[0]["fields"]["seconds"], 0)
+        self.assertEqual(rows[0]["origin"], a.service.runtime_id)
+        self.assertEqual(b.service.review.snapshot("default")["mode"], "manual")
+        self.assertIs(a.mesh._event_store(), a.service.events)
+
     def test_events_reach_every_computer_and_leases_exclude_each_other(self):
         from test_mesh import Network, Node
         from test_runtime import until
@@ -254,6 +272,8 @@ class PlannerTest(IterateCase):
         self.assertIn("1 到 3", planner.check_plan(too_many, files, self.settings))
         self.assertEqual(planner.risk_floor(["x/RuntimeClient.java"]), "L2")
         self.assertEqual(planner.risk_floor(["x/AppUpdate.java"]), "L3")
+        self.assertEqual(planner.risk_floor(["x/QuickReview.java"]), "L3")
+        self.assertEqual(planner.risk_floor(["x/QuickReviewDialog.java"]), "L3")
         self.assertEqual(planner.risk_floor([JAVA]), "L1")
 
 

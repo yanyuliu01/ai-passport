@@ -9,7 +9,7 @@ import android.view.View;
 
 /** Small code-native line icons; selected state is also expressed by the navigation label. */
 final class NavIconView extends View {
-    private final String icon;
+    private String icon;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private int color = 0xff93a1b3;
     NavIconView(Context context, String icon) {
@@ -18,6 +18,7 @@ final class NavIconView extends View {
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
     }
     void color(int color) { this.color = color; invalidate(); }
+    void icon(String icon) { this.icon = icon; invalidate(); }
     @Override protected void onDraw(Canvas canvas) {
         float unit = Math.min(getWidth(), getHeight()) / 24f;
         canvas.save();
@@ -57,6 +58,16 @@ final class NavIconView extends View {
             canvas.drawRoundRect(new RectF(9, 3, 15, 14), 3, 3, paint);
             canvas.drawArc(new RectF(5.5f, 4.5f, 18.5f, 17.5f), 0, 180, false, paint);
             canvas.drawLine(12, 17.5f, 12, 21, paint);
+        } else if (icon.equals("close")) {
+            canvas.drawLine(6, 6, 18, 18, paint); canvas.drawLine(18, 6, 6, 18, paint);
+        } else if (icon.equals("copy")) {
+            canvas.drawRoundRect(new RectF(8, 8, 20, 20), 2.5f, 2.5f, paint);
+            Path back = new Path(); back.moveTo(16, 5); back.lineTo(16, 4); back.cubicTo(16, 4, 16, 4, 15, 4);
+            back.lineTo(6, 4); back.cubicTo(5, 4, 4, 5, 4, 6); back.lineTo(4, 15); back.cubicTo(4, 16, 5, 16, 5, 16);
+            canvas.drawPath(back, paint);
+        } else if (icon.equals("retry")) {
+            canvas.drawArc(new RectF(5, 5, 19, 19), -60, 300, false, paint);
+            canvas.drawLine(18.5f, 4, 18.5f, 8.5f, paint); canvas.drawLine(18.5f, 8.5f, 14, 8.5f, paint);
         } else if (icon.equals("history")) {
             canvas.drawCircle(12, 12, 8.5f, paint);
             canvas.drawLine(12, 7.5f, 12, 12, paint); canvas.drawLine(12, 12, 15, 14, paint);
@@ -68,6 +79,9 @@ final class NavIconView extends View {
         } else if (icon.equals("send")) {
             paint.setStrokeWidth(2.2f);
             canvas.drawLine(12, 19, 12, 5, paint); canvas.drawLine(6, 11, 12, 5, paint); canvas.drawLine(18, 11, 12, 5, paint);
+        } else if (icon.equals("stop")) {
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(new RectF(7, 7, 17, 17), 2, 2, paint);
         } else if (icon.equals("pin")) {
             Path path = new Path(); path.moveTo(9, 4); path.lineTo(15, 4); path.lineTo(14, 10); path.lineTo(18, 13);
             path.lineTo(6, 13); path.lineTo(10, 10); path.close();

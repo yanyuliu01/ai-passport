@@ -234,6 +234,14 @@ final class Card {
         card.resultReady = Json.flag(raw, "result_ready");
         card.turnEnded = turnEnded;
         card.summaryPartial = Json.string(raw, "summary_partial");
+        List<Entry> activity = new ArrayList<>();
+        for (Object item : Json.list(raw, "activity")) {
+            Map<String, Object> event = Json.object(item);
+            activity.add(new Entry("xiaoyou", Json.string(event, "text"), Collections.emptyList(),
+                    Json.string(event, "id"), "task", Json.string(event, "kind"),
+                    Json.string(event, "author"), Json.number(event, "at")));
+        }
+        card.activity = Collections.unmodifiableList(activity);
         return card;
     }
 
@@ -241,6 +249,7 @@ final class Card {
     /** Runtime 明说的是“本轮结束”（不是整件事做完）。 */
     boolean turnEnded;
     String summaryPartial = "";
+    List<Entry> activity = Collections.emptyList();
 
     private static List<Attachment> allAttachments(Map<String, Object> raw, List<Entry> entries) {
         Map<String, Attachment> items = new java.util.LinkedHashMap<>();
@@ -309,10 +318,12 @@ final class Card {
     }
 
     Card unknown() {
-        return new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
+        Card copy = new Card(id, title, "unknown", agent, brief, "idle", entries, progress, createdAt,
                 startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
                 source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
                 contentScope, contentTruncated, titleSource, titleTruncated, attachments);
+        copy.activity = activity;
+        return copy;
     }
 
     /** 这件事的第一句话；电脑观察是当前最近一轮需求。 */

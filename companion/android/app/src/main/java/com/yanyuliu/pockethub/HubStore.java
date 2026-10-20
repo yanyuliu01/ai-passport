@@ -253,6 +253,7 @@ public final class HubStore {
     /** 卡被整个换掉（换了 Runtime、Runtime 换了记录）一次加一：设备上的也要清掉重发。 */
     private long cardsEpoch;
     private boolean runtimeConnected;
+    private boolean catchingUp;
     /** 第一屏跟着的那张卡：我最近说的那句话归到的，或者刚刚有了结果的。 */
     private String turnCard;
     /** Runtime 上还在等回答的授权，早的在前。 */
@@ -410,6 +411,17 @@ public final class HubStore {
 
     public synchronized boolean runtimeConnected() { return runtimeConnected; }
 
+    /** 第一次连这台电脑、历史还没拉完（聊天页这时画几行占位，而不是先闪一下空页面）。 */
+    public synchronized boolean catchingUp() { return catchingUp; }
+
+    public void catchingUp(boolean value) {
+        synchronized (this) {
+            if (catchingUp == value) return;
+            catchingUp = value;
+        }
+        notifyChanged();
+    }
+
     public void runtimeConnected(boolean connected) {
         boolean changed;
         synchronized (this) { changed = runtimeConnected != connected; runtimeConnected = connected; }
@@ -492,6 +504,7 @@ public final class HubStore {
                 cards.putAll(shelf.cards); cardOrder.putAll(shelf.order);
                 feedSeq = shelf.feedSeq; usage = shelf.usage; sync = shelf.sync;
             } else {
+                catchingUp = true;
                 feedSeq = 0; usage = null; sync = new SyncCache("default");
             }
             cardsKey = next;

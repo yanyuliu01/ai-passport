@@ -168,6 +168,16 @@ its state, read the hub's events.
 | `attachments` | attachment ids |
 | `created_at`, `rev`, `seq` | creation time, revision of this record (only grows, also across restarts; implemented as the sequence), log sequence |
 
+Runtime 0.12.0 adds `kind=activity` task events, outside conversation `members`
+and model context. `phase` is `dispatch`, `message`, `tool_start`, `tool_result`,
+`completed`, `failed`, or `cancelled`; the author is the actual helper and
+`scope=task`. IDs combine round identity, phase and native event identity;
+public message snapshots revise the same ID. The App groups them by task,
+orders by creation time and ID, and deduplicates by revision; an event with a
+missing task is never a pending chat bubble. Retention is 2,000 events separate
+from chat; pruning still advances `floor`. Details beyond 4,000 characters are
+labelled as excerpts. Provider reasoning is excluded.
+
 ### Task (today's card)
 
 A task groups messages: id, conversation, title, state, who works on it, progress, the ids of

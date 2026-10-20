@@ -35,7 +35,7 @@ Sequence = Callable[[], int]
 STATUSES = ("pending", "allowed", "denied", "withdrawn")
 FIELDS = ("id", "card", "conversation", "agent", "tool", "detail", "created_at", "kind",
           "source", "session_id", "project", "remote_actionable", "expires_at",
-          "request_id", "subagent_id", "turn_id")
+          "request_id", "subagent_id", "turn_id", "operation")
 
 
 def describe(agent: str, tool: str, tool_input: Any) -> Tuple[str, str]:
@@ -84,6 +84,7 @@ class Approvals:
         # 别的 Runtime 的授权在这里有副本（小幽网络，mesh.py）。在这里回答时交给它：
         # (副本, allow/deny) → 送出去了没有。结局等那台报回来。
         self.forward: Optional[Callable[[Dict[str, Any], str], bool]] = None
+        self.on_request: Optional[Callable[[str], None]] = None
 
     def mirror(self, approval_id: str, fields: Dict[str, Any]) -> None:
         """别的 Runtime 的一个授权在这里的副本：整段换成那台报来的样子，取一个这里的序号。"""
@@ -135,7 +136,7 @@ class Approvals:
             }
             if context:
                 for key in ("source", "session_id", "project", "remote_actionable", "expires_at",
-                            "request_id", "subagent_id", "turn_id"):
+                            "request_id", "subagent_id", "turn_id", "operation"):
                     if key in context:
                         self._items[approval_id][key] = context[key]
             if responder is not None:
@@ -147,6 +148,8 @@ class Approvals:
                 del self._items[key]
                 self._responders.pop(key, None)
         self._notify(card, approval_id)
+        if self.on_request is not None:
+            self.on_request(approval_id)
         return approval_id
 
     def wait(self, approval_id: str, seconds: Optional[float] = None,
@@ -369,7 +372,8 @@ class Gate:
                     return
                 tool, detail = describe(holder["agent"], body["tool_name"], body.get("input"))
                 approval_id = gate._approvals.ask(
-                    holder["card"], holder["conversation"], holder["agent"], tool, detail)
+                    holder["card"], holder["conversation"], holder["agent"], tool, detail,
+                    context={"operation": body["tool_name"]})
                 decision = gate._approvals.wait(approval_id)
                 item = gate._approvals.get(approval_id) or {}
                 try:

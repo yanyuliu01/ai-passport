@@ -198,6 +198,7 @@ class Tasks:
             error: Optional[str] = None
             try:
                 self._prepare(task, control)
+                control.activity("dispatch", text, "dispatch")
                 system = task.system
                 if task.artifact_dir:
                     instruction = (
@@ -220,7 +221,11 @@ class Tasks:
             except Exception as failure:  # 任务线程不能悄悄死掉：当成这件事没做成
                 error = "Runtime 内部出错：%s: %s" % (type(failure).__name__, failure)
             finally:
-                self._release(task, control)
+                phase = "cancelled" if control.cancelled else "failed" if error else "completed"
+                try:
+                    control.activity(phase, error or ("本轮已停止" if control.cancelled else "本轮执行结束"), "end")
+                finally:
+                    self._release(task, control)
             if outcome is not None and outcome.session_id and task.borrowed_session is None:
                 self._store.remember(task.session_key, task.agent.name, outcome.session_id)
             with self._lock:

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from .cards import Cards
+from .desktop_content import redact_credentials
 
 SCOPES = ("main", "task")
 # 一句回复是什么：普通回复、交出去时的那句、帮手原样的结果、小幽的总结、提示（比如出错、重启）。
@@ -59,7 +60,19 @@ class Record:
 
     def progress(self, card_id: str, line: str) -> Optional[Dict[str, Any]]:
         """帮手报了一行进展。"""
-        return self._cards.update(card_id, progress=line)
+        return self._cards.update(card_id, progress=redact_credentials(line))
+
+    def activity(self, card_id: str, author: str, phase: str, text: str,
+                 event_id: str) -> None:
+        """Persist a public task event separately from conversation messages."""
+        if phase not in ("dispatch", "message", "tool_start", "tool_result", "completed", "failed", "cancelled"):
+            raise RecordError("Unknown activity phase: %s" % phase)
+        text = redact_credentials(text).strip()
+        if not text:
+            return
+        if len(text) > 4000:
+            text = text[:4000] + "\n[内容较长，已截取前 4000 字]"
+        self._cards.activity(card_id, author, phase, text, event_id)
 
     def attach(self, card_id: str, attachments: List[Dict[str, Any]],
                entry_index: Optional[int] = None) -> Optional[Dict[str, Any]]:

@@ -165,7 +165,8 @@ final class AppUpdate {
         } else {
             // Runtime authenticates the manifest; its private token must never
             // be included in a public host's request or redirect chain.
-            UpdateDownload.fetchExternal(release.downloadUrl, release.sha256, release.size, file, progress::at);
+            UpdateDownload.fetchPreferred(release.downloadUrl, target.url + packagePath(release), target.token,
+                    release.sha256, release.size, file, progress::at);
         }
     }
 

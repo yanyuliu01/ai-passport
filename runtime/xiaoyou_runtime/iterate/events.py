@@ -61,6 +61,10 @@ BUILTIN = [
               description="未捕获的异常"),
     EventType("slow", {"metric": 40, "ms": int, "screen": 40}, "usage", 30, description="某个操作的耗时"),
     EventType("update", {"result": 40, "version": 32}, "diagnostic", 90, description="更新下载、安装的结果"),
+    EventType("review", {"action": 40, "operation": 16, "result": 16, "reason": 40,
+                        "conversation": 64, "mode": 16, "seconds": int, "previous_seconds": int,
+                        "expires_at": int, "approval_id": 64, "card": 64, "agent": 64, "by": 32},
+              "diagnostic", 90, description="快速审核的模式设置、到期恢复及审核结果，不含操作正文"),
 ]
 
 

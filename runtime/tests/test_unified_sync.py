@@ -383,8 +383,12 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("GET", "/v1/sync", token=None)[0], 401)
         status, info = self.call("GET", "/v1/info")
         self.assertEqual(status, 200)
-        self.assertEqual(sorted(info), ["capabilities", "epoch", "name", "protocol", "runtime_id",
+        self.assertEqual(sorted(info), ["capabilities", "epoch", "events", "iterate", "name", "protocol", "runtime_id",
                                         "subject_id", "version"])
+        self.assertIn("events_v1", info["capabilities"])
+        self.assertEqual(info["events"]["version"], 1)
+        self.assertTrue(info["events"]["types"])
+        self.assertEqual(info["iterate"]["stages"], ["collect", "detect"])
         self.assertEqual(self.call("GET", "/v1/sync?after=x")[0], 400)
         status, body = self.call("GET", "/v1/sync?after=0")
         self.assertEqual((status, body["runtime_id"], body["reset"]), (200, info["runtime_id"], False))

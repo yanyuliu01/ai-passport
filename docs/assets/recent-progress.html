@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-passport 近期进展 · 10-15 → 10-16</title>
+<style>
+  :root {
+    --bg: #f4f7fb;
+    --card: #ffffff;
+    --ink: #0f1c2e;
+    --muted: #5b6b82;
+    --line: #e3e9f1;
+    --blue: #2563eb;
+    --blue-deep: #1e40af;
+    --sky: #0ea5e9;
+    --teal: #0d9488;
+    --amber: #d97706;
+    --amber-bg: #fff7e6;
+    --rose: #e11d48;
+    --rose-bg: #fff1f2;
+    --green: #16a34a;
+    --green-bg: #ecfdf3;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(15, 28, 46, .04), 0 8px 24px rgba(15, 28, 46, .06);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 28px 72px; }
+
+  /* Header */
+  header { display: flex; align-items: center; gap: 18px; margin-bottom: 28px; }
+  .mark {
+    width: 54px; height: 54px; border-radius: 16px; flex: none;
+    background: linear-gradient(135deg, var(--sky), var(--blue));
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 16px rgba(37, 99, 235, .28);
+  }
+  .mark svg { display: block; }
+  header h1 { font-size: 26px; margin: 0; letter-spacing: .5px; font-weight: 700; }
+  header .sub { color: var(--muted); font-size: 14px; margin-top: 2px; }
+  .pill {
+    margin-left: auto; flex: none; font-size: 13px; font-weight: 600;
+    color: var(--blue-deep); background: #e6efff; border: 1px solid #c8dcff;
+    padding: 7px 14px; border-radius: 999px; white-space: nowrap;
+  }
+
+  /* Section headings */
+  section { margin-top: 30px; }
+  .sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .sec-head .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .sec-head h2 { font-size: 17px; margin: 0; font-weight: 700; }
+  .sec-head .hint { color: var(--muted); font-size: 13px; }
+
+  /* Grid */
+  .grid { display: grid; gap: 16px; }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 860px) {
+    .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
+    .pill { display: none; }
+  }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 20px 18px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .card .tagline { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
+
+  /* Feature chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-size: 12.5px; color: #1e3a5f; background: #f1f6fd;
+    border: 1px solid #dbe7f7; padding: 6px 11px; border-radius: 999px;
+  }
+  .chip b { font-weight: 700; color: var(--blue-deep); }
+
+  /* Item rows */
+  ul.rows { list-style: none; margin: 0; padding: 0; }
+  ul.rows li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+  ul.rows li:last-child { border-bottom: 0; }
+  ul.rows .ico { flex: none; width: 22px; height: 22px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+  ul.rows .ico.ok { background: var(--green-bg); color: var(--green); }
+  ul.rows .ico.b { background: #e8f0fe; color: var(--blue); }
+  ul.rows li .t { font-weight: 600; }
+  ul.rows li .d { color: var(--muted); font-size: 13px; }
+
+  /* Timeline */
+  .timeline { position: relative; margin: 6px 0 2px; padding-left: 24px; }
+  .timeline::before { content: ""; position: absolute; left: 7px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .tl { position: relative; padding: 0 0 16px; }
+  .tl:last-child { padding-bottom: 0; }
+  .tl::before {
+    content: ""; position: absolute; left: -24px; top: 5px; width: 16px; height: 16px;
+    border-radius: 50%; background: #fff; border: 2px solid var(--sky);
+  }
+  .tl.done::before { border-color: var(--green); background: var(--green); }
+  .tl .t { font-size: 14px; font-weight: 600; }
+  .tl .d { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  /* Donut / ring */
+  .donut-wrap { display: flex; align-items: center; gap: 22px; }
+  .donut { position: relative; width: 116px; height: 116px; flex: none; }
+  .donut svg { transform: rotate(-90deg); }
+  .donut .num {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .donut .num b { font-size: 26px; line-height: 1; }
+  .donut .num span { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  /* Status badges */
+  .badge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .badge.green { background: var(--green-bg); color: var(--green); }
+  .badge.amber { background: var(--amber-bg); color: var(--amber); }
+  .badge.rose { background: var(--rose-bg); color: var(--rose); }
+  .badge.blue { background: #e6efff; color: var(--blue-deep); }
+
+  /* Decision card */
+  .decision { background: linear-gradient(135deg, #fffbeb, #fff7e6); border: 1px solid #f3e0b8; }
+  .decision h3 { color: #92400e; }
+  .decision ul.rows li .d { color: #92600a; }
+
+  footer { margin-top: 34px; color: var(--muted); font-size: 12.5px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="mark">
+      <svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M6 10c0-2.2 1.8-4 4-4h12c2.2 0 4 1.8 4 4v9c0 2.2-1.8 4-4 4h-8l-5.5 3.5V23H10c-2.2 0-4-1.8-4-4v-9z" fill="#ffffff"/>
+        <circle cx="12" cy="14.5" r="1.6" fill="#2563eb"/>
+        <circle cx="20" cy="14.5" r="1.6" fill="#2563eb"/>
+      </svg>
+    </div>
+    <div>
+      <h1>ai-passport 近期进展</h1>
+      <div class="sub">App · 电脑 runtime · Codex 头像 的一页可视化报告</div>
+    </div>
+    <span class="pill">10-15 → 10-16</span>
+  </header>
+
+  <!-- 刚完成（放最前，一眼看到结果） -->
+  <section>
+    <div class="sec-head">
+      <span class="dot" style="background: var(--green);"></span>
+      <h2>刚完成</h2>
+      <span class="hint">PR #3 已合入，CI 全绿</span>
+    </div>
+    <div class="card">
+      <div class="donut-wrap">
+        <div class="donut">
+          <svg width="116" height="116" viewBox="0 0 116 116">
+            <circle cx="58" cy="58" r="50" fill="none" stroke="#e6f2ec" stroke-width="12"/>
+            <circle cx="58" cy="58" r="50" fill="none" stroke="#16a34a" stroke-width="12"
+              stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="0"/>
+          </svg>
+          <div class="num"><b>4 / 4</b><span>检查通过</span></div>
+        </div>
+        <div style="flex: 1;">
+          <h3>合并 PR #3，CI 四项检查全过</h3>
+          <p class="tagline" style="margin-bottom: 12px;">今天已合入 feature/usage-history，发布前把关的检查全部通过。</p>
+          <div class="chips">
+            <span class="chip"><b>安卓编译</b> 通过</span>
+            <span class="chip"><b>固件构建</b> 通过</span>
+            <span class="chip"><b>仓库检查</b> 通过</span>
+            <span class="chip"><b>合并镜像</b> 通过</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 近期主线 -->
+  <section>
+    <div class="sec-head">
+      <span class="dot" style="background: var(--blue);"></span>
+      <h2>近期主线</h2>
+      <span class="hint">这两天的主力方向</span>
+    </div>
+    <div class="grid cols-3">
+
+      <div class="card">
+        <h3>App ↔ 电脑 runtime 同步</h3>
+        <p class="tagline">手机和电脑之间终于打通、稳稳地同步</p>
+        <ul class="rows">
+          <li><span class="ico ok">✓</span><div><div class="t">远程 Tailscale Funnel 连通</div><div class="d">手机能远程连上电脑 runtime</div></div></li>
+          <li><span class="ico b">分</span><div><div class="t">48 KB 分批同步</div><div class="d">大内容分批补齐，不再卡</div></div></li>
+          <li><span class="ico b">存</span><div><div class="t">按电脑存进度</div><div class="d">每台电脑各自记住同步位置</div></div></li>
+          <li><span class="ico b">脸</span><div><div class="t">表情稳定</div><div class="d">说完开心、失败变叉叉眼</div></div></li>
+          <li><span class="ico b">圈</span><div><div class="t">用量圈</div><div class="d">额度剩余一眼可见</div></div></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>更新与发布通道</h3>
+        <p class="tagline">App 的更新、发布和会话续接串成一条线</p>
+        <ul class="rows">
+          <li><span class="ico b">音</span><div><div class="t">语音模型资源包</div><div class="d">语音模型改成可下载的资源包</div></div></li>
+          <li><span class="ico b">增</span><div><div class="t">增量更新</div><div class="d">App 支持增量方式更新</div></div></li>
+          <li><span class="ico b">发</span><div><div class="t">GitHub Releases 上传</div><div class="d">发布产物自动进 Releases</div></div></li>
+          <li><span class="ico b">续</span><div><div class="t">手机接续桌面会话</div><div class="d">电脑上的会话手机接着聊</div></div></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Codex 像素头像</h3>
+        <p class="tagline">新形象发布到安装包</p>
+        <div style="margin-bottom: 12px;">
+          <span class="badge blue">已发布</span>
+          <span class="badge green" style="margin-left: 6px;">v0.14.1</span>
+        </div>
+        <p style="font-size: 13.5px; color: var(--muted); margin: 0 0 14px;">
+          Codex 的像素头像已打进 0.14.1 安装包，ARM64 与通用版都已就绪。
+        </p>
+        <div class="chips">
+          <span class="chip">ARM64 版</span>
+          <span class="chip">通用版</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 未落地 -->
+  <section>
+    <div class="sec-head">
+      <span class="dot" style="background: var(--amber);"></span>
+      <h2>未落地</h2>
+      <span class="hint">方案有了，还没动手</span>
+    </div>
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>App 三个问题 <span class="badge amber">待修</span></h3>
+        <p class="tagline">都停在“查清了、方案提了”，尚未改</p>
+        <ul class="rows">
+          <li><span class="ico b">偏</span><div><div class="t">头像偏右</div><div class="d">图片重心偏右，需校准四种表情位置</div></div></li>
+          <li><span class="ico b">英</span><div><div class="t">首页英文</div><div class="d">先确认是哪条路径，再按常见错误出中文</div></div></li>
+          <li><span class="ico b">时</span><div><div class="t">小时用量入口</div><div class="d">建议点头像圈展开，同时看两窗口剩余</div></div></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>tailor / cc 报错 <span class="badge rose">卡住</span></h3>
+        <p class="tagline">工具侧报模型不可用，尚未修复</p>
+        <ul class="rows">
+          <li><span class="ico ok" style="background: var(--rose-bg); color: var(--rose);">!</span>
+            <div><div class="t">claude-opus-5-5 不可用</div>
+            <div class="d">tailor 一直报这个模型不可用，还没找到原因</div></div></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 待主人决定 -->
+  <section>
+    <div class="sec-head">
+      <span class="dot" style="background: var(--amber);"></span>
+      <h2>待主人决定</h2>
+      <span class="hint">需要你拍板的两件事</span>
+    </div>
+    <div class="card decision">
+      <ul class="rows" style="font-size: 15px;">
+        <li>
+          <span class="ico b" style="background:#fdeccb; color:#b45309;">1</span>
+          <div><div class="t">App 三个问题要不要现在继续推进修？</div>
+          <div class="d">头像偏右 · 首页英文 · 小时用量入口，方案已有，只差动手。</div></div>
+        </li>
+        <li>
+          <span class="ico b" style="background:#fdeccb; color:#b45309;">2</span>
+          <div><div class="t">tailor 的模型问题要不要优先处理？</div>
+          <div class="d">claude-opus-5-5 一直不可用，是否现在排查并换可用模型。</div></div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>ai-passport · 近期进展一页报告 · 数据截至 10-16</footer>
+
+</div>
+</body>
+</html>

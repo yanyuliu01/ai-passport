@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import uuid
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -1060,7 +1061,14 @@ class Xiaoyou:
 
     def _prepare(self, task: Task, control: Control) -> None:
         """一轮开始前：进展记到卡上；要问“可以吗”的帮手，给它一把通到主人那里的钥匙。"""
-        control.progress = lambda line, card=task.card: self._record.progress(card, line)
+        round_id = uuid.uuid4().hex
+
+        def activity(phase: str, text: str, key: Optional[str] = None) -> None:
+            event_id = "%s-activity-%s-%s" % (round_id, phase, key or uuid.uuid4().hex)
+            self._record.activity(task.card, task.agent.name, phase, text, event_id)
+
+        control.activity = activity
+        control.progress = lambda line: self._record.progress(task.card, line)
         control.scratch = self._config.state_dir
         if task.agent.type in ("claude_code", "codex", "dsh"):
             task.artifact_dir = str(self.artifacts.task_dir(task.card))

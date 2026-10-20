@@ -35,6 +35,8 @@ from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
 from .store import Store
+from .quick_review import QuickReview
+from .iterate.events import EventStore
 from .xiaoyou import Xiaoyou
 
 MAX_TEXT_CHARS = 8000
@@ -118,7 +120,35 @@ class Service:
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
         if seq > xiaoyou.cards.seq:
             xiaoyou.record.sequence(at_least=seq)
+        self.events = EventStore(store.state_dir, origin=self.runtime_id)
+        self._review_startup_events: List[Dict[str, Any]] = []
+        self._review_loading = True
+        self.review = QuickReview(xiaoyou.approvals, store.state_dir, event_sink=self._review_event)
+        self._review_loading = False
+        # Recovered queued work may request a tool immediately. Restore its
+        # durable policy and event sink before starting any recovery workers.
         self._recover()
+
+    def _review_event(self, event: Dict[str, Any]) -> None:
+        from . import __version__
+        fields = {key: value for key, value in event.items() if key not in ("at", "epoch", "id")}
+        if "id" in event:
+            fields["approval_id"] = event["id"]
+        fields["action"] = event.get("change", event["action"])
+        fields["result"] = {"storage_failed": "failed", "rejected": "failed", "requested": "pending",
+                            "stale": "stale"}.get(event["action"], "success")
+        result = self.events.accept({"events": [{"id": uuid.uuid4().hex, "at": event["at"] * 1000,
+                "type": "review", "client": {"kind": "runtime", "id": self.runtime_id,
+                "version": __version__}, "fields": fields}]})
+        if self.mesh is not None:
+            self.mesh.publish_events(result["events"])
+        elif self._review_loading:
+            self._review_startup_events.extend(result["events"])
+
+    def publish_review_startup(self) -> None:
+        if self.mesh is not None and self._review_startup_events:
+            self.mesh.publish_events(self._review_startup_events)
+            self._review_startup_events = []
 
     def _recover(self) -> None:
         """Runtime 刚启动：上次收下但没处理完的话。"""
@@ -532,7 +562,7 @@ class Service:
 
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
-        capabilities = list(CAPABILITIES) + (["mesh"] if self.mesh is not None else [])
+        capabilities = list(CAPABILITIES) + ["quick_review"] + (["mesh"] if self.mesh is not None else [])
         return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
                 "protocol": PROTOCOL, "capabilities": capabilities}
 
@@ -754,6 +784,7 @@ class Service:
         return self._xiaoyou.share(conversation, cleaned)
 
     def close(self) -> None:
+        self.review.close()
         with self._changed:
             self._closed = True
             workers = list(self._busy.values())

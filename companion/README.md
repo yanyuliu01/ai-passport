@@ -282,6 +282,104 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
+## Interaction and motion (0.21.1)
+
+A pass modelled on the Claude mobile app. It changes only what the phone shows and how it responds to
+gestures; the Runtime API is unchanged.
+
+- **Chat and task pages only append**: new messages are added at the end and rise into place, older ones
+  stay where they are and the scroll position no longer jumps; a streaming reply only changes the text in its
+  own bubble. The list is redrawn only when older messages are loaded, a message disappears or the order
+  changes. The task page updates its steps, conversation and in-progress replies as three separate parts.
+- **Reply marker**: under the last reply, a breathing dot while thinking (after 8 seconds a line says what it
+  is waiting for), a turning star while writing, and a still, faded star once done, next to "copy" and
+  "ask again" (sends your previous message again).
+- **Four composer button states**: on the chat page with no text it is hold-to-talk (release to send, slide off
+  the button to cancel); with text it sends; while the companion is replying or the task is running it stops
+  (this stops the Runtime task and still asks to confirm); after stopping it spins until the task ends. The
+  Runtime cannot interrupt a reply the companion is still saying, so then it only shows a waiting state. Task
+  and helper pages keep the arrow when empty.
+- **Page changes**: going deeper (task, helper, settings) slides in from the right, going back from the left,
+  same-level pages fade.
+- **Sidebar**: swipe right on the home, chat or device page to pull it out, swipe left to close; both follow the
+  finger.
+- **Bottom sheets**: task actions, archived tasks, the approval list and detail, usage, execution records,
+  download source and attachment choices slide up from the bottom and can be dragged down to close. Stop,
+  firmware change and computer switch confirmations remain system dialogs.
+- **Notices**: toasts are replaced by a small banner at the top of the page; errors are red, a tap hides it, and
+  screen readers announce it.
+- **First sync**: while the first history sync from a computer is still running, the chat page shows pulsing
+  placeholders instead of flashing an empty page.
+- **Haptics**: a light tap when hold-to-talk starts and ends, on send, on copy, and on a successful approval.
+- With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
+
+## Quick review (0.21.0)
+
+Open **Quick review** in Connections and settings or tap the pending-approval
+banner. The page names the selected computer, shows the exact pending tool
+operations, and offers one button to allow the displayed batch (up to 100).
+New requests arriving afterwards are excluded. Changed, expired, withdrawn, or
+already answered requests are checked again; a repeated batch does not execute
+the same operation twice. Individual allow/deny controls remain available.
+
+**Enable automatic approval of read-only tools** is an explicit owner
+preauthorization for file reads and directory/text searches from helpers dispatched
+by the current main conversation on this computer. Only structured `Read`, `Glob`,
+`Grep`, and `LS` tool identities from the permission adapter qualify. Commands,
+file changes/deletions, spending, network tools, and unclassified operations remain
+manual and can be reviewed in a displayed batch. It immediately covers matching
+pending requests and subsequent requests while enabled. It does not perform an AI
+risk assessment. Independent desktop sessions, other computers,
+and stalled-task continuation questions remain manual. A live, remotely actionable
+desktop permission request can still be included in a displayed batch.
+
+The mode defaults to manual. App 0.21.0 with Runtime 0.13.0 offers **Until manually
+disabled**, 15 minutes, 1/8/24 hours, 7 days, or a custom duration of 1 to 525,600
+minutes. Select a duration and enable it; when already enabled, the separate
+duration button applies the selected period starting now. It can be disabled
+immediately. Settings survive Runtime restart: timed grants retain their original
+deadline, and indefinite grants stay enabled until disabled. It continues working
+while the phone is closed or disconnected. The page refreshes status every three seconds
+while open and retains its original computer as the target. If that computer
+is removed or the selection changes, reopen the page for the intended computer.
+
+Runtime 0.12.0 supplies basic quick review with a temporary one-hour mode;
+App 0.21.0 retains that behavior when duration capabilities are absent and asks
+for a Runtime upgrade to configure duration. Older Runtime versions retain
+individual review and report that quick review is unavailable. Automatic mode can only be
+enabled when Runtime explicitly declares a supported read-only tool scope;
+unknown or broader scopes still allow the owner to turn automatic mode off.
+Enabling, disabling, changing duration, expiry, restart restoration, and storage
+failures are recorded with mode/duration metadata. They also enter Runtime's
+registered `review` operation events for the unified log. The page's visit time
+uses the existing `screen` event. Recent mode changes and batch
+or automatic decisions are recorded on the computer; the page shows the latest 50
+entries for the conversation. The file retains at most 200 entries across
+conversations, without command bodies or file contents. A storage failure stops
+automatic approval and leaves a visible error; refresh to reconcile an interrupted
+submission. Pairing, messages, and existing approval protocols are unchanged.
+Build/host checks do not establish phone installation, real first-response timing,
+or multi-client acceptance.
+
+## Helper execution records and updates (0.20.0)
+
+Task details show recent public helper activity and a paged record browser with
+selectable details: dispatch, progress text, tool start/result and round end.
+Runtime 0.12.0 advertises `task_activity` and sends `kind=activity` messages through
+`/v1/sync`. Events are independent of conversation entries and the five-line
+progress preview. The Runtime keeps at most 2,000 activity records separately
+from chat retention; individual details are limited to 4,000 characters and
+labelled when truncated. Only newly observed public events are available;
+provider reasoning is excluded. Older Runtimes show their recent progress lines.
+
+Internet downloads keep partial bytes and automatically try the paired Runtime
+after transient network failures. Valid capped byte ranges continue to the next
+range. Hash/protocol/authorization failures remain visible. The same trusted
+size and checksum apply to both sources; Runtime credentials stay on its URL.
+
+The [agent gateway proposal](../docs/development/agent-gateway.md) covers future
+App-controlled CLI/harness installation; no installer is included in this version.
+
 ## App fixes (0.18.0)
 
 - Computers in one Xiaoyou mesh (runtime 0.10.0 or newer, same `subject_id`) count
@@ -469,19 +567,19 @@ way, not as an APK file to sideload:
      --variant "armeabi-v7a=$apk_dir/app-armeabi-v7a-debug.apk" \
      --variant "x86=$apk_dir/app-x86-debug.apk" \
      --variant "x86_64=$apk_dir/app-x86_64-debug.apk" \
-     --note "one line the owner understands" --github
+     --note "one line the owner understands"
    python3 -m xiaoyou_runtime app status
    ```
 
-   `--github` uploads the arm64 package (the phone's) to GitHub Releases (the owner
-   authorized public hosting of the APK), so the phone can choose "download from the
-   internet" or "download from the computer" on each update; both are the same file
-   with the same checksum. Add ABIs with `--github arm64-v8a,universal`. The upload
-   uses the credential git pushes to GitHub with (or `GITHUB_TOKEN`) and uploads files
-   only, never code. Publish the `speech` resource pack again only when the models change:
+   Publishing now uploads every supplied APK to GitHub Releases by default
+   (the owner authorized public hosting). Asset names include the content hash,
+   so republishing a version cannot reuse different old bytes. `--github ABI,...`
+   limits the uploaded architectures; `--local-only` deliberately skips hosting.
+   Upload failure preserves the previous local publication. This uploads files,
+   never Git commits. Publish the speech pack again only when its files change:
 
    ```bash
-   python3 -m xiaoyou_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr --github
+   python3 -m xiaoyou_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr
    ```
 
    Pack files are stored and uploaded by checksum: unchanged files are never uploaded
@@ -497,7 +595,7 @@ way, not as an APK file to sideload:
 5. **Commit; push only when asked.** Publishing does not push to Git and a
    Git push does not publish.
 
-For an uploaded HTTPS release asset, add `--download-url HTTPS_URL` for the
+For an already uploaded HTTPS release asset, add `--local-only --download-url HTTPS_URL` for the
 default APK and `--variant-download-url ABI=HTTPS_URL` for each hosted variant.
 Upload exactly the verified APK first; the Runtime records its local size/hash
 and keeps local serving available for older clients. A variant without its own
@@ -599,6 +697,7 @@ the runtime can therefore have the app write any image to the device.
 | `.../CardViews.java` | Which cards are conversation and which are tasks, and how they are worded on the phone; plain Java, unit tested |
 | `.../MainActivity.java` | Sidebar, chat, task and helper pages, connection and settings, approval detail and composer |
 | `.../AppPresentation.java`, `.../AvatarView.java`, `.../NavIconView.java` | Tested role, sidebar order and helper rules, normalized portraits and native icons |
+| `.../ChatPlan.java`, `.../Motion.java`, `.../ReplyMarker.java`, `.../Sheet.java` | Tested incremental list updates, shared motion timings, the reply marker and bottom sheets |
 
 ## Status
 

@@ -14,7 +14,7 @@ PACKAGE = Path(__file__).resolve().parent.parent / "xiaoyou_runtime"
 # The hub itself and the stores underneath it.
 ALLOWED = {"record.py", "cards.py", "message_log.py"}
 WRITES = {"open", "update", "add_attachments", "bump", "request", "request_changed", "replica",
-          "replicate_message"}
+          "replicate_message", "activity"}
 
 
 class SingleWritePathTest(unittest.TestCase):

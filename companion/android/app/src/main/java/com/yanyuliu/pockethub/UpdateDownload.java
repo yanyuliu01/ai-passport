@@ -39,6 +39,28 @@ final class UpdateDownload {
         fetch(address, "", sha, size, file, progress, true, connections);
     }
 
+    static void fetchPreferred(String mirror, String runtime, String token, String sha, long size,
+                               File file, Progress progress) throws Exception {
+        fetchPreferred(mirror, runtime, token, sha, size, file, progress,
+                url -> (HttpURLConnection) url.openConnection());
+    }
+
+    static void fetchPreferred(String mirror, String runtime, String token, String sha, long size,
+                               File file, Progress progress, ConnectionFactory connections) throws Exception {
+        if (mirror != null && !mirror.isEmpty()) {
+            try {
+                fetchExternal(mirror, sha, size, file, progress, connections);
+                return;
+            } catch (Invalid failure) {
+                throw failure; // Never hide a checksum, protocol, or unsafe URL failure.
+            } catch (IOException unavailable) {
+                // The manifest pins identical bytes on both sources. Resume the
+                // same partial on the paired Runtime; its token stays on that URL.
+            }
+        }
+        fetch(runtime, token, sha, size, file, progress, false, connections);
+    }
+
     private static void fetch(String address, String token, String sha, long size, File file,
                               Progress progress, boolean external, ConnectionFactory connections) throws Exception {
         if (!sha.matches("[0-9a-f]{64}") || size <= 0 || size > MAX_BYTES)
@@ -52,9 +74,12 @@ final class UpdateDownload {
             discard(part);
         }
         IOException last = null;
-        for (int attempt = 0; attempt < 3; attempt++) {
+        int attempt = 0;
+        for (int response = 0; response < 256 && attempt < 3; response++) {
             try {
                 transfer(address, token, sha, size, part, progress, external, connections);
+                // A valid server may cap a 206 response before the end of the file.
+                if (part.length() < size) continue;
                 if (!matches(part, sha)) {
                     discard(part);
                     throw new Invalid("安装包校验没通过，请重新检查更新");
@@ -65,7 +90,7 @@ final class UpdateDownload {
                 throw failure; // Authorization and protocol failures are never retried.
             } catch (IOException failure) {
                 last = failure;
-                if (attempt < 2) Thread.sleep(250L * (attempt + 1));
+                if (++attempt < 3) Thread.sleep(250L * attempt);
             }
         }
         long percent = Math.min(99, part.length() * 100 / size);
@@ -101,7 +126,7 @@ final class UpdateDownload {
                 try {
                     if (!range.matches() || Long.parseLong(range.group(1)) != offset
                             || Long.parseLong(range.group(3)) != size
-                            || (end = Long.parseLong(range.group(2))) != size - 1)
+                            || (end = Long.parseLong(range.group(2))) < offset || end >= size)
                         throw new NumberFormatException();
                 } catch (NumberFormatException invalid) {
                     discard(part);
@@ -124,7 +149,7 @@ final class UpdateDownload {
                 byte[] buffer = new byte[65536];
                 int count;
                 while ((count = input.read(buffer)) != -1) {
-                    if (total + count > size) {
+                    if (total + count > end + 1) {
                         // Close the output before deleting on all Android filesystems.
                         throw new Invalid("安装包大小不正确，请重新检查更新");
                     }
@@ -137,7 +162,7 @@ final class UpdateDownload {
                 discard(part);
                 throw invalid;
             }
-            if (total != size) throw new IOException("安装包尚未下载完整");
+            if (total != end + 1) throw new IOException("安装包尚未下载完整");
         } finally { connection.disconnect(); }
     }
 
@@ -163,6 +188,8 @@ final class UpdateDownload {
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(15000);
             connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setRequestProperty("Cache-Control", "no-cache");
+            connection.setRequestProperty("User-Agent", "PocketHub-Updater");
             if (!external) {
                 connection.setRequestProperty("Authorization", "Bearer " + token);
                 connection.setRequestProperty("If-Match", "\"" + sha + "\"");

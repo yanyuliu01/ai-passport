@@ -391,6 +391,8 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
         # Shared services may broadcast events for other clients' threads.
         if params.get("threadId") not in (None, thread_id):
             continue
+        if params.get("turnId") not in (None, turn_id):
+            continue
         if method is None:
             if message.get("id") in asked_limits and isinstance(message.get("result"), dict):
                 control.limits("codex", message["result"])
@@ -419,10 +421,25 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
             control.touch(began=item_id if line else None, step=line)
             if line:
                 control.progress(line)
+                control.activity("tool_start", line, item_id)
         elif method == "item/completed":
             control.touch(ended=item_id)
             if item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                 said = item["text"]
+                control.activity("message", said, item_id)
+            elif progress_of(item):
+                from .desktop_content import message_text
+                output = item.get("aggregatedOutput")
+                if item.get("type") == "fileChange":
+                    output = describe_change(item.get("changes"))
+                if not isinstance(output, str):
+                    result = item.get("result")
+                    output = message_text(result.get("content")) if isinstance(result, dict) else ""
+                status = str(item.get("status") or "completed")
+                exit_code = item.get("exitCode")
+                detail = "%s · %s%s\n%s" % (status, progress_of(item),
+                    " · exit %s" % exit_code if exit_code is not None else "", output)
+                control.activity("tool_result", detail, item_id)
         else:
             control.touch()
         if method == "account/rateLimits/updated":

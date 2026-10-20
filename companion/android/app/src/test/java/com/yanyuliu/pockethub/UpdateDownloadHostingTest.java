@@ -154,4 +154,30 @@ public class UpdateDownloadHostingTest {
         catch (IOException expected) { assertTrue(expected.getMessage().contains("安装包信息不完整")); }
         assertTrue(urls.isEmpty());
     }
+
+    @Test public void cappedRangesContinueAndNetworkFailureResumesOnRuntimeWithItsOwnToken() throws Exception {
+        response(206, Arrays.copyOfRange(APK, 0, 1024)).headers.put("Content-Range", "bytes 0-1023/8192");
+        for (int i = 0; i < 3; i++) response(503, new byte[0]);
+        response(206, Arrays.copyOfRange(APK, 1024, APK.length)).headers.put("Content-Range", "bytes 1024-8191/8192");
+        String runtime = "http://127.0.0.1:8765/v1/app/apk?sha256=" + sha;
+        UpdateDownload.fetchPreferred(GITHUB, runtime, "runtime-secret", sha, APK.length, file,
+                ignored -> { }, this::connection);
+        assertArrayEquals(APK, Files.readAllBytes(file.toPath()));
+        assertEquals(new URL(runtime), urls.get(4));
+        assertEquals("bytes=1024-", replies.get(4).getRequestProperty("Range"));
+        assertEquals("Bearer runtime-secret", replies.get(4).getRequestProperty("Authorization"));
+        for (int i = 0; i < 4; i++) assertNull(replies.get(i).getRequestProperty("Authorization"));
+        assertTrue(replies.stream().allMatch(reply -> reply.closed));
+    }
+
+    @Test public void checksumFailureCannotBeHiddenBySourceFallback() throws Exception {
+        byte[] corrupt = APK.clone(); corrupt[0] ^= 1;
+        response(200, corrupt);
+        try {
+            UpdateDownload.fetchPreferred(GITHUB, "http://127.0.0.1/apk", "secret", sha, APK.length, file,
+                    ignored -> { }, this::connection);
+            fail();
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("校验")); }
+        assertEquals(1, urls.size()); assertFalse(file.exists()); assertFalse(part.exists());
+    }
 }

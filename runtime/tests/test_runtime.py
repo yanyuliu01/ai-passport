@@ -99,6 +99,7 @@ if "stream-json" in args:
         "unifiedWindows": {"five_hour": {"utilization": 0.4449, "resetsAt": 2000000000},
                            "seven_day": {"utilization": 0.2, "resetsAt": 2000500000}}}})
     emit({"type": "assistant", "message": {"content": [
+        {"type": "thinking", "thinking": "private reasoning fixture"},
         {"type": "text", "text": "let me look"},
         {"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": "ls  -la\n/tmp"}}]}})
     if mode == "hang-in-command":
@@ -257,6 +258,15 @@ def finish(status="completed", error=None, say=None):
     sys.exit(0)
 done(item("userMessage"))
 verdicts = []
+if mode == "audit":
+    command = item("commandExecution", command="python task.py")
+    command.update(status="completed", exitCode=0, aggregatedOutput="checked 3 files")
+    done(command)
+    done(item("reasoning", summary=["private reasoning fixture"]))
+    send({"method": "item/completed", "params": {"threadId": "other", "turnId": "turn-1",
+          "item": {"type": "agentMessage", "id": "wrong-thread", "text": "other session"}}})
+    send({"method": "item/completed", "params": {"threadId": thread, "turnId": "other",
+          "item": {"type": "agentMessage", "id": "wrong-turn", "text": "other turn"}}})
 if mode in ("ask", "ask-all"):
     where = os.environ.get("FAKE_CODEX_CWD", "/work")
     command = item("commandExecution", command="rm -rf build", cwd=where)
@@ -771,12 +781,17 @@ class ClaudeCodeAgentTests(TempDirCase):
     def test_work_is_followed_step_by_step_and_the_session_is_known_at_once(self):
         control = agents_module.Control()
         lines, sessions = [], []
+        events = []
+        control.activity = lambda phase, text, key=None: events.append((phase, text))
         control.progress, control.session = lines.append, sessions.append
         outcome = self.agent.run(Job("count", system="S", schema=self.schema, control=control))
         self.assertEqual((outcome.text, outcome.session_id), ("did count [nobody to ask]", "s-stream"))
         self.assertEqual(outcome.fields["brief"], "did")
         # Tool names and commands as they are; the tool that carries the reply is not a step.
         self.assertEqual(lines, ["Bash ls  -la\n/tmp"])
+        self.assertIn(("message", "let me look"), events)
+        self.assertIn(("tool_result", "完成 · tu-1\nok"), events)
+        self.assertFalse(any("private reasoning fixture" in text for _, text in events))
         self.assertEqual(sessions, ["s-stream"])
         args = self.calls()[0]["args"]
         self.assertEqual(args[:4], ["-p", "--output-format", "stream-json", "--verbose"])
@@ -1329,6 +1344,18 @@ class CodexAppServerTests(TempDirCase):
         turn = self.sent("turn/start")[0]["params"]
         self.assertEqual(turn, {"threadId": "thread-1", "model": "some-model", "effort": "medium",
                                 "input": [{"type": "text", "text": "review -- $(x)"}]})
+
+    def test_public_agent_messages_are_auditable(self):
+        os.environ["FAKE_CODEX_MODE"] = "audit"
+        control = self.control()
+        events = []
+        control.activity = lambda phase, text, key=None: events.append((phase, text, key))
+        self.agent.run(Job("inspect", control=control))
+        self.assertTrue(any(phase == "message" and "final inspect" in text for phase, text, _ in events))
+        self.assertFalse(any("reasoning" in text for _, text, _ in events))
+        self.assertTrue(any(phase == "tool_result" and "checked 3 files" in text and "exit 0" in text
+                            for phase, text, _ in events))
+        self.assertFalse(any("other session" in text or "other turn" in text for _, text, _ in events))
 
     def test_quota_tokens_and_the_model_come_back_from_the_app_server(self):
         control = self.control()

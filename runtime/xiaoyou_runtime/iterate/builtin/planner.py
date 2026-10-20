@@ -20,8 +20,8 @@ SOURCE_SUFFIXES = (".java", ".kt", ".xml")
 RISKS = ("L1", "L2", "L3")
 # 动到这些文件，风险至少是这一级（模型自评更低也按这个算）
 RISK_FLOOR = (
-    ("L3", re.compile(r"AppUpdate|UpdateDownload|AppPacks|BleLink|BuddyProtocol|Firmware|LinkService")),
-    ("L2", re.compile(r"RuntimeClient|HubStore|SyncCache|ChatHistory|QuickReview")),
+    ("L3", re.compile(r"AppUpdate|UpdateDownload|AppPacks|BleLink|BuddyProtocol|Firmware|LinkService|QuickReview")),
+    ("L2", re.compile(r"RuntimeClient|HubStore|SyncCache|ChatHistory")),
 )
 FRAME = re.compile(r"\(([A-Za-z0-9_]+\.(?:java|kt)):(\d+)\)")
 CJK_WORD = re.compile(r"[一-鿿]{2,6}")

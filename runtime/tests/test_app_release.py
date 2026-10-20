@@ -66,7 +66,7 @@ class AppReleaseTest(TempDirCase):
         apk = write_apk(self.folder / "out")
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
-            self.assertEqual(main(["--config", str(path), "app", "publish", str(apk), "--note", "试试"]), 0)
+            self.assertEqual(main(["--config", str(path), "app", "publish", "--local-only", str(apk), "--note", "试试"]), 0)
             self.assertEqual(main(["--config", str(path), "app", "status"]), 0)
         self.assertIn("版本号 17", printed.getvalue())
         self.assertIn("试试", printed.getvalue())
@@ -103,7 +103,7 @@ class AppReleaseTest(TempDirCase):
         default = write_apk(self.folder / "all")
         arm = write_apk(self.folder / "arm", APK[:100], abi="arm64-v8a")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["--config", str(path), "app", "publish", str(default),
+            self.assertEqual(main(["--config", str(path), "app", "publish", "--local-only", str(default),
                                    "--variant", "arm64-v8a=" + str(arm)]), 0)
         self.assertEqual(AppRelease(load(path, {}).state_dir).info("arm64-v8a")["size"], 100)
 
@@ -142,7 +142,7 @@ class AppReleaseTest(TempDirCase):
         default = write_apk(self.folder / "all")
         arm = write_apk(self.folder / "arm", APK[:100], abi="arm64-v8a")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["--config", str(path), "app", "publish", str(default),
+            self.assertEqual(main(["--config", str(path), "app", "publish", "--local-only", str(default),
                                    "--download-url", "https://example.com/default.apk",
                                    "--variant", "arm64-v8a=" + str(arm),
                                    "--variant-download-url", "arm64-v8a=https://example.com/arm.apk?raw=true"]), 0)

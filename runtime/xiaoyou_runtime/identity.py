@@ -18,7 +18,7 @@ PROTOCOL = 1
 # 这台 Runtime 支持的同步能力；客户端按它决定用哪些接口。
 # sync_usage：/v1/sync 也带用量，并且接受 usage=<rev>（用量变了提前返回）
 # reports：POST /v1/reports 接受不在这台电脑上的会话上报（reports.py）
-CAPABILITIES = ("messages", "sync", "approvals", "feed", "client_id_dedupe", "sync_usage", "reports")
+CAPABILITIES = ("messages", "sync", "approvals", "feed", "client_id_dedupe", "sync_usage", "reports", "task_activity")
 
 
 def runtime_id(state_dir: Path) -> str:

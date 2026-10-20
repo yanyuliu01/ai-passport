@@ -315,6 +315,19 @@ class Cards:
             self._log.request(message)
             self._changed.notify_all()
 
+    def activity(self, card_id: str, author: str, phase: str, text: str, event_id: str) -> None:
+        with self._changed:
+            card = self._cards.get(card_id)
+            if card is None or card.get("mesh_origin"):
+                return
+            if not self._log.activity(card, author, phase, text, event_id, time.time()):
+                return
+            # This event is not a conversation entry or a card state change.
+            # Its log sequence wakes sync; do not rewrite every card for each
+            # output chunk. The App derives its activity revision from messages.
+            self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
+            self._changed.notify_all()
+
     @staticmethod
     def task_view(card: Dict[str, Any], unavailable: bool = True) -> Dict[str, Any]:
         """同步接口里的“事”：卡去掉消息副本，换成成员消息的编号。

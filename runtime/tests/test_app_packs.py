@@ -79,7 +79,7 @@ class PackTest(TempDirCase):
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
             self.assertEqual(0, main(["--config", str(path), "app", "pack", "speech",
-                                      str(write_pack(self.folder / "models"))]))
+                                      str(write_pack(self.folder / "models")), "--local-only"]))
             self.assertEqual(0, main(["--config", str(path), "app", "status"]))
         self.assertIn("资源包 speech：2 个文件", printed.getvalue())
         self.assertIn("从这台电脑下载", printed.getvalue())
@@ -204,21 +204,22 @@ class GitHubTest(TempDirCase):
         printed = io.StringIO()
         with mock.patch.object(app_release, "_github", return_value=github), contextlib.redirect_stdout(printed):
             self.assertEqual(0, main(["--config", str(path), "app", "publish", str(default),
-                                      "--variant", "arm64-v8a=%s" % arm, "--github"]))
+                                      "--variant", "arm64-v8a=%s" % arm]))
             self.assertEqual(0, main(["--config", str(path), "app", "pack", "speech",
-                                      str(write_pack(self.folder / "m")), "--github"]))
+                                      str(write_pack(self.folder / "m"))]))
             # Publishing the same pack again uploads nothing new.
             self.assertEqual(0, main(["--config", str(path), "app", "pack", "speech",
                                       str(write_pack(self.folder / "m")), "--github"]))
         self.assertIn("app-0.10.2-17", fake.releases)
-        self.assertEqual(["pocket-hub-0.10.2-arm64-v8a.apk"],
-                         [name for name, _ in fake.uploads if name.endswith(".apk")])
+        self.assertEqual(2, len([name for name, _ in fake.uploads if name.endswith(".apk")]))
+        self.assertTrue(all(hashlib.sha256(data).hexdigest()[:16] in name
+                            for name, data in fake.uploads if name.endswith(".apk")))
         release = AppRelease(self.folder / "state")
-        self.assertTrue(release.info("arm64-v8a")["download_url"].endswith("pocket-hub-0.10.2-arm64-v8a.apk"))
-        self.assertEqual("", release.info()["download_url"])  # universal stays on the Runtime
+        self.assertIn("pocket-hub-0.10.2-arm64-v8a-", release.info("arm64-v8a")["download_url"])
+        self.assertIn("pocket-hub-0.10.2-universal-", release.info()["download_url"])
         files = release.packs()["packs"][0]["files"]
         self.assertTrue(all(item["download_url"].startswith("https://github.com/") for item in files))
-        self.assertEqual(3, len(fake.uploads))  # one APK and two pack files, nothing uploaded twice
+        self.assertEqual(4, len(fake.uploads))  # two APKs and two pack files, nothing uploaded twice
         self.assertIn("也传到了 GitHub", printed.getvalue())
 
     def test_a_failed_upload_publishes_nothing(self):
@@ -228,9 +229,35 @@ class GitHubTest(TempDirCase):
         printed = io.StringIO()
         with mock.patch.object(app_release, "_github", return_value=broken), contextlib.redirect_stdout(printed):
             self.assertEqual(1, main(["--config", str(path), "app", "publish",
-                                      str(write_apk(self.folder / "out")), "--github", "universal"]))
+                                      str(write_apk(self.folder / "out"))]))
         self.assertIn("没发布成", printed.getvalue())
         self.assertFalse(AppRelease(self.folder / "state").info()["available"])
+
+    def test_same_version_same_size_changed_apk_gets_an_immutable_new_asset(self):
+        path = write_config(self.folder)
+        fake = FakeGitHub()
+        with mock.patch.object(app_release, "_github", return_value=self.releases(fake)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            apk = write_apk(self.folder / "out", b"PK\x03\x04first")
+            self.assertEqual(0, main(["--config", str(path), "app", "publish", str(apk)]))
+            before = AppRelease(self.folder / "state").info()
+            apk.write_bytes(b"PK\x03\x04other")
+            self.assertEqual(0, main(["--config", str(path), "app", "publish", str(apk)]))
+        after = AppRelease(self.folder / "state").info()
+        self.assertNotEqual(before["download_url"], after["download_url"])
+        self.assertEqual(before["size"], after["size"])
+        self.assertEqual(2, len(fake.uploads))
+        self.assertFalse(fake.deleted)
+
+    def test_invalid_variant_fails_before_creating_public_release(self):
+        path = write_config(self.folder)
+        github = mock.Mock()
+        default = write_apk(self.folder / "u")
+        arm = write_apk(self.folder / "a", code=99, abi="arm64-v8a")
+        with mock.patch.object(app_release, "_github", return_value=github), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, main(["--config", str(path), "app", "publish", str(default),
+                                      "--variant", "arm64-v8a=" + str(arm)]))
+        github.release.assert_not_called()
 
 
 if __name__ == "__main__":

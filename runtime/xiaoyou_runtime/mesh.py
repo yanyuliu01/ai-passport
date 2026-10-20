@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import __version__
 from .agents import Agent, AgentError, Job, Outcome
 from .config import AgentSpec
-from .message_log import DESKTOP_CONVERSATION, KINDS
+from .message_log import DESKTOP_CONVERSATION, KINDS, MAX_ACTIVITIES
 from .mesh_share import Shares
 
 PROTOCOL = 1
@@ -118,6 +118,7 @@ class Replicas:
                         entry["records"][(item["k"], item["id"])] = item
         except OSError as error:
             sys.stderr.write("读不了网络记录 %s：%s\n" % (path, error))
+        self._trim(entry)
         self._origins[origin] = entry
 
     def _path(self, origin: str) -> Path:
@@ -195,10 +196,17 @@ class Replicas:
     def _trim(self, entry: Dict[str, Any]) -> None:
         for kind, limit in LIMITS.items():
             keys = [key for key in entry["records"] if key[0] == kind]
-            if len(keys) > limit:
-                keys.sort(key=lambda key: entry["records"][key]["oseq"])
-                for key in keys[:len(keys) - limit]:
-                    del entry["records"][key]
+            groups = [(keys, limit)]
+            if kind == "message":
+                activity = {key for key in keys if isinstance(entry["records"][key].get("data"), dict)
+                            and entry["records"][key]["data"].get("kind") == "activity"}
+                groups = [([key for key in keys if key not in activity], limit),
+                          (list(activity), MAX_ACTIVITIES)]
+            for members, maximum in groups:
+                if len(members) > maximum:
+                    members.sort(key=lambda key: entry["records"][key]["oseq"])
+                    for key in members[:len(members) - maximum]:
+                        del entry["records"][key]
 
     def _rewrite(self, origin: str, entry: Dict[str, Any]) -> None:
         path = self._path(origin)
@@ -248,6 +256,7 @@ class Mesh:
         self._replicas = Replicas(folder)
         self._state_path = folder / "state.json"
         self._lock = threading.RLock()
+        self._apply_lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._peers: Dict[str, Peer] = {}
@@ -269,6 +278,7 @@ class Mesh:
         self.shares = Shares(self, config)
         service.subject_id = self.subject_id
         service.mesh = self
+        service.publish_review_startup()
         xiaoyou.mesh = self
         xiaoyou.approvals.forward = self._forward_approval
 
@@ -547,9 +557,21 @@ class Mesh:
                 self._changed.notify_all()
 
     def _apply(self, origin: str, epoch: str, records: List[Dict[str, Any]]) -> None:
+        # Push and pull may deliver concurrently. Durable records already reject
+        # old revisions; serialize their projections too, using the newest
+        # stored value so a delayed batch cannot undo a terminal task state.
+        with self._apply_lock:
+            if self._replicas.position(origin)[0] != epoch:
+                return
+            self._apply_current(origin, epoch, records)
+
+    def _apply_current(self, origin: str, epoch: str, records: List[Dict[str, Any]]) -> None:
         touched: Dict[str, None] = {}
         for record in records:
-            kind, data = record["k"], record["data"]
+            kind = record["k"]
+            data = self._replicas.get(origin, kind, record["id"])
+            if data is None:
+                continue
             try:
                 if kind == "message":
                     task = self._message(origin, epoch, data)
@@ -900,8 +922,7 @@ class Mesh:
 
     def _event_store(self) -> Any:
         if getattr(self, "_events", None) is None:
-            from .iterate.events import EventStore
-            self._events = EventStore(Path(self._config.state_dir), origin=self.runtime_id)
+            self._events = self._service.events
         return self._events
 
     def publish_events(self, events: List[Dict[str, Any]]) -> None:

@@ -8,6 +8,42 @@ import java.util.Map;
 public class SyncCacheTest {
     private static Map<String, Object> page(String body) { return Json.parseObject(body); }
 
+    @Test public void activityIsOrderedDeduplicatedAndSeparateFromConversationAndPending() {
+        SyncCache cache = new SyncCache("default");
+        String older = "{\"id\":\"a1\",\"seq\":9,\"rev\":9,\"task\":\"c1\",\"kind\":\"activity\","
+                + "\"phase\":\"tool_start\",\"text\":\"read file\",\"author\":{\"kind\":\"agent\",\"name\":\"codex\"},\"created_at\":110}";
+        String newer = older.replace("a1", "a2").replace(":9", ":10").replace("tool_start", "tool_result")
+                .replace("read file", "done").replace(":110", ":111");
+        SyncCache.Result result = cache.apply(page("{\"epoch\":\"e1\",\"seq\":10,\"messages\":[" + newer + "," + older
+                + "],\"tasks\":[" + TASK + "]}"));
+        Card card = result.cards.get(0);
+        assertEquals(2, card.activity.size()); assertTrue(card.entries.isEmpty()); assertTrue(result.pending.isEmpty());
+        assertEquals("a1", card.activity.get(0).id); assertEquals("codex", card.activity.get(0).author);
+        assertEquals("tool_result", card.activity.get(1).kind); assertEquals(10, card.seq);
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":10,\"messages\":[" + older + "],\"tasks\":[]}"));
+        assertEquals(2, cache.card("c1").activity.size());
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":11,\"messages\":[" + newer.replace(":10", ":11").replace("done", "updated")
+                + "],\"tasks\":[]}"));
+        assertEquals("updated", cache.card("c1").activity.get(1).text);
+        assertEquals(11, cache.card("c1").seq);
+        assertEquals(2, cache.card("c1").unknown().activity.size());
+        cache.apply(page("{\"epoch\":\"e2\",\"seq\":1,\"messages\":[],\"tasks\":[" + TASK + "]}"));
+        assertTrue(cache.card("c1").activity.isEmpty());
+    }
+
+    @Test public void activityRetentionIsBoundedWithoutDroppingChat() {
+        StringBuilder body = new StringBuilder("{\"epoch\":\"e1\",\"seq\":3000,\"tasks\":[" + TASK + "],\"messages\":[" + ASKED);
+        for (int index = 0; index < 2001; index++)
+            body.append(",{\"id\":\"a").append(index).append("\",\"task\":\"c1\",\"kind\":\"activity\",\"phase\":\"tool_start\",\"text\":\"step\",\"created_at\":")
+                    .append(200 + index).append(",\"rev\":").append(10 + index).append(",\"seq\":").append(10 + index).append('}');
+        body.append("]}");
+        SyncCache cache = new SyncCache("default");
+        Card card = cache.apply(page(body.toString())).cards.get(0);
+        assertEquals(2000, card.activity.size());
+        assertEquals("a1", card.activity.get(0).id);
+        assertEquals(1, card.entries.size()); assertEquals("m1:you", card.entries.get(0).id);
+    }
+
     private static final String ASKED = "{\"id\":\"m1:you\",\"rev\":3,\"seq\":3,\"conversation\":\"default\",\"task\":\"c1\","
             + "\"scope\":\"main\",\"author\":{\"kind\":\"owner\",\"name\":\"you\"},\"kind\":\"user\",\"text\":\"查一下\","
             + "\"status\":\"final\",\"partial\":\"\",\"created_at\":100}";

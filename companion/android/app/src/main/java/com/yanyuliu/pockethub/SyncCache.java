@@ -82,6 +82,7 @@ final class SyncCache {
             tasks.put(id, task);
             touched.add(id);
         }
+        trimActivity(touched);
         List<Card> cards = new ArrayList<>();
         for (String id : touched) {
             Card card = card(id);
@@ -100,6 +101,20 @@ final class SyncCache {
         return value instanceof String ? (String) value : "";
     }
 
+    private void trimActivity(Set<String> touched) {
+        List<Map<String, Object>> activity = new ArrayList<>();
+        for (Map<String, Object> message : messages.values())
+            if (Json.string(message, "kind").equals("activity")) activity.add(message);
+        if (activity.size() <= 2000) return;
+        activity.sort(java.util.Comparator.comparingDouble((Map<String, Object> item) -> Json.number(item, "created_at"))
+                .thenComparing(item -> Json.string(item, "id")));
+        for (int index = 0; index < activity.size() - 2000; index++) {
+            Map<String, Object> item = activity.get(index);
+            messages.remove(Json.string(item, "id"));
+            touched.add(Json.string(item, "task"));
+        }
+    }
+
     /** The task as a card: its fields plus its final member messages as entries. */
     Card card(String id) {
         Map<String, Object> task = tasks.get(id);
@@ -113,6 +128,20 @@ final class SyncCache {
             entries.add(entry(message));
         }
         raw.put("entries", entries);
+        List<Map<String, Object>> activity = new ArrayList<>();
+        long seq = (long) Json.number(task, "seq");
+        for (Map<String, Object> message : messages.values()) {
+            if (id.equals(Json.string(message, "task")) && Json.string(message, "kind").equals("activity")) {
+                Map<String, Object> event = entry(message);
+                event.put("kind", Json.string(message, "phase"));
+                activity.add(event);
+                seq = Math.max(seq, (long) Json.number(message, "seq"));
+            }
+        }
+        activity.sort(java.util.Comparator.comparingDouble((Map<String, Object> event) -> Json.number(event, "at"))
+                .thenComparing(event -> Json.string(event, "id")));
+        raw.put("activity", activity);
+        raw.put("seq", (double) seq);
         return Card.from(raw);
     }
 
@@ -153,6 +182,7 @@ final class SyncCache {
     private List<Pending> pending() {
         List<Pending> result = new ArrayList<>();
         for (Map<String, Object> message : messages.values()) {
+            if (Json.string(message, "kind").equals("activity")) continue;
             if (!conversation.equals(Json.string(message, "conversation"))) continue;
             String task = Json.string(message, "task");
             if (final_(message) && !task.isEmpty() && tasks.containsKey(task)) continue;

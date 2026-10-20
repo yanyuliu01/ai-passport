@@ -349,14 +349,32 @@ def run(config: Any, args: Any) -> int:
                 name = args.version_name if args.version_name is not None else found.get("version_name")
                 packages = dict(variants)
                 packages.setdefault(found.get("abi", "universal"), Path(args.file))
+                if not isinstance(code, int) or isinstance(code, bool) or code <= 0:
+                    raise AppReleaseError("不知道安装包版本号，请提供 Gradle 元数据或 --version-code")
+                requested = list(packages) if args.github == "all" else [
+                    item.strip() for item in args.github.split(",") if item.strip()]
+                for abi, package in packages.items():
+                    if abi not in ABIS or not 0 < package.stat().st_size <= MAX_APK_BYTES:
+                        raise AppReleaseError("安装包架构或大小不正确：%s" % abi)
+                    metadata = _metadata_beside(package)
+                    if abi in variants and (metadata.get("version_code") != code
+                            or str(metadata.get("version_name") or "") != str(name or "")
+                            or metadata.get("abi") != abi):
+                        raise AppReleaseError("各架构安装包的版本、架构必须与 Gradle 元数据一致")
+                    with package.open("rb") as stream:
+                        if stream.read(4) != b"PK\x03\x04":
+                            raise AppReleaseError("这不是安卓安装包（apk）")
+                if set(requested) - packages.keys():
+                    raise AppReleaseError("--github 指定的架构没有对应的安装包")
                 github = _github(args)
                 tag = "app-%s-%s" % (name or "build", code)
                 published = github.release(tag, "Pocket Hub %s" % (name or code),
                                            "Pocket Hub %s（版本号 %s）。%s" % (name or "-", code, args.note[:200]))
-                for abi in [item.strip() for item in args.github.split(",") if item.strip()]:
-                    if abi not in packages:
-                        raise AppReleaseError("--github 里的 %s 没有对应的安装包" % abi)
-                    url = github.upload(published, packages[abi], "pocket-hub-%s-%s.apk" % (name or code, abi))
+                for abi in requested:
+                    # A repeated version can contain different bytes. Never reuse
+                    # a mutable, same-size asset with an old download's checksum.
+                    url = github.upload(published, packages[abi], "pocket-hub-%s-%s-%s.apk" % (
+                        name or code, abi, _sha256(packages[abi])[:16]))
                     if packages[abi] == Path(args.file) and abi == found.get("abi", "universal"):
                         download_url = url
                     else:
@@ -420,13 +438,18 @@ def add_arguments(subparsers: Any) -> None:
                          help="默认安装包的公开 HTTPS 下载网址；不填则从本机 Runtime 下载")
     publish.add_argument("--variant-download-url", action="append", default=[], metavar="ABI=HTTPS_URL",
                          help="--variant 安装包对应的公开 HTTPS 下载网址，可重复")
-    publish.add_argument("--github", nargs="?", const="arm64-v8a", default="", metavar="ABI[,ABI]",
-                         help="同时把这些架构的安装包传到 GitHub Releases（默认 arm64-v8a），手机可选从网上下载")
+    hosting = publish.add_mutually_exclusive_group()
+    hosting.add_argument("--github", nargs="?", const="all", default="all", metavar="ABI[,ABI]",
+                         help="默认把所有提供的安装包传到 GitHub Releases；可限定架构")
+    hosting.add_argument("--local-only", dest="github", action="store_const", const="",
+                         help="只在本机发布，不上传 GitHub（也用于已有自选下载网址）")
     publish.add_argument("--github-repo", default="", metavar="OWNER/NAME",
                          help="GitHub 仓库；不写就用仓库的 github（或 origin）远端")
     pack = actions.add_parser("pack", help="发布一个资源包（比如语音模型），手机只下载变了的文件")
     pack.add_argument("name", help="资源包名，比如 speech")
     pack.add_argument("folder", help="资源文件所在的目录")
-    pack.add_argument("--github", action="store_true", help="同时把新文件传到 GitHub Releases")
+    hosting = pack.add_mutually_exclusive_group()
+    hosting.add_argument("--github", action="store_true", default=True, help="把新文件传到 GitHub Releases（默认）")
+    hosting.add_argument("--local-only", dest="github", action="store_false", help="只在本机发布资源包")
     pack.add_argument("--github-repo", default="", metavar="OWNER/NAME")
     actions.add_parser("status", help="现在发布的是哪一版")

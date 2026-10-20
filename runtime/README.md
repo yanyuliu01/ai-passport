@@ -928,6 +928,66 @@ MCP where they support MCP); they do not go through the runtime.
 
 ### Approvals
 
+Since 0.12.0, authenticated quick review adds `GET /v1/review?conversation=default`,
+`POST /v1/review/batch`, and `POST /v1/review/mode` without changing individual
+approval endpoints. GET returns a per-process `epoch`, mode `revision`, current
+`mode`/`expires_at`, exact eligible `pending` operations with opaque fingerprint
+`key` values, and recent audit entries. Batch accepts `epoch`, `conversation`,
+and `items: [{"id", "key"}]` (1 to 100). It checks each snapshot fingerprint and
+returns per-item `status`; requests arriving after the snapshot are excluded.
+Repeating a completed batch reports its current outcomes without another grant.
+
+Mode writes accept `epoch`, the observed integer `revision`, `conversation`,
+`mode: "manual" | "auto_allow"`, and optional `seconds` (default 3,600). Since
+0.13.0, `0` means until manually disabled; timed periods accept 60 to 31,536,000
+seconds. GET adds `duration_options` (persistent support, minimum/maximum seconds,
+and restart persistence), `duration_seconds`, and `persistent`. An indefinite
+grant returns `mode: "auto_allow"`, `persistent: true`, and `expires_at: 0`.
+App 0.21.0 offers presets and custom minutes, and only sends the extended values
+when Runtime declares those capabilities. This is owner preauthorization, not model risk
+review. Automatic allow requires a local helper's structured `operation` identity
+to be `Read`, `Glob`, `Grep`, or `LS` in that conversation. The permission Gate
+provides that field; adapters without a typed read-only identity stay manual.
+Commands, writes/deletions, spending, network tools, and unknown operations remain
+manual and can be included in a displayed batch. Desktop sessions, mesh replicas,
+other conversations, and stall questions
+are excluded. Actionable, unexpired desktop requests can be batched explicitly;
+their existing live responder still verifies the actual operation. Stale epochs
+or mode revisions return `409`, malformed input `400`, and audit write failures
+`503`. All endpoints require the paired Runtime token.
+
+Since 0.13.0, grants are saved atomically alongside audit metadata and survive
+Runtime restart. Timed grants keep their original absolute expiry, so restart
+does not extend them. Indefinite grants remain until explicitly disabled. Initial
+state is manual; legacy audit files do not create grants. Pending approvals and
+normal manual decisions keep their existing behavior. Audit metadata is retained
+in `state_dir/approval-review.json` (owner-only, last 200 entries, last 50 per
+conversation returned), without command bodies or file contents. Decision intent
+is stored before allowing an operation, then the result is recorded. If the latter
+write fails, the operation may already be allowed: refresh to reconcile before
+retrying. A write failure disables automatic grants and attempts to persist a
+separate `approval-review.disabled` guard so a failed replacement cannot restore
+an old grant on restart. A successful explicit mode setting clears this guard.
+Invalid stored settings load as manual with an error. Approval outcomes carry
+`by: "phone_batch" | "auto_allow"` through the existing sync protocol. Mode state is
+read from GET; open App review pages refresh every three seconds. Older clients
+ignore the additive metadata and keep individual review. Runtime 0.12.0 ignores
+durable grants and restores its temporary mode. Disable automatic approval before
+rolling back: this clears saved policies, preventing a later upgrade from
+restoring an indefinite grant. The audit file remains available.
+
+Quick review also emits the registered diagnostic event type `review` to the
+unified event log (`state_dir/iterate/app-events/*.jsonl`, 90-day retention).
+It records enable/disable, duration changes, expiry, restart restoration,
+approval intent/outcome, stale/invalid requests, and storage failures. Fields
+include mode, seconds, previous duration, expiry, operation/result/reason codes,
+and task/approval identifiers; command bodies, paths, file contents and tokens
+are excluded. Runtime origin/client metadata identifies the source computer.
+These events use the shared event store and existing mesh publication path;
+they do not copy authorization policies to other computers. The durable approval
+audit remains primary if diagnostic logging fails; that failure is reported to
+the Runtime error log without changing a committed approval result.
+
 A thing given to Claude Code runs with `--permission-mode manual` and with the
 runtime's own permission tool attached
 (`xiaoyou_runtime/permission_mcp.py`, an MCP server with a single tool). Where
@@ -1520,12 +1580,27 @@ python3 -m xiaoyou_runtime app status
 Incremental updates (since 0.8.3): large files that rarely change (speech models) stay out
 of the APK and are published with `python3 -m xiaoyou_runtime app pack <name> <folder>` as a
 resource pack, stored and served per file by SHA-256, so the phone downloads only what changed.
-With `--github`, `app publish` and `app pack` first upload the same files to GitHub Releases
-(the APK defaults to arm64 only, under tag `app-<version>-<code>`; pack files share the
-`app-packs` release, named by checksum, and unchanged ones are not uploaded again) and put the
-addresses into the manifest, so the phone can choose to download from the internet. The token
-comes from `GITHUB_TOKEN`/`GH_TOKEN` or git's GitHub credential, is sent only to GitHub, and
-only files are uploaded, never code; a failed upload publishes nothing locally.
+`app publish` and `app pack` upload to GitHub Releases by default, then publish
+locally only after upload succeeds. Every supplied APK gets a public URL;
+`--github ABI,...` limits APK uploads and `--local-only` explicitly skips hosting.
+APKs use tag `app-<version>-<code>` and content-hash asset names; pack files share
+the `app-packs` release and unchanged files are not uploaded again. The token
+comes from `GITHUB_TOKEN`/`GH_TOKEN` or git's GitHub credential and is sent only
+to GitHub. Only files are uploaded, never Git commits. A failed upload keeps the
+previous local publication. Explicit custom URLs use `--local-only`.
+
+Runtime 0.12.0 adds `task_activity`: public helper dispatch, messages, tool
+start/result and round end are persisted as task-scoped `kind=activity` records
+and replayed through `/v1/sync`, including mesh replication. Claude stream JSON,
+Codex app-server and DeepSeek ACP provide the events they expose. Plain command
+adapters cannot expose their internal steps. Activities do not occupy card
+conversation entries or the five-line progress preview. Retention is 2,000 events
+separate from the 5,000-message chat budget; details are scrubbed for recognizable
+credentials and limited to 4,000 characters with a truncation label. Older App
+versions ignore events outside task members; old Runtimes provide only their
+recent progress preview. Historical discarded steps cannot be recovered.
+See the [gateway proposal](../docs/development/agent-gateway.md) for future managed
+CLI installation; no installation API is shipped yet.
 
 The version code is read from Gradle's `output-metadata.json` next to the APK
 (or `--version-code`). The app offers the update when the code is higher, or

@@ -200,6 +200,23 @@ final class AppPresentation {
         return result;
     }
 
+    /** 输入框右边那个按钮的四种样子：没字时安静、有字能发、在回话时等或停、点了停在等它停下。 */
+    static final String COMPOSER_IDLE = "idle", COMPOSER_READY = "ready", COMPOSER_WAIT = "wait",
+            COMPOSER_STOP = "stop", COMPOSER_STOPPING = "stopping";
+
+    /**
+     * hasText：框里有字；replying：小幽还在回上一句；stoppable：有一件能停的事在做（小幽交办出去的、
+     * 不是电脑上同步来的）；stopping：已经叫它停了，还没停下。
+     * 有字又不在回话时总能发，补充要求不被正在做的事挡住；回话中不能再发（Runtime 一次处理一句）。
+     */
+    static String composerState(boolean hasText, boolean replying, boolean stoppable, boolean stopping) {
+        if (stopping && (replying || stoppable)) return COMPOSER_STOPPING;
+        if (hasText && !replying) return COMPOSER_READY;
+        if (stoppable) return COMPOSER_STOP;
+        if (replying) return COMPOSER_WAIT;
+        return COMPOSER_IDLE;
+    }
+
     static String draftKey(String runtime, String task) {
         return (runtime == null ? "" : runtime) + "\n" + (task == null ? "" : task);
     }

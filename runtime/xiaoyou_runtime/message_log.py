@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 MAX_MESSAGES = 5000
+MAX_ACTIVITIES = 2000
 # 文件行数超过保留条数的这么多倍时整份重写。
 COMPACT_FACTOR = 3
 STATUSES = ("queued", "streaming", "final", "failed", "cancelled")
@@ -286,6 +287,21 @@ class MessageLog:
                     record.update(status="streaming", partial=text)
                     self._put(record, persist=current is None)
 
+    def activity(self, card: Dict[str, Any], author: str, phase: str, text: str,
+                 event_id: str, at: float) -> bool:
+        current = self._messages.get(event_id)
+        if current is not None:
+            if phase != "message" or current.get("text") == text:
+                return False
+            self._put(dict(current, text=text))
+            return True
+        self._put({"id": event_id, "conversation": card["conversation"], "task": card["id"],
+                   "scope": "task", "author": {"kind": "agent", "name": author},
+                   "kind": "activity", "phase": phase, "text": text, "partial": "",
+                   "reply_to": None, "source": {"type": "runtime"}, "attachments": [],
+                   "created_at": at, "status": "final"})
+        return True
+
     def request(self, message: Dict[str, Any]) -> None:
         """Service 收下的一次请求（见 service.py）变了：主人那句话和小幽的回答这两条消息。
 
@@ -380,20 +396,31 @@ class MessageLog:
 
     def retain(self, keep: Iterable[str]) -> None:
         """超过保留条数时挤掉最早的、不在 keep（现有卡上的消息）里的。"""
-        if len(self._messages) <= MAX_MESSAGES:
+        # Tool-heavy work must never consume the conversation's retention budget.
+        activities = [key for key, record in self._messages.items() if record.get("kind") == "activity"]
+        evicted = False
+        if len(activities) > MAX_ACTIVITIES:
+            for key in activities[:len(activities) - MAX_ACTIVITIES + MAX_ACTIVITIES // 10]:
+                self.floor = max(self.floor, self._messages.pop(key)["seq"])
+                evicted = True
+        count = sum(record.get("kind") != "activity" for record in self._messages.values())
+        if count <= MAX_MESSAGES:
+            if evicted:
+                self.compact()
             return
         keep = set(keep)
         # 一次多挤掉十分之一：不然之后每来一条都要整份重写一次文件。
         target = MAX_MESSAGES - MAX_MESSAGES // 10
-        evicted = False
         for message_id in list(self._messages):
-            if len(self._messages) <= target:
+            if count <= target:
                 break
             record = self._messages[message_id]
-            if message_id in keep or record["status"] in ("queued", "streaming"):
+            if (record.get("kind") == "activity" or message_id in keep
+                    or record["status"] in ("queued", "streaming")):
                 continue
             self.floor = max(self.floor, record["seq"])
             del self._messages[message_id]
+            count -= 1
             evicted = True
         if evicted:
             self.compact()  # floor 要写下去，文件也顺便变小

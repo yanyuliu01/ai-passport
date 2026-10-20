@@ -277,6 +277,7 @@ final class RuntimeClient {
                     more = fetchSync(target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
                 } else {
                     more = false;
+                    store.catchingUp(false);
                     fetchFeed(target, FEED_WAIT_SECONDS, true);
                 }
                 failures = 0;
@@ -295,6 +296,7 @@ final class RuntimeClient {
                     pause(2);
                     continue;
                 }
+                store.catchingUp(false);  // 连不上：不再画占位，交给离线提示
                 List<Target> others = siblings(app, target);
                 if (!others.isEmpty() && failures < 1 + others.size()) {
                     // 同一台电脑还有别的地址（比如局域网连不上就走 Funnel）：换一个试，不清空卡。
@@ -400,6 +402,7 @@ final class RuntimeClient {
             store.applyPending(result.pending);
             if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
             store.runtimeConnected(true);
+            store.catchingUp(result.more);
             return result.more;
         }
     }
@@ -427,6 +430,30 @@ final class RuntimeClient {
 
     /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
     interface ActionCallback { void onResult(String problem); }
+
+    interface ReviewCallback { void onResult(Map<String, Object> data, String problem); }
+    static final String REVIEW_UNAVAILABLE = "这台电脑的 Runtime 尚不支持快速审核，请更新后使用。";
+
+    static void review(Target target, String operation, String body, ReviewCallback callback) {
+        QUICK.execute(() -> {
+            Map<String, Object> data = null;
+            String problem = null;
+            try {
+                data = Json.parseObject(requestText(operation == null ? "GET" : "POST",
+                        target.url + "/v1/review" + (operation == null ? "?conversation=default" : "/" + operation),
+                        target.token, body == null ? null : body.getBytes(StandardCharsets.UTF_8),
+                        "application/json; charset=utf-8", 15, false));
+                new QuickReview(data);
+            } catch (IOException | RuntimeException error) {
+                String detail = String.valueOf(error.getMessage());
+                problem = detail.contains("404") ? REVIEW_UNAVAILABLE
+                        : "未能确认审核结果：" + detail;
+            }
+            final Map<String, Object> result = data;
+            final String failure = problem;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> callback.onResult(result, failure));
+        });
+    }
 
     private static void actionResult(ActionCallback callback, String problem) {
         if (callback != null) new android.os.Handler(android.os.Looper.getMainLooper())

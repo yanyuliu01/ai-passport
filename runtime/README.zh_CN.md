@@ -739,6 +739,47 @@ python3 -m xiaoyou_runtime --config config.json usage
 
 ### 授权
 
+从 0.12.0 起，快速审核新增需要认证的 `GET /v1/review?conversation=default`、
+`POST /v1/review/batch`、`POST /v1/review/mode`，原有单条审批接口不变。GET 返回本进程的
+`epoch`、模式 `revision`、当前 `mode`/`expires_at`、完整的可审核 `pending` 操作及不透明
+指纹 `key`，以及最近审核记录。批量接口接受 `epoch`、`conversation` 和
+`items: [{"id", "key"}]`（1 到 100 项），逐项核验快照指纹并返回各项 `status`；快照之后
+新出现的请求不包含在内。重复提交已经处理的批次只返回当前结果，不再次授权。
+
+模式设置接受 `epoch`、已看到的整数 `revision`、`conversation`、
+`mode: "manual" | "auto_allow"`，以及可选的 `seconds`（默认 3,600）。从 0.13.0 起，
+`0` 表示持续开启直到手动关闭；定时范围为 60 到 31,536,000 秒。GET 新增 `duration_options`
+（持续开启支持、最短/最长秒数、重启后保留能力）、`duration_seconds` 和 `persistent`。
+持续开启返回 `mode: "auto_allow"`、`persistent: true`、`expires_at: 0`。App 0.21.0 提供预设
+和自定义分钟数，只向明确声明这些能力的 Runtime 发送扩展值。这是主人预授权，不是模型风险审核。只有当前对话本机帮手明确标识为
+`Read`、`Glob`、`Grep` 或 `LS` 的结构化 `operation` 会自动允许。权限 Gate 提供这个字段；
+无法提供明确只读类型的适配器仍为手动。命令、写入或删除、付费、联网工具和未知操作仍需手动
+确认，可加入当前展示的批次。独立桌面会话、网络副本、其他对话和卡住后是否继续的询问都
+不包含在内。可远程回答且
+未过期的桌面请求可明确加入批量审核，现有实时响应通道仍会核验实际操作。旧进程标识或模式
+版本返回 `409`，输入无效返回 `400`，审核记录写盘失败返回 `503`。所有接口都需要配对令牌。
+
+从 0.13.0 起，预授权与审核元数据一起原子保存，Runtime 重启后保留。定时模式保留原绝对
+截止时间，重启不会延长有效期；持续模式保持生效直到明确关闭。初始状态为手动，旧审核记录
+不会生成预授权。待审请求和正常手动决定沿用原有行为。
+审核元数据保存在 `state_dir/approval-review.json`（仅本人可读，保留最近 200 条，接口返回
+当前对话最近 50 条），不写命令正文和文件内容。先记录决定意图，再执行允许，再记录结果。
+最后一次写盘失败时，操作可能已经允许，应先刷新核实再重试。写盘失败会关闭自动通过，
+并尝试写入独立的 `approval-review.disabled` 标记，防止替换失败后重启恢复旧授权。
+成功明确设置模式后清除此标记。已保存的设置无效时，以手动模式启动并显示错误。
+审批结果通过现有同步协议携带 `by: "phone_batch" | "auto_allow"`。模式状态从 GET 读取，
+App 审核页打开时每三秒刷新。旧客户端忽略新增元数据，仍可逐条确认。Runtime 0.12.0 忽略
+持久预授权，恢复其原有临时模式。回退前应先关闭自动通过以清空已保存策略，避免以后再次
+升级时恢复持续授权；审核记录文件继续保留。
+
+快速审核还将已登记的诊断事件类型 `review` 写入统一事件日志
+（`state_dir/iterate/app-events/*.jsonl`，保留 90 天）。事件覆盖开启/关闭、调整时长、到期、
+重启恢复、审核决定意图/结果、过期或无效请求和存储失败。字段包含模式、秒数、原时长、
+截止时间、操作/结果/原因码及任务/审批标识；不包含命令正文、路径、文件内容或令牌。
+Runtime 的来源及客户端元数据标明源电脑。事件共用同一事件库和现有 mesh 发布路径，
+不会把授权策略复制到其他电脑。诊断日志失败时，以持久审批审计为准；失败会写入 Runtime
+错误日志，不会改变已经提交的审批结果。
+
 交给 Claude Code 的事以 `--permission-mode manual` 运行，并带上 Runtime 自带的权限询问工具
 （`xiaoyou_runtime/permission_mcp.py`，一个只有一个工具的 MCP 服务）。Claude Code 要问
 “可以吗”的时候改成调用这个工具；工具把操作交给 Runtime，这件事的卡变成 `waiting`，
@@ -1196,10 +1237,20 @@ python3 -m xiaoyou_runtime app status
 
 增量更新（0.8.3 起）：很少变的大文件（语音模型）不进安装包，用
 `python3 -m xiaoyou_runtime app pack <名字> <目录>` 发布成资源包，按文件 SHA-256 存放和提供，手机只下载变了的。
-`app publish` 和 `app pack` 加 `--github` 时，先把同一个文件传到 GitHub Releases（安装包默认只传
-arm64，发布 tag 为 `app-<版本>-<版本号>`；资源文件都放在 `app-packs` 发布里、按校验值命名，没变的不重传），
-再把网址写进清单，手机可以选从网上下载。令牌取自 `GITHUB_TOKEN`/`GH_TOKEN` 或 git 的 GitHub 凭据，
-只发给 GitHub，只上传文件、不推送代码；上传失败时本机什么都不发布。
+`app publish` 和 `app pack` 默认先上传 GitHub Releases，上传成功后才在本机发布。
+所有提供的 APK 都有公开下载地址；`--github ABI,...` 可限定架构，`--local-only` 明确跳过
+上传。APK 使用 `app-<version>-<code>` 标签和带内容哈希的文件名；资源文件共用 `app-packs`
+发布，未变化的不重传。令牌来自 `GITHUB_TOKEN`／`GH_TOKEN` 或 git 的 GitHub 凭据，只发给
+GitHub。只上传文件，不推送 Git 提交；失败保留之前的本机发布。自选已有下载地址时加
+`--local-only`。
+
+Runtime 0.12.0 新增 `task_activity`：把帮手公开派发、回复、工具开始／结果和轮次结束持久
+保存为任务范围的 `kind=activity`，经 `/v1/sync` 回放，也参与 mesh 复制。Claude 流式 JSON、
+Codex app-server 与 DeepSeek ACP 采集来源提供的事件；普通命令适配器无法展示其内部步骤。
+记录不占用卡片对话条目，也不受最近 5 行进展限制。最多保留 2000 条，与 5000 条聊天额度
+分开；识别出的凭据会脱敏，单条限制 4000 字并标注截取。旧 App 忽略不属于任务成员的事件，
+旧 Runtime 只提供最近进展；已经丢弃的历史步骤无法补回。
+后续受管理 CLI 安装见 [gateway 方案](../docs/development/agent-gateway.zh_CN.md)，本版尚无安装 API。
 
 版本号从 apk 旁边 Gradle 写的 `output-metadata.json` 读（或用 `--version-code`）。版本号更大，
 或版本号相同但安装包不同、而且发布得比手机上那份装得晚时，App 提示更新。打开 App 时会问一次

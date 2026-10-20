@@ -285,6 +285,9 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
     control.can_stop(stop)
 
     said = ""
+    public = ""
+    public_id = 0
+    public_at = 0.0
     problem = ""
     last_alive = time.monotonic()
     watch.start()
@@ -305,6 +308,9 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
                 raise AgentError(watch.reason)
             raise AgentError("dsh 的 acp 进程中途退出了：%s" % (problem or server.stderr_tail()))
         if message.get("id") == prompt_id and "method" not in message:
+            if public.strip():
+                control.activity("message", public, "message-%s" % public_id)
+                public = ""
             if "error" in message:
                 error = message["error"]
                 detail = error.get("message") if isinstance(error, dict) else str(error)
@@ -325,6 +331,8 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
         if method is None:
             continue  # 别的请求的回答（目前没有），这里不用管
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        if params.get("sessionId") not in (None, session_id):
+            continue
         if "id" in message:
             threading.Thread(target=_answer, args=(server, spec, control, message),
                              daemon=True).start()
@@ -341,16 +349,37 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
             chunk = content.get("text") if isinstance(content, dict) else None
             if isinstance(chunk, str) and kind == "agent_message_chunk":
                 said += chunk
+                public += chunk
+                if now - public_at >= .5 or len(public) >= 4000:
+                    control.activity("message", public, "message-%s" % public_id)
+                    public_at = now
+                if len(public) >= 4000:
+                    public = ""
+                    public_id += 1
             control.touch()
         elif kind == "tool_call":
+            if public.strip():
+                control.activity("message", public, "message-%s" % public_id)
+                public = ""
+                public_id += 1
             call_id = update.get("toolCallId") if isinstance(update.get("toolCallId"), str) else None
             line = progress_of(update)
             control.touch(began=call_id, step=line)
             if line:
                 control.progress(line)
+                control.activity("tool_start", line, call_id)
         elif kind == "tool_call_update":
             call_id = update.get("toolCallId") if isinstance(update.get("toolCallId"), str) else None
-            control.touch(ended=call_id)
+            terminal = update.get("status") in ("completed", "failed", "cancelled")
+            control.touch(ended=call_id if terminal else None)
+            if terminal:
+                from .desktop_content import message_text
+                outputs = []
+                for item in update.get("content") or []:
+                    if isinstance(item, dict) and item.get("type") == "content":
+                        outputs.append(message_text(item.get("content")))
+                control.activity("tool_result", "%s · %s\n%s" % (
+                    update["status"], update.get("title") or call_id or "操作", "\n".join(outputs)), call_id)
         else:
             control.touch()
 

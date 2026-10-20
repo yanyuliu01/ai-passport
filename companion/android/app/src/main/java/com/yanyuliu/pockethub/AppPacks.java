@@ -170,11 +170,9 @@ final class AppPacks {
                         int overall = (int) Math.min(99, (before + item.size * percent / 100) * 100 / total);
                         main().post(() -> progress.at(overall));
                     };
-                    if (external && !item.downloadUrl.isEmpty())
-                        UpdateDownload.fetchExternal(item.downloadUrl, item.sha256, item.size, file, step);
-                    else
-                        UpdateDownload.fetch(target.url + "/v1/app/file?sha256=" + item.sha256, target.token,
-                                item.sha256, item.size, file, step);
+                    UpdateDownload.fetchPreferred(external ? item.downloadUrl : "",
+                            target.url + "/v1/app/file?sha256=" + item.sha256, target.token,
+                            item.sha256, item.size, file, step);
                     File placed = new File(folder, item.path);
                     File parent = placed.getParentFile();
                     if (!parent.isDirectory() && !parent.mkdirs()) throw new IOException("没地方放资源文件");

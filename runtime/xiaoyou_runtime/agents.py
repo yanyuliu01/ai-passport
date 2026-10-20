@@ -43,6 +43,7 @@ WAIT, STOP, SILENT, MOVED = "wait", "stop", "silent", "moved"
 RESUME_HINT = "对这件事说“接着做”可以从停下的地方继续"
 
 
+
 # 启动 Runtime 的那个 Claude / Codex 会话塞进环境的变量，只对那个会话有效，不往代理传。
 PARENT_SESSION_ENV = (
     "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
@@ -74,6 +75,8 @@ class Control:
         # 下面几样由开任务的一方填好，代理用得上就用：
         # 做了一步操作时报一行进展
         self.progress: Callable[[str], None] = lambda line: None
+        # Public execution events only; never reasoning or hidden provider context.
+        self.activity: Callable[[str, str, Optional[str]], None] = lambda phase, text, key=None: None
         # 一拿到会话编号就报：这样中途被停掉也能接着用
         self.session: Callable[[str], None] = lambda session_id: None
         # 权限询问工具要的环境变量（小门的地址和这件事的钥匙）；None 表示这一次没有人可问
@@ -745,7 +748,7 @@ class ClaudeCodeAgent(Agent):
             elif kind == "assistant":
                 message = event.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
-                for block in content if isinstance(content, list) else []:
+                for index, block in enumerate(content if isinstance(content, list) else []):
                     if (isinstance(block, dict) and block.get("type") == "tool_use"
                             and isinstance(block.get("name"), str)
                             # 这是它交结构化回复用的，不是一步操作。
@@ -755,6 +758,10 @@ class ClaudeCodeAgent(Agent):
                         control.touch(began=block.get("id") if isinstance(
                             block.get("id"), str) else None, step=step)
                         control.progress(step)
+                        control.activity("tool_start", step, block.get("id"))
+                    elif isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+                        control.activity("message", block["text"], "%s-%s" % (message.get("id"), index)
+                                         if message.get("id") else None)
             elif kind == "user":
                 message = event.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
@@ -762,6 +769,11 @@ class ClaudeCodeAgent(Agent):
                     if (isinstance(block, dict) and block.get("type") == "tool_result"
                             and isinstance(block.get("tool_use_id"), str)):
                         control.touch(ended=block["tool_use_id"])
+                        from .desktop_content import message_text
+                        output = message_text(block.get("content"))
+                        status = "失败" if block.get("is_error") else "完成"
+                        control.activity("tool_result", "%s · %s\n%s" % (
+                            status, block["tool_use_id"], output), block["tool_use_id"])
             elif kind == "result":
                 final.update(event)
                 control.spend(claude_tokens(event.get("usage")))

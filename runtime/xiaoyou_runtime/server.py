@@ -69,6 +69,7 @@ from . import __version__
 from .app_release import AppRelease, AppReleaseError, byte_range
 from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
+from .quick_review import ReviewConflict
 from .iterate.events import EventError, EventStore, types_from_dirs
 from .iterate import lease as iterate_lease
 from .iterate import notify as iterate_notify
@@ -98,7 +99,9 @@ def make_server(config: Config, service: Service,
     iterate_settings = iterate_settings_of(config)
     event_types = types_from_dirs(iterate_settings.plugin_dirs)
     iterate_gateway = model_gateway.from_config(config)
-    event_store = EventStore(config.state_dir, event_types, getattr(service, "runtime_id", ""))
+    event_store = getattr(service, "events", None) or EventStore(
+        config.state_dir, event_types, getattr(service, "runtime_id", ""))
+    event_store.types = event_types
     default_spec = config.agent(config.default_agent)
     default_type = default_spec.type if default_spec is not None else ""
 
@@ -390,6 +393,14 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "usage"]:
                 self._send(200, service.usage(query.get("refresh", [""])[0] in ("1", "true")))
                 return
+            if parts == ["v1", "review"]:
+                from .service import _name
+                try:
+                    conversation = _name(query.get("conversation", ["default"])[0], "conversation")
+                    self._send(200, service.review.snapshot(conversation))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
             if parts == ["v1", "cards"]:
                 try:
                     cards = service.cards(query.get("conversation", ["default"])[0])
@@ -588,6 +599,23 @@ def make_server(config: Config, service: Service,
                         body.get("effort"), body.get("model"),
                     )
                     self._send(202, message)
+                    return
+                if parts in (["v1", "review", "mode"], ["v1", "review", "batch"]):
+                    from .service import _name
+                    if not isinstance(body, dict):
+                        raise RequestError("请求体应该是一个对象")
+                    conversation = _name(body.get("conversation", "default"), "conversation")
+                    try:
+                        operation = service.review.configure if parts[-1] == "mode" else service.review.batch
+                        self._send(200, operation(conversation, body))
+                    except ReviewConflict as error:
+                        service.review.rejected(conversation, parts[-1], "conflict")
+                        self._fail(409, str(error))
+                    except ValueError as error:
+                        service.review.rejected(conversation, parts[-1], "invalid_input")
+                        self._fail(400, str(error))
+                    except OSError:
+                        self._fail(503, "审核记录未能写入，请刷新核实状态")
                     return
                 if len(parts) == 3 and parts[:2] == ["v1", "approvals"]:
                     if not isinstance(body, dict):
