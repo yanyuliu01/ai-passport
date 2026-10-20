@@ -934,7 +934,10 @@ class ClaudeCodeAgentTests(TempDirCase):
 
         plain = dataclasses.replace(self.config.agents[0], config_dir=None, allowed_tools=[])
         agent = agents_module.ClaudeCodeAgent(plain, run=fake_run)
-        agent.run(Job("x"))
+        clean = {key: value for key, value in os.environ.items()
+                 if key not in agents_module.PARENT_SESSION_ENV}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            agent.run(Job("x"))
         self.assertNotIn("env", seen[-1])
         self.assertNotIn("--allowedTools", agent.command(Job("x")))
 
@@ -943,6 +946,41 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(seen[-1]["env"]["CLAUDE_CONFIG_DIR"], str(self.folder / "claude-home"))
         # 其余环境变量原样保留，否则连 PATH 都没有。
         self.assertEqual(seen[-1]["env"].get("PATH"), os.environ.get("PATH"))
+
+    def test_claude_session_login_is_not_inherited_by_claude_code(self):
+        # Runtime started from inside a Claude desktop session carries that session's
+        # temporary login; cc rejects it with "403 Request not allowed".
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, '{"result": "ok", "session_id": "s"}', "")
+
+        session = {"ANTHROPIC_AUTH_TOKEN": "session-token", "ANTHROPIC_BASE_URL": "http://127.0.0.1:9/proxy"}
+        plain = dataclasses.replace(self.config.agents[0], config_dir=None, env={}, allowed_tools=[])
+        separate = dataclasses.replace(plain, config_dir=self.folder / "home")
+        with mock.patch.dict(os.environ, session):
+            for spec in (plain, separate):
+                agent = agents_module.ClaudeCodeAgent(spec, run=fake_run)
+                agent.run(Job("x"))
+                env = seen[-1]["env"]
+                self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
+                self.assertNotIn("ANTHROPIC_BASE_URL", env)
+                self.assertEqual(env.get("PATH"), os.environ.get("PATH"))
+
+            # Written in the config, they are used as before.
+            extra = {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic",
+                     "ANTHROPIC_AUTH_TOKEN": "sk-example"}
+            configured = dataclasses.replace(separate, env=extra)
+            agents_module.ClaudeCodeAgent(configured, run=fake_run).run(Job("x"))
+            self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-example")
+            self.assertEqual(seen[-1]["env"]["ANTHROPIC_BASE_URL"], extra["ANTHROPIC_BASE_URL"])
+
+            # A configured base URL still needs its own key; the session's does not count.
+            keyless = dataclasses.replace(separate, env={"ANTHROPIC_BASE_URL": extra["ANTHROPIC_BASE_URL"]})
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                self.assertIn("ANTHROPIC_AUTH_TOKEN", agents_module.ClaudeCodeAgent(keyless).check())
 
     def test_extra_environment_points_claude_code_at_another_service(self):
         seen = []
@@ -1140,7 +1178,24 @@ class CodexAgentTests(TempDirCase):
             "env_files": {"OPENAI_API_KEY": "key.txt"}}}), {})
         env = agents_module.create(loaded.agents[0])._env()
         self.assertEqual(("http://127.0.0.1:7897", "sk-file"), (env["HTTPS_PROXY"], env["OPENAI_API_KEY"]))
-        self.assertIsNone(self.agent._env())
+        clean = {key: value for key, value in os.environ.items()
+                 if key not in agents_module.PARENT_SESSION_ENV}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertIsNone(self.agent._env())
+
+    def test_parent_session_variables_do_not_reach_codex_or_dsh(self):
+        # Runtime started from inside a Codex session carries its sandbox flags;
+        # CODEX_SANDBOX_NETWORK_DISABLED would cut the helper off the network.
+        session = {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt",
+                   "CODEX_THREAD_ID": "t", "ANTHROPIC_AUTH_TOKEN": "session-token"}
+        dsh = agents_module.create(dataclasses.replace(self.config.agents[0], type="dsh",
+                                                       command=["dsh"], config_dir=None))
+        with mock.patch.dict(os.environ, session):
+            for agent in (self.agent, dsh):
+                env = agent._env()
+                for key in session:
+                    self.assertNotIn(key, env)
+                self.assertEqual(env.get("PATH"), os.environ.get("PATH"))
 
     def test_a_task_runs_through_codex_exec(self):
         outcome = self.agent.run(Job("review -- $(x)"))

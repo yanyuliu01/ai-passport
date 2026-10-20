@@ -43,6 +43,13 @@ WAIT, STOP, SILENT, MOVED = "wait", "stop", "silent", "moved"
 RESUME_HINT = "对这件事说“接着做”可以从停下的地方继续"
 
 
+# 启动 Runtime 的那个 Claude / Codex 会话塞进环境的变量，只对那个会话有效，不往代理传。
+PARENT_SESSION_ENV = (
+    "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_PERMISSION_PROFILE",
+    "CODEX_CI", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID",
+)
+
 class AgentError(Exception):
     """这个代理这一次没有给出结果；消息可以直接给用户看。"""
 
@@ -546,6 +553,19 @@ class Agent:
         """启动时的检查：有问题返回说明，没问题返回 None。不调用模型。"""
         return None
 
+    @staticmethod
+    def _parent_session() -> List[str]:
+        """Runtime 自己是从哪个 Claude / Codex 会话里启动时，环境里带着的那个会话的变量。"""
+        return [key for key in PARENT_SESSION_ENV if key in os.environ]
+
+    @staticmethod
+    def _inherited_env() -> Dict[str, str]:
+        """交给代理的环境：Runtime 自己的，去掉启动它的那个会话留下的变量。
+        Claude 会话的临时登录交给 cc 会被拒（403 Request not allowed）；
+        Codex 会话的沙箱标记（CODEX_SANDBOX_NETWORK_DISABLED 等）会让 codex 断网。
+        配置里明确写了的照样用。"""
+        return {key: value for key, value in os.environ.items() if key not in PARENT_SESSION_ENV}
+
     def _file_env(self) -> Dict[str, str]:
         """env_files 里的变量：每次现读，换了密钥不用重启。"""
         values = {}
@@ -633,9 +653,10 @@ class ClaudeCodeAgent(Agent):
         return command
 
     def _env(self) -> Optional[Dict[str, str]]:
-        if self.spec.config_dir is None and not self.spec.env and not self.spec.env_files:
+        if (self.spec.config_dir is None and not self.spec.env and not self.spec.env_files
+                and not self._parent_session()):
             return None
-        env = dict(os.environ)
+        env = self._inherited_env()
         # 配置里写的环境变量：换接口地址、密钥、模型之类。
         env.update(self.spec.env)
         env.update(self._file_env())
@@ -804,7 +825,8 @@ class ClaudeCodeAgent(Agent):
             problem = self._effort_problem()
         if problem is None and self.spec.env.get("ANTHROPIC_BASE_URL"):
             keys = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
-            if not any(self.spec.env.get(key) or key in self.spec.env_files or os.environ.get(key)
+            if not any(self.spec.env.get(key) or key in self.spec.env_files
+                       or (os.environ.get(key) and key not in PARENT_SESSION_ENV)
                        for key in keys):
                 return ("env 里设了 ANTHROPIC_BASE_URL，但没有 ANTHROPIC_AUTH_TOKEN："
                         "在 env_files 里指向放密钥的文件，或者填进 env")
@@ -827,9 +849,10 @@ class CodexAgent(Agent):
         self._run = run
 
     def _env(self) -> Optional[Dict[str, str]]:
-        if self.spec.config_dir is None and not self.spec.env and not self.spec.env_files:
+        if (self.spec.config_dir is None and not self.spec.env and not self.spec.env_files
+                and not self._parent_session()):
             return None
-        env = dict(os.environ)
+        env = self._inherited_env()
         # 配置里写的环境变量（代理、接口地址之类）和 env_files 里的，和 Claude Code 一样带上。
         env.update(self.spec.env)
         env.update(self._file_env())
@@ -960,7 +983,7 @@ class DshAgent(Agent):
         self._open = opener
 
     def _env(self) -> Optional[Dict[str, str]]:
-        env = dict(os.environ)
+        env = self._inherited_env()
         env.update(self.spec.env)
         for key, path in self.spec.env_files.items():
             try:
