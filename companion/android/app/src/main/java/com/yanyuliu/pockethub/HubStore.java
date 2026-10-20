@@ -1048,8 +1048,13 @@ public final class HubStore {
         }
     }
 
+    /** 同一帧里来的多次变化（同步一页、用量、流式片段）合成一次刷新，界面不跟着一次次重画。 */
+    private final java.util.concurrent.atomic.AtomicBoolean notifyQueued = new java.util.concurrent.atomic.AtomicBoolean();
+
     private void notifyChanged() {
+        if (!notifyQueued.compareAndSet(false, true)) return;
         main.post(() -> {
+            notifyQueued.set(false);
             for (Listener listener : listeners) {
                 listener.onHubChanged();
             }

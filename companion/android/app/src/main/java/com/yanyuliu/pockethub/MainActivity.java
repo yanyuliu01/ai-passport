@@ -206,6 +206,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private LinearLayout replyActions;
     private final Runnable markerTick = this::refreshMarker;
     private int chatWindow = 80;
+    /** 聊天窗口里第一条消息的编号（见 refreshChat）。 */
+    private String chatAnchor = null;
     private final Map<String, TextView> chatWords = new HashMap<>();
     private final Map<String, TextView> chatStatus = new HashMap<>();
     private String taskKey = null;
@@ -1706,21 +1708,31 @@ public class MainActivity extends Activity implements HubStore.Listener {
      */
     private boolean refreshChat(List<Card> all, HubStore store) {
         List<ChatHistory.Message> messages = store.mainMessages();
-        int first = Math.max(0, messages.size() - chatWindow);
+        // 窗口的起点钉在一条消息上：新消息来了窗口只往下长，不往前挪（挪一格就是整页重画、闪一下）。
+        // 长出很多（多 160 条）以后才在下一次重画时收回到最近 chatWindow 条。
+        int first = -1;
+        if (chatAnchor != null) for (int index = 0; index < messages.size(); index++)
+            if (messages.get(index).id.equals(chatAnchor)) { first = index; break; }
+        if (first < 0 || messages.size() - first > chatWindow + 160) {
+            first = Math.max(0, messages.size() - chatWindow);
+            chatAnchor = messages.isEmpty() ? null : messages.get(first).id;
+        }
         boolean loading = messages.isEmpty() && store.catchingUp();
-        String header = companionChoice + ":" + first + ":" + messages.isEmpty() + ":" + loading;
+        String header = companionChoice + ":" + chatAnchor + ":" + (first > 0) + ":" + messages.isEmpty() + ":" + loading;
         List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
         for (int index = first; index < messages.size(); index++) {
             ChatHistory.Message message = messages.get(index);
             ids.add(message.id); looks.add(chatLook(message, CardViews.find(all, message.card), store));
         }
         ChatPlan plan = ChatPlan.of(chatHeader, chatIds, chatLooks, header, ids, looks);
+        // 第一次同步时历史一页一页地到，中间的消息会插进来：先不重画，拉完再一次画好。
+        if (plan.rebuild && store.catchingUp() && !chatRows.isEmpty()) return false;
         boolean changed = !plan.unchanged(ids.size());
         if (plan.rebuild) {
             chatHeader = header; chatList.removeAllViews(); chatWords.clear(); chatStatus.clear(); chatRows.clear();
             if (first > 0) chatList.addView(button("查看更早的对话", view -> {
                 int y = scroll.getScrollY(), height = body.getHeight();
-                chatWindow += 80; chatHeader = ""; refreshChat(HubStore.get().cards(), HubStore.get());
+                chatWindow += 80; chatAnchor = null; chatHeader = ""; refreshChat(HubStore.get().cards(), HubStore.get());
                 scroll.post(() -> scroll.scrollTo(0, y + body.getHeight() - height));
             }));
             if (loading) chatList.addView(chatSkeleton());
@@ -2004,7 +2016,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         HubStore store = HubStore.get();
         boolean connected = store.runtimeConnected();
         StringBuilder key = new StringBuilder(opened == null ? "" : opened.id).append('>').append(connected);
-        if (opened != null) key.append('#').append(opened.seq).append(':').append(opened.state).append(opened.queued);
+        // 只比上面那段真的画出来的东西：卡的版本号每次进展都变，用它会让整段步骤一直重画。
+        if (opened != null) key.append('#').append(opened.state).append(opened.queued).append(opened.title)
+                .append(opened.brief).append(opened.progress.isEmpty() ? "" : opened.progress.get(opened.progress.size() - 1))
+                .append(opened.activity.size()).append(opened.resultReady).append(desktopBusy(opened));
         boolean fresh = taskKey == null || opened == null || !opened.id.equals(taskShown);
         boolean changed = false;
         if (fresh) {

@@ -313,6 +313,8 @@ gestures; the Runtime API is unchanged.
 - **Haptics**: a light tap when hold-to-talk starts and ends, on send, on copy, and on a successful approval.
 - 0.22.1: a quick tap on the chat hold-to-talk button no longer does nothing silently; it says to hold
   and release to send. When nothing was recognised it says so (the home button too).
+- 0.22.2: past 80 messages, every new message no longer redraws the whole chat (the window start stays put);
+  the first history sync no longer redraws per page, and several changes in one frame refresh once.
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)
