@@ -223,6 +223,15 @@ final class AppPresentation {
         return Markdown.messages(text);
     }
 
+    /**
+     * 像聊天软件那样一条一条整条发出来：还在写的时候只给已经写完的那几条（后面跟着 --- 的），
+     * 正在写的那条先藏在“正在输入”后面；说完了（done）才给最后一条。
+     */
+    static List<String> settledBubbles(String text, boolean done) {
+        if (done || text == null) return bubbles(text);
+        return bubbles(text.substring(0, Markdown.lastBreak(text)));
+    }
+
     static String draftKey(String runtime, String task) {
         return (runtime == null ? "" : runtime) + "\n" + (task == null ? "" : task);
     }

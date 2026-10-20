@@ -45,6 +45,21 @@ public class ChatPlanTest {
         assertTrue(AppPresentation.bubbles(null).isEmpty());
     }
 
+    @Test public void whileSheIsTypingOnlyFinishedMessagesShow() {
+        assertTrue(AppPresentation.settledBubbles("好了，我看", false).isEmpty());
+        assertEquals(Arrays.asList("好了。"), AppPresentation.settledBubbles("好了。
+---
+另外说", false));
+        assertEquals(Arrays.asList("好了。", "另外"), AppPresentation.settledBubbles("好了。
+---
+另外
+---", false));
+        assertEquals(Arrays.asList("好了。", "另外说一句"), AppPresentation.settledBubbles("好了。
+---
+另外说一句", true));
+        assertTrue(AppPresentation.settledBubbles(null, false).isEmpty());
+    }
+
     @Test public void theDeviceGetsPlainWords() {
         assertEquals("结论\n· 快一点\n\n另外", Markdown.plain("**结论**\n- 快一点\n---\n另外"));
         assertEquals("", Markdown.plain(null));

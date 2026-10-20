@@ -3,6 +3,7 @@ package com.yanyuliu.pockethub;
 import android.animation.ValueAnimator;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 
 /**
  * App 里共用的几种动效。时长统一在这里：小变化 150ms，进页面 220ms。
@@ -41,6 +42,29 @@ final class Motion {
         view.setTranslationY(rise);
         view.animate().alpha(1f).translationY(0f).setDuration(PAGE).setStartDelay(delay)
                 .setInterpolator(new DecelerateInterpolator(1.6f)).start();
+    }
+
+    /**
+     * 聊天气泡弹出来（像 iMessage / 微信）：从尖角那一侧由小放大、稍微回弹一下。
+     * fromEnd 是你发的（尖角在右下），否则是她发的（尖角在左上）。delay 用来一条接一条地出。
+     */
+    static void pop(View bubble, boolean fromEnd, long delay) {
+        if (!enabled()) return;
+        bubble.animate().cancel();
+        bubble.setAlpha(0f); bubble.setScaleX(.72f); bubble.setScaleY(.72f);
+        bubble.setTranslationY(bubble.getResources().getDisplayMetrics().density * 6);
+        Runnable pivot = () -> {
+            bubble.setPivotX(fromEnd ? bubble.getWidth() : 0f);
+            bubble.setPivotY(fromEnd ? bubble.getHeight() : 0f);
+        };
+        if (bubble.getWidth() > 0) pivot.run();
+        else bubble.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(View view, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                view.removeOnLayoutChangeListener(this); pivot.run();
+            }
+        });
+        bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f).setStartDelay(delay).setDuration(280)
+                .setInterpolator(new OvershootInterpolator(1.4f)).start();
     }
 
     /** 按钮换了样子（发送、停止、等待）：先缩一下再弹回来，让人看到它变了。 */

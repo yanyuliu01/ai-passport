@@ -46,7 +46,7 @@ say "let Codex do it, carefully" and DS arranges it. The ☰ button at the top
 left opens a sidebar with every place in the app:
 
 - **Chat with DS** — a persistent message timeline. Sent messages appear immediately;
-  streamed replies update the same bubble. Hand-off replies stay visible with a task
+  each short message of a reply pops in whole once it is written, like a messaging app. Hand-off replies stay visible with a task
   link, and completion summaries arrive as new messages without changing pages.
   Conversations started on the computer never appear here. Older messages can be
   loaded above the visible window; deleting or pruning a task card does not remove
@@ -288,11 +288,11 @@ A pass modelled on the Claude mobile app. It changes only what the phone shows a
 gestures; the Runtime API is unchanged.
 
 - **Chat and task pages only append**: new messages are added at the end and rise into place, older ones
-  stay where they are and the scroll position no longer jumps; a streaming reply only changes the text in its
-  own bubble. The list is redrawn only when older messages are loaded, a message disappears or the order
+  stay where they are and the scroll position no longer jumps; a reply in progress only adds bubbles to its own
+  row. The list is redrawn only when older messages are loaded, a message disappears or the order
   changes. The task page updates its steps, conversation and in-progress replies as three separate parts.
-- **Reply marker**: under the last reply, a breathing dot while thinking (after 8 seconds a line says what it
-  is waiting for), a turning star while writing, and a still, faded star once done, next to "copy" and
+- **Reply marker**: under the last reply, a typing bubble with three bouncing dots while she thinks or writes
+  (after 8 seconds a line says what it is waiting for), and a still, faded star once done, next to "copy" and
   "ask again" (sends your previous message again).
 - **Four composer button states**: on the chat page with no text it is hold-to-talk (release to send, slide off
   the button to cancel); with text it sends; while the companion is replying or the task is running it stops
@@ -325,6 +325,16 @@ gestures; the Runtime API is unchanged.
   and answers you. Several messages waiting at once each keep their own bubble.
 - 0.25.1: the first message after opening the app now shows its reply without leaving and coming back (the
   chat list identifies messages by an id that does not change).
+- 0.25.2: while she retells a background result, the words being written appear once instead of twice (Runtime
+  0.18+ sends them as a message and the card also carries them; the card's copy is used only with older
+  Runtimes). A task's card is shown only under its latest reply, so the hand-off line and the result no longer
+  each carry one. When a task's state changes, the reply above its card no longer fades in again (its second
+  bubble used to vanish for half a second).
+- 0.26.0: replies are no longer shown character by character. Like iMessage or WeChat, a typing bubble shows
+  while she writes, and each short message (split where she writes ---) pops in whole from its corner as soon
+  as it is finished; several finished at once pop one after another. Your own messages pop in from the bottom
+  right. The home line and task page follow the same rule. The Runtime still streams; only the app's display
+  changed.
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)

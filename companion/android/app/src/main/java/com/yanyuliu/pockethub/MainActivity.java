@@ -211,6 +211,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private final Map<String, TextView> chatWords = new HashMap<>();
     /** 小幽每条回复的气泡组（一段一个气泡）。 */
     private final Map<String, LinearLayout> chatGroups = new HashMap<>();
+    /** 挂着任务卡的那几行：一件事只在它最新的一条回复下面挂一张（见 refreshChat）。 */
+    private final Set<String> chatReceipts = new HashSet<>();
     private final Map<String, TextView> chatStatus = new HashMap<>();
     private String taskKey = null;
     /** 任务页三段各自的状态（见 refreshTasks）。 */
@@ -1721,6 +1723,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         boolean loading = messages.isEmpty() && store.catchingUp();
         String header = companionChoice + ":" + chatAnchor + ":" + (first > 0) + ":" + messages.isEmpty() + ":" + loading;
+        // 一件事的卡只挂在它最新的那条回复下面：交出去时那句话下面有卡，结果出来卡就跟着挪到结果下面，
+        // 不在每条相关的话下面各挂一张。
+        chatReceipts.clear();
+        Set<String> carded = new HashSet<>();
+        for (int index = messages.size() - 1; index >= first; index--) {
+            ChatHistory.Message message = messages.get(index);
+            if (!message.role.equals("you") && !message.card.isEmpty() && carded.add(message.card))
+                chatReceipts.add(rowKey(message));
+        }
         List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
         for (int index = first; index < messages.size(); index++) {
             ChatHistory.Message message = messages.get(index);
@@ -1730,6 +1741,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         // 第一次同步时历史一页一页地到，中间的消息会插进来：先不重画，拉完再一次画好。
         if (plan.rebuild && store.catchingUp() && !chatRows.isEmpty()) return false;
         boolean changed = !plan.unchanged(ids.size());
+        // 换掉的行（比如卡的状态变了、卡挪到了后面那条）里的话早就在屏幕上了：重新填进去时不再淡入一遍，
+        // 不然第二个气泡要隔 450ms 才出来，看着像那句话没了又冒出来。
+        Set<String> redrawn = new HashSet<>();
         if (plan.rebuild) {
             chatHeader = header; chatList.removeAllViews(); chatWords.clear(); chatStatus.clear(); chatRows.clear(); chatGroups.clear();
             if (first > 0) chatList.addView(button("查看更早的对话", view -> {
@@ -1751,7 +1765,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 ChatHistory.Message message = messages.get(first + at);
                 View row = chatRow(message, CardViews.find(all, message.card));
                 chatList.removeView(chatRows.get(at)); chatList.addView(row, chatHeaderViews + at);
-                chatRows.set(at, row);
+                chatRows.set(at, row); redrawn.add(ids.get(at));
                 // 「正在想」变成第一句话的那一刻：气泡淡进来，而不是突然冒出来。
                 if (tab == TAB_CHAT && chatLooks.get(at).charAt(0) == '-' && looks.get(at).charAt(0) == 'B') Motion.appear(row);
             }
@@ -1759,7 +1773,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 ChatHistory.Message message = messages.get(index);
                 View row = chatRow(message, CardViews.find(all, message.card));
                 chatRows.add(row); chatList.addView(row, chatHeaderViews + chatRows.size() - 1);
-                if (tab == TAB_CHAT) Motion.appear(row);
+                // 你发的那句从右下角弹出来；她的话由 setBubbles 一条条弹。
+                TextView words = chatWords.get(rowKey(message));
+                if (tab == TAB_CHAT && words != null) Motion.pop((View) words.getParent(), true, 0);
             }
         }
         chatIds = ids; chatLooks = looks;
@@ -1768,8 +1784,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             ChatHistory.Message message = messages.get(index);
             LinearLayout group = chatGroups.get(rowKey(message));
             if (group != null) {
-                String said = message.status.equals("streaming") ? message.text : messageText(message);
-                changed |= setBubbles(group, said, animate, !message.status.equals("streaming"));
+                changed |= setBubbles(group, shownBubbles(message), animate && !redrawn.contains(rowKey(message)));
                 changed |= showStatus(chatStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
                 continue;
             }
@@ -1807,13 +1822,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return box;
     }
 
+    /** 她这条回复现在该露出来的几条：还在写时只露写完的（见 AppPresentation.settledBubbles）。 */
+    private List<String> shownBubbles(ChatHistory.Message message) {
+        if (message.status.equals("streaming")) return AppPresentation.settledBubbles(message.text, false);
+        return AppPresentation.bubbles(messageText(message));
+    }
+
     /**
-     * 把小幽的一条回复画成几个气泡（Runtime 用空行分开每条短消息）。已有的气泡只改字；新多出来的
-     * 浮上来。一整段一下子到齐（不是边说边出）时一条一条地出，中间隔一小会儿，像对方在接着打字。
+     * 把小幽的一条回复画成几个气泡（她单独写一行 --- 另起一条）。已有的气泡只改字；新多出来的
+     * 整条从左上角弹出来，几条同时到时一条接一条地弹，中间隔一小会儿，像对方在接着发。
      * 返回是否变了。
      */
-    private boolean setBubbles(LinearLayout group, String text, boolean animate, boolean whole) {
-        List<String> parts = AppPresentation.bubbles(text);
+    private boolean setBubbles(LinearLayout group, List<String> parts, boolean animate) {
         int had = group.getChildCount();
         boolean changed = false;
         while (group.getChildCount() > parts.size()) { group.removeViewAt(group.getChildCount() - 1); changed = true; }
@@ -1829,7 +1849,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             TextView words = bubbleWords(false, ""); words.setTextIsSelectable(true);
             words.setTag(parts.get(index)); words.setText(Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
-            if (animate) Motion.appear(bubble, whole && had == 0 ? (index - had) * 450L : 0);
+            if (animate) Motion.pop(bubble, false, (index - had) * 380L);
         }
         return changed;
     }
@@ -1844,13 +1864,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return message.clientId + (message.role.equals("you") ? ":you" : ":reply");
     }
 
-    /** 一行消息的样子：换了才重画这一行（字的变化不算，流式时直接改字）。 */
+    /** 一行消息的样子：换了才重画这一行（字的变化不算，直接改字）。 */
     private String chatLook(ChatHistory.Message message, Card card, HubStore store) {
         // 第一个字符记有没有气泡：换行时只有气泡刚出现才做淡入。小幽的话气泡在行里自己长（G），
         // 从“在想”到“开始说”不用换掉整行。
         StringBuilder look = new StringBuilder().append(!message.role.equals("you") ? 'G' : hasBubble(message) ? 'B' : '-')
                 .append(message.status.equals("failed"));
-        if (card != null && AppPresentation.dispatched(card))
+        if (card != null && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
             look.append(card.title).append(AppPresentation.stateWord(card, store.runtimeConnected())).append(card.resultReady);
         return look.toString();
     }
@@ -1859,7 +1879,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         LinearLayout row = column();
         boolean mine = message.role.equals("you");
         if (!mine) {
-            // 小幽的话像聊天那样一段一个气泡；气泡随文字一条条长出来（setBubbles）。
+            // 小幽的话像聊天那样一条一个气泡；写完一条弹出一条（setBubbles）。
             LinearLayout group = column(); chatGroups.put(rowKey(message), group); row.addView(group);
         } else if (hasBubble(message)) {
             LinearLayout bubble = bubbleShell(mine);
@@ -1869,7 +1889,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         TextView caption = statusCaption(mine);
         row.addView(caption, captionParams(mine)); chatStatus.put(rowKey(message), caption);
-        if (!mine && card != null && AppPresentation.dispatched(card)) row.addView(receipt(card));
+        if (!mine && card != null && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
+            row.addView(receipt(card));
         if (message.status.equals("failed") && mine && !message.synced) {
             row.addView(button("重试发送", view -> RuntimeClient.retry(this, message.id, message.text,
                     message.scope.equals("task") ? message.card : null)));
@@ -1880,9 +1901,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private View markerRow() {
         if (markerRow == null) {
             markerRow = new LinearLayout(this); markerRow.setGravity(Gravity.CENTER_VERTICAL);
-            markerRow.setPadding(dp(6), dp(2), dp(40), dp(6));
+            markerRow.setPadding(0, dp(5), dp(40), dp(6));
             marker = new ReplyMarker(this, BLUE);
-            markerRow.addView(marker, new LinearLayout.LayoutParams(dp(20), dp(20)));
+            markerRow.addView(marker, new LinearLayout.LayoutParams(dp(54), dp(34)));
             markerLabel = text("", 13, false); markerLabel.setTextColor(HINT);
             markerLabel.setTypeface(Typeface.defaultFromStyle(Typeface.ITALIC));
             markerLabel.setPadding(dp(8), 0, 0, 0);
@@ -1950,8 +1971,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     /**
-     * 最后一条回复下面的标记：在想是一个呼吸的点，想了 8 秒以上旁边写一句在干什么；
-     * 在写是转着的星芒；说完了星芒停下。返回是否变了。
+     * 最后一条回复下面的标记：在想、在写都是“正在输入”的三个点，等了 8 秒以上旁边写一句在干什么；
+     * 说完了换成一个淡淡的星芒。返回是否变了。
      */
     private boolean refreshMarker() {
         if (marker == null) return false;
@@ -1961,14 +1982,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String state = ReplyMarker.HIDDEN, label = "";
         if (last != null && !last.role.equals("you")) {
             if (last.status.equals("thinking")) {
-                state = ReplyMarker.THINKING;
+                state = ReplyMarker.TYPING;
                 double waited = System.currentTimeMillis() / 1000.0 - last.at;
                 HubStore.Turn turn = store.turn();
                 if (!turn.agent.isEmpty()) label = "等 " + AppPresentation.name(turn.agent) + " 做完…";
                 else if (waited >= 8) label = turn.stage.isEmpty() ? "还在想，稍等…" : turn.stage;
-            } else if (last.status.equals("streaming")) state = ReplyMarker.WRITING;
+            } else if (last.status.equals("streaming")) state = ReplyMarker.TYPING;
             else if (last.status.equals("done")) state = ReplyMarker.RESTING;
-        } else if (last != null && last.status.equals("sending")) state = ReplyMarker.THINKING;
+        } else if (last != null && last.status.equals("sending")) state = ReplyMarker.TYPING;
         boolean changed = !state.equals(marker.state()) || !label.contentEquals(markerLabel.getText());
         marker.state(state);
         markerRow.setVisibility(state.equals(ReplyMarker.HIDDEN) ? View.GONE : View.VISIBLE);
@@ -1984,21 +2005,22 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         // 在想的时候每秒看一眼，到 8 秒时换上那句话。
         markerRow.removeCallbacks(markerTick);
-        if (state.equals(ReplyMarker.THINKING) && label.isEmpty()) markerRow.postDelayed(markerTick, 1000);
+        if (state.equals(ReplyMarker.TYPING) && label.isEmpty()) markerRow.postDelayed(markerTick, 1000);
         return changed;
     }
 
     /** 气泡里只放说的话；发送中、正在想这类状态放在气泡下面的小字里（statusText）。 */
     private String messageText(ChatHistory.Message message) {
         if (message.role.equals("you")) return message.text;
-        if (message.status.equals("streaming")) return message.text + " ▍";
         if (message.status.equals("interrupted") && message.text.isEmpty()) return "回复尚未完成";
         return message.text;
     }
 
-    /** 还在想、一个字都没有的回复不画空气泡，只留下面那行“正在想…”。 */
+    /** 还在想、或者还没有一条写完的回复不画空气泡，只留下面那个“正在输入”。 */
     private static boolean hasBubble(ChatHistory.Message message) {
-        return message.role.equals("you") || !(message.status.equals("thinking") && message.text.isEmpty());
+        if (message.role.equals("you")) return true;
+        if (message.status.equals("streaming")) return !AppPresentation.settledBubbles(message.text, false).isEmpty();
+        return !(message.status.equals("thinking") && message.text.isEmpty());
     }
 
     private String statusText(ChatHistory.Message message) {
@@ -2082,8 +2104,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             taskHead = column(); taskThread = column(); taskExtras = column(); taskPending = column();
             taskPane.addView(taskHead); taskPane.addView(taskThread); taskPane.addView(taskExtras); taskPane.addView(taskPending);
             taskMarker = new ReplyMarker(this, BLUE);
-            LinearLayout.LayoutParams markerParams = new LinearLayout.LayoutParams(dp(20), dp(20));
-            markerParams.setMargins(dp(6), dp(2), 0, dp(6));
+            LinearLayout.LayoutParams markerParams = new LinearLayout.LayoutParams(dp(54), dp(34));
+            markerParams.setMargins(0, dp(5), 0, dp(6));
             taskPane.addView(taskMarker, markerParams); taskMarker.state(ReplyMarker.HIDDEN);
         }
         if (!key.toString().equals(taskKey)) {
@@ -2187,7 +2209,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             for (int at : plan.replace) {
                 View row = taskPendingRow(pending.get(at));
                 taskPending.removeViewAt(at); taskPending.addView(row, at); taskPendingRows.set(at, row);
-                if (tab == TAB_TASKS && taskPendingLooks.get(at).charAt(0) == '-' && looks.get(at).charAt(0) == 'B') Motion.appear(row);
+                if (tab == TAB_TASKS && taskPendingLooks.get(at).charAt(0) == '-' && looks.get(at).charAt(0) == 'B')
+                    Motion.pop(row.getChildAt(0), false, 0);
             }
             for (int index = plan.appendFrom; index < pending.size(); index++) {
                 View row = taskPendingRow(pending.get(index)); taskPendingRows.add(row); taskPending.addView(row);
@@ -2197,7 +2220,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         taskPendingIds = ids; taskPendingLooks = looks;
         for (ChatHistory.Message message : pending) {
             TextView words = taskWords.get(rowKey(message));
-            String shown = message.role.equals("you") || !message.status.equals("streaming") ? messageText(message) : message.text;
+            String shown = message.role.equals("you") ? message.text : String.join("\n---\n", shownBubbles(message));
             if (words != null && !shown.equals(words.getTag())) {
                 words.setTag(shown);
                 words.setText(message.role.equals("you") ? shown
@@ -2208,9 +2231,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         ChatHistory.Message last = pending.isEmpty() ? null : pending.get(pending.size() - 1);
         String state = last == null ? ReplyMarker.HIDDEN
-                : last.role.equals("you") ? (last.status.equals("sending") ? ReplyMarker.THINKING : ReplyMarker.HIDDEN)
-                : last.status.equals("thinking") ? ReplyMarker.THINKING
-                : last.status.equals("streaming") ? ReplyMarker.WRITING : ReplyMarker.HIDDEN;
+                : last.role.equals("you") ? (last.status.equals("sending") ? ReplyMarker.TYPING : ReplyMarker.HIDDEN)
+                : last.status.equals("thinking") || last.status.equals("streaming") ? ReplyMarker.TYPING : ReplyMarker.HIDDEN;
         if (!state.equals(taskMarker.state())) { taskMarker.state(state); changed = true; }
         return changed;
     }
@@ -2643,7 +2665,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         } else if (transcribing) {
             state = "thinking"; mood = "think"; line = heard.isEmpty() ? "嗯…" : heard;
         } else if (!streaming.isEmpty()) {
-            state = "talking"; mood = "happy"; line = Markdown.plain(streaming) + " ▍";
+            // 首页也不再一个字一个字地出：写完的那几条先出来，没有就是“…”。
+            List<String> said = AppPresentation.settledBubbles(streaming, false);
+            state = "talking"; mood = "happy"; line = said.isEmpty() ? "…" : Markdown.plain(String.join("\n---\n", said));
         } else if (store.busy()) {
             boolean waiting = !turn.agent.isEmpty();
             state = waiting ? "working" : "thinking"; mood = waiting ? "focus" : "think";

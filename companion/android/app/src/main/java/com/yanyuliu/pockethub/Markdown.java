@@ -32,6 +32,14 @@ final class Markdown {
         return parts;
     }
 
+    /** 最后一个单独一行 --- 开始的位置；没有就是 0（还没有一条写完）。 */
+    static int lastBreak(String text) {
+        int at = 0;
+        Matcher matcher = BREAK.matcher(text);
+        while (matcher.find()) at = matcher.start();
+        return at;
+    }
+
     /** 纯文字：去掉加粗记号，列表换成 “· ”，几条消息之间空一行。 */
     static String plain(String text) {
         if (text == null || text.isEmpty()) return "";
