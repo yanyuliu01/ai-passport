@@ -282,7 +282,7 @@ The device accepts one Bluetooth connection at a time. Disconnect it from the
 Claude desktop app (or move away from that computer) before connecting the
 phone.
 
-## Interaction and motion (0.21.1)
+## Interaction and motion (0.22.0)
 
 A pass modelled on the Claude mobile app. It changes only what the phone shows and how it responds to
 gestures; the Runtime API is unchanged.

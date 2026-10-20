@@ -11,7 +11,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode 39
-        versionName "0.21.1"
+        versionName "0.22.0"
     }
 
     // The speech models are no longer packaged: they are published as the "speech" resource
