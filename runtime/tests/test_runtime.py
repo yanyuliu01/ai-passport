@@ -729,6 +729,29 @@ class ShapeTests(unittest.TestCase):
         for text in ("just words", "{broken", '{"mood": "happy"}', '["reply"]', ""):
             self.assertIsNone(agents_module.fields_from_text(text))
 
+    def test_owner_memory_keeps_notes_in_a_plain_file(self):
+        import shutil
+        import tempfile
+        from xiaoyou_runtime.memory import OwnerMemory, prompt_section
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        memory = OwnerMemory(folder / "memory" / "owner.md")
+        self.assertEqual(memory.notes(), [])
+        self.assertEqual(prompt_section([]), [])
+        memory.remember("少说点", "2026-10-20")
+        self.assertEqual(memory.remember("少说点"), "这条之前就记着了")
+        memory.remember("别点帮手的名", "2026-10-21")
+        self.assertEqual(memory.notes(), ["[2026-10-20] 少说点", "[2026-10-21] 别点帮手的名"])
+        self.assertIn("- [2026-10-20] 少说点", (folder / "memory" / "owner.md").read_text(encoding="utf-8"))
+        section = prompt_section(memory.notes())
+        self.assertEqual(section[-1], "2. [2026-10-21] 别点帮手的名")
+        prompt = xiaoyou_module.lane_prompt("P", 40, [], [], None, 0, tools=True, memory=memory.notes())
+        self.assertIn("你记得的关于主人的事", prompt)
+        self.assertNotIn("判断理由", prompt)
+        self.assertEqual(memory.forget(9), "没有第 9 条")
+        memory.forget(1)
+        self.assertEqual(memory.notes(), ["[2026-10-21] 别点帮手的名"])
+
     def test_a_reply_wrapped_in_prose_is_still_recognised(self):
         # 真实出过的样子：JSON 前面多说一句，reply 里带转义的换行。
         fields = {"reply": "找到了，频闪是整页重画。\n\n已经改好了。", "brief": "找到频闪原因", "mood": "happy"}

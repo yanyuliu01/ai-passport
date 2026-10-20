@@ -416,6 +416,19 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## The companion remembers (0.17.0)
+
+The companion now has a memory: `state/memory/owner.md`, one dated line per item, put into her prompt every
+turn (relays see it too). She adds with `remember` and removes by number with `forget`; you can edit the file
+directly. Only preferences, rules and things she should keep doing go in, not a diary; at most 60 items, the
+oldest dropped first.
+
+- Saying "noted" or "I'll do it that way from now on" without calling `remember` gets the same quiet reminder
+  as promising work without a tool call.
+- The paragraph asking her to spell out her reasoning (what is ambiguous, which readings she considered…) is
+  gone, replaced by one line: act on your reading when confident, otherwise ask briefly. That paragraph was
+  the main reason replies opened by restating what you said and listing options for you to pick.
+
 ## Let her decide how to talk (0.16.0)
 
 This replaces the "short messages, split by length" rules of 0.14.0. The Runtime only tells the companion

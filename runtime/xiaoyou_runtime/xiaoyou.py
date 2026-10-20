@@ -27,6 +27,7 @@ import uuid
 import time
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import router as routing
@@ -39,6 +40,8 @@ from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
+from .memory import OwnerMemory
+from .memory import prompt_section as memory_section
 from .voice_tools import JOIN, TOOL_SESSION_PREFIX, Toolbox
 from .usage import EFFORT_NAMES, Usage
 from .workspace import Workspace
@@ -224,9 +227,7 @@ SEED_TURNS = 8
 
 # 有工具时，共用的那几段里说 JSON 字段的地方换成说工具。
 TOOL_WORDING = (
-    ("（action 写 none）", "（不调工具）"),
     ("action 写 none", "不调工具"),
-    ("reply 里都", "你说的话里都"),
     ("用 start 交给帮手", "用 start_task 交给帮手"),
 )
 
@@ -447,7 +448,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                 cards: List[Dict[str, Any]], focus: Optional[str], now: float,
                 pinned: bool = False, notes: Optional[Dict[str, str]] = None,
                 quota: bool = False, desktop: Optional[Dict[str, Any]] = None,
-                tools: bool = False) -> str:
+                tools: bool = False, memory: Optional[List[str]] = None) -> str:
     """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。
 
     tools 为真时她有工具（voice_tools）：说的话直接写文字，做事调工具，不写 JSON。
@@ -478,24 +479,15 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
             "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
         )
     parts.append(
-        "主人的话含糊、没说清楚具体要做什么时，先自己判断一下：能直接问清楚就问（action 写 "
-        "none），觉得已经有把握猜到意思，也可以按你的理解派给帮手——但不管选哪条，reply 里都"
-        "要写出具体的判断理由，像是你真的想过这件事：这句话含糊在哪、你想到了哪几种可能的"
-        "理解、为什么挑了其中一种、或者为什么觉得哪几种理解差太多所以要问。"
-        "不要写“收到，你想让我干啥”“在呢，一切正常”“需要确认一下”这类不含具体内容、换成任何"
-        "一句话都能用的套话——这种话等于没想、没判断。"
-        "比如主人说“测一下”：不能只回“在呢，有事说”，而要说清楚具体是什么让你拿不准，比如"
-        "“‘测一下’没说要测什么——是测刚改完的这部分代码、测固件、还是就是想看看我们这条线通不"
-        "通？我先按你最近在聊的那件事理解，如果猜错了你告诉我”，然后再决定是问清楚还是按这个"
-        "理解派出去。"
-        "同一句含糊的话主人又说了一遍，不代表要你换个花样：不要把它当成“顺便验证一下别的帮手"
-        "通不通”“这次换一个试试”这种自己加的新任务——没新信息就按上次的理解给个稳定、"
-        "一致的答案，或者还是如实说你仍然不确定，不要为了显得有在做事就真的派一件你自己编"
-        "出来的任务。真要派给帮手做事，是因为确实听懂了要做什么，不是为了测帮手能不能通。"
+        "主人的话没说清要做什么时，有把握就按你的理解办，没把握就简单问一句。"
+        "不要为了显得在做事，去派一件自己编出来的任务。"
     )
     parts.append("")
     parts.append(CHAT_STYLE)
     parts.append("")
+    if memory:
+        parts.extend(memory_section(memory))
+        parts.append("")
     if tools:
         parts.append("## 怎么回复")
         parts.append(
@@ -602,12 +594,16 @@ def describe_desktop(card: Dict[str, Any], helpers: List[Agent]) -> List[str]:
     return parts
 
 
-def voice_prompt(persona: str, brief_max_chars: int, text: bool = False) -> str:
-    """转述帮手的结果时的系统提示：人设和回复格式。text 为真时直接写话，不写 JSON。"""
+def voice_prompt(persona: str, brief_max_chars: int, text: bool = False,
+                 memory: Optional[List[str]] = None) -> str:
+    """转述帮手的结果时的系统提示：人设和回复格式。text 为真时直接写话，不写 JSON。
+    memory 是她记得的关于主人的事（主人的偏好转述时也照做）。"""
+    remembered = memory_section(memory or [])
     if text:
         return "\n".join([
             persona, "",
             CHAT_STYLE, "",
+            *remembered, *([""] if remembered else []),
             "## 转述帮手的结果",
             "帮手交回的原文主人看不到，完整的留在任务里。你用自己的话把结果告诉主人。", "",
             "## 怎么回复",
@@ -716,6 +712,8 @@ class Xiaoyou:
         self._order = [agent.name for agent in agents]
         self._agents_lock = threading.Lock()
         self._store = store
+        # 她记得的关于主人的事（偏好、规矩）：每一轮都放进提示，她用 remember / forget 改。
+        self.memory = OwnerMemory(Path(config.state_dir) / "memory" / "owner.md")
         self._router = router if router is not None else routing.Router()
         self._cards = Cards(config.state_dir / "cards.json")
         # 记录中心：这里写卡、说话、改状态都经过它（record.py）；_cards 只用来读。
@@ -953,7 +951,8 @@ class Xiaoyou:
             self._config.persona, self._config.brief_max_chars, available,
             listed, focus["id"] if focus is not None else None, now, pinned,
             self._usage.notes(), any(self._usage.account(agent.name) for agent in available),
-            focus if focus is not None and focus.get("monitoring_only") else None, tools)
+            focus if focus is not None and focus.get("monitoring_only") else None, tools,
+            self.memory.notes())
         schema = lane_schema(available)
         toolbox = self._toolbox(conversation, focus, available, pinned) if lead.talks_with_tools() else None
         outcome = None
@@ -1088,7 +1087,7 @@ class Xiaoyou:
             return self._plan(Outcome("", None, fields), conversation, focus, available, pinned)[1]
 
         return Toolbox([agent.name for agent in available], efforts, models, check,
-                       lambda card: self._detail(card, conversation, focus))
+                       lambda card: self._detail(card, conversation, focus), self.memory)
 
     def _detail(self, card_id: str, conversation: str, focus: Optional[Dict[str, Any]]) -> Optional[str]:
         """task_detail 给她看的：一件事的状态、谁在做、最近几步、最后说的话。别的对话的事看不到。"""
@@ -1495,7 +1494,7 @@ class Xiaoyou:
                 outcome = self._speak(
                     voice, relay(task.agent.name, card.get("title", ""), result),
                     task.conversation, voice_prompt(
-                        self._config.persona, self._config.brief_max_chars, plain),
+                        self._config.persona, self._config.brief_max_chars, plain, self.memory.notes()),
                     None if plain else reply_schema(), task.hop, catch_up=True,
                     on_text=self._streamer(voice.name, report, plain=plain))
                 reply = reply_text(outcome)

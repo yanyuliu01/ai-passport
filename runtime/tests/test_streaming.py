@@ -214,7 +214,7 @@ class ToolTalkTests(TempDirCase):
         self.assertNotIn("JSON Schema", first.get("system", ""))
         result = second["messages"][-1]["content"][0]
         self.assertEqual((result["type"], result["tool_use_id"]), ("tool_result", "tool-1"))
-        self.assertIn("记下了", result["content"])
+        self.assertIn("说完就去办", result["content"])
         # 第二轮的话接在第一轮后面，一起交给手机看。
         self.assertEqual(seen[-1], "好，我让 codex 去查。\n\n---\n\n有结果我告诉你。")
 
@@ -248,7 +248,7 @@ class ToolTalkTests(TempDirCase):
                                  on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
                                  "deepseek-v4-pro", lambda text: None, opener)
         reminder = opener.requests[1][1]["messages"][-1]["content"]
-        self.assertIn("一个工具都没调", reminder)
+        self.assertIn("没调对应的工具", reminder)
         self.assertEqual(outcome.fields["action"]["type"], "start")
         # 只提醒一次：说了不做第二次就照实给出去。
         opener = FakeOpener(sse("我这就去看看。"), sse("我去看一眼。"))
@@ -276,6 +276,38 @@ class ToolTalkTests(TempDirCase):
         self.assertIn("tool_use", kinds)
         self.assertIn("tool_result", kinds)
         self.assertEqual(saved[-1], {"role": "assistant", "content": "还在做。"})
+
+    def test_saying_she_will_remember_without_remembering_gets_a_reminder(self):
+        from xiaoyou_runtime.memory import OwnerMemory
+        from xiaoyou_runtime.voice_tools import Toolbox
+        memory = OwnerMemory(self.folder / "owner.md")
+        tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
+        self.assertTrue(tools.promised("明白，这个我记下了，后面按这个来。"))
+        # 查过一件事不算记住了。
+        tools.call("task_detail", {"card": "c3"})
+        self.assertTrue(tools.promised("记下了"))
+        tools.call("remember", {"note": "少说点"})
+        self.assertFalse(tools.promised("记下了"))
+        self.assertEqual(memory.notes()[-1][-3:], "少说点")
+        # 没有记忆功能时不拿这个提醒她。
+        bare = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None)
+        self.assertFalse(bare.promised("记下了"))
+
+    def test_she_can_remember_and_forget_through_tools(self):
+        opener = FakeOpener(tool_sse("", "remember", {"note": "回复别太长"}), sse("好，记住了。"))
+        from xiaoyou_runtime.memory import OwnerMemory
+        from xiaoyou_runtime.voice_tools import Toolbox
+        memory = OwnerMemory(self.folder / "owner.md")
+        tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
+        names = [tool["name"] for tool in tools.definitions()]
+        self.assertIn("remember", names)
+        dsh_stream.run(dsh_spec(self.folder), Job(text="以后少说点", system="S", plain=True,
+                       on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                       "deepseek-v4-pro", lambda text: None, opener)
+        self.assertTrue(memory.notes()[0].endswith("回复别太长"))
+        self.assertEqual(len(opener.requests), 2)  # 调了 remember，不再提醒
+        self.assertIn("删掉了", tools.call("forget", {"number": 1})[0])
+        self.assertEqual(memory.notes(), [])
 
     def test_old_json_replies_in_the_history_become_plain_words(self):
         history = [{"role": "user", "content": "hi"},

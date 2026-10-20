@@ -29,15 +29,19 @@ PROMISE = re.compile(
     r"(我这就|这就去|我马上|马上去|马上帮|我现在就|我先去|我去(查|看|找|问|拢|整理|弄|做|跑|翻|核|试|盯)"
     r"|我来(查|看|找|拢|整理|弄|做|跑|翻|核|安排)|交给\s?\w{1,12}|让\s?\w{1,12}\s?(去|来)(查|看|做|弄|跑|改|整理)"
     r"|已经(让|交给|安排))")
+# 嘴上说了要记住、以后照做的话。没调 remember 就说这种话，跟“说了去做却没做”一样，也提醒一次。
+MEMORY_PROMISE = re.compile(
+    r"(记下了|记下来|记住了|我记住|记着了|收下这条|收下了|按这个来|照这个来|以后(我|就)|下次(我|就)|往后(我|就)"
+    r"|我会注意|长记性)")
 PROMISE_NUDGE = (
-    "（Runtime 提醒，主人看不到：你刚才说了要去做，但这一轮一个工具都没调，事情不会发生。"
-    "要做就现在调对应的工具（交给帮手用 start_task，看进展用 task_detail），不用再跟主人重复或道歉；"
-    "其实不需要做事的话，用一句话改口说清楚。）")
+    "（Runtime 提醒，主人看不到：你刚才说了要去做或者说记下了，但这一轮没调对应的工具，事情不会发生，"
+    "下一轮你也不会记得。要做事就现在调工具（交给帮手用 start_task，看进展用 task_detail），"
+    "要记住就现在调 remember；不用再跟主人重复或道歉。其实不需要的话，用一句话改口说清楚。）")
 
 ACTION_TOOLS = ("start_task", "amend_task", "cancel_task")
 
 # 给模型看的工具结果：办得了的事先记下，提醒她不用再说一遍。
-RECORDED = "记下了，这一轮说完就去办：%s。用一句话告诉主人交给了谁、在做什么；前面已经说过就不用再说，直接结束。"
+RECORDED = "好，这一轮说完就去办：%s。用一句话告诉主人交给了谁、在做什么；前面已经说过就不用再说，直接结束。"
 
 
 class Toolbox:
@@ -50,8 +54,9 @@ class Toolbox:
 
     def __init__(self, helpers: List[str], efforts: List[str], models: List[str],
                  check: Callable[[Dict[str, Any]], Optional[str]],
-                 lookup: Callable[[str], Optional[str]]):
+                 lookup: Callable[[str], Optional[str]], memory: Any = None):
         self._helpers = helpers
+        self._memory = memory  # memory.OwnerMemory；None 就没有 remember / forget
         self._efforts = efforts
         self._models = models
         self._check = check
@@ -101,6 +106,22 @@ class Toolbox:
             "description": "查一件事现在怎么样了：状态、谁在做、最近几步进展、做完的结果。只是看，不改它。",
             "input_schema": {"type": "object", "properties": {"card": card}, "required": ["card"]},
         })
+        if self._memory is not None:
+            tools.append({
+                "name": "remember",
+                "description": "记住一条关于主人的事：偏好、定下的规矩、要你以后一直照做的话、长期的情况。"
+                               "每一轮你都会看到记着的事。一次性的小事不用记。",
+                "input_schema": {"type": "object", "properties": {
+                    "note": {"type": "string", "description": "要记的一句话，写清楚以后该怎么做"},
+                }, "required": ["note"]},
+            })
+            tools.append({
+                "name": "forget",
+                "description": "删掉一条记着的事（主人改主意了、或者记错了）。number 是“你记得的关于主人的事”里的编号。",
+                "input_schema": {"type": "object", "properties": {
+                    "number": {"type": "integer"},
+                }, "required": ["number"]},
+            })
         return tools
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
@@ -114,6 +135,14 @@ class Toolbox:
                 return "没有编号是 %s 的事" % (card or "（空）"), True
             self._looked = card
             return found, False
+        if name == "remember" and self._memory is not None:
+            note = str(args.get("note") or "").strip()
+            return self._memory.remember(note), not note
+        if name == "forget" and self._memory is not None:
+            try:
+                return self._memory.forget(int(args.get("number"))), False
+            except (TypeError, ValueError):
+                return "number 要写记着的那条的编号", True
         if name not in ACTION_TOOLS:
             return "没有叫 %s 的工具" % name, True
         if self.action is not None:
@@ -134,8 +163,13 @@ class Toolbox:
         return RECORDED % what, False
 
     def promised(self, said: str) -> bool:
-        """这一轮一个工具都没调，嘴上却说了要去做。"""
-        return not self.calls and PROMISE.search(said or "") is not None
+        """嘴上说了却没做：说要去做、却没调做事或查看的工具；说记下了、却没调 remember。"""
+        names = {name for name, _ in self.calls}
+        acted = bool(names & set(ACTION_TOOLS + ("task_detail",)))
+        if PROMISE.search(said or "") and not acted:
+            return True
+        return self._memory is not None and MEMORY_PROMISE.search(said or "") is not None \
+            and "remember" not in names
 
     def fields(self, said: str) -> Dict[str, Any]:
         """这一轮的结果，写成和以前 JSON 一样的字段，交给 Xiaoyou 照原来的路办。
