@@ -311,6 +311,8 @@ gestures; the Runtime API is unchanged.
 - **First sync**: while the first history sync from a computer is still running, the chat page shows pulsing
   placeholders instead of flashing an empty page.
 - **Haptics**: a light tap when hold-to-talk starts and ends, on send, on copy, and on a successful approval.
+- 0.22.1: a quick tap on the chat hold-to-talk button no longer does nothing silently; it says to hold
+  and release to send. When nothing was recognised it says so (the home button too).
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)

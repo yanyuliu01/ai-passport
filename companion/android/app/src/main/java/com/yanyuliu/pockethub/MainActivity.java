@@ -129,6 +129,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private TextView micHint;
     /** 这次按住说话是从聊天页输入框按的（否则是首页的大按钮）。 */
     private boolean micFromComposer;
+    private long micPressedAt;
     private long nextUpdateCheck;
     private String updateTarget = "";
     private View devicePill;
@@ -1534,11 +1535,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
             case android.view.MotionEvent.ACTION_DOWN:
                 view.getParent().requestDisallowInterceptTouchEvent(true);
                 if (!listening) micFromComposer = true;
+                micPressedAt = android.os.SystemClock.uptimeMillis();
                 startListening(); return true;
             case android.view.MotionEvent.ACTION_UP:
                 view.getParent().requestDisallowInterceptTouchEvent(false);
                 boolean inside = event.getX() >= 0 && event.getY() >= 0 && event.getX() <= view.getWidth() && event.getY() <= view.getHeight();
-                if (inside) stopListening(); else cancelListening();
+                // 点一下就松开录不到话：不发、说清楚怎么用，而不是什么都不发生。
+                boolean tapped = android.os.SystemClock.uptimeMillis() - micPressedAt < 400;
+                if (inside && !tapped) stopListening();
+                else { cancelListening(); if (tapped) toast("按住说话，松开发送；要打字点左边的输入框"); }
                 return true;
             case android.view.MotionEvent.ACTION_CANCEL:
                 view.getParent().requestDisallowInterceptTouchEvent(false);
@@ -2388,6 +2393,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 } else if (text != null && !text.isEmpty()) {
                     HubStore.get().log("手机已完成离线转录，仅发送文字");
                     RuntimeClient.send(MainActivity.this, text);
+                } else {
+                    // 没认出字也没出错（太短、太轻）：原来这里什么都不做，看起来像发出去了没回音。
+                    micSay("没听清，再按住说一次"); toast("没听清，什么都没发出去，再按住说一次");
                 }
                 refreshHome(HubStore.get(), HubStore.get().cards());
             }
