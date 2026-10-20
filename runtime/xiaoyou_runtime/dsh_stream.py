@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text
 from .config import AgentSpec
@@ -107,107 +107,193 @@ def events(lines: Iterable[bytes], check: Optional[Callable[[], None]] = None) -
             yield event
 
 
+# 带工具时最多来回几轮（说话 → 调工具 → 看结果 → 接着说）。到了还要调就不再给结果，这一轮到此为止。
+MAX_TOOL_ROUNDS = 4
+
+
+def plain_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """以前写 JSON 的那些回复只留 reply 的文字：说话改成直接写文字以后，模型看到自己
+    以前满屏的 JSON 会照着学。"""
+    out = []
+    for item in history:
+        if item["role"] == "assistant":
+            found = fields_from_text(item["content"])
+            if found is not None and found["reply"].strip():
+                item = {"role": "assistant", "content": found["reply"].strip()}
+        out.append(item)
+    return out
+
+
 def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         on_text: Callable[[str], None], opener: Opener = urllib.request.urlopen) -> Outcome:
-    """问一次，文字每来一块就把到目前为止的全文交给 on_text。"""
+    """问一次，文字每来一块就把到目前为止的全文交给 on_text。
+
+    job.tools（voice_tools.Toolbox）不为空时：她写的文字就是说的话，要做事调工具；
+    工具结果交回给她接着说，最多 MAX_TOOL_ROUNDS 轮。几轮里写的话用空行连成一段
+    （每一轮是新的一条消息）。这时不要 JSON，也不加回复结构的说明。"""
     key = env.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
         raise AgentError("没有 DEEPSEEK_API_KEY，走不了流式")
     if not model:
         raise AgentError("没有配置模型，走不了流式")
+    tools = job.tools
     folder = sessions_dir(spec)
     history = _load(folder, job.session_id)
     session_id = job.session_id if history else SESSION_PREFIX + uuid.uuid4().hex
-    system = "\n\n".join(part for part in (job.system or "", schema_note(job.schema)) if part)
-    body: Dict[str, Any] = {
-        "model": model, "stream": True, "max_tokens": MAX_TOKENS,
-        "thinking": {"type": "disabled"},
-        "messages": history + [{"role": "user", "content": job.text}],
-    }
-    if system:
-        body["system"] = system
+    if tools is not None or job.schema is None:
+        history = plain_history(history)
+    system = "\n\n".join(part for part in (job.system or "", "" if tools is not None else schema_note(job.schema)) if part)
+    messages: List[Dict[str, Any]] = history + [{"role": "user", "content": job.text}]
     base = (env.get("DEEPSEEK_BASE_URL") or BASE_URL).rstrip("/")
     url = base if base.endswith("/v1") else base + "/v1"
-    request = urllib.request.Request(
-        url + "/messages", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        method="POST")
-    request.add_header("Content-Type", "application/json")
-    request.add_header("Accept", "text/event-stream")
-    request.add_header("x-api-key", key)
-    request.add_header("anthropic-version", "2023-06-01")
-    said = ""
-    stopped = False
     timeout = job.timeout or spec.timeout_seconds or 60
     began = time.monotonic()
-    first_text: Optional[float] = None
-    expired = threading.Event()
-    timer: Optional[threading.Timer] = None
+    first_text: List[Optional[float]] = [None]
 
-    def check_deadline() -> None:
-        if expired.is_set() or time.monotonic() - began >= timeout:
-            raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
+    def ask(prefix: str) -> Tuple[str, List[Dict[str, Any]], bool]:
+        """问一轮。返回（这一轮写的文字，这一轮的工具调用，是不是停在要调工具）。
+        prefix 是前几轮已经说过的话：交给 on_text 的是到目前为止的全文。"""
+        body: Dict[str, Any] = {
+            "model": model, "stream": True, "max_tokens": MAX_TOKENS,
+            "thinking": {"type": "disabled"}, "messages": messages,
+        }
+        if system:
+            body["system"] = system
+        if tools is not None:
+            body["tools"] = tools.definitions()
+        request = urllib.request.Request(
+            url + "/messages", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            method="POST")
+        request.add_header("Content-Type", "application/json")
+        request.add_header("Accept", "text/event-stream")
+        request.add_header("x-api-key", key)
+        request.add_header("anthropic-version", "2023-06-01")
+        said = ""
+        calls: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+        wants_tools = False
+        stopped = False
+        expired = threading.Event()
+        timer: Optional[threading.Timer] = None
 
-    try:
-        with opener(request, timeout=timeout) as response:
-            check_deadline()
+        def check_deadline() -> None:
+            if expired.is_set() or time.monotonic() - began >= timeout:
+                raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
 
-            def stop_reading() -> None:
-                expired.set()
-                # Shutdown wakes a blocked SSL read without waiting on BufferedReader's lock.
-                raw = getattr(getattr(response, "fp", None), "raw", None)
-                sock = getattr(raw, "_sock", None)
-                try:
-                    if isinstance(sock, socket.socket):
-                        sock.shutdown(socket.SHUT_RDWR)
-                    else:
-                        response.close()
-                except OSError:
-                    pass
-
-            timer = threading.Timer(max(0.001, timeout - (time.monotonic() - began)), stop_reading)
-            timer.daemon = True
-            timer.start()
-            for event in events(response, check_deadline):
-                kind = event.get("type")
-                if kind == "error":
-                    error = event.get("error")
-                    raise AgentError("DeepSeek 流式接口出错：%s" % clip(str(
-                        error.get("message") if isinstance(error, dict) else error), 200))
-                if kind == "content_block_delta":
-                    delta = event.get("delta")
-                    if isinstance(delta, dict) and delta.get("type") == "text_delta" \
-                            and isinstance(delta.get("text"), str) and delta["text"]:
-                        said += delta["text"]
-                        if first_text is None:
-                            first_text = time.monotonic() - began
-                        on_text(said)
-                elif kind == "message_stop":
-                    stopped = True
-                    break
-                if time.monotonic() - began > timeout:
-                    raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
-            check_deadline()
-    except urllib.error.HTTPError as error:
-        detail = ""
         try:
-            detail = error.read().decode("utf-8", "replace")
-        except OSError:
-            pass
-        raise AgentError("DeepSeek 流式接口返回 %d：%s" % (error.code, clip(detail, 200)))
-    except (urllib.error.URLError, OSError, ValueError) as error:
-        check_deadline()
-        raise AgentError("连不上 DeepSeek 流式接口：%s" % error)
-    finally:
-        if timer is not None:
-            timer.cancel()
-    said = said.strip()
-    if not stopped or not said:
+            with opener(request, timeout=max(1, timeout - (time.monotonic() - began))) as response:
+                check_deadline()
+
+                def stop_reading() -> None:
+                    expired.set()
+                    # Shutdown wakes a blocked SSL read without waiting on BufferedReader's lock.
+                    raw = getattr(getattr(response, "fp", None), "raw", None)
+                    sock = getattr(raw, "_sock", None)
+                    try:
+                        if isinstance(sock, socket.socket):
+                            sock.shutdown(socket.SHUT_RDWR)
+                        else:
+                            response.close()
+                    except OSError:
+                        pass
+
+                timer = threading.Timer(max(0.001, timeout - (time.monotonic() - began)), stop_reading)
+                timer.daemon = True
+                timer.start()
+                for event in events(response, check_deadline):
+                    kind = event.get("type")
+                    if kind == "error":
+                        error = event.get("error")
+                        raise AgentError("DeepSeek 流式接口出错：%s" % clip(str(
+                            error.get("message") if isinstance(error, dict) else error), 200))
+                    if kind == "content_block_start":
+                        block = event.get("content_block")
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            current = {"id": block.get("id"), "name": block.get("name"), "json": ""}
+                            calls.append(current)
+                        else:
+                            current = None
+                    elif kind == "content_block_delta":
+                        delta = event.get("delta")
+                        if not isinstance(delta, dict):
+                            continue
+                        if delta.get("type") == "text_delta" and isinstance(delta.get("text"), str) \
+                                and delta["text"]:
+                            said += delta["text"]
+                            if first_text[0] is None:
+                                first_text[0] = time.monotonic() - began
+                            on_text((prefix + "\n\n" + said) if prefix else said)
+                        elif delta.get("type") == "input_json_delta" and current is not None \
+                                and isinstance(delta.get("partial_json"), str):
+                            current["json"] += delta["partial_json"]
+                    elif kind == "message_delta":
+                        delta = event.get("delta")
+                        if isinstance(delta, dict) and delta.get("stop_reason") == "tool_use":
+                            wants_tools = True
+                    elif kind == "message_stop":
+                        stopped = True
+                        break
+                    if time.monotonic() - began > timeout:
+                        raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
+                check_deadline()
+        except urllib.error.HTTPError as error:
+            detail = ""
+            try:
+                detail = error.read().decode("utf-8", "replace")
+            except OSError:
+                pass
+            raise AgentError("DeepSeek 流式接口返回 %d：%s" % (error.code, clip(detail, 200)))
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            check_deadline()
+            raise AgentError("连不上 DeepSeek 流式接口：%s" % error)
+        finally:
+            if timer is not None:
+                timer.cancel()
+        if not stopped:
+            raise AgentError("DeepSeek 流式接口没有说完就断了")
+        return said.strip(), calls, wants_tools and bool(calls)
+
+    spoken: List[str] = []
+    for round_index in range(MAX_TOOL_ROUNDS if tools is not None else 1):
+        said, calls, wants_tools = ask("\n\n".join(spoken))
+        if said:
+            spoken.append(said)
+        if tools is None or not wants_tools:
+            break
+        content: List[Dict[str, Any]] = ([{"type": "text", "text": said}] if said else [])
+        results: List[Dict[str, Any]] = []
+        for call in calls:
+            try:
+                arguments = json.loads(call["json"]) if call["json"].strip() else {}
+            except ValueError:
+                arguments = None
+            content.append({"type": "tool_use", "id": call["id"], "name": call["name"],
+                            "input": arguments if isinstance(arguments, dict) else {}})
+            if arguments is None:
+                text, failed = "参数不是合法的 JSON，没有执行", True
+            else:
+                text, failed = tools.call(str(call["name"]), arguments)
+            result: Dict[str, Any] = {"type": "tool_result", "tool_use_id": call["id"], "content": text}
+            if failed:
+                result["is_error"] = True
+            results.append(result)
+        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": results})
+        if round_index == MAX_TOOL_ROUNDS - 1:
+            break
+    said = "\n\n".join(spoken).strip()
+    if not said and (tools is None or tools.action is None):
         raise AgentError("DeepSeek 流式接口没有说完就断了")
-    sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs\n" % (
-        model, first_text or 0.0, time.monotonic() - began))
+    sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs tools=%s\n" % (
+        model, first_text[0] or 0.0, time.monotonic() - began,
+        ",".join(name for name, _ in tools.calls) if tools is not None else "-"))
     try:
-        _save(folder, session_id, trim(body["messages"] + [{"role": "assistant", "content": said}]))
+        # 会话里只记说过的话（工具来回不记）：下一轮的“现在的事”里本来就有这些事的状态。
+        _save(folder, session_id, trim(history + [{"role": "user", "content": job.text},
+                                                  {"role": "assistant", "content": said or "（交代了一件事）"}]))
     except OSError:
         session_id = None  # 记不下来：下一次当新会话开，这一次的回复照样用
+    if tools is not None:
+        return Outcome(said[:MAX_OUTPUT_CHARS], session_id, tools.fields(said[:MAX_OUTPUT_CHARS]))
     return Outcome(said[:MAX_OUTPUT_CHARS], session_id,
                    fields_from_text(said) if job.system is not None else None)

@@ -392,6 +392,30 @@ class Scripted(agents_module.Agent):
                        {"reply": "re:" + job.text, "brief": "b:" + job.text, "mood": "happy"})
 
 
+class ToolTalker(Scripted):
+    """A stand-in voice that talks in plain words and acts through tools (voice_tools)."""
+
+    def __init__(self, name="deepseek"):
+        super().__init__(name)
+        self.calls = []      # [(tool, args), ...] made on the next tool turn
+        self.results = []    # what the tools answered
+        self.tool_jobs = []
+
+    def talks_with_tools(self):
+        return True
+
+    def run(self, job):
+        if job.tools is None:
+            self.jobs.append(job)
+            return Outcome("说：" + job.text[-20:], "t1")
+        self.tool_jobs.append(job)
+        for name, args in self.calls:
+            self.results.append(job.tools.call(name, args))
+        self.calls = []
+        said = "好的。\n\n我来安排。"
+        return Outcome(said, "t1", job.tools.fields(said))
+
+
 def make_xiaoyou(folder, agents, router=None, workspace=None, usage=None, **settings):
     """Xiaoyou over stand-in agents; the first one is the default and the voice."""
     loaded = config_module.load(write_config(folder), {})
@@ -2540,6 +2564,35 @@ class XiaoyouTests(TempDirCase):
         self.assertIn("有结果我马上说", notes[1])
         self.codex.gate.set()
         self.settled(turn.card)
+
+    def test_with_tools_she_talks_in_words_and_acts_through_tools(self):
+        voice = ToolTalker()
+        xiaoyou, _ = make_xiaoyou(self.folder / "tools", [voice, self.codex])
+        self.addCleanup(xiaoyou.close)
+        voice.calls = [("start_task", {"agent": "nobody", "title": "查", "task": "查日志"}),
+                       ("start_task", {"agent": "codex", "title": "查日志", "task": "查一下日志"})]
+        turn = xiaoyou.hear("帮我查日志", "default", "t-1", report=lambda *a: None)
+        # 第一次写错了帮手：当场告诉她，她在同一轮里改对。
+        self.assertTrue(voice.results[0][1])
+        self.assertIn("没有叫 nobody 的帮手", voice.results[0][0])
+        self.assertFalse(voice.results[1][1])
+        self.assertEqual((turn.agent, turn.started, turn.reply), ("codex", True, "好的。\n\n我来安排。"))
+        self.assertIn("start_task", xiaoyou_module.lane_prompt("P", 40, [self.codex], [], None, 0, tools=True))
+        self.assertNotIn("只输出一个 JSON 对象", voice.tool_jobs[0].system)
+        card = xiaoyou.settle(turn.card, 5)
+        self.assertEqual(card["title"], "查日志")
+        # 转述帮手的结果也是直接写话，不要 JSON。
+        relay = voice.jobs[-1]
+        self.assertIsNone(relay.schema)
+        self.assertEqual(card["entries"][-1]["text"], "说：" + relay.text[-20:])
+
+    def test_without_tools_she_answers_and_nothing_is_started(self):
+        voice = ToolTalker()
+        xiaoyou, _ = make_xiaoyou(self.folder / "plain", [voice, self.codex])
+        self.addCleanup(xiaoyou.close)
+        turn = xiaoyou.hear("你好", "default", "t-1", report=lambda *a: None)
+        self.assertEqual((turn.started, turn.reply), (False, "好的。\n\n我来安排。"))
+        self.assertEqual(self.codex.jobs, [])
 
     def test_she_answers_herself_when_she_can(self):
         turn = self.say("几点了")

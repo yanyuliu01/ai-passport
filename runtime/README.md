@@ -416,6 +416,26 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## The companion acts through tools (0.15.0)
+
+When the speaking agent supports tool calls (today the direct DeepSeek route of dsh, `talks_with_tools()`),
+the companion no longer writes JSON: what she writes is what you read, a blank line starts the next message,
+and she calls tools to get things done. The tools are defined in `voice_tools.py` and run by the Runtime
+itself, whichever model is behind her:
+
+- `start_task`: hand something to a helper (helper, title, instructions; can continue an existing task).
+- `amend_task`: add to or change an existing task (redo / after).
+- `cancel_task`: stop a task.
+- `task_detail`: look at a task (state, recent steps, last message). The reply is filed under the task she
+  looked at.
+
+An action is checked against the usual rules (does the helper exist, is the task id right…) the moment she
+calls it; if it cannot be done she gets the reason back and fixes it in the same turn instead of a whole retry.
+Accepted actions are carried out after she finishes talking, through the existing card and launch code. One
+action per turn, at most four round trips. Relays are plain words too. Old JSON replies kept in the session
+are shown to her as plain text so she does not copy them. If this route fails (API error, timeout) the turn
+falls back to the JSON route; agents without tool calls (for example Claude Code as the speaker) keep it.
+
 ## How the companion talks (0.14.0)
 
 The companion replies like a chat: one to four short messages per turn, a sentence or two each, separated

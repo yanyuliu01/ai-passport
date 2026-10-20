@@ -172,6 +172,79 @@ class DshStreamTests(TempDirCase):
                            FakeOpener(sse('{"reply": "半', stop=False)))
 
 
+def tool_sse(text, tool, args, stop_reason="tool_use"):
+    """A stream that says text, then calls one tool with args."""
+    lines = []
+    if text:
+        lines += ['data: ' + json.dumps({"type": "content_block_start", "index": 0,
+                                         "content_block": {"type": "text", "text": ""}}),
+                  'data: ' + json.dumps({"type": "content_block_delta", "index": 0,
+                                         "delta": {"type": "text_delta", "text": text}})]
+    lines += ['data: ' + json.dumps({"type": "content_block_start", "index": 1, "content_block": {
+                  "type": "tool_use", "id": "tool-1", "name": tool, "input": {}}}),
+              'data: ' + json.dumps({"type": "content_block_delta", "index": 1, "delta": {
+                  "type": "input_json_delta", "partial_json": json.dumps(args, ensure_ascii=False)}}),
+              'data: ' + json.dumps({"type": "message_delta", "delta": {"stop_reason": stop_reason}}),
+              'data: {"type":"message_stop"}']
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+class ToolTalkTests(TempDirCase):
+    """说的话直接写、做事调工具：一轮里可以说话、调工具、看结果、接着说。"""
+
+    def toolbox(self, problem=None):
+        from xiaoyou_runtime.voice_tools import Toolbox
+        return Toolbox(["codex"], [], [], lambda fields: problem,
+                       lambda card: "c3 · 正在做" if card == "c3" else None)
+
+    def test_she_talks_calls_a_tool_and_goes_on(self):
+        opener = FakeOpener(tool_sse("好，我让 codex 去查。", "start_task",
+                                     {"agent": "codex", "title": "查日志", "task": "看看日志"}),
+                            sse("有结果我告诉你。"))
+        tools = self.toolbox()
+        seen = []
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="查一下", system="S", plain=True,
+                                 on_text=seen.append, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", seen.append, opener)
+        self.assertEqual(outcome.text, "好，我让 codex 去查。\n\n有结果我告诉你。")
+        self.assertEqual(outcome.fields["action"], {"type": "start", "agent": "codex", "title": "查日志", "task": "看看日志"})
+        self.assertEqual(outcome.fields["mood"], "busy")
+        first, second = opener.requests[0][1], opener.requests[1][1]
+        self.assertIn("tools", first)
+        self.assertNotIn("JSON Schema", first.get("system", ""))
+        result = second["messages"][-1]["content"][0]
+        self.assertEqual((result["type"], result["tool_use_id"]), ("tool_result", "tool-1"))
+        self.assertIn("记下了", result["content"])
+        # 第二轮的话接在第一轮后面，一起交给手机看。
+        self.assertEqual(seen[-1], "好，我让 codex 去查。\n\n有结果我告诉你。")
+
+    def test_a_refused_action_comes_back_in_the_same_turn(self):
+        opener = FakeOpener(tool_sse("", "start_task", {"agent": "codex", "title": "x", "task": "y"}),
+                            sse("这件事我办不了。"))
+        tools = self.toolbox(problem="没有这个帮手")
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="做", system="S", plain=True,
+                                 on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        result = opener.requests[1][1]["messages"][-1]["content"][0]
+        self.assertTrue(result["is_error"])
+        self.assertIn("没有这个帮手", result["content"])
+        self.assertEqual(outcome.fields["action"], {"type": "none"})
+
+    def test_looking_at_a_task_files_the_reply_under_it(self):
+        opener = FakeOpener(tool_sse("我看一眼。", "task_detail", {"card": "c3"}), sse("还在做。"))
+        tools = self.toolbox()
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="c3 呢", system="S", plain=True,
+                                 on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        self.assertEqual(opener.requests[1][1]["messages"][-1]["content"][0]["content"], "c3 · 正在做")
+        self.assertEqual((outcome.fields["card"], outcome.fields["action"]["type"]), ("c3", "none"))
+
+    def test_old_json_replies_in_the_history_become_plain_words(self):
+        history = [{"role": "user", "content": "hi"},
+                   {"role": "assistant", "content": '{"reply": "你好", "brief": "b", "mood": "happy"}'}]
+        self.assertEqual(dsh_stream.plain_history(history)[1]["content"], "你好")
+
+
 class DshAgentStreamTests(TempDirCase):
     def headless(self, said):
         def run(command, **extra):

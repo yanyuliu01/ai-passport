@@ -333,6 +333,9 @@ class Job:
     model: Optional[str] = None
     # 想边生成边看时：回复每多一块，就把到目前为止的原始全文交给它。代理做不到流式时不调用
     on_text: Optional[Callable[[str], None]] = None
+    # 小幽手边的工具（voice_tools.Toolbox）：有它时她直接写给主人的文字就是说的话，要做事就调工具，
+    # 不再写 JSON。只交给 talks_with_tools() 为真的代理；None 表示这一次不给工具
+    tools: Any = None
     # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
     # Claude Code 只在原项目目录下找得到要 --resume 的会话
     cwd: Optional[str] = None
@@ -567,6 +570,11 @@ class Agent:
     def check(self) -> Optional[str]:
         """启动时的检查：有问题返回说明，没问题返回 None。不调用模型。"""
         return None
+
+    def talks_with_tools(self) -> bool:
+        """以小幽的身份说话时能不能用工具调用（Job.tools）：说的话就是文字，做事走工具。
+        不能的代理照旧写一个 JSON（reply、action……）。"""
+        return False
 
     @staticmethod
     def _parent_session() -> List[str]:
@@ -1006,6 +1014,12 @@ class DshAgent(Agent):
         self._run = run
         self._open = opener
 
+    def talks_with_tools(self) -> bool:
+        # 说话那一次直接问 DeepSeek 的 Messages 接口（dsh_stream），它支持工具调用。
+        return bool(self.spec.stream) and (
+            "DEEPSEEK_API_KEY" in self.spec.env_files or bool(self.spec.env.get("DEEPSEEK_API_KEY"))
+            or bool(os.environ.get("DEEPSEEK_API_KEY")))
+
     def _env(self) -> Optional[Dict[str, str]]:
         env = self._inherited_env()
         env.update(self.spec.env)
@@ -1039,6 +1053,9 @@ class DshAgent(Agent):
                 return dsh_stream.run(self.spec, job, self._env(), self.tier(job)[0],
                                       job.on_text, self._open)
             except AgentError as error:
+                if job.tools is not None:
+                    # 带工具的这一次退回 dsh 老路就没有工具了（要做的事会丢）：交给调用方改走 JSON。
+                    raise
                 remaining = budget - (time.monotonic() - began)
                 if remaining <= 0:
                     raise AgentError("DeepSeek 回复已达到 %d 秒总时限，不再重复等待" % budget) from error

@@ -39,6 +39,7 @@ from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
+from .voice_tools import Toolbox
 from .usage import EFFORT_NAMES, Usage
 from .workspace import Workspace
 
@@ -184,6 +185,14 @@ def reply_so_far(raw: str) -> str:
 # 流式回复最快隔这么久往外报一次，免得每个字都让手机多跑一趟。
 PARTIAL_SECONDS = 0.12
 
+
+# 有工具时，共用的那几段里说 JSON 字段的地方换成说工具。
+TOOL_WORDING = (
+    ("（action 写 none）", "（不调工具）"),
+    ("action 写 none", "不调工具"),
+    ("reply 里都", "你说的话里都"),
+    ("用 start 交给帮手", "用 start_task 交给帮手"),
+)
 
 # 帮手做得久时小幽跟进一句：做了多久才说第一句、至少隔多久、一件事最多几句（秒、句）。
 PING_AFTER = 90
@@ -397,24 +406,37 @@ def tier_rules(helpers: List[Agent], quota: bool) -> List[str]:
 def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                 cards: List[Dict[str, Any]], focus: Optional[str], now: float,
                 pinned: bool = False, notes: Optional[Dict[str, str]] = None,
-                quota: bool = False, desktop: Optional[Dict[str, Any]] = None) -> str:
+                quota: bool = False, desktop: Optional[Dict[str, Any]] = None,
+                tools: bool = False) -> str:
     """小幽接主人一句话时的系统提示：人设、她怎么做事、回复格式、帮手、现在的事。
+
+    tools 为真时她有工具（voice_tools）：说的话直接写文字，做事调工具，不写 JSON。
 
     notes 是每个帮手的模型、档位和额度（一句话），有就写在它后面；quota 表示帮手里有
     订阅额度可看的。desktop 是主人正看着的电脑上的会话（focus 就是它）。"""
     notes = notes or {}
     parts = [persona, ""]
     parts.append("## 你怎么做事")
-    parts.append(
-        "这一轮你只负责说话：听懂主人的话，凭你已经知道的就能答的直接答，其余的交给帮手。"
-        "你现在没有任何工具，这是特意安排的，不是出了故障：查资料、读文件、写文件、跑命令、"
-        "上网，这些动手的事都由帮手在后台做。所以凡是需要动手的事，一律用 start 交给帮手"
-        "（对已有的事用 amend），不要自己尝试，不要假装查过，也不要跟主人说“我没有工具”"
-        "“我做不了”。帮手在后台做，做完后结果会单独告诉主人：你不用等，也不要替它编结果。"
-        "对话里以你的口吻说的“做完了”“没做成”，是帮手在后台做完之后的汇报，不代表你这一轮"
-        "自己能动手；主人让你再做一次，就再交给帮手一次。"
-        "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
-    )
+    if tools:
+        parts.append(
+            "这一轮你负责听懂主人的话、跟主人说话、安排事情。你手边只有几样调度和查看的工具："
+            "start_task 交给帮手，amend_task 补充或改要求，cancel_task 停掉一件事，task_detail 看一件事"
+            "现在怎么样。查资料、读写文件、跑命令、上网这些动手的事一律交给帮手，不要假装查过，也不要"
+            "跟主人说“我没有工具”“我做不了”。帮手在后台做，做完后结果会单独告诉主人：你不用等，"
+            "也不要替它编结果。主人问一件事进展如何，先用 task_detail 看一眼再说。"
+            "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
+        )
+    else:
+            parts.append(
+            "这一轮你只负责说话：听懂主人的话，凭你已经知道的就能答的直接答，其余的交给帮手。"
+            "你现在没有任何工具，这是特意安排的，不是出了故障：查资料、读文件、写文件、跑命令、"
+            "上网，这些动手的事都由帮手在后台做。所以凡是需要动手的事，一律用 start 交给帮手"
+            "（对已有的事用 amend），不要自己尝试，不要假装查过，也不要跟主人说“我没有工具”"
+            "“我做不了”。帮手在后台做，做完后结果会单独告诉主人：你不用等，也不要替它编结果。"
+            "对话里以你的口吻说的“做完了”“没做成”，是帮手在后台做完之后的汇报，不代表你这一轮"
+            "自己能动手；主人让你再做一次，就再交给帮手一次。"
+            "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
+        )
     parts.append(
         "主人的话含糊、没说清楚具体要做什么时，先自己判断一下：能直接问清楚就问（action 写 "
         "none），觉得已经有把握猜到意思，也可以按你的理解派给帮手——但不管选哪条，reply 里都"
@@ -434,6 +456,20 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("")
     parts.append(CHAT_STYLE)
     parts.append("")
+    if tools:
+        parts.append("## 怎么回复")
+        parts.append(
+            "直接写你要对主人说的话，就是普通文字：不要写 JSON，不要代码块。条与条之间空一行，"
+            "每一条就是主人手机上的一个气泡。要做事就调工具：一般先说一句你打算怎么办，再调工具；"
+            "工具回“记下了”以后，同样的话不用再说一遍。一轮只办一件事。只是聊天、能直接答的，"
+            "不调任何工具。工具回“办不了”时，按它说的改了再调，或者照实告诉主人。")
+        parts.append("")
+        parts.append("## 你的帮手")
+        _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+        text = "\n".join(parts)
+        for json_word, tool_word in TOOL_WORDING:
+            text = text.replace(json_word, tool_word)
+        return text
     parts.append("## 回复格式")
     parts.append("每一轮只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars)
     parts.append(
@@ -455,6 +491,14 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("- cancel：主人不要某件事了。card 写那件事的编号。")
     parts.append("")
     parts.append("## 你的帮手")
+    _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+    return "\n".join(parts)
+
+
+def _helpers_and_now(parts: List[str], helpers: List[Agent], notes: Dict[str, str], quota: bool,
+                     cards: List[Dict[str, Any]], now: float, focus: Optional[str], pinned: bool,
+                     desktop: Optional[Dict[str, Any]], tools: bool) -> None:
+    """系统提示的后半段：有哪些帮手、现在有哪些事、主人正看着哪件。两种回复方式共用。"""
     if helpers:
         for agent in helpers:
             note = notes.get(agent.name)
@@ -470,7 +514,12 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         parts.extend(describe_card(card, now) for card in cards)
     else:
         parts.append("还没有。")
-    if focus is not None and pinned:
+    if focus is not None and pinned and tools:
+        parts.append(
+            "主人是打开 %s 这件事、在它里面说的这句话：一般就归到它。能直接答的直接答；要动手就接着"
+            "这件事做：它还在做用 amend_task，已经结束了用 start_task 并在 card 写 %s，都会接着它原来的"
+            "会话。只有这句话明显是跟它无关的另一件新事时，才用 start_task 且不写 card，另开一件。" % (focus, focus))
+    elif focus is not None and pinned:
         parts.append(
             "主人是打开 %s 这件事、在它里面说的这句话：一般就归到它，card 写 %s。"
             "能直接答的直接答；要动手就接着这件事做（它还在做用 amend，已经结束了用 amend 或 "
@@ -481,7 +530,6 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
             "主人说这句话时正看着 %s。没有别的线索时，“这个”“它”“这件事”指的就是它。" % focus)
     if desktop is not None:
         parts.extend(describe_desktop(desktop, helpers))
-    return "\n".join(parts)
 
 
 def describe_desktop(card: Dict[str, Any], helpers: List[Agent]) -> List[str]:
@@ -516,8 +564,19 @@ def describe_desktop(card: Dict[str, Any], helpers: List[Agent]) -> List[str]:
     return parts
 
 
-def voice_prompt(persona: str, brief_max_chars: int) -> str:
-    """转述帮手的结果时的系统提示：人设和回复格式。"""
+def voice_prompt(persona: str, brief_max_chars: int, text: bool = False) -> str:
+    """转述帮手的结果时的系统提示：人设和回复格式。text 为真时直接写话，不写 JSON。"""
+    if text:
+        return "\n".join([
+            persona, "",
+            CHAT_STYLE, "",
+            "## 转述帮手的结果",
+            "第一条说结论：成了没有、找到了什么。第二条说要主人拿主意的事，没有就不说。"
+            "需要时最后一条说完整的在哪（比如“完整的在任务里”）。不复述帮手的过程、文件名和代码位置，"
+            "帮手原文里的英文和术语换成主人听得懂的话。", "",
+            "## 怎么回复",
+            "直接写你要对主人说的话，就是普通文字：不要写 JSON，不要代码块，条与条之间空一行。",
+        ])
     return "\n".join([
         persona, "",
         CHAT_STYLE, "",
@@ -854,23 +913,40 @@ class Xiaoyou:
         listed.sort(key=lambda card: card["created_at"])
         if focus is not None and all(card["id"] != focus["id"] for card in listed):
             listed.insert(0, focus)
-        system = lane_prompt(self._config.persona, self._config.brief_max_chars, available,
-                             listed, focus["id"] if focus is not None else None, now, pinned,
-                             self._usage.notes(),
-                             any(self._usage.account(agent.name) for agent in available),
-                             focus if focus is not None and focus.get("monitoring_only") else None)
+        prompt = lambda tools: lane_prompt(  # noqa: E731
+            self._config.persona, self._config.brief_max_chars, available,
+            listed, focus["id"] if focus is not None else None, now, pinned,
+            self._usage.notes(), any(self._usage.account(agent.name) for agent in available),
+            focus if focus is not None and focus.get("monitoring_only") else None, tools)
         schema = lane_schema(available)
-        stream = self._streamer(lead.name, say)
-        outcome = self._speak(lead, text, conversation, system, schema, hop, catch_up=True,
-                              on_text=stream)
+        toolbox = self._toolbox(conversation, focus, available, pinned) if lead.talks_with_tools() else None
+        outcome = None
+        if toolbox is not None:
+            # 说的话直接写、做事调工具（voice_tools）。这条路不通（接口出错、超时）就退回写 JSON 的老路。
+            try:
+                outcome = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
+                                      on_text=self._streamer(lead.name, say, plain=True), tools=toolbox)
+            except AgentError as error:
+                sys.stderr.write("带工具的回话没成，改回写 JSON：%s\n" % error)
+                say("partial", lead.name, "")
+                toolbox = None
+        if outcome is None:
+            outcome = self._speak(lead, text, conversation, prompt(False), schema, hop, catch_up=True,
+                                  on_text=self._streamer(lead.name, say))
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
         self._trace(outcome, problem)
         if problem is not None:
             # 刚才边说边给主人看的那段不算数了：收回来，重说的那一次从头再显示。
             say("partial", lead.name, "")
-            stream = self._streamer(lead.name, say)
-            outcome = self._speak(lead, retry_note(problem), conversation, system, schema, hop,
-                                  catch_up=False, on_text=stream)
+            note = retry_note(problem)
+            if toolbox is not None:
+                for json_word, tool_word in TOOL_WORDING:
+                    note = note.replace(json_word, tool_word)
+                toolbox = self._toolbox(conversation, focus, available, pinned)
+            outcome = self._speak(lead, note, conversation, prompt(toolbox is not None),
+                                  None if toolbox is not None else schema, hop, catch_up=False,
+                                  on_text=self._streamer(lead.name, say, plain=toolbox is not None),
+                                  tools=toolbox)
             plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
         fields = outcome.fields or {}
@@ -965,6 +1041,38 @@ class Xiaoyou:
         self._store.transcript.add(conversation, turn_id, text, reply, worker, [lead.name])
         return turn
 
+    def _toolbox(self, conversation: str, focus: Optional[Dict[str, Any]], available: List[Agent],
+                 pinned: bool) -> Toolbox:
+        """这一轮小幽手边的工具。做事的工具调用时就按 _plan 的规则查一遍，办不了当场告诉她。"""
+        efforts = [level for level in EFFORT_LEVELS
+                   if any(level in agent.spec.efforts for agent in available)]
+        models = sorted({name for agent in available for name in agent.spec.models})
+
+        def check(fields: Dict[str, Any]) -> Optional[str]:
+            return self._plan(Outcome("", None, fields), conversation, focus, available, pinned)[1]
+
+        return Toolbox([agent.name for agent in available], efforts, models, check,
+                       lambda card: self._detail(card, conversation, focus))
+
+    def _detail(self, card_id: str, conversation: str, focus: Optional[Dict[str, Any]]) -> Optional[str]:
+        """task_detail 给她看的：一件事的状态、谁在做、最近几步、最后说的话。别的对话的事看不到。"""
+        wanted = card_id.strip().strip("「」“”\"'#").lower()
+        if wanted.isdigit():
+            wanted = "c" + wanted
+        card = self._cards.get(wanted)
+        if card is None or (card["conversation"] != conversation and not (
+                focus is not None and card["id"] == focus["id"])):
+            return None
+        lines = [describe_card(card, time.time())]
+        steps = [line for line in card.get("progress") or [] if isinstance(line, str)][-3:]
+        if steps:
+            lines.append("最近几步：" + "；".join(clip(line, 80) for line in steps))
+        said = [entry for entry in card.get("entries") or [] if entry.get("role") != "you"]
+        if said:
+            last = said[-1]
+            lines.append("最后一条（%s）：%s" % (last.get("author") or last.get("role"), clip(last.get("text") or "", 1500)))
+        return "\n".join(lines)
+
     def _plan(self, outcome: Outcome, conversation: str, focus: Optional[Dict[str, Any]],
               available: List[Agent], pinned: bool = False) -> Any:
         """读出她要 Runtime 做什么。返回（计划，办不了的原因）；办得了时原因是 None。"""
@@ -1049,7 +1157,7 @@ class Xiaoyou:
         return value if isinstance(value, str) else ""
 
     @staticmethod
-    def _streamer(agent: str, say: Report) -> Callable[[str], None]:
+    def _streamer(agent: str, say: Report, plain: bool = False) -> Callable[[str], None]:
         """把代理边生成边交出的原始全文，换成主人能看的 reply 片段报出去：有变化才报，
         而且不报得太勤。原始全文是空串表示这一次重来，已经报过的收回。"""
         state: Dict[str, Any] = {"shown": "", "at": None}
@@ -1063,7 +1171,8 @@ class Xiaoyou:
             now = time.monotonic()
             if state["at"] is not None and now - state["at"] < PARTIAL_SECONDS:
                 return
-            shown = clean_display(reply_so_far(raw))
+            # plain：说的话就是原文（带工具、不写 JSON 的那条路）；否则从写了一半的 JSON 里取 reply。
+            shown = clean_display(raw if plain else reply_so_far(raw))
             if shown and shown != state["shown"]:
                 state["shown"], state["at"] = shown, now
                 say("partial", agent, shown)
@@ -1071,15 +1180,15 @@ class Xiaoyou:
         return on_text
 
     def _speak(self, agent: Agent, text: str, conversation: str, system: str,
-               schema: Dict[str, Any], hop: int, catch_up: bool,
-               on_text: Optional[Callable[[str], None]] = None) -> Outcome:
+               schema: Optional[Dict[str, Any]], hop: int, catch_up: bool,
+               on_text: Optional[Callable[[str], None]] = None, tools: Any = None) -> Outcome:
         """让能说话的代理在这个对话自己的会话里接一段话。只说话，不给工具。"""
         missed = self._store.transcript.unseen(conversation, agent.name) if catch_up else []
         outcome = agent.run(Job(
             text=recap(missed, text) if missed else text,
             session_id=self._store.session(conversation, agent.name),
             conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
-            timeout=self._config.voice_timeout_seconds, on_text=on_text,
+            timeout=self._config.voice_timeout_seconds, on_text=on_text, tools=tools,
         ))
         if outcome.session_id:
             self._store.remember(conversation, agent.name, outcome.session_id)
@@ -1342,12 +1451,13 @@ class Xiaoyou:
         voice = self._voice(self._available(task.hop))
         if voice is not None and voice.name != task.agent.name:
             try:
+                plain = voice.talks_with_tools()  # 能直接写话的：不写 JSON，转述就是一段文字
                 outcome = self._speak(
                     voice, relay(task.agent.name, card.get("title", ""), result),
                     task.conversation, voice_prompt(
-                        self._config.persona, self._config.brief_max_chars),
-                    reply_schema(), task.hop, catch_up=True,
-                    on_text=self._streamer(voice.name, report))
+                        self._config.persona, self._config.brief_max_chars, plain),
+                    None if plain else reply_schema(), task.hop, catch_up=True,
+                    on_text=self._streamer(voice.name, report, plain=plain))
                 reply = reply_text(outcome)
                 if reply:
                     fields = outcome.fields or {}
