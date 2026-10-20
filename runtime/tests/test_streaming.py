@@ -206,7 +206,7 @@ class ToolTalkTests(TempDirCase):
         outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="查一下", system="S", plain=True,
                                  on_text=seen.append, tools=tools), {"DEEPSEEK_API_KEY": "k"},
                                  "deepseek-v4-pro", seen.append, opener)
-        self.assertEqual(outcome.text, "好，我让 codex 去查。\n\n有结果我告诉你。")
+        self.assertEqual(outcome.text, "好，我让 codex 去查。\n\n---\n\n有结果我告诉你。")
         self.assertEqual(outcome.fields["action"], {"type": "start", "agent": "codex", "title": "查日志", "task": "看看日志"})
         self.assertEqual(outcome.fields["mood"], "busy")
         first, second = opener.requests[0][1], opener.requests[1][1]
@@ -216,7 +216,7 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual((result["type"], result["tool_use_id"]), ("tool_result", "tool-1"))
         self.assertIn("记下了", result["content"])
         # 第二轮的话接在第一轮后面，一起交给手机看。
-        self.assertEqual(seen[-1], "好，我让 codex 去查。\n\n有结果我告诉你。")
+        self.assertEqual(seen[-1], "好，我让 codex 去查。\n\n---\n\n有结果我告诉你。")
 
     def test_a_refused_action_comes_back_in_the_same_turn(self):
         opener = FakeOpener(tool_sse("", "start_task", {"agent": "codex", "title": "x", "task": "y"}),
@@ -238,6 +238,44 @@ class ToolTalkTests(TempDirCase):
                                  "deepseek-v4-pro", lambda text: None, opener)
         self.assertEqual(opener.requests[1][1]["messages"][-1]["content"][0]["content"], "c3 · 正在做")
         self.assertEqual((outcome.fields["card"], outcome.fields["action"]["type"]), ("c3", "none"))
+
+    def test_a_promise_without_a_tool_gets_one_quiet_reminder(self):
+        opener = FakeOpener(sse("我这就去把这几天的事拢一拢。"),
+                            tool_sse("", "start_task", {"agent": "codex", "title": "回顾", "task": "整理这几天做的事"}),
+                            sse("交给 codex 了。"))
+        tools = self.toolbox()
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="这几天做了什么", system="S", plain=True,
+                                 on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        reminder = opener.requests[1][1]["messages"][-1]["content"]
+        self.assertIn("一个工具都没调", reminder)
+        self.assertEqual(outcome.fields["action"]["type"], "start")
+        # 只提醒一次：说了不做第二次就照实给出去。
+        opener = FakeOpener(sse("我这就去看看。"), sse("我去看一眼。"))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="看看", system="S", plain=True,
+                                 on_text=print, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(outcome.fields["action"], {"type": "none"})
+
+    def test_tool_sessions_are_separate_and_keep_the_tool_calls(self):
+        spec = dsh_spec(self.folder)
+        old = "api-" + "1" * 32
+        folder = dsh_stream.sessions_dir(spec)
+        dsh_stream._save(folder, old, [{"role": "user", "content": "hi"},
+                                       {"role": "assistant", "content": '{"reply": "交给 cc 了"}'}])
+        opener = FakeOpener(tool_sse("", "task_detail", {"card": "c3"}), sse("还在做。"))
+        outcome = dsh_stream.run(spec, Job(text="c3 呢", system="S", plain=True, session_id=old,
+                                 on_text=print, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", lambda text: None, opener)
+        # 不接写 JSON 时期的旧会话：新开一个 apt- 会话。
+        self.assertTrue(outcome.session_id.startswith("apt-"))
+        self.assertEqual(len(opener.requests[0][1]["messages"]), 1)
+        saved = dsh_stream._load(folder, outcome.session_id)
+        kinds = [block["type"] for item in saved if isinstance(item["content"], list) for block in item["content"]]
+        self.assertIn("tool_use", kinds)
+        self.assertIn("tool_result", kinds)
+        self.assertEqual(saved[-1], {"role": "assistant", "content": "还在做。"})
 
     def test_old_json_replies_in_the_history_become_plain_words(self):
         history = [{"role": "user", "content": "hi"},

@@ -318,6 +318,9 @@ gestures; the Runtime API is unchanged.
 - 0.23.0: each short message in the companion's reply gets its own bubble; while streaming they appear one
   by one, and a reply that arrives whole is revealed a message at a time. Her follow-ups while a helper works
   appear in the chat too (needs Runtime 0.14.0).
+- 0.24.0: replies are no longer split by length; a new bubble starts only where she writes a line with
+  only ---, paragraphs stay in one bubble. Bold and lists are rendered; the device, the home line and copied
+  text get plain words (needs Runtime 0.16.0).
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)

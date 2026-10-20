@@ -14,12 +14,30 @@ reply 抠出来；模型在 JSON 前后多写一句、或者包进代码块，�
 Xiaoyou 负责把记下的事真的办掉。哪家模型的工具调用格式都能从 definitions() 改写过去。
 """
 
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# 她要另起一条消息时，单独写一行 ---。Runtime 和手机都按它分开，几条、多长都由她定。
+MESSAGE_BREAK = "---"
+JOIN = "\n\n---\n\n"
+
+# 带工具说话的会话编号前缀：跟以前写 JSON 的会话（api-）分开，免得她照着旧的样子只说不做。
+TOOL_SESSION_PREFIX = "apt-"
+
+# 嘴上说了要去做的话。一轮里一个工具都没调、却说了这种话，Runtime 提醒她一次（PROMISE_NUDGE）。
+PROMISE = re.compile(
+    r"(我这就|这就去|我马上|马上去|马上帮|我现在就|我先去|我去(查|看|找|问|拢|整理|弄|做|跑|翻|核|试|盯)"
+    r"|我来(查|看|找|拢|整理|弄|做|跑|翻|核|安排)|交给\s?\w{1,12}|让\s?\w{1,12}\s?(去|来)(查|看|做|弄|跑|改|整理)"
+    r"|已经(让|交给|安排))")
+PROMISE_NUDGE = (
+    "（Runtime 提醒，主人看不到：你刚才说了要去做，但这一轮一个工具都没调，事情不会发生。"
+    "要做就现在调对应的工具（交给帮手用 start_task，看进展用 task_detail），不用再跟主人重复或道歉；"
+    "其实不需要做事的话，用一句话改口说清楚。）")
 
 ACTION_TOOLS = ("start_task", "amend_task", "cancel_task")
 
 # 给模型看的工具结果：办得了的事先记下，提醒她不用再说一遍。
-RECORDED = "好，记下了，这一轮说完就去办：%s。刚才已经说过的话不用再重复；还有要跟主人说的就接着说，没有就结束。"
+RECORDED = "记下了，这一轮说完就去办：%s。用一句话告诉主人交给了谁、在做什么；前面已经说过就不用再说，直接结束。"
 
 
 class Toolbox:
@@ -114,6 +132,10 @@ class Toolbox:
                 "amend": "告诉 %s 新的要求" % (card or "正看着的那件事"),
                 "cancel": "停掉 %s" % (card or "正看着的那件事")}[action["type"]]
         return RECORDED % what, False
+
+    def promised(self, said: str) -> bool:
+        """这一轮一个工具都没调，嘴上却说了要去做。"""
+        return not self.calls and PROMISE.search(said or "") is not None
 
     def fields(self, said: str) -> Dict[str, Any]:
         """这一轮的结果，写成和以前 JSON 一样的字段，交给 Xiaoyou 照原来的路办。

@@ -318,7 +318,8 @@ final class CardViews {
             boolean last = index == card.entries.size() - 1;
             String text = !mine && last && !card.active() && !card.brief.isEmpty()
                     ? card.brief : entry.text;
-            lines.add((mine ? "你：" : "ds：") + oneLine(text, THREAD_ENTRY_CHARS));
+            // 设备小屏只认纯文字：手机上画的加粗、列表、分条记号去掉（Markdown.plain）。
+            lines.add((mine ? "你：" : "ds：") + oneLine(mine ? text : Markdown.plain(text), THREAD_ENTRY_CHARS));
         }
         StringBuilder out = new StringBuilder();
         for (int index = lines.size() - 1; index >= 0; index--) {
@@ -345,7 +346,7 @@ final class CardViews {
         if (threads && isTask(card)) {
             return deviceThread(card);
         }
-        return BuddyProtocol.chatReply(card.active() ? "" : card.brief, card.lastSay());
+        return BuddyProtocol.chatReply(card.active() ? "" : card.brief, Markdown.plain(card.lastSay()));
     }
 
     /** 小屏只放最近一轮可见来回，分别留空间给需求和回复，始终带上实际状态。 */

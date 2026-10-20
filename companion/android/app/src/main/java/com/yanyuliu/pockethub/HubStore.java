@@ -834,7 +834,7 @@ public final class HubStore {
             streaming = "";
             turnCard = card;
             String shown = reply.isEmpty() ? brief : reply;
-            turn = new Turn("done", turn.said, BuddyProtocol.chatReply(brief, reply), "", "",
+            turn = new Turn("done", turn.said, BuddyProtocol.chatReply(brief, Markdown.plain(reply)), "", "",
                     mood == null || mood.isEmpty() ? "idle" : mood);
             events.add(0, new Event("chat-" + (++sequence), CHAT_SOURCE, "", shown,
                     System.currentTimeMillis(), brief.isEmpty() ? shown : brief));

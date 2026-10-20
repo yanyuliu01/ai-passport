@@ -39,7 +39,7 @@ from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
 from .tasks import Task, Tasks
-from .voice_tools import Toolbox
+from .voice_tools import JOIN, TOOL_SESSION_PREFIX, Toolbox
 from .usage import EFFORT_NAMES, Usage
 from .workspace import Workspace
 
@@ -131,6 +131,39 @@ def clean_display(text: str) -> str:
     return text.strip()
 
 
+def clean_chat(text: str) -> str:
+    """给手机聊天看的回复：跟 clean_display 一样去掉代码围栏、表情和写不出的符号，但留下
+    轻量的格式——加粗 **…**、列表（统一成 “- ” 开头，编号列表照留），标题改成一行加粗。
+    手机按这几样画（加粗、列表），设备小屏用的 brief 仍然是 clean_display 的纯文字。"""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    lines = []
+    for raw in text.split("\n"):
+        line = raw.rstrip()
+        if _FENCE.match(line):
+            lines.append("")
+            continue
+        heading = _HEADING.match(line)
+        line = _QUOTE.sub("", line)
+        if _RULE.match(line):
+            line = ""
+        elif heading:
+            title = line[heading.end():].strip().strip("*")
+            line = "**%s**" % title if title else ""
+        else:
+            line = _BULLET.sub("- ", line)
+        line = _LINK.sub(r"\1", line)
+        line = _STRIKE.sub(r"\1", line)
+        lines.append(line)
+    text = "\n".join(lines).replace("`", "")
+    text = "".join(ch for ch in text if _displayable(ch))
+    text = re.sub(r" {2,}", " ", text)
+    text = re.sub(r" +\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _displayable(ch: str) -> bool:
     """能上小屏的字符：字母、数字、标点、空白；符号和隐形标记不要。"""
     category = unicodedata.category(ch)
@@ -186,6 +219,9 @@ def reply_so_far(raw: str) -> str:
 PARTIAL_SECONDS = 0.12
 
 
+# 第一次带工具说话时，从对话记录里带进去当前情的轮数。
+SEED_TURNS = 8
+
 # 有工具时，共用的那几段里说 JSON 字段的地方换成说工具。
 TOOL_WORDING = (
     ("（action 写 none）", "（不调工具）"),
@@ -206,12 +242,11 @@ _SENTENCE_END = re.compile(r"(?<=[。！？!?；;])")
 _LIST_LINE = re.compile(r"^(· |\d+[.、）)])")
 
 CHAT_STYLE = (
-    "## 说话的样子\n"
-    "像在手机上和主人聊天发消息：一次回 1 到 4 条短消息，每条一两句、不超过 40 个字，"
-    "条与条之间空一行。第一条就说最要紧的结论。能一句说完就只发一条，不要凑数。"
-    "不用标题、编号列表、加粗、代码块和表格；不贴文件路径、行号、命令、代码和英文报错原文，"
-    "主人要了再给。主人要细节、原文或完整解释时可以多说，但还是拆成几条短消息。"
-    "直接对主人说“你”，不要写“主人”“给主人的结论”“下面是”“以下是”这类旁白。"
+    "## 在哪里说话\n"
+    "你是在主人的手机上跟他聊天：他随时可能插话，屏幕不大，能显示加粗和列表。说几条、每条多长、"
+    "用什么语气，你看情况自己定。想另起一条消息的地方，单独写一行 ---（三个短横线）。\n"
+    "三条底线：没调工具就不要说“我已经去做了”“已经让谁去查了”；不编进度和结果，推测的说是推测；"
+    "已经跟主人说过的，不要换个说法再说一遍。"
 )
 
 
@@ -250,9 +285,14 @@ def segments(text: str) -> List[str]:
     return out
 
 
+_BREAK_LINE = re.compile(r"^\s*-{3,}\s*$", re.M)
+
+
 def chat_text(text: str) -> str:
-    """整理好、拆成几条的回复：条与条之间空一行（手机按空行画成一个个气泡）。"""
-    return "\n\n".join(segments(text))
+    """给手机看的回复：整理好格式，不按长度切。她单独写一行 --- 的地方另起一条消息
+    （统一成 voice_tools.JOIN，手机按它画成几个气泡）；几条、多长都由她定。"""
+    parts = [clean_chat(part) for part in _BREAK_LINE.split(text or "")]
+    return JOIN.join(part for part in parts if part)
 
 
 def reply_text(outcome: Outcome) -> str:
@@ -285,13 +325,13 @@ def digest(result: str, title: str) -> str:
 
 def shape(reply: str, brief: Any, mood: Any, limit: int, agent: str, card: str = "",
           started: bool = False) -> Turn:
-    """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle，
-    回复拆成聊天式的几条短消息。"""
-    reply = chat_text(clean_display(reply or ""))
+    """把代理给出的原始字段整理成一轮结果：缺的补上，超长的截断，非法的表情改成 idle。
+    回复留着轻量格式给手机（chat_text）；brief 是给设备小屏的纯文字。"""
+    reply = chat_text(reply or "")
     brief_text = clean_display(brief) if isinstance(brief, str) else ""
     return Turn(
         reply=reply,
-        brief=clip(brief_text or reply, limit),
+        brief=clip(brief_text or clean_display(reply), limit),
         mood=mood if mood in MOODS else "idle",
         agent=agent,
         card=card,
@@ -459,10 +499,8 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     if tools:
         parts.append("## 怎么回复")
         parts.append(
-            "直接写你要对主人说的话，就是普通文字：不要写 JSON，不要代码块。条与条之间空一行，"
-            "每一条就是主人手机上的一个气泡。要做事就调工具：一般先说一句你打算怎么办，再调工具；"
-            "工具回“记下了”以后，同样的话不用再说一遍。一轮只办一件事。只是聊天、能直接答的，"
-            "不调任何工具。工具回“办不了”时，按它说的改了再调，或者照实告诉主人。")
+            "直接写你要对主人说的话，不要写 JSON。要动手就调工具，说了不调，事情不会发生。"
+            "一轮只办一件事。工具回“办不了”时，按它说的改了再调，或者照实告诉主人。")
         parts.append("")
         parts.append("## 你的帮手")
         _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
@@ -571,18 +609,16 @@ def voice_prompt(persona: str, brief_max_chars: int, text: bool = False) -> str:
             persona, "",
             CHAT_STYLE, "",
             "## 转述帮手的结果",
-            "第一条说结论：成了没有、找到了什么。第二条说要主人拿主意的事，没有就不说。"
-            "需要时最后一条说完整的在哪（比如“完整的在任务里”）。不复述帮手的过程、文件名和代码位置，"
-            "帮手原文里的英文和术语换成主人听得懂的话。", "",
+            "帮手交回的原文主人看不到，完整的留在任务里。你用自己的话把结果告诉主人。", "",
             "## 怎么回复",
-            "直接写你要对主人说的话，就是普通文字：不要写 JSON，不要代码块，条与条之间空一行。",
+            "直接写你要对主人说的话：不要写 JSON，不要代码块。",
         ])
     return "\n".join([
         persona, "",
         CHAT_STYLE, "",
         "## 转述帮手的结果",
-        "第一条说结论：成了没有、找到了什么。第二条说要主人拿主意的事，没有就不说。"
-        "需要时最后一条说完整的在哪（比如“完整的在任务里”）。不复述帮手的过程、文件名和代码位置，"
+        "帮手交回的原文主人看不到，完整的留在任务里。你用自己的话把结果告诉主人，"
+        "不复述帮手的过程、文件名和代码位置，"
         "帮手原文里的英文和术语换成主人听得懂的话。", "",
         "## 回复格式",
         "只输出一个 JSON 对象，不要在它前后加任何文字，按给定的结构：" + REPLY_FORMAT % brief_max_chars,
@@ -651,7 +687,7 @@ def relay(helper: str, title: str, result: str) -> str:
         cut = "\n（以上为原文开头和结尾，请勿声称已阅读省略内容。）"
     return (
         "（后台那件事「%s」，帮手 %s 做完了。下面是它交回的原始结果，主人看不到这段。"
-        "按“转述帮手的结果”的样子，用你自己的话、像聊天那样告诉主人。"
+        "用你自己的话告诉主人。"
         "）\n\n%s%s" % (title, helper, result, cut)
     )
 
@@ -1172,7 +1208,7 @@ class Xiaoyou:
             if state["at"] is not None and now - state["at"] < PARTIAL_SECONDS:
                 return
             # plain：说的话就是原文（带工具、不写 JSON 的那条路）；否则从写了一半的 JSON 里取 reply。
-            shown = clean_display(raw if plain else reply_so_far(raw))
+            shown = chat_text(raw if plain else reply_so_far(raw))
             if shown and shown != state["shown"]:
                 state["shown"], state["at"] = shown, now
                 say("partial", agent, shown)
@@ -1183,10 +1219,14 @@ class Xiaoyou:
                schema: Optional[Dict[str, Any]], hop: int, catch_up: bool,
                on_text: Optional[Callable[[str], None]] = None, tools: Any = None) -> Outcome:
         """让能说话的代理在这个对话自己的会话里接一段话。只说话，不给工具。"""
+        session = self._store.session(conversation, agent.name)
         missed = self._store.transcript.unseen(conversation, agent.name) if catch_up else []
+        if tools is not None and not (session or "").startswith(TOOL_SESSION_PREFIX):
+            # 第一次带工具说话：会话是新开的（不接写 JSON 的旧会话），把最近几轮当前情带进去。
+            missed = self._store.transcript.turns(conversation)[-SEED_TURNS:]
         outcome = agent.run(Job(
             text=recap(missed, text) if missed else text,
-            session_id=self._store.session(conversation, agent.name),
+            session_id=session,
             conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
             timeout=self._config.voice_timeout_seconds, on_text=on_text, tools=tools,
         ))

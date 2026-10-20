@@ -416,6 +416,20 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## Let her decide how to talk (0.16.0)
+
+This replaces the "short messages, split by length" rules of 0.14.0. The Runtime only tells the companion
+where she is talking (a phone chat where you may cut in at any time, with bold and lists rendered); how many
+messages, how long and in what tone are hers to decide. Three rules remain: never claim something is under way
+without a tool call, never invent progress or results, never repeat what was already said in other words.
+
+- **She splits messages**: a line with only `---` starts a new message; the Runtime no longer cuts by length.
+  In a tool turn, what she says before a tool call and after its result are two messages (two moments).
+- **Light formatting**: replies for the phone keep bold and lists (`clean_chat`); the device brief stays plain.
+- **Promising without acting**: tool-mode turns use their own sessions (`apt-`), not the JSON-era ones; the
+  first one is seeded with the last 8 turns, and tool calls and results are kept in the session. A turn that
+  calls no tool but says "on it" or "handed it to …" gets one quiet reminder to call the tool now or take it back.
+
 ## The companion acts through tools (0.15.0)
 
 When the speaking agent supports tool calls (today the direct DeepSeek route of dsh, `talks_with_tools()`),

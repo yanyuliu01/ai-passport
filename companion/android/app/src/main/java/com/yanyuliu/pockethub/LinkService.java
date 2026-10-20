@@ -474,10 +474,10 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             // 交给帮手的那一轮：帮手用哪一档做的，写在卡上。
             Card turnCard = deviceUsage ? CardViews.find(store.cards(), turn.card) : null;
             String chat = deviceCards
-                    ? BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
+                    ? BuddyProtocol.chat(turn.phase, turn.said, Markdown.plain(turn.reply), turn.agent,
                             turn.stage, turn.mood, turn.card, turn.doing,
                             turnCard != null && !turn.agent.isEmpty() ? turnCard.effort : null)
-                    : BuddyProtocol.chat(turn.phase, turn.said, turn.reply, turn.agent,
+                    : BuddyProtocol.chat(turn.phase, turn.said, Markdown.plain(turn.reply), turn.agent,
                             turn.stage, turn.mood);
             if (ask != null && !deviceCanAnswer && !deviceDesktopApproval) {
                 chat = BuddyProtocol.chat("done", "", "有审批请求，请在手机或电脑确认：" + ask.text,

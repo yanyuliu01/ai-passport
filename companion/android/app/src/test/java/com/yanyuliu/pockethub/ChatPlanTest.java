@@ -36,12 +36,18 @@ public class ChatPlanTest {
         assertTrue(ChatPlan.of("", list(), list(), "0", list("a"), list("x")).rebuild);
     }
 
-    @Test public void replyParagraphsBecomeBubbles() {
-        assertEquals(Arrays.asList("好。", "改完了。"), AppPresentation.bubbles("好。\n\n改完了。"));
-        assertEquals(Arrays.asList("要点：\n· 一\n· 二"), AppPresentation.bubbles("要点：\n· 一\n· 二"));
-        assertEquals(Arrays.asList("一", "二"), AppPresentation.bubbles("  一 \n \n\n二\n"));
+    @Test public void sheSplitsMessagesHerselfWithALineOfDashes() {
+        // 段落留在同一个气泡里；她单独写一行 --- 才另起一条。
+        assertEquals(Arrays.asList("好。\n\n改完了。"), AppPresentation.bubbles("好。\n\n改完了。"));
+        assertEquals(Arrays.asList("好了。", "另外说一句"), AppPresentation.bubbles("好了。\n\n---\n\n另外说一句"));
+        assertEquals(Arrays.asList("要点：\n- 一\n- 二"), AppPresentation.bubbles("要点：\n- 一\n- 二"));
         assertTrue(AppPresentation.bubbles("").isEmpty());
         assertTrue(AppPresentation.bubbles(null).isEmpty());
+    }
+
+    @Test public void theDeviceGetsPlainWords() {
+        assertEquals("结论\n· 快一点\n\n另外", Markdown.plain("**结论**\n- 快一点\n---\n另外"));
+        assertEquals("", Markdown.plain(null));
     }
 
     @Test public void composerStates() {

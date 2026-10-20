@@ -217,12 +217,9 @@ final class AppPresentation {
         return COMPOSER_IDLE;
     }
 
-    /** 小幽的一条回复拆成的气泡：Runtime 用空行分开每条短消息；旧版 Runtime 没分的就是一个气泡。 */
+    /** 小幽的一条回复拆成的气泡：她单独写一行 --- 的地方另起一条（几条由她定）；段落留在同一个气泡里。 */
     static List<String> bubbles(String text) {
-        List<String> parts = new java.util.ArrayList<>();
-        if (text == null) return parts;
-        for (String part : text.split("\\n\\s*\\n")) if (!part.trim().isEmpty()) parts.add(part.trim());
-        return parts;
+        return Markdown.messages(text);
     }
 
     static String draftKey(String runtime, String task) {

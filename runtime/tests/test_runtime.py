@@ -719,7 +719,7 @@ class ShapeTests(unittest.TestCase):
 
     def test_shape_cleans_reply_and_brief(self):
         turn = xiaoyou_module.shape("**好了** `ok` ✅", "**好** `ok` ✅", "happy", 40, "claude")
-        self.assertEqual((turn.reply, turn.brief), ("好了 ok", "好 ok"))
+        self.assertEqual((turn.reply, turn.brief), ("**好了** ok", "好 ok"))
 
     def test_a_structured_reply_written_as_text_is_recognised(self):
         fields = {"reply": "好", "brief": "好", "mood": "happy"}
@@ -744,20 +744,19 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(xiaoyou_module.reply_text(Outcome("就一句话", None, None)), "就一句话")
         self.assertEqual(xiaoyou_module.reply_text(Outcome("x", None, {"reply": " 好 "})), "好")
 
-    def test_replies_are_split_into_short_chat_messages(self):
-        segments = xiaoyou_module.segments
-        self.assertEqual(segments("好。\n\n改完了。"), ["好。", "改完了。"])
-        self.assertEqual(segments("第一行\n第二行"), ["第一行", "第二行"])
-        # 列表留在同一条里。
-        self.assertEqual(segments("要点：\n· 一\n· 二"), ["要点：\n· 一\n· 二"])
+    def test_replies_keep_light_formatting_and_her_own_message_breaks(self):
+        chat_text = xiaoyou_module.chat_text
+        # 不按长度切：一段话再长也是一条。
         long = "这是一句比较长的话，用来凑够长度。" * 8
-        parts = segments(long)
-        self.assertGreater(len(parts), 1)
-        self.assertTrue(all(len(part) <= xiaoyou_module.BUBBLE_CHARS + 20 for part in parts))
-        many = segments("\n\n".join("第%d条。" % index for index in range(10)))
-        self.assertEqual(len(many), xiaoyou_module.MAX_BUBBLES)
-        self.assertNotIn("\n\n", many[-1])
-        self.assertEqual(xiaoyou_module.chat_text("一\n二"), "一\n\n二")
+        self.assertEqual(chat_text(long), long)
+        self.assertEqual(chat_text("一\n二"), "一\n二")
+        # 她单独写一行 --- 的地方另起一条。
+        self.assertEqual(chat_text("好了。\n---\n另外说一句"), "好了。\n\n---\n\n另外说一句")
+        # 加粗和列表留给手机画；标题变成一行加粗；表情和代码围栏照旧去掉。
+        self.assertEqual(chat_text("## 结论\n* **快** 一点\n```\nx\n```✅"), "**结论**\n- **快** 一点\n\nx")
+        # 小屏用的 brief 是纯文字。
+        turn = xiaoyou_module.shape("**好了**\n---\n- 一", None, "happy", 40, "x")
+        self.assertEqual(turn.brief, "好了 · 一")
 
     def test_the_short_version_points_to_the_full_result(self):
         long = "我在 Mac 上，进不了 Windows 的命令行，所以查不了那边的文件，也没法在那边打包。\n\n" * 4

@@ -1820,11 +1820,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
         for (int index = 0; index < parts.size(); index++) {
             if (index < had) {
                 TextView words = (TextView) ((ViewGroup) group.getChildAt(index)).getChildAt(0);
-                if (!parts.get(index).contentEquals(words.getText())) { words.setText(parts.get(index)); changed = true; }
+                if (!parts.get(index).equals(words.getTag())) {
+                    words.setTag(parts.get(index)); words.setText(Markdown.render(parts.get(index), dp(16))); changed = true;
+                }
                 continue;
             }
             LinearLayout bubble = bubbleShell(false);
-            TextView words = bubbleWords(false, parts.get(index)); words.setTextIsSelectable(true);
+            TextView words = bubbleWords(false, ""); words.setTextIsSelectable(true);
+            words.setTag(parts.get(index)); words.setText(Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
             if (animate) Motion.appear(bubble, whole && had == 0 ? (index - had) * 450L : 0);
         }
@@ -1909,7 +1912,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         ChatHistory.Message reply = lastReply();
         android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (reply == null || clipboard == null) return;
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(companionName() + "的回复", reply.text));
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(companionName() + "的回复", Markdown.plain(reply.text)));
         toast("已复制");
     }
 
@@ -2185,7 +2188,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         for (ChatHistory.Message message : pending) {
             TextView words = taskWords.get(message.id);
             String shown = message.role.equals("you") || !message.status.equals("streaming") ? messageText(message) : message.text;
-            if (words != null && !shown.contentEquals(words.getText())) { words.setText(shown); changed = true; }
+            if (words != null && !shown.equals(words.getTag())) {
+                words.setTag(shown);
+                words.setText(message.role.equals("you") ? shown
+                        : Markdown.render(String.join("\n\n", Markdown.messages(shown)), dp(16)));
+                changed = true;
+            }
             changed |= showStatus(taskStatus.get(message.id), message.status.equals("thinking") ? "" : statusText(message));
         }
         ChatHistory.Message last = pending.isEmpty() ? null : pending.get(pending.size() - 1);
@@ -2625,7 +2633,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         } else if (transcribing) {
             state = "thinking"; mood = "think"; line = heard.isEmpty() ? "嗯…" : heard;
         } else if (!streaming.isEmpty()) {
-            state = "talking"; mood = "happy"; line = streaming + " ▍";
+            state = "talking"; mood = "happy"; line = Markdown.plain(streaming) + " ▍";
         } else if (store.busy()) {
             boolean waiting = !turn.agent.isEmpty();
             state = waiting ? "working" : "thinking"; mood = waiting ? "focus" : "think";
@@ -2635,9 +2643,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         } else if (!latestMainReply(store).isEmpty()) {
             state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(latestMainReply(store)), 180);
         } else if (turn.phase.equals("failed")) {
-            state = "idle"; mood = "idle"; line = "刚才那句没发出去：" + CardViews.oneLine(HomeMessage.display(turn.reply), 60);
+            state = "idle"; mood = "idle"; line = "刚才那句没发出去：" + CardViews.oneLine(HomeMessage.display(Markdown.plain(turn.reply)), 60);
         } else if (turn.phase.equals("done") && !turn.reply.isEmpty()) {
-            state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(turn.reply), 180);
+            state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(Markdown.plain(turn.reply)), 180);
         } else {
             Card busy = null;
             for (AppPresentation.Helper helper : roster) if (busy == null) busy = helper.current(connected);
@@ -3143,7 +3151,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
             name.setPadding(dp(6), 0, 0, 0); heading.addView(name);
             bubble.addView(heading);
         }
-        TextView words = bubbleWords(mine, entry.text.length() > 16000 ? entry.text.substring(0, 16000) + "\n\n较长内容已折叠，请打开完整方案附件。" : entry.text);
+        String said = entry.text.length() > 16000 ? entry.text.substring(0, 16000) + "\n\n较长内容已折叠，请打开完整方案附件。" : entry.text;
+        // 任务里的对话一条一个气泡：小幽分成几条的，段落之间空一行；加粗和列表照样画。
+        TextView words = bubbleWords(mine, "");
+        words.setText(mine ? said : Markdown.render(String.join("\n\n", Markdown.messages(said)), dp(16)));
         words.setTextIsSelectable(true); bubble.addView(words);
         for (Attachment item : entry.attachments) { bubble.addView(attachmentView(item)); rendered.add(item.id); }
         parent.addView(bubble, bubbleParams(mine));

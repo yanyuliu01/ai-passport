@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text
 from .config import AgentSpec
+from .voice_tools import JOIN, PROMISE_NUDGE, TOOL_SESSION_PREFIX
 
 BASE_URL = "https://api.deepseek.com/anthropic"
 MAX_TOKENS = 8192
@@ -35,7 +36,8 @@ MAX_TOKENS = 8192
 MAX_HISTORY_MESSAGES = 40
 MAX_HISTORY_CHARS = 60000
 SESSION_PREFIX = "api-"
-_SESSION_ID = re.compile(r"^api-[0-9a-f]{32}$")
+# api- 是写 JSON 说话的会话，apt- 是带工具说话的会话（voice_tools.TOOL_SESSION_PREFIX），两种不混用。
+_SESSION_ID = re.compile(r"^ap[it]-[0-9a-f]{32}$")
 
 Opener = Callable[..., Any]
 
@@ -63,16 +65,23 @@ def _load(folder: Path, session_id: Optional[str]) -> List[Dict[str, str]]:
         return []
     if not isinstance(data, list):
         return []
+    # 带工具的会话里，一条的内容可以是几块（文字、工具调用、工具结果）。
     return [item for item in data if isinstance(item, dict)
-            and item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str)]
+            and item.get("role") in ("user", "assistant")
+            and isinstance(item.get("content"), (str, list))]
 
 
-def trim(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """只留最近的：条数和字数都有上限，并且从主人说的那一条开始。"""
+def _size(item: Dict[str, Any]) -> int:
+    content = item["content"]
+    return len(content) if isinstance(content, str) else len(json.dumps(content, ensure_ascii=False))
+
+
+def trim(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """只留最近的：条数和字数都有上限，并且从主人说的一句话（不是工具结果）开始。"""
     kept = history[-MAX_HISTORY_MESSAGES:]
-    while kept and sum(len(item["content"]) for item in kept) > MAX_HISTORY_CHARS:
+    while kept and sum(_size(item) for item in kept) > MAX_HISTORY_CHARS:
         kept = kept[2:]
-    while kept and kept[0]["role"] != "user":
+    while kept and not (kept[0]["role"] == "user" and isinstance(kept[0]["content"], str)):
         kept = kept[1:]
     return kept
 
@@ -116,7 +125,7 @@ def plain_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
     以前满屏的 JSON 会照着学。"""
     out = []
     for item in history:
-        if item["role"] == "assistant":
+        if item["role"] == "assistant" and isinstance(item["content"], str):
             found = fields_from_text(item["content"])
             if found is not None and found["reply"].strip():
                 item = {"role": "assistant", "content": found["reply"].strip()}
@@ -129,8 +138,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     """问一次，文字每来一块就把到目前为止的全文交给 on_text。
 
     job.tools（voice_tools.Toolbox）不为空时：她写的文字就是说的话，要做事调工具；
-    工具结果交回给她接着说，最多 MAX_TOOL_ROUNDS 轮。几轮里写的话用空行连成一段
-    （每一轮是新的一条消息）。这时不要 JSON，也不加回复结构的说明。"""
+    工具结果交回给她接着说，最多 MAX_TOOL_ROUNDS 轮。每一轮说的话是单独的一条消息
+    （用 voice_tools.JOIN 连起来，手机按它分开）。这时不要 JSON，也不加回复结构的说明。"""
     key = env.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
         raise AgentError("没有 DEEPSEEK_API_KEY，走不了流式")
@@ -138,8 +147,11 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         raise AgentError("没有配置模型，走不了流式")
     tools = job.tools
     folder = sessions_dir(spec)
-    history = _load(folder, job.session_id)
-    session_id = job.session_id if history else SESSION_PREFIX + uuid.uuid4().hex
+    prefix = TOOL_SESSION_PREFIX if tools is not None else SESSION_PREFIX
+    # 两种说话方式的会话不混用：换了方式就新开一个（接上前情由调用方用 recap 带进来）。
+    wanted = job.session_id if job.session_id and job.session_id.startswith(prefix) else None
+    history = _load(folder, wanted)
+    session_id = wanted if history else prefix + uuid.uuid4().hex
     if tools is not None or job.schema is None:
         history = plain_history(history)
     system = "\n\n".join(part for part in (job.system or "", "" if tools is not None else schema_note(job.schema)) if part)
@@ -222,7 +234,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                             said += delta["text"]
                             if first_text[0] is None:
                                 first_text[0] = time.monotonic() - began
-                            on_text((prefix + "\n\n" + said) if prefix else said)
+                            on_text((prefix + JOIN + said) if prefix else said)
                         elif delta.get("type") == "input_json_delta" and current is not None \
                                 and isinstance(delta.get("partial_json"), str):
                             current["json"] += delta["partial_json"]
@@ -254,11 +266,22 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         return said.strip(), calls, wants_tools and bool(calls)
 
     spoken: List[str] = []
-    for round_index in range(MAX_TOOL_ROUNDS if tools is not None else 1):
-        said, calls, wants_tools = ask("\n\n".join(spoken))
+    nudged = False
+    rounds = MAX_TOOL_ROUNDS if tools is not None else 1
+    for round_index in range(rounds):
+        said, calls, wants_tools = ask(JOIN.join(spoken))
         if said:
             spoken.append(said)
+        if tools is not None and not wants_tools and not nudged and round_index < rounds - 1 \
+                and tools.promised(JOIN.join(spoken)):
+            # 说了要去做却一个工具都没调：悄悄提醒一次，让她现在就调（或者改口）。
+            nudged = True
+            messages.append({"role": "assistant", "content": said or "……"})
+            messages.append({"role": "user", "content": PROMISE_NUDGE})
+            continue
         if tools is None or not wants_tools:
+            if tools is not None:
+                messages.append({"role": "assistant", "content": said or "（没有再说话）"})
             break
         content: List[Dict[str, Any]] = ([{"type": "text", "text": said}] if said else [])
         results: List[Dict[str, Any]] = []
@@ -281,16 +304,21 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         messages.append({"role": "user", "content": results})
         if round_index == MAX_TOOL_ROUNDS - 1:
             break
-    said = "\n\n".join(spoken).strip()
+    said = JOIN.join(spoken).strip()
     if not said and (tools is None or tools.action is None):
         raise AgentError("DeepSeek 流式接口没有说完就断了")
     sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs tools=%s\n" % (
         model, first_text[0] or 0.0, time.monotonic() - began,
         ",".join(name for name, _ in tools.calls) if tools is not None else "-"))
     try:
-        # 会话里只记说过的话（工具来回不记）：下一轮的“现在的事”里本来就有这些事的状态。
-        _save(folder, session_id, trim(history + [{"role": "user", "content": job.text},
-                                                  {"role": "assistant", "content": said or "（交代了一件事）"}]))
+        if tools is not None:
+            # 带工具的会话把工具调用和结果也记下：只记说过的话，她会学成“说了就算做了”。
+            if messages[-1]["role"] != "assistant":
+                messages.append({"role": "assistant", "content": "（这一轮到此为止）"})
+            _save(folder, session_id, trim(messages))
+        else:
+            _save(folder, session_id, trim(history + [{"role": "user", "content": job.text},
+                                                      {"role": "assistant", "content": said or "……"}]))
     except OSError:
         session_id = None  # 记不下来：下一次当新会话开，这一次的回复照样用
     if tools is not None:
