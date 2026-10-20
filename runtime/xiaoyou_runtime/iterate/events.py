@@ -51,9 +51,12 @@ class EventType:
 
 BUILTIN = [
     EventType("screen", {"name": 40, "ms": int}, "usage", 30, description="离开一个页面：页面名、停留毫秒"),
-    EventType("rage_tap", {"screen": 40, "region": 16, "count": int}, "usage", 30,
+    EventType("rage_tap", {"screen": 40, "region": 16, "count": int, "control": 48}, "usage", 30,
               description="短时间在同一处连点"),
+    EventType("tap", {"screen": 40, "control": 48, "region": 16}, "usage", 30,
+              description="点了哪个控件（只记 App 自己起的控件名，不记屏幕上的内容）"),
     EventType("error", {"screen": 40, "message": 120}, "diagnostic", 30, description="提示给主人的错误"),
+    EventType("notice", {"screen": 40, "message": 120}, "usage", 30, description="提示给主人的普通消息（不是错误）"),
     EventType("crash", {"exception": 160, "frames": list, "thread": 40}, "diagnostic", 90,
               description="未捕获的异常"),
     EventType("slow", {"metric": 40, "ms": int, "screen": 40}, "usage", 30, description="某个操作的耗时"),

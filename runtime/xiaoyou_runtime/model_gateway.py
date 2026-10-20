@@ -60,6 +60,8 @@ class Provider:
     price_input: float = 0.0
     price_output: float = 0.0
     timeout_seconds: int = 120
+    # 原样并进每次请求体的字段，比如 DeepSeek 关掉思考：{"thinking": {"type": "disabled"}}
+    extra_body: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -159,6 +161,9 @@ def parse(raw: Any, base: Path = Path("."), env: Optional[Mapping[str, str]] = N
         price = item.get("price", {})
         if not isinstance(price, dict):
             raise GatewayConfigError("%s.price 应该是 {\"input\", \"output\"}" % where)
+        extra_body = item.get("extra_body", {})
+        if not isinstance(extra_body, dict):
+            raise GatewayConfigError("%s.extra_body 应该是一个对象" % where)
         timeout = item.get("timeout_seconds", 120)
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 5 <= timeout <= 1800:
             raise GatewayConfigError("%s.timeout_seconds 应该在 5 到 1800 之间" % where)
@@ -167,7 +172,7 @@ def parse(raw: Any, base: Path = Path("."), env: Optional[Mapping[str, str]] = N
             key=_key(item, base, env, where), models=list(models),
             price_input=_price(price.get("input", 0), where + ".price.input"),
             price_output=_price(price.get("output", 0), where + ".price.output"),
-            timeout_seconds=timeout)
+            timeout_seconds=timeout, extra_body=dict(extra_body))
     routes_raw = raw.get("routes", {})
     if not isinstance(routes_raw, dict):
         raise GatewayConfigError("models.routes 应该是对象：用途 → [\"端点/模型\", …]")
@@ -306,6 +311,7 @@ class Gateway:
                 "messages": [m for m in messages if m["role"] != "system"]}
             if system:
                 payload["system"] = system
+            payload.update(provider.extra_body)
             headers["anthropic-version"] = ANTHROPIC_VERSION
             if provider.key:
                 headers["x-api-key"] = provider.key
@@ -321,6 +327,7 @@ class Gateway:
                    "temperature": temperature, "stream": False}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        payload.update(provider.extra_body)
         if provider.key:
             headers["Authorization"] = "Bearer " + provider.key
         data = self._transport(provider.base_url + "/chat/completions", headers,

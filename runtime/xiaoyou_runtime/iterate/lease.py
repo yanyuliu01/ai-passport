@@ -2,7 +2,7 @@
 
 能力：这台电脑能做哪几步，写在 /v1/info 的 iterate.stages 里。
   collect、detect   总能做（只读本机的事件和记录）
-  plan              有这个仓库，而且模型网关里 iterate.plan 有可用的候选
+  plan              有这个仓库，而且模型网关里 iterate.version_plan 或 iterate.plan 有可用的候选
   build             有 JDK 和 Android SDK（JAVA_HOME / ANDROID_HOME，或者 iterate.toolchain 指的目录）
 
 租约：一轮要跑之前，向本机 Runtime 申请（POST /v1/iterate/lease）；Runtime 经 mesh 和别的电脑比较，
@@ -33,7 +33,8 @@ def capabilities(settings: Any, gateway: Any = None) -> Dict[str, Any]:
     stages: List[str] = ["collect", "detect"]
     repo = Path(settings.repo_dir)
     has_repo = (repo / ".git").exists()
-    if has_repo and gateway is not None and gateway.available("iterate.plan"):
+    if has_repo and gateway is not None and (gateway.available("iterate.version_plan")
+                                             or gateway.available("iterate.plan")):
         stages.append("plan")
     if has_repo and _has_android(settings):
         stages.append("build")

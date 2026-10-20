@@ -100,6 +100,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private long screenSince = System.currentTimeMillis();
     private long eventsSentAt;
     private UsageEvents.RageTap rageTap;
+    // Names of tappable controls for usage events. Only App-authored names, never on-screen content.
+    private final java.util.WeakHashMap<View, String> controls = new java.util.WeakHashMap<>();
+    private float downX, downY;
     /** 打开的那件事；null 时任务页回到聊天。 */
     private String openTask = null;
     /** 打开的那位帮手（role）。 */
@@ -266,7 +269,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         approvalText.setPadding(dp(8), 0, dp(8), 0);
         approvalBar.addView(approvalText, new LinearLayout.LayoutParams(0, -2, 1));
         TextView go = text("去确认 ›", 13, true); go.setTextColor(0xff8a5413); approvalBar.addView(go);
-        approvalBar.setOnClickListener(view -> showApprovals());
+        approvalBar.setOnClickListener(view -> showApprovals()); ctl(approvalBar, "approval-bar");
         approvalBar.setFocusable(true); approvalBar.setVisibility(View.GONE);
         LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(-1, dp(44));
         barParams.setMargins(dp(16), 0, dp(16), dp(4));
@@ -379,7 +382,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         composer = column(); composer.setPadding(dp(12), dp(6), dp(12), dp(16));
         composer.setBackgroundColor(BACKGROUND);
         chatView = text("", 12, false); chatView.setPadding(dp(8), dp(2), dp(8), dp(6));
-        chatView.setOnClickListener(view -> { if (nowJump != null) open(nowJump); });
+        chatView.setOnClickListener(view -> { if (nowJump != null) open(nowJump); }); ctl(chatView, "chat-now");
         composer.addView(chatView);
         LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
         // 附件按钮等电脑端能收手机附件后再出现，不放一个点了没用的按钮。
@@ -394,7 +397,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         row.addView(chatInput, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout send = column(); send.setGravity(Gravity.CENTER);
         send.setBackground(pressable(BLUE, 22)); send.setFocusable(true);
-        send.setOnClickListener(view -> sendChat());
+        send.setOnClickListener(view -> sendChat()); ctl(send, "send");
         NavIconView arrow = new NavIconView(this, "send"); arrow.color(Color.WHITE);
         send.addView(arrow, new LinearLayout.LayoutParams(dp(22), dp(22)));
         sendButton = send;
@@ -409,7 +412,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         });
 
         scrim = new View(this); scrim.setBackgroundColor(0x52142032);
-        scrim.setOnClickListener(view -> setDrawer(false)); scrim.setVisibility(View.GONE);
+        scrim.setOnClickListener(view -> setDrawer(false)); ctl(scrim, "drawer-close"); scrim.setVisibility(View.GONE);
         scrim.setContentDescription("关闭侧边栏");
         drawer = column(); drawer.setBackgroundColor(Color.WHITE);
         drawer.setPadding(dp(12), dp(16), dp(12), dp(12)); drawer.setClickable(true);
@@ -426,7 +429,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         footerLabel.setPadding(dp(12), 0, dp(8), 0);
         footer.addView(footerLabel, new LinearLayout.LayoutParams(0, -2, 1));
         drawerState = text("", 12, false); footer.addView(drawerState);
-        footer.setOnClickListener(view -> { setDrawer(false); show(TAB_MINE); });
+        footer.setOnClickListener(view -> { setDrawer(false); show(TAB_MINE); }); ctl(footer, "drawer:settings");
         drawer.addView(footer, new LinearLayout.LayoutParams(-1, -2));
         frame = new FrameLayout(this);
         frame.addView(page, new FrameLayout.LayoutParams(-1, -1));
@@ -464,9 +467,29 @@ public class MainActivity extends Activity implements HubStore.Listener {
         getSharedPreferences("link", MODE_PRIVATE).edit().putBoolean("connect", connect).apply();
     }
 
+    /** An ordinary hint (progress, confirmation, guidance). Recorded as a notice, not an error. */
     private void toast(String message) {
-        UsageEvents.error(screenName(tab), message);
+        UsageEvents.notice(currentScreen(), message);
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    /** Something the owner asked for did not work. Recorded as an error. */
+    private void fail(String message) {
+        UsageEvents.error(currentScreen(), message);
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private <T extends View> T ctl(T view, String name) {
+        controls.put(view, name);
+        return view;
+    }
+
+    private String currentScreen() {
+        return tab == TAB_SETTINGS ? screenName(tab) + ":" + settingsName(settingsSection) : screenName(tab);
+    }
+
+    static String settingsName(int section) {
+        return section == 1 ? "notifications" : section == 2 ? "preferences" : "connection";
     }
 
     private static String screenName(int tab) {
@@ -486,21 +509,51 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void leaveScreen() {
         long now = System.currentTimeMillis();
-        UsageEvents.screen(screenName(tab), now - screenSince);
+        UsageEvents.screen(currentScreen(), now - screenSince);
         screenSince = now;
     }
 
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent event) {
-        if (rageTap != null && event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
-            int count = rageTap.tap(event.getX(), event.getY(), event.getEventTime());
-            if (count > 0) {
-                View root = getWindow().getDecorView();
-                UsageEvents.rageTap(screenName(tab),
-                        UsageEvents.RageTap.region(event.getX(), event.getY(), root.getWidth(), root.getHeight()), count);
+        int action = event.getActionMasked();
+        if (action == android.view.MotionEvent.ACTION_DOWN) { downX = event.getRawX(); downY = event.getRawY(); }
+        if (action == android.view.MotionEvent.ACTION_UP) {
+            View root = getWindow().getDecorView();
+            String region = UsageEvents.RageTap.region(event.getX(), event.getY(), root.getWidth(), root.getHeight());
+            boolean tap = Math.hypot(event.getRawX() - downX, event.getRawY() - downY)
+                    < android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+            String control = tap ? controlAt(root, (int) event.getRawX(), (int) event.getRawY()) : null;
+            if (control != null) UsageEvents.tap(currentScreen(), control, region);
+            if (rageTap != null) {
+                int count = rageTap.tap(event.getX(), event.getY(), event.getEventTime());
+                if (count > 0) UsageEvents.rageTap(currentScreen(), region, count, control == null ? "" : control);
             }
         }
         return super.dispatchTouchEvent(event);
+    }
+
+    /** The named control under a tap, by walking up from the deepest view there; never reads its text. */
+    private String controlAt(View root, int x, int y) {
+        View hit = deepestAt(root, x, y);
+        for (View view = hit; view != null; view = view.getParent() instanceof View ? (View) view.getParent() : null) {
+            String name = controls.get(view);
+            if (name != null) return name;
+            if (view.isClickable()) return "unlabeled:" + view.getClass().getSimpleName();
+        }
+        return "none";
+    }
+
+    private static View deepestAt(View view, int x, int y) {
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        if (view.getVisibility() != View.VISIBLE || !view.getGlobalVisibleRect(bounds) || !bounds.contains(x, y)) return null;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = group.getChildCount() - 1; index >= 0; index--) {
+                View found = deepestAt(group.getChildAt(index), x, y);
+                if (found != null) return found;
+            }
+        }
+        return view;
     }
 
     private void refreshAvatarAnimations(View view) {
@@ -514,7 +567,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private View iconAction(String icon, String label, View.OnClickListener action) {
         LinearLayout container = column(); container.setGravity(Gravity.CENTER);
         container.setContentDescription(label); container.setFocusable(true);
-        container.setOnClickListener(action);
+        container.setOnClickListener(action); ctl(container, label);
         container.setBackground(pressable(Color.TRANSPARENT, 22));
         NavIconView view = new NavIconView(this, icon); view.color(INK);
         container.addView(view, new LinearLayout.LayoutParams(dp(22), dp(22)));
@@ -610,7 +663,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         TextView homeLabel = text(companionName(), 15, true);
         homeLabel.setPadding(dp(12), 0, 0, 0);
         home.addView(homeLabel, new LinearLayout.LayoutParams(0, -2, 1));
-        home.setOnClickListener(view -> { setDrawer(false); show(TAB_HOME); });
+        home.setOnClickListener(view -> { setDrawer(false); show(TAB_HOME); }); ctl(home, "drawer:home");
         drawerList.addView(home);
         LinearLayout chat = listRow(44, tab == TAB_CHAT);
         NavIconView history = new NavIconView(this, "history"); history.color(MUTED);
@@ -619,7 +672,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         TextView chatLabel = text("对话记录", 14, false); chatLabel.setTextColor(INK);
         chatLabel.setPadding(dp(10), 0, 0, 0);
         chat.addView(chatLabel, new LinearLayout.LayoutParams(0, -2, 1));
-        chat.setOnClickListener(view -> { setDrawer(false); show(TAB_CHAT); });
+        chat.setOnClickListener(view -> { setDrawer(false); show(TAB_CHAT); }); ctl(chat, "drawer:chat");
         drawerList.addView(chat);
 
         drawerList.addView(drawerHeading("任务"));
@@ -649,7 +702,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 pinParams.setMargins(0, 0, dp(6), 0); row.addView(pin, pinParams);
             }
             if (!word.isEmpty()) row.addView(stateText(word, 12));
-            row.setOnClickListener(view -> { setDrawer(false); open(card.id); });
+            row.setOnClickListener(view -> { setDrawer(false); open(card.id); }); ctl(row, "drawer:task");
             row.setOnLongClickListener(view -> { taskActions(card); return true; });
             row.setContentDescription(card.title + "，" + AppPresentation.taskDay(card, System.currentTimeMillis(), java.time.ZoneId.systemDefault()) + " " + time
                     + (word.isEmpty() ? "" : "，" + word) + "，长按整理");
@@ -660,7 +713,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             LinearLayout row = listRow(40, false);
             TextView label = text("已归档 " + archived.size(), 12, false); label.setTextColor(HINT);
             label.setPadding(dp(34), 0, 0, 0); row.addView(label);
-            row.setOnClickListener(view -> showArchived());
+            row.setOnClickListener(view -> showArchived()); ctl(row, "drawer:archived");
             drawerList.addView(row);
         }
 
@@ -675,7 +728,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             TextView word = stateText(state, 12);
             if (state.equals("空闲")) word.setTextColor(HINT);
             row.addView(word);
-            row.setOnClickListener(view -> { setDrawer(false); openAgent(helper.role); });
+            row.setOnClickListener(view -> { setDrawer(false); openAgent(helper.role); }); ctl(row, "drawer:helper");
             row.setContentDescription(AppPresentation.name(helper.role) + "，" + state);
             drawerList.addView(row);
         }
@@ -691,7 +744,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean near = device;
         TextView deviceState = text(near ? "在身边" : "未连接", 12, false); deviceState.setTextColor(near ? GREEN : HINT);
         deviceRow.addView(deviceState);
-        deviceRow.setOnClickListener(view -> { setDrawer(false); show(TAB_DEVICE); });
+        deviceRow.setOnClickListener(view -> { setDrawer(false); show(TAB_DEVICE); }); ctl(deviceRow, "drawer:device");
         drawerList.addView(deviceRow);
     }
 
@@ -826,7 +879,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (pack == null || todo.isEmpty()) {
             toast("正在问电脑有没有新的语音模型…");
             AppUpdate.check(this, target, (newer, error) -> {
-                if (error != null) toast("没问到：" + error);
+                if (error != null) fail("没问到：" + error);
                 mineKey = null; onHubChanged();
             });
             return;
@@ -837,7 +890,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 packProgress = percent; mineKey = null; refreshMine();
             }, error -> {
                 packProgress = -1; mineKey = null; refreshMine();
-                toast(error == null ? "手机语音模型已就绪" : "没下载成：" + error);
+                if (error == null) toast("手机语音模型已就绪"); else fail("没下载成：" + error);
             });
         });
     }
@@ -850,15 +903,17 @@ public class MainActivity extends Activity implements HubStore.Listener {
         AppUpdate.Release update = AppUpdate.availableFor(RuntimeClient.selected(this));
         if (update == null) {
             toast("正在问电脑有没有新版…");
+            UsageEvents.update("check", "");
             AppUpdate.check(this, target, (newer, error) -> {
-                if (error != null) toast("没问到：" + error);
-                else if (newer == null) toast("已经是最新的了");
-                else toast("有新版 " + newer.label() + "，再点一次安装");
+                if (error != null) { fail("没问到：" + error); UsageEvents.update("check_failed", ""); }
+                else if (newer == null) { toast("已经是最新的了"); UsageEvents.update("up_to_date", ""); }
+                else { toast("有新版 " + newer.label() + "，再点一次安装"); UsageEvents.update("available", newer.label()); }
                 mineKey = null; drawerKey = null; onHubChanged();
             });
             return;
         }
         chooseSource(update.downloadUrl.isEmpty() ? null : "安装包 " + mb(update.size), external -> {
+            UsageEvents.update(external ? "download_internet" : "download_computer", update.label());
             updateProgress = 0; mineKey = null; refreshMine();
             downloadApp(target, update, external);
         });
@@ -869,8 +924,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
             updateProgress = percent; mineKey = null; refreshMine();
         }, (apk, error) -> {
             updateProgress = -1; mineKey = null; refreshMine();
-            if (error != null) { toast("没下载成：" + error); return; }
-            if (!AppUpdate.install(this, apk)) toast("请允许 Pocket Hub 安装应用，回来再点一次「安装」");
+            if (error != null) { fail("没下载成：" + error); UsageEvents.update("download_failed", update.label()); return; }
+            if (AppUpdate.install(this, apk)) UsageEvents.update("install_prompted", update.label());
+            else { toast("请允许 Pocket Hub 安装应用，回来再点一次「安装」"); UsageEvents.update("install_blocked", update.label()); }
         });
     }
 
@@ -890,6 +946,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (!newer.sha256.equals(prefs.getString("update_told", ""))) {
                 prefs.edit().putString("update_told", newer.sha256).apply();
                 toast("电脑上有新版 App，去「连接与设置」更新");
+                UsageEvents.update("auto_available", newer.label());
             }
             mineKey = null; drawerKey = null; onHubChanged();
         });
@@ -906,6 +963,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         box.setBackground(surface(Color.WHITE, Color.WHITE, 18));
         return box;
     }
+
+    /** Settings rows with fixed App wording; any other row (task titles, computer names, logs) is recorded as "row". */
+    private static final java.util.Set<String> STATIC_ROWS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "随身设备", "伴侣形象", "用量", "快速审核", "设备固件", "通知", "偏好与运行记录", "App 更新",
+            "手机语音模型", "断开设备", "连接设备", "固件", "电脑上的会话"));
 
     private View groupRow(String icon, String title, String subtitle, String value, int valueColor,
                           View.OnClickListener action, boolean divided) {
@@ -928,6 +990,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         TextView end = text(value, 13, false); end.setTextColor(valueColor); row.addView(end);
         row.setOnClickListener(action); row.setFocusable(true);
         row.setContentDescription(title + (subtitle == null ? "" : "，" + subtitle) + "，" + value);
+        ctl(row, STATIC_ROWS.contains(title) ? "row:" + title : "row");
         return row;
     }
 
@@ -1142,6 +1205,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private void openSettings(int section) {
+        if (tab == TAB_SETTINGS && section != settingsSection) leaveScreen();
         saveUiContext(); settingsSection = section; show(TAB_SETTINGS);
     }
 
@@ -1487,7 +1551,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         words.addView(state);
         row.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
         TextView more = text("›", 18, false); more.setTextColor(0xff9aa7b8); row.addView(more);
-        row.setOnClickListener(view -> open(card.id)); row.setFocusable(true);
+        row.setOnClickListener(view -> open(card.id)); row.setFocusable(true); ctl(row, "task-row");
         row.setContentDescription(AppPresentation.name(owner) + "，" + card.title + "，" + (word.isEmpty() ? AppPresentation.stateLabel(card, connected) : word));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.setMargins(0, dp(4), dp(40), dp(10)); row.setLayoutParams(params);
@@ -1651,14 +1715,14 @@ public class MainActivity extends Activity implements HubStore.Listener {
         pill.addView(dot, new LinearLayout.LayoutParams(dp(7), dp(7)));
         TextView label = text("", 12, false); label.setTag("label"); label.setTextColor(0xff33465e);
         label.setPadding(dp(6), 0, 0, 0); pill.addView(label);
-        pill.setOnClickListener(view -> show(TAB_DEVICE)); pill.setFocusable(true);
+        pill.setOnClickListener(view -> show(TAB_DEVICE)); pill.setFocusable(true); ctl(pill, "device-pill");
         return pill;
     }
 
     private LinearLayout buildHome() {
         LinearLayout pane = column(); pane.setGravity(Gravity.CENTER_HORIZONTAL);
         stage = new CompanionStage(this, 210);
-        stage.setOnClickListener(view -> poke()); stage.setFocusable(true);
+        stage.setOnClickListener(view -> poke()); stage.setFocusable(true); ctl(stage, "home-avatar");
         stage.setContentDescription("摸摸" + companionName());
         LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(-2, -2);
         stageParams.setMargins(0, dp(8), 0, dp(4));
@@ -1668,7 +1732,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         homeSpeech.setPadding(dp(18), dp(14), dp(18), dp(14));
         homeSpeech.setBackground(surface(Color.WHITE, Color.WHITE, 20));
         homeSpeech.setMaxLines(8); homeSpeech.setEllipsize(TextUtils.TruncateAt.END);
-        homeSpeech.setOnClickListener(view -> show(TAB_CHAT));
+        homeSpeech.setOnClickListener(view -> show(TAB_CHAT)); ctl(homeSpeech, "home-speech");
         LinearLayout.LayoutParams speechParams = new LinearLayout.LayoutParams(-2, -2);
         speechParams.setMargins(dp(16), dp(8), dp(16), dp(14));
         pane.addView(homeSpeech, speechParams);
@@ -1714,7 +1778,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 default: return true;
             }
         });
-        micButton = button;
+        micButton = button; ctl(button, "mic");
         middle.addView(button, new LinearLayout.LayoutParams(dp(84), dp(84)));
         micHint = text("按住说话", 12, false); micHint.setPadding(0, dp(8), 0, 0);
         micHint.setMaxWidth(dp(260)); micHint.setMaxLines(3); micHint.setGravity(Gravity.CENTER);
@@ -1778,7 +1842,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                     HubStore.get().log(error == null ? "手机录音交给电脑识别" : "手机识别没成功（" + error + "），交给电脑识别");
                     RuntimeClient.sendVoice(MainActivity.this, wav, null, false);
                 } else if (error != null) {
-                    micHint.setText(error); HubStore.get().log(error); toast(error);
+                    micHint.setText(error); HubStore.get().log(error); fail(error);
                 } else if (text != null && !text.isEmpty()) {
                     HubStore.get().log("手机已完成离线转录，仅发送文字");
                     RuntimeClient.send(MainActivity.this, text);
@@ -1803,13 +1867,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
             @Override public void finished(byte[] wav, String error, boolean cancelled) { runOnUiThread(() -> {
                 if (session != voiceSession || isFinishing() || isDestroyed() || cancelled) return;
                 releaseMic(); transcribing = false;
-                if (error != null) { micHint.setText(error); toast(error); }
+                if (error != null) { micHint.setText(error); fail(error); }
                 else if (wav != null && HubStore.get().runtimeConnected()) {
                     HubStore.get().log("手机语音模型还没下载，录音交给电脑识别");
                     RuntimeClient.sendVoice(MainActivity.this, wav, null, false);
                 } else {
                     String why = "电脑没连上，手机语音模型也还没下载：去「连接与设置 → App 更新」下载后可离线识别";
-                    micHint.setText(why); toast(why);
+                    micHint.setText(why); fail(why);
                 }
                 refreshHome(HubStore.get(), HubStore.get().cards());
             }); }
@@ -2012,7 +2076,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             face.addView(ring, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
             face.setClipChildren(false);
             face.setContentDescription(AppPresentation.name(role) + " 的用量详情");
-            face.setOnClickListener(click -> showQuota(role));
+            face.setOnClickListener(click -> showQuota(role)); ctl(face, "usage-face");
             view.addView(face, new LinearLayout.LayoutParams(dp(40), dp(40)));
             words = text("", 13, false); words.setPadding(dp(6), 0, 0, 0);
             view.addView(words);
@@ -2737,6 +2801,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         button.setBackground(pressable(Color.WHITE, 12, 0xffe6ebf2));
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         button.setOnClickListener(action);
+        ctl(button, "button:" + UsageEvents.controlName(label));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, dp(5), 0, dp(5));

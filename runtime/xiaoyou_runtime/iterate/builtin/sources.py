@@ -13,14 +13,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..objects import Signal
 from ..events import EventStore, flat
+from ..releases import phase, timeline
 from ..store import read_json
 
 MAX_TEXT = 200
+# 0.21 及以前的 App 把每条弹出提示都记成 error。读起来像失败的才算错误，其余当普通提示。
+FAILURE = re.compile(r"失败|出错|错误|不能|没法|无法|断开|超时|连不上|不可用|异常|崩")
 # 像是在抱怨或者纠正：先用这个粗筛，筛出来的才可能送去给模型分类（省钱，也少送原话）。
 COMPLAINT = re.compile(
     r"不对|不是这|又|还是没|怎么(还|又|没|不)|没反应|点不|点了没|卡住|卡死|太慢|好慢|慢死|看不到|看不见|"
     r"没显示|不显示|显示不|英文|乱码|闪退|崩了|崩溃|找不到|不行|报错|出错|失败|bug|有问题|难用|麻烦|"
-    r"太多了|不方便|反复|重复|偏了|歪了|错位|挡住|跳回|白屏|黑屏", re.I)
+    r"太多了|不方便|反复|重复|偏了|歪了|错位|挡住|跳回|白屏|黑屏|慢|烂|不好用|太多|为什么|为啥|"
+    r"怎么回事|反应半天|体验|记.{0,2}(个|下)?问题|有个问题|识别.{0,6}(差|不准|不行)", re.I)
 APP_WORDS = re.compile(
     r"app|APP|App|手机|界面|页面|首页|按钮|点|显示|弹窗|通知|侧边栏|输入框|头像|图标|字|滑|屏幕|更新|安装", re.I)
 CATEGORIES = ("app_bug", "app_ui", "app_slow", "app_confusing", "agent_behavior", "not_feedback")
@@ -43,12 +47,19 @@ def _first_cursor(ctx: Any, cursor: Optional[Dict[str, Any]]) -> float:
 
 def app_events(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Signal], Dict[str, Any]]:
     events, new_cursor = EventStore(ctx.state_dir).read_after(cursor)
+    releases = timeline(ctx.state_dir)
     signals = []
     for event in events:
         if not isinstance(event.get("id"), str) or not isinstance(event.get("type"), str):
             continue
-        signals.append(Signal(id="app:" + event["id"], type="app." + event["type"],
-                              at=float(event.get("at") or 0), source="app_events", data=flat(event)))
+        data = flat(event)
+        # 改版前后的行为单独标出来：新版刚装上（settling）、有新版还没装（updating）。
+        data["phase"] = phase(float(event.get("at") or 0), str(data.get("app_version") or ""), releases)
+        kind = event["type"]
+        if kind == "error" and not FAILURE.search(str(data.get("message") or "")):
+            kind = "notice"
+        signals.append(Signal(id="app:" + event["id"], type="app." + kind,
+                              at=float(event.get("at") or 0), source="app_events", data=data))
     return signals, new_cursor
 
 
@@ -108,6 +119,13 @@ def chat_feedback(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Sign
     newest = after
     budget = ctx.settings.max_classify
     use_model = ctx.model_available("iterate.classify")
+    # 现在装着的这版 App 是什么时候发布的：在它之前说的 App 问题可能已经修了。
+    released = 0.0
+    try:
+        from ...app_release import AppRelease
+        released = float(AppRelease(ctx.state_dir).info().get("published_at") or 0)
+    except Exception:
+        pass
     signals = []
     for card in _cards(ctx):
         if card.get("monitoring_only"):
@@ -139,7 +157,8 @@ def chat_feedback(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Sign
                 id="chat:%s" % (entry.get("id") or "%s:%d" % (card.get("id"), index)),
                 type="chat.feedback", at=float(at), source="chat_feedback",
                 data={"text": text[:MAX_TEXT], "card": card.get("id"), "category": category,
-                      "confidence": round(confidence, 2), "method": method}))
+                      "confidence": round(confidence, 2), "method": method,
+                      "before_release": bool(released and float(at) < released)}))
     return signals, {"at": newest}
 
 

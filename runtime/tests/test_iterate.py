@@ -2,6 +2,7 @@
 See docs/development/auto-iteration."""
 
 import json
+import re
 import time
 import urllib.request
 from pathlib import Path
@@ -61,9 +62,12 @@ class IterateCase(TempDirCase):
         source.parent.mkdir(parents=True)
         (self.repo / ".git").mkdir()
         source.write_text("\n".join("line %d" % n for n in range(1, 200)) +
-                          "\n    private void show(int next) {\n        toast(\"加载失败\");\n    }\n",
+                          "\n    private void show(int next) {\n        toast(\"加载失败\");\n    }\n"
+                          "            case TAB_MINE: return \"mine\";\n    private void refreshMine() { mine(TAB_MINE); }\n",
                           encoding="utf-8")
-        self.settings = parse({"repo_dir": str(self.repo), "trigger": {"min_new_signals": 5}}, self.folder)
+        # 这些用例测一次挑一个问题的老路径；版本方案见 VersionPlanTest。
+        self.settings = parse({"repo_dir": str(self.repo), "trigger": {"min_new_signals": 5},
+                               "pipeline": {"version_planner": None}}, self.folder)
         self.config = SimpleNamespace(state_dir=self.state, base_dir=self.folder, host="127.0.0.1",
                                       port=1, token=TOKEN, iterate={}, models=None)
 
@@ -144,6 +148,32 @@ class EventsTest(IterateCase):
         self.assertIn("crash", [t["name"] for t in info["events"]["types"]])
         self.assertIn("collect", info["iterate"]["stages"])
         self.assertEqual(EventStore(loaded.state_dir).all()[0]["fields"]["message"], "发送失败")
+
+
+class ReportCardTest(IterateCase):
+    def test_a_run_report_is_a_task_card_in_the_main_conversation(self):
+        url, loaded = start_runtime(self, self.folder / "rt")
+        def post(body):
+            request = urllib.request.Request(url + "/v1/iterate/report", method="POST",
+                                             data=json.dumps(body).encode("utf-8"),
+                                             headers={"Authorization": "Bearer " + TOKEN,
+                                                      "Content-Type": "application/json"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read())
+        body = {"run_id": "r20261020-113728", "title": "自动迭代：让「我的」不再进了就退",
+                "text": "# 自动迭代\n\n## 版本方案\n先做入口"}
+        card = post(body)["card"]
+        self.assertEqual(post(dict(body, text="改过的内容"))["card"], card)   # same run, same card
+        request = urllib.request.Request(url + "/v1/sync?conversation=default&after=0",
+                                         headers={"Authorization": "Bearer " + TOKEN})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            page = json.loads(response.read())
+        task = [item for item in page["tasks"] if item["id"] == card][0]
+        self.assertEqual(task["conversation"], "default")
+        texts = [m["text"] for m in page["messages"] if m.get("task") == card]
+        self.assertIn("改过的内容", texts)
+        from xiaoyou_runtime.iterate.notify import plain
+        self.assertEqual(plain("# 标题\n\n## 版本方案\n内容"), "标题\n\n【版本方案】\n内容")
 
 
 class MeshEventsTest(IterateCase):
@@ -262,7 +292,7 @@ class PipelineTest(IterateCase):
         areas = {issue.detector: issue.area for issue in book.issues.values()}
         self.assertEqual(areas["task_failures"], "agent")
         self.assertEqual(len(posted), 1)
-        self.assertEqual(posted[0]["origin"], "iterate")
+        self.assertEqual(posted[0]["run_id"], run["id"])
         self.assertIn("崩溃处加空值保护", posted[0]["text"])
         folder = Runs(self.state).folder / run["id"]
         self.assertTrue((folder / "plan.json").exists() and (folder / "report.md").exists())
@@ -276,7 +306,8 @@ class PipelineTest(IterateCase):
     def test_without_force_it_waits_for_enough_new_signals(self):
         self.seed()
         Runs(self.state).save_state({"last_run_at": NOW - 60, "pending_signals": 0})
-        settings = parse({"repo_dir": str(self.repo), "trigger": {"min_new_signals": 10}}, self.folder)
+        settings = parse({"repo_dir": str(self.repo), "trigger": {"min_new_signals": 10},
+                          "pipeline": {"version_planner": None}}, self.folder)
         waiting = self.runner(now=NOW, settings=settings).run()
         self.assertEqual(waiting["state"], "waiting")
         self.assertEqual(Runs(self.state).state()["pending_signals"], 8)  # 5 app, 1 chat, 2 failed cards
@@ -364,3 +395,128 @@ class SchedulerTest(IterateCase):
         cards.items = [{"state": "working", "monitoring_only": True}, {"state": "done"}]
         self.assertTrue(scheduler.tick())
         self.assertEqual(launched[0][-2:], ["iterate", "run"])
+
+
+class VersionPlanTest(IterateCase):
+    def screens(self, session, names, start=NOW - 600, quick=()):
+        return [{"id": "%s-%d" % (session, n), "type": "screen", "at": int((start + n * 10) * 1000), "session": session,
+                 "client": {"kind": "android", "version": "0.20.0"},
+                 "fields": {"name": name, "ms": 800 if n in quick else 9000}} for n, name in enumerate(names)]
+
+    def test_path_detectors_and_one_version_plan_for_the_batch(self):
+        names = ["home", "mine", "settings", "mine", "settings", "mine", "home", "mine", "home", "mine", "mine"]
+        EventStore(self.state).accept({"events": self.screens("s1", names, quick={1, 3, 5, 7, 9, 10})},
+                                      received_at=NOW)
+        settings = parse({"repo_dir": str(self.repo)}, self.folder)
+        plan = {"version_goal": "让「我的」页面不再进了就退",
+                "themes": [{"title": "给我的页面明确入口", "covers": [], "root_cause": "入口不清楚", "evidence": "11 次里 6 次",
+                            "alternatives": "也可能在等更新", "confidence": "medium",
+                            "flow_change": "加标题", "changes": [{"file": JAVA, "intent": "加标题栏"}],
+                            "acceptance": ["进去能看到标题"], "metric": "快速退出占比", "risk": "L1"}],
+                "not_doing": [], "regressions": [], "principles": {"relies_on": ["P20"], "conflicts": []}}
+
+        class Gateway(FakeGateway):
+            def complete_json(inner, purpose, messages, check, attempts=3, max_tokens=1024):
+                inner.purposes.append((purpose, messages))
+                issues = re.findall(r"\[((?:quick_exit|back_and_forth):[0-9a-f]+)\]", messages[1]["content"])
+                answer = json.loads(json.dumps(plan))
+                answer["themes"][0]["covers"] = issues[:1]
+                self.assertIsNone(check(answer))
+                bad = json.loads(json.dumps(answer))
+                bad["themes"][0]["covers"] = ["made-up"]
+                self.assertIn("不是这批的问题编号", check(bad))
+                return answer, Completion(text="", provider="local", model="qwen", locality="local")
+
+        gateway = Gateway([])
+        gateway.available = lambda purpose: purpose == "iterate.version_plan"
+        posted = []
+        run = self.runner(gateway, posted=posted, settings=settings).run(force=True)
+        self.assertEqual(run["state"], "planned", run.get("error") or run["stages"])
+        detectors = {issue.detector for issue in IssueBook(self.state).issues.values()}
+        self.assertTrue({"quick_exit", "back_and_forth"} <= detectors)
+        purpose, messages = gateway.purposes[-1]
+        self.assertEqual(purpose, "iterate.version_plan")
+        self.assertIn("home → mine → settings", messages[1]["content"])   # real journeys go to the model
+        self.assertIn("让「我的」页面不再进了就退", posted[0]["title"])
+        self.assertIn("主题 1：给我的页面明确入口", run["report"])
+        self.assertIn("其他可能：也可能在等更新（把握：中）", run["report"])
+        covered = run["version_plan"]["themes"][0]["covers"][0]
+        self.assertEqual(IssueBook(self.state).issues[covered].status, "planned")
+
+    def test_complaints_made_before_the_running_app_version_are_left_out(self):
+        from xiaoyou_runtime.iterate.builtin import detectors
+        from xiaoyou_runtime.iterate.objects import Signal
+        old = Signal("a", "chat.feedback", NOW, "chat_feedback", {"category": "app_ui", "text": "头像偏右", "before_release": True})
+        new = Signal("b", "chat.feedback", NOW, "chat_feedback", {"category": "app_slow", "text": "同步有点慢", "before_release": False})
+        issues = detectors.complaint_cluster(None, [old, new])
+        self.assertEqual([issue.hints["category"] for issue in issues], ["app_slow"])
+
+
+class ReleasePhaseTest(IterateCase):
+    def test_use_right_after_a_release_or_before_installing_one_is_set_aside(self):
+        from xiaoyou_runtime.iterate.releases import phase
+        releases = [{"at": NOW - 10 * 3600, "version": "0.20.0"}, {"at": NOW, "version": "0.21.0"}]
+        self.assertEqual(phase(NOW - 9 * 3600, "0.20.0", releases), "settling")     # new version, 1 h in
+        self.assertIsNone(phase(NOW - 3600, "0.20.0", releases))                    # ordinary use
+        self.assertEqual(phase(NOW + 600, "0.20.0", releases), "updating")          # newer one not installed
+        self.assertEqual(phase(NOW + 600, "0.21.0", releases), "settling")
+        self.assertIsNone(phase(NOW - 11 * 3600, "0.19.0", releases))               # before any known release
+
+    def test_low_confidence_themes_become_not_doing(self):
+        from xiaoyou_runtime.iterate.builtin import version
+        from xiaoyou_runtime.iterate.objects import Issue
+        issue = Issue(fingerprint="quick_exit:1", detector="quick_exit", area="app", title="t", severity=3, count=5,
+                      first_seen=NOW, last_seen=NOW, hints={"screen": "mine"})
+        theme = {"title": "改我的页面", "covers": ["quick_exit:1"], "root_cause": "r", "evidence": "e",
+                 "alternatives": "主人在等更新", "confidence": "low", "flow_change": "f",
+                 "changes": [{"file": JAVA, "intent": "i"}], "acceptance": ["a"], "metric": "m", "risk": "L1"}
+        answer = {"version_goal": "g", "themes": [theme], "not_doing": [], "regressions": [],
+                  "principles": {"relies_on": [], "conflicts": []}}
+
+        class Gateway(FakeGateway):
+            def complete_json(inner, purpose, messages, check, attempts=3, max_tokens=1024):
+                self.assertIsNone(check(answer))
+                self.assertIn("发布时间线", messages[1]["content"])
+                return json.loads(json.dumps(answer)), Completion(text="", provider="l", model="q", locality="local")
+
+        plugin = plugins_module.builtin_registry().get("version_planner", "version_plan")
+        ctx = plugins_module.Context(plugin, self.settings, self.state, Gateway([]), now=NOW)
+        ctx.release_lines = ["10-20 11:55 发布 0.21.0"]
+        plan = version.version_plan(ctx, [{"key": "screen:mine", "title": "页面「mine」", "issues": [issue]}])
+        self.assertEqual(plan["themes"], [])
+        self.assertIn("把握低：主人在等更新", plan["not_doing"][0]["reason"])
+
+
+class NoticeTest(IterateCase):
+    def test_ordinary_toasts_are_not_errors(self):
+        EventStore(self.state).accept({"events": [
+            event("error", 1, screen="mine", message="已经是最新的了"),
+            event("error", 2, screen="home", message="已允许本次操作"),
+            event("error", 3, screen="chat", message="发送失败，连不上电脑")]}, received_at=NOW)
+        plugin = plugins_module.builtin_registry().get("source", "app_events")
+        ctx = plugins_module.Context(plugin, self.settings, self.state, now=NOW)
+        signals, _ = sources.app_events(ctx, None)
+        self.assertEqual(sorted(s.type for s in signals), ["app.error", "app.notice", "app.notice"])
+
+
+class InstrumentationTest(IterateCase):
+    def test_taps_and_update_sessions(self):
+        store = EventStore(self.state)
+        result = store.accept({"events": [
+            {"id": "t1", "type": "tap", "at": int(NOW * 1000), "session": "s9",
+             "client": {"kind": "android", "version": "0.21.1"},
+             "fields": {"screen": "settings:connection", "control": "row:App 更新", "region": "1,2", "text": "x"}},
+            {"id": "u1", "type": "update", "at": int(NOW * 1000) + 1, "session": "s9",
+             "client": {"kind": "android", "version": "0.21.1"}, "fields": {"result": "check"}}]})
+        self.assertEqual(result["accepted"], 2)
+        tap = [e for e in store.all() if e["type"] == "tap"][0]
+        self.assertEqual(tap["fields"], {"screen": "settings:connection", "control": "row:App 更新", "region": "1,2"})
+        names = ["mine", "settings:connection", "mine", "settings:connection", "mine", "home"]
+        store.accept({"events": [{"id": "s9-%d" % n, "type": "screen", "at": int((NOW + n) * 1000), "session": "s9",
+                                  "client": {"kind": "android", "version": "0.21.1"},
+                                  "fields": {"name": name, "ms": 900}} for n, name in enumerate(names)]})
+        settings = parse({"repo_dir": str(self.repo), "pipeline": {"version_planner": None}}, self.folder)
+        run = self.runner(settings=settings).run(force=True)
+        self.assertGreaterEqual(run["stages"]["release_phase"]["updating"], 6)
+        detectors = {issue.detector for issue in IssueBook(self.state).issues.values()}
+        self.assertNotIn("back_and_forth", detectors)   # checking for an update is not being lost

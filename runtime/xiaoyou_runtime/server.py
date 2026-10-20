@@ -47,6 +47,7 @@
   GET  /v1/app/apk                      安装包本身
   POST /v1/events                   {"events":[{"id","at","type","client","session","fields"}]} 各客户端的使用事件
                                        （见 iterate/events.py；/v1/app/events 是旧名字，同一个接口）
+  POST /v1/iterate/report            {"run_id","title","text","state"?} 一轮自动迭代的结果，在主对话里开一张事卡（见 iterate/notify.py）
   POST /v1/iterate/lease             {"action","stage","seconds"} 自动迭代申请、续约、放手租约（见 iterate/lease.py）
   POST /v1/reports                     {"origin","session_id","state"?,"text"?,"upstream_id"?,"title"?,"role"?}
                                         不在这台电脑上的会话报进展（只读显示，见 reports.py）
@@ -70,6 +71,7 @@ from .artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from .config import Config
 from .iterate.events import EventError, EventStore, types_from_dirs
 from .iterate import lease as iterate_lease
+from .iterate import notify as iterate_notify
 from . import model_gateway
 from .iterate.pipeline import settings_of as iterate_settings_of
 from .firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
@@ -559,6 +561,12 @@ def make_server(config: Config, service: Service,
                     if mesh is not None:
                         mesh.publish_events(result["events"])
                     self._send(200, {key: value for key, value in result.items() if key != "events"})
+                    return
+                if parts == ["v1", "iterate", "report"]:
+                    try:
+                        self._send(200, iterate_notify.deliver(service._xiaoyou.record, config.state_dir, body))
+                    except ValueError as error:
+                        self._fail(400, str(error))
                     return
                 if parts == ["v1", "iterate", "lease"]:
                     if not isinstance(body, dict):

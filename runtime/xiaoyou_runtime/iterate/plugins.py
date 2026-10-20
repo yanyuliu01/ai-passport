@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-KINDS = ("source", "detector", "triage", "planner", "implementer", "gate", "policy", "releaser",
+KINDS = ("source", "detector", "grouper", "version_planner", "triage", "planner", "implementer", "gate", "policy", "releaser",
          "observer")
 PERMISSIONS = ("read_state", "read_repo", "model", "write_worktree", "git_commit", "publish",
                "network")
@@ -33,6 +33,8 @@ CALLS = {
     "detector": "run(ctx, signals) -> [Issue]",
     "triage": "run(ctx, issues) -> Issue | None",
     "planner": "run(ctx, issue) -> plan dict",
+    "grouper": "run(ctx, issues) -> [{\"key\", \"title\", \"issues\"}]",
+    "version_planner": "run(ctx, groups) -> version plan dict",
 }
 
 
@@ -121,9 +123,9 @@ class Registry:
 
 
 def builtin_registry(extra_dirs: Optional[List[Path]] = None) -> Registry:
-    from .builtin import detectors, planner, sources, triage
+    from .builtin import detectors, planner, sources, triage, version
     registry = Registry()
-    for module in (sources, detectors, triage, planner):
+    for module in (sources, detectors, triage, planner, version):
         registry.add_module(module, "builtin")
     for folder in extra_dirs or []:
         registry.load_dir(folder)

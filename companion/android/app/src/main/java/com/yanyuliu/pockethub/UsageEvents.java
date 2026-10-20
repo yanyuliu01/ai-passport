@@ -94,10 +94,39 @@ final class UsageEvents {
         record("error", fields);
     }
 
-    static void rageTap(String screen, String region, int count) {
+    static void rageTap(String screen, String region, int count, String control) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("screen", screen); fields.put("region", region); fields.put("count", count);
+        if (control != null && !control.isEmpty()) fields.put("control", control);
         record("rage_tap", fields);
+    }
+
+    /** A tap on a control. The name is App-authored (see MainActivity.ctl), never on-screen content. */
+    static void tap(String screen, String control, String region) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("screen", screen); fields.put("control", control); fields.put("region", region);
+        record("tap", fields);
+    }
+
+    /** An ordinary hint shown to the owner; not an error. */
+    static void notice(String screen, String message) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("screen", screen); fields.put("message", message);
+        record("notice", fields);
+    }
+
+    /** One step of updating the app: check, up_to_date, available, download_*, install_*, *_failed. */
+    static void update(String result, String version) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("result", result);
+        if (version != null && !version.isEmpty()) fields.put("version", version);
+        record("update", fields);
+    }
+
+    /** A button label as a control name: digits become "#", so counts and versions never vary the name. */
+    static String controlName(String label) {
+        String name = label == null ? "" : label.replaceAll("[0-9]+", "#").trim();
+        return name.length() > 40 ? name.substring(0, 40) : name;
     }
 
     static void record(String type, Map<String, Object> fields) {

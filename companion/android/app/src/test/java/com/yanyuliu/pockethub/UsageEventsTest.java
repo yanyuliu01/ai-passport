@@ -59,6 +59,16 @@ public class UsageEventsTest {
         assertEquals(Arrays.asList("c", "d"), UsageEvents.dropSent(Arrays.asList("b", "c", "d"), sent));
     }
 
+    @Test public void controlNamesNeverCarryCountsOrVersions() {
+        assertEquals("button:查看全部 # 条记录", "button:" + UsageEvents.controlName("查看全部 128 条记录"));
+        assertEquals("v#.#.#", UsageEvents.controlName("v0.21.1"));
+        String longLabel = new String(new char[50]).replace('\0', '字');
+        assertEquals(40, UsageEvents.controlName(longLabel).length());
+        assertEquals("connection", MainActivity.settingsName(0));
+        assertEquals("notifications", MainActivity.settingsName(1));
+        assertEquals("preferences", MainActivity.settingsName(2));
+    }
+
     @Test public void fourQuickTapsOnOneSpotAreARageTap() {
         UsageEvents.RageTap rage = new UsageEvents.RageTap(50);
         assertEquals(0, rage.tap(100, 100, 1000));

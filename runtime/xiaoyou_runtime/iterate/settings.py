@@ -9,13 +9,16 @@ from typing import Any, Dict, List, Optional
 DEFAULT_PIPELINE: Dict[str, Any] = {
     "source": ["app_events", "chat_feedback", "card_failures", "reply_latency"],
     "detector": ["crash", "app_errors", "rage_tap", "slow_first_reply", "complaint_cluster",
-                 "task_failures"],
+                 "task_failures", "quick_exit", "back_and_forth"],
+    # 外层循环：一批问题归组后写成一份版本方案。设成 null 时退回一次只挑一个问题（triage + planner）。
+    "grouper": "by_screen",
+    "version_planner": "version_plan",
     "triage": "score_by_impact",
     "planner": "template_plan",
     "implementer": None,
 }
 LIST_STAGES = ("source", "detector", "gate")
-SINGLE_STAGES = ("triage", "planner", "implementer", "policy", "releaser", "observer")
+SINGLE_STAGES = ("grouper", "version_planner", "triage", "planner", "implementer", "policy", "releaser", "observer")
 AREAS = ("app", "runtime", "agent")
 
 
