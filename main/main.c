@@ -37,6 +37,8 @@
 #include "buddy_state.h"
 #include "pocket_text.h"
 #include "pocket_ui.h"
+#include "pocket_images.h"
+#include "pocket_images_ui.h"
 #include "pocket_update.h"
 #include "pocket_view.h"
 #include "pocket_voice.h"
@@ -151,7 +153,7 @@ static buddy_rx_slot_t s_rx_slots[BUDDY_RX_SLOT_COUNT];
  * 真的需要加大时，先看设备报的内存余量（fw info 里的 heap / low），再改这个数。 */
 #define BUDDY_STATIC_BUDGET_BYTES (34U * 1024U)
 _Static_assert(sizeof(s_rx_slots) + sizeof(buddy_state_t) + sizeof(buddy_event_t) +
-                       sizeof(buddy_ui_snapshot_t) <= BUDDY_STATIC_BUDGET_BYTES,
+                       sizeof(buddy_ui_snapshot_t) + POCKET_IMAGES_STATIC_BYTES <= BUDDY_STATIC_BUDGET_BYTES,
                "fixed memory over budget: the board has no PSRAM, see the comment above");
 static portMUX_TYPE s_rx_pool_lock = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE s_view_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -1007,7 +1009,16 @@ static int buddy_render(buddy_state_t *state, const buddy_action_t *action, uint
     if (!bsp_lvgl_lock(1000)) {
         return 0;
     }
+    const char *image_card = snapshot.card_live ? snapshot.chat.card :
+        snapshot.cards && snapshot.card_index >= 0 && snapshot.card_index < (int)snapshot.cards->count
+            ? snapshot.cards->cards[snapshot.card_index].id : "";
+    bool images_enabled = snapshot.host_hub && !snapshot.screen_off && snapshot.page == BUDDY_PAGE_TALK &&
+        pocket_view_for(&snapshot) == POCKET_VIEW_PAGE && state->ble_encrypted && state->ble_connected;
+    pocket_images_focus(image_card, images_enabled, state->ble_connection_generation, now_ms);
+    snapshot.image_available = pocket_images_available();
     pocket_ui_render(&snapshot);
+    pocket_images_ui(pocket_images_open(), pocket_images_pixels(),
+                     pocket_images_caption());
     if (action->type == BUDDY_ACTION_UI_SCROLL) {
         edge = pocket_ui_scroll(action->scroll_delta);
     }
@@ -1022,6 +1033,17 @@ static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
                             buddy_action_t *action)
 {
     buddy_orchestrator_ops_t ops = buddy_orchestrator_ops(state);
+    /* Use the existing strict UTF-8/depth/NUL validator before the additive command. */
+    int parsed = buddy_protocol_parse(slot->data, slot->length, event);
+    if (parsed == BUDDY_EVENT_UNKNOWN_COMMAND && strcmp(event->command.name, "image") == 0) {
+        if (buddy_ble_is_generation_secure(slot->connection_generation) && bsp_lvgl_lock(1000)) {
+            pocket_images_ui_detach();
+            (void)pocket_images_line(slot->data, slot->length);
+            pocket_images_ui(pocket_images_open(), pocket_images_pixels(), pocket_images_caption());
+            bsp_lvgl_unlock();
+        }
+        return true;
+    }
 
     /* 事件结构有几 KB，解析到应用任务那个静态的缓冲里，不放在任务栈上。 */
     return buddy_orchestrator_process_rx_into(state, &ops, slot->data, slot->length,
@@ -1064,6 +1086,12 @@ static QueueHandle_t buddy_wait_for_queue(void)
     return ready;
 }
 
+static size_t buddy_image_free_heap(void) { return esp_get_free_heap_size(); }
+static bool buddy_image_send(const char *data, size_t length, uint32_t generation)
+{
+    return buddy_ble_send_for_generation(data, length, generation) == ESP_OK;
+}
+
 static void buddy_app_task(void *context)
 {
     static buddy_state_t state;
@@ -1075,6 +1103,8 @@ static void buddy_app_task(void *context)
 
     (void)context;
     (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    const pocket_images_ops_t image_ops = {buddy_image_free_heap, buddy_image_send};
+    pocket_images_init(&image_ops);
     buddy_state_init(&state, &s_initial_settings);
     buddy_sample_battery(&state);
 
@@ -1097,7 +1127,17 @@ static void buddy_app_task(void *context)
                 !(control.type == BUDDY_CONTROL_KEY &&
                   pocket_update_shown(pocket_update_phase())) &&
                 buddy_control_to_event(&control, &state, &event)) {
-                buddy_state_reduce(&state, &event, now_ms, &action);
+                bool image_key = false;
+                if (state.page == BUDDY_PAGE_TALK && !state.screen_off &&
+                    !state.passkey_visible && state.confirmation == BUDDY_CONFIRM_NONE &&
+                    !state.prompt.id[0] && state.voice_phase == BUDDY_VOICE_IDLE &&
+                    state.ble_encrypted && state.ble_connected && bsp_lvgl_lock(1000)) {
+                    pocket_images_ui_detach();
+                    image_key = pocket_images_key(&event);
+                    pocket_images_ui(pocket_images_open(), pocket_images_pixels(), pocket_images_caption());
+                    bsp_lvgl_unlock();
+                }
+                if (!image_key) buddy_state_reduce(&state, &event, now_ms, &action);
                 reduced = true;
             }
         } else if (ready == s_rx_priority_queue || ready == s_rx_normal_queue) {

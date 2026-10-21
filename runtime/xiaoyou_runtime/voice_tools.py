@@ -270,6 +270,9 @@ class Toolbox:
         return self._promises is not None and LATER_PROMISE.search(said) is not None \
             and not names & {"track", "start_task"}
 
+    def speaking(self) -> "SpeakingTools":
+        return SpeakingTools(self)
+
     def fields(self, said: str) -> Dict[str, Any]:
         """这一轮的结果，写成和以前 JSON 一样的字段，交给 Xiaoyou 照原来的路办。
 
@@ -280,6 +283,32 @@ class Toolbox:
                     "mood": "happy"}
         return {"reply": said, "card": self.card or "new", "action": self.action,
                 "mood": "busy" if self.action["type"] in ("start", "amend") else "happy"}
+
+
+class SpeakingTools:
+    """The speaking phase can look things up, but cannot make another commitment."""
+
+    def __init__(self, parent: Toolbox):
+        self.parent = parent
+        self.calls: List[Tuple[str, Dict[str, Any]]] = []
+        self.action = None
+        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall"}
+
+    def definitions(self) -> List[Dict[str, Any]]:
+        return [tool for tool in self.parent.definitions() if tool["name"] in self.allowed]
+
+    def call(self, name: str, args: Any) -> Tuple[str, bool]:
+        self.calls.append((name, args))
+        if name not in self.allowed:
+            return "说话阶段不能改变任务、记忆或约定", True
+        return self.parent.call(name, args)
+
+    def promised(self, said: str) -> bool:
+        return False
+
+    def fields(self, said: str) -> Dict[str, Any]:
+        return {"reply": said, "card": self.parent._looked or "new",
+                "action": {"type": "none"}, "mood": "happy"}
 
 
 def _due(value: Any) -> Tuple[Optional[float], Optional[str]]:

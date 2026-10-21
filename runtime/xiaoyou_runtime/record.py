@@ -81,7 +81,7 @@ class Record:
 
     # ---- 说的话 ----
 
-    def exchange(self, card_id: str, said: Optional[str], say: str, *, turn_id: Optional[str] = None,
+    def exchange(self, card_id: str, said: Optional[str], say: Optional[str], *, turn_id: Optional[str] = None,
                  scope: str = "main", kind: str = "reply", **fields: Any) -> Optional[Dict[str, Any]]:
         """主人说的一句（said，可以没有）和对它的回答（say）。编号是 turn_id + :you / :reply。"""
         self._check(scope, kind)

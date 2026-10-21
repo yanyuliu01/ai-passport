@@ -1,6 +1,8 @@
 idf_component_register(
     SRCS "main.c"
          "pocket_ui.c"
+         "pocket_images.c"
+         "pocket_images_ui.c"
          "pocket_view.c"
          "pocket_pet.c"
          "pocket_voice.c"

@@ -332,6 +332,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
 
     text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
     start: Dict[str, Any] = {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
+    start["input"].extend({"type": "localImage", "path": str(path)} for path in job.images)
     if job.schema:
         start["outputSchema"] = job.schema
     # 模型和努力程度每一轮都明说：接着做的线程里上一轮可能用的是别的。

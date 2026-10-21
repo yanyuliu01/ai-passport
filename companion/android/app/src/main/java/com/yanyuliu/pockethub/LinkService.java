@@ -77,6 +77,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     private String lastTasks = "";
     /** 让设备上的固件和电脑上指定的那一版保持一致。 */
     private FirmwareSync firmware;
+    private DeviceImages images;
 
     static void start(Context context) {
         Intent intent = new Intent(context, LinkService.class);
@@ -95,6 +96,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
     public void onCreate() {
         super.onCreate();
         link = new BleLink(this, this);
+        images = new DeviceImages(this, link);
         firmware = new FirmwareSync(this, link, () -> recording != null);
         firmware.start();
         HubStore.get().addListener(this);
@@ -123,6 +125,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         main.removeCallbacksAndMessages(null);
         HubStore.get().removeListener(this);
         firmware.stop();
+        images.close();
         link.stop();
         super.onDestroy();
     }
@@ -161,6 +164,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         link.send(BuddyProtocol.time(now / 1000L, zone.getOffset(now) / 1000));
         link.send(BuddyProtocol.hubHello());
         recording = null;
+        images.reset(false);
         lastHeartbeat = "";
         lastTurnKey = "";
         lastChat = "";
@@ -189,6 +193,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
 
     @Override
     public void onLine(String line) {
+        if (images.onLine(line)) return;
         if (firmware.onLine(line)) {
             return;
         }
@@ -224,6 +229,8 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         }
         Boolean hub = BuddyProtocol.parseHubAck(line);
         if (hub != null) {
+            Map<String, Object> hello = Json.parseObject(line);
+            images.reset(hello != null && Json.number(hello, "images") == 1);
             deviceChat = BuddyProtocol.hubAckHasChat(line);
             deviceCards = deviceChat && BuddyProtocol.hubAckHasCards(line);
             deviceThreads = deviceCards && BuddyProtocol.hubAckHasThreads(line);
@@ -345,6 +352,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             cardsEpochSent = store.cardsEpoch();
             sentCards.clear();
             link.send(BuddyProtocol.cardClear());
+            images.clear();
         }
         List<Card> all = store.cards();
         // 第三屏的单子：在做的任务，分开显示的固件上再接着最近做完的。把做完的事另列
@@ -380,6 +388,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
                 link.send(line);
             }
             kept.put(card.id, line);
+            images.offer(card);
         }
         tasksGoing = false;
         for (Card card : listed) {

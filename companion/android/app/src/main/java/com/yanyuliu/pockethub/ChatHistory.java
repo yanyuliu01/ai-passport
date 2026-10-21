@@ -11,6 +11,7 @@ final class ChatHistory {
     static final class Message {
         String id, card, scope, role, text, status, kind;
         String clientId;
+        List<Attachment> attachments = new ArrayList<>();
         double at;
         boolean synced;
         Message(String id, String card, String scope, String role, String text, String status,
@@ -29,6 +30,11 @@ final class ChatHistory {
         String scope = target.isEmpty() ? "main" : "task";
         put(new Message(id + ":you", target, scope, "you", text, "sending", "user", at, false));
         put(new Message(id + ":reply", target, scope, "xiaoyou", "", "thinking", "reply", at, false));
+    }
+
+    void image(String id, Attachment item) {
+        Message message = messages.get(id + ":you");
+        if (message != null && item != null) message.attachments = java.util.Collections.singletonList(item);
     }
 
     private void put(Message message) { messages.put(message.id, message); }
@@ -150,6 +156,7 @@ final class ChatHistory {
             }
             Message next = new Message(id, card.id, scope, entry.role, text, "done", kind,
                     known != null ? known.at : entry.at > 0 ? entry.at : card.createdAt + index * .001, true);
+            next.attachments = entry.attachments;
             if (known != null) next.clientId = known.clientId;
             put(next);
         }
@@ -170,9 +177,12 @@ final class ChatHistory {
         if (known != null && (!known.synced || known.status.equals("done"))) return false;
         boolean you = item.role.equals("you");
         String status = you ? "sent" : item.text.isEmpty() ? "thinking" : "streaming";
-        if (known != null && known.text.equals(item.text) && known.status.equals(status)) return false;
+        if (known != null && known.text.equals(item.text) && known.status.equals(status)
+                && known.attachments.size() == item.attachments.size()
+                && (item.attachments.isEmpty() || known.attachments.get(0).id.equals(item.attachments.get(0).id))) return false;
         Message next = new Message(item.id, item.task, item.scope, item.role, item.text, status,
                 you ? "user" : "reply", known != null ? known.at : item.at, true);
+        next.attachments = item.attachments;
         next.clientId = "";
         put(next);
         if (summary(next)) messages.remove(next.card + ":summary-live");
@@ -234,7 +244,7 @@ final class ChatHistory {
                     && (!unsynced || !message.synced)) {
                 Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
                         message.status, message.kind, message.at, message.synced);
-                copy.clientId = message.clientId; result.add(copy);
+                copy.clientId = message.clientId; copy.attachments = message.attachments; result.add(copy);
             }
         }
         result.sort(Comparator.comparingDouble((Message message) -> message.at)
@@ -253,6 +263,11 @@ final class ChatHistory {
             for (int i = 0; i < names.length; i++) {
                 if (i > 0) out.append(','); BuddyProtocol.quote(out, names[i]); out.append(':'); BuddyProtocol.quote(out, values[i]);
             }
+            out.append(",\"attachments\":[");
+            for (int i = 0; i < message.attachments.size(); i++) {
+                if (i > 0) out.append(','); out.append(message.attachments.get(i).json());
+            }
+            out.append(']');
             out.append(",\"client_id\":"); BuddyProtocol.quote(out, message.clientId);
             out.append(",\"at\":").append(message.at).append(",\"synced\":").append(message.synced).append('}');
         }
@@ -273,6 +288,7 @@ final class ChatHistory {
                     Json.string(item, "role"), Json.string(item, "text"), status, Json.string(item, "kind"),
                     Json.number(item, "at"), Json.flag(item, "synced"));
             if (!Json.string(item, "client_id").isEmpty()) message.clientId = Json.string(item, "client_id");
+            message.attachments = Attachment.parse(item);
             history.put(message);
         }
         return history;

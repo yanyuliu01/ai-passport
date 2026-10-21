@@ -47,16 +47,9 @@ public class ChatPlanTest {
 
     @Test public void whileSheIsTypingOnlyFinishedMessagesShow() {
         assertTrue(AppPresentation.settledBubbles("好了，我看", false).isEmpty());
-        assertEquals(Arrays.asList("好了。"), AppPresentation.settledBubbles("好了。
----
-另外说", false));
-        assertEquals(Arrays.asList("好了。", "另外"), AppPresentation.settledBubbles("好了。
----
-另外
----", false));
-        assertEquals(Arrays.asList("好了。", "另外说一句"), AppPresentation.settledBubbles("好了。
----
-另外说一句", true));
+        assertEquals(Arrays.asList("好了。"), AppPresentation.settledBubbles("好了。\n---\n另外说", false));
+        assertEquals(Arrays.asList("好了。", "另外"), AppPresentation.settledBubbles("好了。\n---\n另外\n---", false));
+        assertEquals(Arrays.asList("好了。", "另外说一句"), AppPresentation.settledBubbles("好了。\n---\n另外说一句", true));
         assertTrue(AppPresentation.settledBubbles(null, false).isEmpty());
     }
 

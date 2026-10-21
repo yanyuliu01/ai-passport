@@ -334,6 +334,24 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 `remote_actionable: true`，电脑端会话卡本身也仍然只读。
 手机需要 Android 通知权限才能在后台提醒；没有该权限，审批仍可在 App 内查看。
 
+## 先决定再说话（0.19.0，需主动开启）
+
+`xiaoyou.decide_first` 默认是 `false`。使用流式 DeepSeek 作为小幽的声音时，
+开启后先用非流式请求选择至多一个承诺，检查并实际落实，再生成可见回复。
+说话阶段只能查看任务详情或翻旧记录。记忆、约定和主动唤醒也采用同样的分离；
+只输出 JSON 的代理及结果转述沿用原有路径。
+
+决定阶段时限是 1.3 秒。超时就带着“本轮尚未落实承诺”的真实事实开始说话；
+迟到的决定直接丢弃，不执行工具。拒绝原因作为事实传给说话阶段。说话失败时，
+不会重做已经落实的操作。两阶段共用小幽单次调用的总时限。工具结果作为协议
+消息保留，不新增隐藏提醒提示。诊断只包含轮次编号、决定状态和耗时、服务端
+首段正文、总耗时及“像承诺却未承诺”的计数，不包含消息原文；服务端首段正文
+耗时不等于客户端实际显示的 TTFT。
+
+在完成[切换方案](../docs/development/decide-then-speak.zh_CN.md)要求的 Mac
+基线与真实 App／Runtime／设备计时、恢复验证前，保持关闭。Windows 单元测试
+不能证明第一条完整气泡在三秒内出现。开关关闭时保留原提醒通道。
+
 ## 记忆、翻旧账、答应的事、主动说话、插话（0.18.0）
 
 参考 Muse 的记忆和投递做法，这一版把“记住”“主动说”做成 Runtime 里的机制，模型负责判断：
@@ -437,6 +455,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | `xiaoyou.voice_agent` | 默认代理；它只干活时取第一个能说话的 | 只干活的代理做完之后，由谁用小幽的口吻转述。 |
 | `xiaoyou.max_parallel` | `0` | 同时在做的事最多几件（0 到 64）；`0` 是不限。超过的排队。 |
 | `xiaoyou.voice_timeout_seconds` | `60` | 小幽自己接一句话最长多久（5 到 600）。这一步不给工具，只是听懂和分派。 |
+| `xiaoyou.decide_first` | `false` | 流式 DeepSeek 的先决定再说话通道，默认关闭，实测验收后再推广。 |
 | `xiaoyou.max_handoffs` | `2` | 0.4 的设置，现在不起作用；留着只为旧配置能读。 |
 | `xiaoyou.router.type` | `mention` | `mention` 或 `command`，见[这句话交给谁](#这句话交给谁)。 |
 | `xiaoyou.router.command` | `[]` | `command`：用来判断的命令。 |
@@ -1570,3 +1589,8 @@ python3 runtime/tests/test_desktop_approvals.py
 python3 runtime/tests/test_artifacts.py
 python3 runtime/tests/test_artifact_delivery.py
 ```
+
+## 主人图片输入
+
+图片上传需在 Runtime 环境执行 `python -m pip install -r requirements-images.txt`。
+鉴权上传和消息协议、支持的看图路由与兼容边界见[图片消息](../docs/development/multimodal-images.zh_CN.md)。

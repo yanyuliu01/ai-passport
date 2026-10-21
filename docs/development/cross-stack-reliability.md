@@ -76,7 +76,11 @@ it on reconnect, retry, or fallback.
 Only nonempty assistant body text that responds meaningfully to this turn
 counts. Typing animations, transport heartbeats, reasoning-only events, HTTP
 acknowledgements, canned acknowledgements, task cards, and error messages do not
-count. Long tool/helper work must allow a genuine initial model response and
+count. The owner selected complete-message bubbles on 2026-10-20: the App may
+wait for an explicit message boundary or completion before showing that bubble.
+Measure the first meaningful complete bubble, including buffering and animation
+delay; the 3,000 ms requirement is unchanged. Never count the typing indicator.
+Long tool/helper work must allow a genuine initial model response and
 then continue asynchronously; neither initial text nor task creation proves
 the requested work has finished. A task whose meaningful response depends on a
 slow tool remains subject to this deadline; do not fabricate results.
@@ -94,8 +98,10 @@ fallbacks. Never silently exclude slow samples or timeouts from the report.
   Do not subtract unrelated machines' wall clocks or log private message/audio
   content or credentials to obtain timing evidence.
 - Allocate the 3,000 ms budget across all stages before adding work to the
-  critical path. Stream meaningful deltas immediately; do not buffer to a full
-  sentence or completed response. Bound growing history/context and expensive
+  critical path. Forward meaningful deltas immediately. The App may present
+  completed short messages as whole bubbles; encourage a short, meaningful first
+  message, and measure the actual visible result against the same deadline.
+  Do not hold the entire multi-message response until all messages finish. Bound growing history/context and expensive
   discovery without silently dropping required memory or permissions.
 - Keep conversation, feed/sync, cancellation, approval, and health handling
   responsive while tools, transcription, downloads, updates, or models run.

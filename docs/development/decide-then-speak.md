@@ -4,9 +4,10 @@
 
 # Decide, then speak
 
-Status: design draft (2026-10-20). The owner asked to redesign how the Runtime keeps what Xiaoyou
-says consistent with what she does, and to leave a record so another agent (Codex) can take over.
-Nothing in "Design" below is implemented yet. It must satisfy the
+Status: opt-in implementation (2026-10-20), Runtime 0.19.0. Phase 1 is implemented
+behind `xiaoyou.decide_first`, default off. Mac baseline collection and live
+acceptance are pending; this is not the default path. The owner asked to redesign
+how the Runtime keeps what Xiaoyou says consistent with what she does. It must satisfy the
 [cross-stack reliability rules](cross-stack-reliability.md), above all the 3-second first-response
 contract.
 
@@ -121,8 +122,9 @@ These are targets, not measurements. Phase 0/1 numbers decide whether they hold.
 If they do not, two fallbacks keep the contract, chosen by measurement:
 
 - **Deadline fallback.** Give D a hard deadline (about 1.3 s). On timeout, start S immediately with
-  the instruction "nothing has been started yet, do not say you are doing it; ask or answer". Let D
-  finish in the background: if it commits, S's next turn and the card reflect it.
+  the instruction "nothing has been started yet, do not say you are doing it; ask or answer".
+  The opt-in implementation discards a late decision without executing it. A future background
+  commitment would require explicit reconciliation before speech could claim it happened.
 - **Parallel start.** Start D and S together; S begins with lookup tools only and the same "nothing
   started yet" rule. This trades a little expressiveness for latency.
 
@@ -147,7 +149,8 @@ If they do not, two fallbacks keep the contract, chosen by measurement:
 
 1. **Phase 0: evidence.** Run the script on the Mac and write the numbers into this document.
 2. **Phase 1: telemetry and flag.** Add the per-turn log line, and implement D/S behind a config flag
-   (`voice.decide_first`, default off). Unit tests (`runtime/tests/test_streaming.py`) cover:
+   (`xiaoyou.decide_first`, default off). Unit tests (`runtime/tests/test_decision.py`
+   and `runtime/tests/test_streaming.py`) cover:
    - a hand-off spoken once;
    - a lookup followed by words;
    - a refused commitment;
@@ -161,6 +164,53 @@ If they do not, two fallbacks keep the contract, chosen by measurement:
 Each phase reports in the delivery format of the [reliability rules](cross-stack-reliability.md#validation-and-delivery).
 
 ## Hand-off notes
+
+- **Windows continuation (2026-10-20).** JDK 17, Gradle 8.9, Android SDK 34 and
+  build-tools 34.0.0 are installed. The App's Windows Python command selection,
+  literal line breaks in Java tests, and pending-row view type were corrected.
+  The owner explicitly retained complete-message bubbles; both reliability
+  guides now allow that presentation while retaining the same measured 3-second
+  requirement. Typing indicators are excluded.
+- **Decision/speech implementation.** Twelve deterministic tests cover dispatch
+  before speech, one visible acknowledgement, read-only lookups, refused and
+  multiple commitments, interruption, discarded late decisions, and absence of
+  hidden reminder messages. JSON-only voices and result relays are unchanged.
+- **Remaining rollout.** The Mac was offline and SSH unavailable. On Windows,
+  the session statistics contained zero tool sessions, so they are not a useful
+  baseline. The owner asked to finish Windows first. Phases 0, 2 and 3 remain
+  pending; do not turn the flag on or remove the legacy path on that evidence.
+- **Windows suite baseline.** Before these changes, 624 Runtime tests ran with
+  eight failures, 55 errors and two skips. Record changed test identities against
+  this baseline; do not describe those platform failures as a passing full gate.
+- **Windows validation.** App 0.26.1 (version code 48) built all five APKs and
+  passed 139 unit tests; the universal APK signature verified. The new decision
+  tests (12), existing streaming tests (30), record tests (6), and repository
+  checks passed. The final full Runtime run executed 636 tests: eight failures,
+  57 errors, two skips. All 63 baseline failing/error identities remained; two
+  additional HTTP tests hit Windows connection-aborted errors and passed when
+  rerun together. The static and complete gates stop at actionlint's unsupported
+  Windows platform; ESP-IDF 5.5.3 is also unavailable. Do not claim a full gate
+  pass. First response <=3s, device recovery, multi-end sync and phone install
+  remain NOT RUN. Evidence logs are under `%LOCALAPPDATA%/XiaoyouBuild/`.
+- **Windows deployment (2026-10-21).** Runtime 0.19.0 is healthy under the existing
+  keepalive supervisor, listening on loopback and Tailscale; authenticated agent
+  and feed reads passed. `decide_first` remains off. App 0.26.1 and the four-file
+  speech pack are published through this Runtime. All ABI-specific APKs have
+  verified hosted URLs; the universal APK and speech pack are served locally
+  after the large universal GitHub upload was interrupted. Metadata, ETags and
+  HTTP Range reads passed for all five APKs and all four speech files. This does
+  not verify phone installation or recovery over a real dropped connection.
+- **Live API probes.** One isolated legacy-path call produced server body at
+  0.995 s and completed at 1.157 s. One isolated D/S call timed out its decision
+  at 1.309 s, then the speaking call took 6.969 s to first server body; total
+  time was 8.502 s. That candidate misses the 3-second budget and stays disabled.
+  These are single API samples, not client-rendered TTFT or a rollout baseline;
+  no owner conversation or task was changed by the probes.
+- **Recovery.** State files were copied to
+  `%LOCALAPPDATA%/XiaoyouBuild/runtime-backup-pre-0.19.0-20261020` before the
+  idle service restart. No local configuration or state schema was changed.
+  Keep the opt-in flag off; the existing legacy path is the current recovery
+  route. Do not restore a snapshot over live work without a separate review.
 
 - **Branch.** The work is on `feature/usage-history`. The commit that adds this document contains the
   Runtime 0.18.2 change, `tools/reminder_stats.py` and the App's `ChatHistory` change (one copy of the

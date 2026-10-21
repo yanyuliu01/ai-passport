@@ -390,7 +390,8 @@ class MessageLog:
             else {"kind": "xiaoyou", "name": "xiaoyou"},
             "kind": "user" if you else "reply",
             "reply_to": None if you else message["id"] + ":you",
-            "text": "", "partial": "", "source": {"type": "runtime"}, "attachments": [],
+            "text": "", "partial": "", "source": {"type": "runtime"},
+            "attachments": [dict(item) for item in message.get("attachments", [])] if you else [],
             "created_at": message.get("created_at") or 0,
         }
 

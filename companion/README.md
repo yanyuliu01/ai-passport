@@ -335,6 +335,9 @@ gestures; the Runtime API is unchanged.
   as it is finished; several finished at once pop one after another. Your own messages pop in from the bottom
   right. The home line and task page follow the same rule. The Runtime still streams; only the app's display
   changed.
+- 0.26.1: fixes the pending-row view type and malformed test strings that blocked compilation,
+  and selects Python correctly on Windows (`PYTHON` can override the executable).
+  Complete-message bubbles, task-card deduplication and stable redraws are retained.
 - With system animations turned off everything jumps straight to its end state. Not yet checked on a phone.
 
 ## Quick review (0.21.0)
@@ -771,3 +774,9 @@ device shows its fourth screen only after the phone has received usage from
 the runtime during the current connection, and three screens otherwise),
 reconnecting by itself after the app is
 restarted, background behavior over hours, and real assistant notifications.
+
+## Image messages
+
+The main-chat composer can upload an image with optional text. Received image
+attachments open from their message. Optional device previews, supported routes,
+limits and verification are described in [Image messages](../docs/development/multimodal-images.md).

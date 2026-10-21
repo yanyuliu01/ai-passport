@@ -420,7 +420,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         chatView.setOnClickListener(view -> { if (nowJump != null) open(nowJump); }); ctl(chatView, "chat-now");
         composer.addView(chatView);
         LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
-        // 附件按钮等电脑端能收手机附件后再出现，不放一个点了没用的按钮。
+        addImage = button("加图", view -> chooseImage());
+        addImage.setContentDescription("选择图片；选好后点击移除");
+        row.addView(addImage, new LinearLayout.LayoutParams(dp(62), dp(44)));
+        draftPreview = new ImageView(this); draftPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        draftPreview.setVisibility(View.GONE); composer.addView(draftPreview, new LinearLayout.LayoutParams(-1, dp(96)));
+        draftPreview.setOnClickListener(view -> { if (draftImage != null) openAttachment(draftImage, imageTarget); });
         chatInput = input("跟小幽说…");
         chatInput.setSingleLine(false); chatInput.setMaxLines(4);
         chatInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -485,6 +490,21 @@ public class MainActivity extends Activity implements HubStore.Listener {
             openAgent = savedInstanceState.getString("openAgent");
             Bundle savedDrafts = savedInstanceState.getBundle("drafts");
             if (savedDrafts != null) for (String key : savedDrafts.keySet()) drafts.put(key, savedDrafts.getString(key, ""));
+        }
+        if (savedInstanceState != null) {
+            RuntimeClient.Target selected = RuntimeClient.selected(this);
+            String saved = savedInstanceState.getString("draftImage");
+            if (saved != null && selected != null && selected.url.equals(savedInstanceState.getString("draftImageRuntime"))) {
+                Map<String, Object> rawImage = Json.parseObject(saved);
+                draftImage = rawImage == null ? null : Attachment.from(rawImage);
+                if (draftImage != null) {
+                    imageTarget = selected; addImage.setText("移除图"); draftPreview.setVisibility(View.VISIBLE);
+                    Attachment restored = draftImage;
+                    ArtifactClient.fetch(this, selected, restored, true, (file, detail) -> {
+                        if (file != null && draftImage == restored) draftPreview.setImageBitmap(scaledBitmap(file, 400));
+                    });
+                }
+            }
         }
         setContentView(frame);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -1194,6 +1214,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Bundle savedDrafts = new Bundle();
         for (Map.Entry<String, String> entry : drafts.entrySet()) savedDrafts.putString(entry.getKey(), entry.getValue());
         state.putBundle("drafts", savedDrafts);
+        if (draftImage != null && imageTarget != null) {
+            state.putString("draftImage", draftImage.json()); state.putString("draftImageRuntime", imageTarget.url);
+        }
         super.onSaveInstanceState(state);
     }
 
@@ -1321,9 +1344,41 @@ public class MainActivity extends Activity implements HubStore.Listener {
         logView.setText(lines.length() == 0 ? "（还没有记录）" : lines.toString());
     }
 
+    private Attachment draftImage;
+    private RuntimeClient.Target imageTarget;
+    private long imageSelection;
+    private boolean imageUploading;
+    private Button addImage;
+    private ImageView draftPreview;
+
+    private void chooseImage() {
+        if (tab != TAB_CHAT) { toast("请在主对话添加图片，任务续聊暂不支持带图"); return; }
+        if (draftImage != null) {
+            draftImage = null; imageTarget = null; ++imageSelection;
+            draftPreview.setVisibility(View.GONE); addImage.setText("加图"); updateSendState(); return;
+        }
+        if (imageUploading) { toast("图片正在上传"); return; }
+        imageTarget = RuntimeClient.selected(this);
+        if (imageTarget == null) { toast("先连接电脑，再添加图片"); return; }
+        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/*"), 54);
+    }
+
     private void sendChat() {
         String message = chatInput.getText().toString().trim();
-        if (message.isEmpty()) return;  // 她还在回上一句时也能发：插话
+        if (imageUploading) { toast("图片还在上传，请稍等"); return; }
+        boolean withImage = draftImage != null && tab == TAB_CHAT;
+        if (message.isEmpty() && !withImage) return;
+        if (withImage) {
+            RuntimeClient.Target selected = RuntimeClient.selected(this);
+            if (selected == null || imageTarget == null || !selected.url.equals(imageTarget.url)
+                    || !selected.token.equals(imageTarget.token)) {
+                toast("电脑已切换，请移除图片后重新选择"); return;
+            }
+            RuntimeClient.sendImage(this, message, draftImage);
+            draftImage = null; imageTarget = null; addImage.setText("加图"); draftPreview.setVisibility(View.GONE);
+            chatInput.setText(""); drafts.remove(composerContext); updateSendState(); scrollDown(); return;
+        }
         if (RuntimeClient.selected(this) == null) { toast("先到侧边栏「连接与设置」添加电脑"); return; }
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
@@ -1441,6 +1496,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         // 别处上报来的会话（不在任何一台电脑上）只能看，不给输入框。
         boolean reported = opened != null && opened.source.equals("external");
         composer.setVisibility(tab == TAB_CHAT || (inTask && opened != null && !reported) || toHelper ? View.VISIBLE : View.GONE);
+        addImage.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
+        draftPreview.setVisibility(tab == TAB_CHAT && draftImage != null ? View.VISIBLE : View.GONE);
         String nextContext = AppPresentation.draftKey(runtimeUrl(),
                 inTask ? openTask : toHelper ? "agent:" + openAgent : null, companionChoice);
         if (!nextContext.equals(composerContext)) {
@@ -1480,10 +1537,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
             // 停下了，或者等了 20 秒还没回音（请求没送到）：不再转圈。
             if (stopping == null || !stopping.active() || System.currentTimeMillis() - stoppingAt > 20000) stoppingCard = null;
         }
-        boolean hasText = !chatInput.getText().toString().trim().isEmpty();
+        boolean hasText = !chatInput.getText().toString().trim().isEmpty() || (draftImage != null && tab == TAB_CHAT);
         String next = AppPresentation.composerState(hasText, store.busy(), stoppable != null, stoppingCard != null);
+        if (imageUploading && tab == TAB_CHAT) next = AppPresentation.COMPOSER_IDLE;
         // 聊天页没字时这个按钮就是「按住说话」；别的页说的话要归到那件事，语音还做不到，仍是箭头。
-        if (next.equals(AppPresentation.COMPOSER_IDLE) && tab == TAB_CHAT) next = COMPOSER_VOICE;
+        if (next.equals(AppPresentation.COMPOSER_IDLE) && tab == TAB_CHAT && !imageUploading) next = COMPOSER_VOICE;
         if (micFromComposer && (listening || transcribing)) return;
         if (next.equals(composerShown)) return;
         boolean first = composerShown.isEmpty();
@@ -1872,6 +1930,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 .append(message.status.equals("failed"));
         if (card != null && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
             look.append(card.title).append(AppPresentation.stateWord(card, store.runtimeConnected())).append(card.resultReady);
+        for (Attachment item : message.attachments) look.append(item.id).append(item.status);
         return look.toString();
     }
 
@@ -1887,13 +1946,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
             bubble.addView(words); chatWords.put(rowKey(message), words);
             row.addView(bubble, bubbleParams(mine));
         }
+        for (Attachment item : message.attachments) row.addView(attachmentView(item));
         TextView caption = statusCaption(mine);
         row.addView(caption, captionParams(mine)); chatStatus.put(rowKey(message), caption);
         if (!mine && card != null && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
             row.addView(receipt(card));
         if (message.status.equals("failed") && mine && !message.synced) {
-            row.addView(button("重试发送", view -> RuntimeClient.retry(this, message.id, message.text,
-                    message.scope.equals("task") ? message.card : null)));
+            row.addView(button("重试发送", view -> {
+                if (!message.attachments.isEmpty()) RuntimeClient.retryImage(this, message.id, message.text, message.attachments.get(0));
+                else RuntimeClient.retry(this, message.id, message.text, message.scope.equals("task") ? message.card : null);
+            }));
         }
         return row;
     }
@@ -2207,7 +2269,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             }
         } else {
             for (int at : plan.replace) {
-                View row = taskPendingRow(pending.get(at));
+                LinearLayout row = taskPendingRow(pending.get(at));
                 taskPending.removeViewAt(at); taskPending.addView(row, at); taskPendingRows.set(at, row);
                 if (tab == TAB_TASKS && taskPendingLooks.get(at).charAt(0) == '-' && looks.get(at).charAt(0) == 'B')
                     Motion.pop(row.getChildAt(0), false, 0);
@@ -2237,7 +2299,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return changed;
     }
 
-    private View taskPendingRow(ChatHistory.Message message) {
+    private LinearLayout taskPendingRow(ChatHistory.Message message) {
         LinearLayout row = column();
         boolean mine = message.role.equals("you");
         if (hasBubble(message)) {
@@ -3251,7 +3313,28 @@ public class MainActivity extends Activity implements HubStore.Listener {
         options.inSampleSize = 1;
         while (options.outWidth / options.inSampleSize > max || options.outHeight / options.inSampleSize > max) options.inSampleSize *= 2;
         options.inJustDecodeBounds = false;
-        try { return BitmapFactory.decodeFile(file.getAbsolutePath(), options); } catch (OutOfMemoryError exhausted) { return null; }
+        try {
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+            if (bitmap == null) return null;
+            try {
+                int orientation = new android.media.ExifInterface(file.getAbsolutePath()).getAttributeInt(
+                        android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL);
+                android.graphics.Matrix transform = new android.graphics.Matrix();
+                switch (orientation) {
+                    case 2: transform.setScale(-1, 1); break;
+                    case 3: transform.setRotate(180); break;
+                    case 4: transform.setScale(1, -1); break;
+                    case 5: transform.setRotate(90); transform.postScale(-1, 1); break;
+                    case 6: transform.setRotate(90); break;
+                    case 7: transform.setRotate(270); transform.postScale(-1, 1); break;
+                    case 8: transform.setRotate(270); break;
+                    default: return bitmap;
+                }
+                Bitmap corrected = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), transform, true);
+                if (corrected != bitmap) bitmap.recycle();
+                return corrected;
+            } catch (java.io.IOException ignored) { return bitmap; }
+        } catch (OutOfMemoryError exhausted) { return null; }
     }
 
     private void openAttachment(Attachment item, RuntimeClient.Target target) {
@@ -3305,6 +3388,26 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 54 && resultCode == RESULT_OK && data != null && data.getData() != null && imageTarget != null) {
+            RuntimeClient.Target target = imageTarget; long selection = ++imageSelection;
+            imageUploading = true; addImage.setText("上传中"); updateSendState();
+            ImageUpload.start(this, data.getData(), target, (item, error) -> {
+                if (selection != imageSelection || isFinishing() || isDestroyed()) return;
+                imageUploading = false;
+                if (item == null) { addImage.setText("加图"); updateSendState(); toast("图片上传失败：" + error); return; }
+                RuntimeClient.Target selected = RuntimeClient.selected(this);
+                if (selected == null || !selected.url.equals(target.url) || !selected.token.equals(target.token)) {
+                    addImage.setText("加图"); imageTarget = null; updateSendState();
+                    toast("电脑已切换，请在当前电脑重新选图"); return;
+                }
+                draftImage = item; imageTarget = target; addImage.setText("移除图");
+                draftPreview.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
+                ArtifactClient.fetch(this, target, item, true, (file, detail) -> {
+                    if (file != null && draftImage == item) draftPreview.setImageBitmap(scaledBitmap(file, 400));
+                });
+                updateSendState();
+            });
+        }
         if (requestCode == 3 && resultCode == RESULT_OK && data != null && data.getData() != null && exportFile != null) {
             ArtifactClient.save(this, exportFile, data.getData(), (file, error) -> {
                 if (file == null) fail("保存失败：" + error); else toast("已保存到所选位置");

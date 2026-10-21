@@ -10,8 +10,8 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 47
-        versionName "0.26.0"
+        versionCode 50
+        versionName "0.27.0"
     }
 
     // The speech models are no longer packaged: they are published as the "speech" resource
@@ -63,7 +63,9 @@ def preparePhoneSpeech = tasks.register("preparePhoneSpeech", Exec) {
             layout.buildDirectory.file("phone-speech/assets/asr/zh/tokens.txt"),
             layout.buildDirectory.file("phone-speech/assets/asr/sense-voice/model.int8.onnx"),
             layout.buildDirectory.file("phone-speech/assets/asr/sense-voice/tokens.txt"))
-    commandLine "python3", rootProject.file("tools/prepare_phone_speech.py"), layout.buildDirectory.dir("phone-speech").get().asFile
+    def pythonCommand = providers.environmentVariable("PYTHON").getOrElse(
+            System.getProperty("os.name").toLowerCase().contains("windows") ? "python" : "python3")
+    commandLine pythonCommand, rootProject.file("tools/prepare_phone_speech.py"), layout.buildDirectory.dir("phone-speech").get().asFile
 }
 tasks.named("preBuild").configure { dependsOn preparePhoneSpeech }
 

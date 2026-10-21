@@ -2851,8 +2851,13 @@ void pocket_ui_render(const buddy_ui_snapshot_t *snap)
         }
         case BUDDY_PAGE_TALK:
             if (render_talk(snap)) {
-                hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
-                hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+                if (snap->image_available) {
+                    /* Two hints fit: keep the existing OK/voice hint visible. */
+                    hints[count++] = (hint_item_t){KEY_UP, PT_IMAGE_ACTION};
+                } else {
+                    hints[count++] = (hint_item_t){KEY_UP, PT_HINT_PREV};
+                    hints[count++] = (hint_item_t){KEY_DOWN, PT_HINT_NEXT};
+                }
             }
             notice = pocket_notice_visible(snap) && snap->host_hub;
             hints[count++] = (hint_item_t){

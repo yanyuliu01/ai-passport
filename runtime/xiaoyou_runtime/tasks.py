@@ -53,6 +53,7 @@ class Task:
     # 这件事用哪一档努力程度、哪个模型；None 用帮手平时的
     effort: Optional[str] = None
     model: Optional[str] = None
+    images: tuple = ()
     artifact_dir: Optional[str] = None
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     # 接着别人的会话做（比如主人在电脑上开的）：在那个会话的目录里、用那个会话编号跑，
@@ -214,7 +215,7 @@ class Tasks:
                 outcome = task.agent.run(Job(
                     text=text, session_id=session, conversation=task.conversation,
                     system=system, schema=task.schema, hop=task.hop, control=control,
-                    effort=task.effort, model=task.model, cwd=task.cwd, card=task.card,
+                    effort=task.effort, model=task.model, cwd=task.cwd, card=task.card, images=task.images,
                 ))
             except AgentError as failure:
                 error = str(failure)

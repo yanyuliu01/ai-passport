@@ -336,6 +336,8 @@ class Job:
     # 小幽手边的工具（voice_tools.Toolbox）：有它时她直接写给主人的文字就是说的话，要做事就调工具，
     # 不再写 JSON。只交给 talks_with_tools() 为真的代理；None 表示这一次不给工具
     tools: Any = None
+    decision_only: bool = False
+    decision_messages: Any = None
     # 主人插话了（threading.Event 被设上）：边说边出的这一次马上停下，已经说出的部分照样交回
     interrupt: Any = None
     # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
@@ -343,6 +345,7 @@ class Job:
     cwd: Optional[str] = None
     # 这是哪件事（卡的编号）；交给网络里别的 Runtime 时，那台替这件事开的卡记着它
     card: Optional[str] = None
+    images: tuple = ()  # trusted local immutable snapshots, supplied by Runtime only
 
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
@@ -910,6 +913,8 @@ class CodexAgent(Agent):
         command += spec.extra_args
         if job.session_id:
             command += ["resume", job.session_id]
+        for image in job.images:
+            command += ["--image", str(image)]
         command += ["-"]  # 这一段话从标准输入读
         return command
 
@@ -1043,6 +1048,9 @@ class DshAgent(Agent):
     def run(self, job: Job) -> Outcome:
         if job.plain and job.model is None and self.spec.chat_model:
             job = replace(job, model=self.spec.chat_model)
+        if job.decision_only:
+            from .decision import choose
+            return choose(self.spec, job, self._env(), self.tier(job)[0], self._open)
         if job.control is not None and self._run is subprocess.run:
             from . import dsh_app  # 放在这里：dsh_app 要用这个模块里的东西
             return dsh_app.run(self.spec, job, job.control, self._env(), self.tier(job))

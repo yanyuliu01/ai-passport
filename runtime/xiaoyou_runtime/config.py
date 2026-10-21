@@ -109,6 +109,7 @@ class Config:
     max_parallel: int = 0
     # 小幽这条线上一次调用最长多久：她只负责听懂、马上答、把活派出去
     voice_timeout_seconds: int = 60
+    decide_first: bool = False
     # 问了主人“还等不等”之后，这么久没人答就停掉；0 是一直等
     idle_answer_seconds: int = 1800
     router_type: str = "mention"
@@ -717,6 +718,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         xiaoyou.get("voice_timeout_seconds", 60), int, "xiaoyou.voice_timeout_seconds")
     if not 5 <= voice_timeout <= 600:
         raise ConfigError("xiaoyou.voice_timeout_seconds 应该在 5 到 600 之间")
+    decide_first = _expect(xiaoyou.get("decide_first", False), bool, "xiaoyou.decide_first")
     router = _expect(xiaoyou.get("router", {}), dict, "xiaoyou.router")
     router_type = _expect(router.get("type", "mention"), str, "xiaoyou.router.type")
     if router_type not in ROUTER_TYPES:
@@ -844,6 +846,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         max_handoffs=max_handoffs,
         max_parallel=max_parallel,
         voice_timeout_seconds=voice_timeout,
+        decide_first=decide_first,
         idle_answer_seconds=idle_answer,
         router_type=router_type,
         router_command=router_command,

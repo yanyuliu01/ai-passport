@@ -702,7 +702,7 @@ static void test_chat_reports_the_conversation(void)
         assert(buddy_protocol_hub_ack_json(ack, sizeof(ack)) > 0);
         assert(strcmp(ack, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
                            "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true,"
-                           "\"desktopApproval\":true}\n") == 0);
+                           "\"desktopApproval\":true,\"images\":1}\n") == 0);
     }
     assert(buddy_protocol_hub_ack_json(output, 8) == 0);
 }

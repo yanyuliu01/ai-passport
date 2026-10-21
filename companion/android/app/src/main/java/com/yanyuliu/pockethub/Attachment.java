@@ -40,6 +40,18 @@ final class Attachment {
         return Collections.unmodifiableList(result);
     }
 
+    String json() {
+        StringBuilder out = new StringBuilder("{");
+        String[] keys = {"id", "name", "mime", "kind", "sha256", "status", "error"};
+        String[] values = {id, name, mime, kind, sha256, status, error};
+        for (int i = 0; i < keys.length; i++) {
+            if (i > 0) out.append(',');
+            BuddyProtocol.quote(out, keys[i]); out.append(':'); BuddyProtocol.quote(out, values[i]);
+        }
+        return out.append(",\"size\":").append(size).append(",\"width\":").append(width)
+                .append(",\"height\":").append(height).append(",\"thumbnail\":").append(thumbnail).append('}').toString();
+    }
+
     boolean image() { return kind.equals("image") && mime.startsWith("image/"); }
     boolean ready() { return status.isEmpty() || status.equals("ready"); }
     String label() { return name.isEmpty() ? "附件" : name; }

@@ -21,6 +21,7 @@ final class SyncCache {
     static final class Pending {
         final String id, task, scope, role, text, status;
         final double at;
+        List<Attachment> attachments = new ArrayList<>();
         Pending(String id, String task, String scope, String role, String text, String status, double at) {
             this.id = id; this.task = task; this.scope = scope; this.role = role;
             this.text = text; this.status = status; this.at = at;
@@ -191,9 +192,10 @@ final class SyncCache {
             String text = Json.string(message, "text");
             if (text.isEmpty()) text = Json.string(message, "partial");
             String scope = Json.string(message, "scope");
-            result.add(new Pending(Json.string(message, "id"), task,
+            Pending pending = new Pending(Json.string(message, "id"), task,
                     scope.isEmpty() ? "main" : scope, role(message), text, status,
-                    Json.number(message, "created_at")));
+                    Json.number(message, "created_at"));
+            pending.attachments = Attachment.parse(message); result.add(pending);
         }
         result.sort(java.util.Comparator.comparingDouble((Pending item) -> item.at));
         return result;

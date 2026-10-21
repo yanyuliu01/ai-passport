@@ -199,7 +199,7 @@ static void test_hub_hello_is_acknowledged_and_enables_voice(void)
     /* The acknowledgement also says this firmware takes "chat" and "helpers". */
     assert(strcmp(fake.sent, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,\"threads\":true,"
                              "\"usage\":true,\"past\":true,\"desktop\":true,"
-                             "\"desktopApproval\":true}\n") == 0);
+                             "\"desktopApproval\":true,\"images\":1}\n") == 0);
 
     /* Those messages change what is on screen and are not acknowledged one by one. */
     fake.sent[0] = '\0';

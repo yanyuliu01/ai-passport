@@ -697,6 +697,11 @@ public final class HubStore {
     // ---- 和小幽聊天 ----
 
     /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
+    void chatImage(String id, Attachment item) {
+        synchronized (this) { history.image(id, item); saveHistory(); }
+        notifyChanged();
+    }
+
     public void chatAsked(String text) {
         chatAsked(text, "local-" + java.util.UUID.randomUUID(), null);
     }

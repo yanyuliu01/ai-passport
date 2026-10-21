@@ -238,3 +238,17 @@
 #define PT_MSG_UNPAIR_FAILED     "取消配对失败"
 #define PT_MSG_UNPAIRING         "正在取消配对"
 #define PT_MSG_UNPAIRED          "已取消配对"
+
+/* Image viewer: all labels use pocket_font_16. */
+#define PT_IMAGE_LOADING "图片加载中 · 确认返回"
+#define PT_IMAGE_EMPTY "没有图片 · 请在手机添加"
+#define PT_IMAGE_MEMORY "内存不足 · 请在手机看图"
+#define PT_IMAGE_REQUEST_FAILED "图片请求失败 · 确认返回"
+#define PT_IMAGE_TIMEOUT "图片传输超时 · 确认返回"
+#define PT_IMAGE_KEYS "上下切图 · 确认返回"
+#define PT_IMAGE_CHECK_FAILED "图片校验失败 · 确认返回"
+#define PT_IMAGE_UNAVAILABLE "图片不可用 · 请在手机查看"
+#define PT_IMAGE_HINT "长按上键看图 · 手机加图"
+
+#define PT_IMAGE_ACTION "长按看图"
+#define PT_IMAGE_READY "图片"

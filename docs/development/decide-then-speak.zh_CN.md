@@ -4,8 +4,9 @@
 
 # 先定，再说
 
-状态：设计稿（2026-10-20）。主人要求重新设计 Runtime 怎么让小幽说的和做的对得上，并留下记录，
-方便另一个代理（Codex）接手。下面“设计”一节的内容都还没实现。它必须满足
+状态：已提供可选实现（2026-10-20），Runtime 0.19.0。阶段 1 位于默认关闭的
+`xiaoyou.decide_first` 开关后；Mac 基线采集和实机验收尚未完成，目前不是默认通道。
+主人要求重新设计 Runtime 怎么让小幽说的和做的对得上。它必须满足
 [跨端可靠性规则](cross-stack-reliability.zh_CN.md)，尤其是 3 秒首响应的约定。
 
 ## 起因
@@ -107,7 +108,8 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
 达不到的话，有两种退路保住约定，按实测选：
 
 - **超时退路。** 给 D 一个硬性时限（约 1.3 秒）。超时就立刻开始 S，并要求“还没开始任何事，别说你在做；
-  要么问，要么直接答”。D 在后台做完：如果做了承诺，S 的下一轮和任务卡会体现出来。
+  要么问，要么直接答”。当前可选实现直接丢弃迟到决定，不执行它；未来若允许后台承诺，
+  必须先明确对齐状态，说话阶段才能声称已经发生。
 - **并行开始。** D 和 S 同时开始；S 一开始只有查看类工具，同样遵守“还没开始任何事”。用一点表达力换延迟。
 
 ### 不受影响的路径
@@ -126,8 +128,8 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
 ## 阶段与验收
 
 1. **阶段 0：数据。** 在 Mac 上跑脚本，把数字写进这份文档。
-2. **阶段 1：日志和开关。** 加每轮一行的日志，用配置开关实现 D/S（`voice.decide_first`，默认关）。
-   单元测试（`runtime/tests/test_streaming.py`）要覆盖：
+2. **阶段 1：日志和开关。** 加每轮一行的日志，用配置开关实现 D/S（`xiaoyou.decide_first`，默认关）。
+   单元测试（`runtime/tests/test_decision.py` 和 `runtime/tests/test_streaming.py`）要覆盖：
    - 交办只说一次；
    - 先查看再说；
    - 承诺被拒；
@@ -140,6 +142,40 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
 每个阶段都按[可靠性规则](cross-stack-reliability.zh_CN.md#validation-and-delivery)的交付格式报告。
 
 ## 交接说明
+
+- **Windows 续接（2026-10-20）。** 已安装 JDK 17、Gradle 8.9、Android SDK 34 和
+  build-tools 34.0.0。已修正 App 在 Windows 上选择 Python 命令、Java 测试字符串
+  中的直接换行，以及待发送行的 View 类型。主人明确选择保留整条气泡；两份可靠性
+  规则已允许这种呈现方式，仍按同一三秒时限实测，打字动画不计入首答。
+- **先决定再说话实现。** 十二项确定性测试覆盖先派发再开口、只出现一份确认、只读
+  查询、拒绝与多个承诺、插话、丢弃迟到决定，以及不新增隐藏提醒。只输出 JSON 的
+  声音和结果转述保持原路径。
+- **剩余切换步骤。** Mac 离线且 SSH 不可用；Windows 的统计只有零个工具会话，
+  不能作为有效基线。主人选择先完成 Windows。阶段 0、2、3 仍待完成，不能据此
+  开启开关或移除旧通道。
+- **Windows 全套测试基线。** 修改前跑了 624 项 Runtime 测试，8 个失败、55 个
+  错误、2 项跳过。要按测试标识与此基线比较，不能把平台问题写成完整门禁通过。
+- **Windows 验证。** App 0.26.1（版本号 48）完成全部五种 APK 的构建，139 项
+  单元测试通过，通用 APK 签名校验通过。新决定通道 12 项、原流式通道 30 项、
+  记录中心 6 项及仓库检查通过。最终全套 Runtime 跑了 636 项：8 个失败、57 个
+  错误、2 项跳过。基线的 63 个失败／错误标识全部保留；另有两个 HTTP 测试遇到
+  Windows 连接中断，单独一起重跑通过。静态和完整门禁都停在 actionlint 不支持
+  Windows，且当前未安装 ESP-IDF 5.5.3，不能写完整门禁通过。三秒首答、设备恢复、
+  多端同步及手机安装均未实测。证据日志位于 `%LOCALAPPDATA%/XiaoyouBuild/`。
+- **Windows 部署（2026-10-21）。** Runtime 0.19.0 已由原有 keepalive 守护程序
+  保持运行，回环和 Tailscale 均已监听，健康检查及鉴权后的代理、消息读取通过。
+  `decide_first` 保持关闭。App 0.26.1 和四文件语音包已通过本 Runtime 发布；
+  所有单架构 APK 都有已核验的托管地址，通用 APK 因 GitHub 大包上传中断改为
+  本地提供，语音包也在本地提供。五种 APK 和四个语音文件的元数据、ETag、HTTP
+  Range 读取通过；这不代表已验证手机安装或真实断网后的恢复。
+- **真实 API 探测。** 一次独立旧通道请求在 0.995 秒出现服务端正文，1.157 秒
+  完成。一次独立 D/S 请求在 1.309 秒决定超时，随后说话请求首段正文用了 6.969
+  秒，整轮 8.502 秒。这个候选通道未达到三秒预算，继续关闭。这只是各一个 API
+  样本，不是客户端显示 TTFT 或推广基线；探测没有改动主人的对话或任务。
+- **恢复。** 空闲服务重启前，状态文件已复制到
+  `%LOCALAPPDATA%/XiaoyouBuild/runtime-backup-pre-0.19.0-20261020`。
+  未改动本地配置或状态结构。保持可选开关关闭，当前仍使用原有通道；不能未经
+  单独核验就把快照覆盖到正在进行的工作上。
 
 - **分支。** 工作在 `feature/usage-history` 上。加这份文档的提交里有 Runtime 0.18.2 的改动、`tools/reminder_stats.py`
   和 App 里 `ChatHistory` 的改动（正在写的话只出现一份）。

@@ -542,6 +542,23 @@ def make_server(config: Config, service: Service,
                 return
             if not self._authorized():
                 return
+            if parts == ["v1", "images"]:
+                from .image_inputs import upload, MAX_UPLOAD_BYTES
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_UPLOAD_BYTES:
+                        self._fail(413, "图片为空或超过 8 MB")
+                        return
+                    data = self.rfile.read(length)
+                    if len(data) != length:
+                        self._fail(400, "图片没有传完")
+                        return
+                    self._send(201, upload(artifacts, data))
+                except (ValueError, ArtifactError) as error:
+                    self._fail(400, str(error))
+                except OSError:
+                    self._fail(503, "图片未能保存，请重试")
+                return
             if parts == ["v1", "voice"]:
                 self._voice(parse_qs(url.query))
                 return
@@ -597,6 +614,7 @@ def make_server(config: Config, service: Service,
                         body.get("client_id"), body.get("agent"), body.get("hop", 0),
                         body.get("card"), body.get("pin") is True,
                         body.get("effort"), body.get("model"),
+                        image_ids=body.get("image_ids"),
                     )
                     self._send(202, message)
                     return

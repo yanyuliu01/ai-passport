@@ -1300,7 +1300,7 @@ int buddy_protocol_hub_ack_json(char *json, size_t size)
     buddy_writer_init(&writer, json, size);
     buddy_writer_literal(&writer, "{\"ack\":\"hub\",\"ok\":true,\"chat\":true,\"cards\":true,"
                          "\"threads\":true,\"usage\":true,\"past\":true,\"desktop\":true,"
-                         "\"desktopApproval\":true}\n");
+                         "\"desktopApproval\":true,\"images\":1}\n");
     return buddy_writer_finish(&writer);
 }
 

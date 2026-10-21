@@ -754,6 +754,23 @@ final class RuntimeClient {
      * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
      * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
      */
+    static void sendImage(Context context, String text, Attachment image) {
+        submit(context, text.isEmpty() ? "请看看这张图片" : text, null, null, false, null, null, null, image);
+    }
+
+    static Attachment uploadImage(Target target, byte[] bytes) throws IOException {
+        Map<String, String> raw = request("POST", target.url + "/v1/images", target.token,
+                bytes, "application/octet-stream", 30);
+        Map<String, Object> item = new java.util.HashMap<>(raw);
+        for (String key : new String[]{"size", "width", "height"}) {
+            try { item.put(key, Long.parseLong(raw.get(key))); } catch (RuntimeException ignored) { }
+        }
+        item.put("thumbnail", "true".equals(raw.get("thumbnail")));
+        Attachment result = Attachment.from(item);
+        if (result == null || !result.image()) throw new IOException("Runtime 没有返回图片附件");
+        return result;
+    }
+
     static void sendVoice(Context context, byte[] wav, String card, boolean pin) {
         submit(context, VOICE_PLACEHOLDER, wav, card, pin, null);
     }
@@ -768,6 +785,18 @@ final class RuntimeClient {
         submit(context, text, wav, card, pin, effort, agent, null);
     }
 
+    static String imageMessageJson(String text, String client, String card, String effort,
+                                   String agent, Attachment image) {
+        String body = CardViews.messageJson(text, client, card, effort, agent);
+        return image == null ? body : body.substring(0, body.length() - 1)
+                + ",\"image_ids\":[\"" + image.id + "\"]}";
+    }
+
+    static void retryImage(Context context, String id, String text, Attachment image) {
+        String client = HubStore.get().retryMessage(id);
+        if (client != null) submit(context, text, null, null, false, null, null, client, image);
+    }
+
     static void retry(Context context, String id, String text, String card) {
         if (HubStore.get().busy()) return;
         String client = HubStore.get().retryMessage(id);
@@ -776,6 +805,11 @@ final class RuntimeClient {
 
     private static void submit(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort, String agent, String retryId) {
+        submit(context, text, wav, card, pin, effort, agent, retryId, null);
+    }
+
+    private static void submit(Context context, String text, byte[] wav, String card,
+                               boolean pin, String effort, String agent, String retryId, Attachment image) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -790,6 +824,7 @@ final class RuntimeClient {
         store.selectedRuntime(url, historyKey(app, target));
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);
+        if (image != null) store.chatImage(clientId, image);
         // 这句话在聊天记录里的编号：回话途中主人又说了一句时，几句各写各的（HubStore 的 key 版本）。
         final String[] key = {clientId};
         CHAT.execute(() -> {
@@ -804,7 +839,7 @@ final class RuntimeClient {
                             wav, "audio/wav", 30);
                 } else {
                     message = request("POST", url + "/v1/messages", token,
-                            CardViews.messageJson(text, clientId, card, effort, agent)
+                            imageMessageJson(text, clientId, card, effort, agent, image)
                                     .getBytes(StandardCharsets.UTF_8),
                             "application/json; charset=utf-8", 20);
                 }

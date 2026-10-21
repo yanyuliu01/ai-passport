@@ -212,6 +212,12 @@ class ArtifactStore:
                 raise ArtifactError("不能公开代理配置目录")
             if any(candidate == Path(path).resolve() for path in spec.env_files.values()):
                 raise ArtifactError("不能公开代理凭据文件")
+        if os.name == "nt":
+            from .windows_files import open_regular
+            try:
+                return open_regular(candidate, MAX_MANIFEST_BYTES if manifest else MAX_ARTIFACT_BYTES)
+            except OSError:
+                raise ArtifactError("产物不存在、不可读或经过重解析路径") from None
         # O_NOFOLLOW on each component closes the parent-directory symlink race.
         directory_fd = None
         try:
@@ -416,6 +422,10 @@ class ArtifactStore:
                 elif meta["size"] > MAX_THUMBNAIL_BYTES:
                     raise ArtifactError("缩略图文件不可用，请查看原图")
             try:
+                if os.name == "nt":
+                    from .windows_files import open_regular
+                    stream = open_regular(path, MAX_ARTIFACT_BYTES)
+                    return stream, dict(meta), mime, os.fstat(stream.fileno()).st_size
                 fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode):

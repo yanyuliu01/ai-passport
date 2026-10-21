@@ -416,6 +416,30 @@ even when its separate, still-valid approval has `remote_actionable: true`.
 The phone needs Android notification permission to alert in the background;
 without it, the approval is still visible inside the App.
 
+## Decide before speaking (0.19.0, opt-in)
+
+`xiaoyou.decide_first` defaults to `false`. With a streaming DeepSeek voice,
+enabling it selects at most one commitment in a non-streamed request, then
+validates and applies it before the visible reply. The speaking request can
+only query task details or recall records. Memory/promise changes follow the
+same split, including proactive turns; JSON-only agents and result relays keep
+their existing paths.
+
+The decision has a 1.3-second deadline. A timeout starts speech with the truthful
+fact that no commitment was made; a late decision is discarded without executing
+tools. Refusals become facts for speech. A speaking failure never repeats an
+already applied action. The two phases share the voice call's total timeout.
+Tool results are retained as protocol messages, without hidden reminder prompts.
+Diagnostics include the turn ID, decision status/duration, first server body,
+total time, and a promise-without-commitment counter; they contain no message
+text. Server body time is not client-rendered TTFT.
+
+Keep the flag off until the Mac baseline and real App/Runtime/device timing and
+recovery checks in [the rollout plan](../docs/development/decide-then-speak.md)
+are complete. Windows unit tests do not establish that a first complete bubble
+appears within three seconds. The legacy reminder path remains available while
+the flag is off.
+
 ## Memory, recall, promises, speaking up and cutting in (0.18.0)
 
 Modelled on how Muse handles memory and delivery: remembering and speaking up are Runtime mechanisms,
@@ -539,6 +563,7 @@ Relative paths are resolved against the directory of the configuration file.
 | `xiaoyou.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyou, after an agent that only does work. |
 | `xiaoyou.max_parallel` | `0` | How many things may be in progress at once (0 to 64); `0` means no limit. The rest wait their turn. |
 | `xiaoyou.voice_timeout_seconds` | `60` | How long Xiaoyou herself may take over one sentence (5 to 600). She gets no tools for this step; it is only understanding and dispatching. |
+| `xiaoyou.decide_first` | `false` | Opt-in decision-before-speech path for streaming DeepSeek voices; requires live validation before rollout. |
 | `xiaoyou.max_handoffs` | `2` | A 0.4 setting that no longer has any effect; still read so that old configurations load. |
 | `xiaoyou.router.type` | `mention` | `mention` or `command`; see [Who gets a message](#who-gets-a-message). |
 | `xiaoyou.router.command` | `[]` | `command`: the command that decides. |
@@ -2052,3 +2077,9 @@ python3 runtime/tests/test_desktop_approvals.py
 python3 runtime/tests/test_artifacts.py
 python3 runtime/tests/test_artifact_delivery.py
 ```
+
+## Owner image input
+
+Image uploads require `python -m pip install -r requirements-images.txt` in the
+Runtime environment. The authenticated upload/message contract, supported vision
+route and compatibility limits are specified in [Image messages](../docs/development/multimodal-images.md).

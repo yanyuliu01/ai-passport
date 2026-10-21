@@ -65,12 +65,16 @@ final class QuickReviewDialog {
         page.setPadding(pad, pad, pad, pad);
         status = new TextView(activity); page.addView(status);
         TextView scope = new TextView(activity);
-        scope.setText("一键允许下面列出的工具操作。自动通过仅用于这台电脑当前主对话派出的帮手，"
+        scope.setText("仅允许当前列表这一批工具操作；新来的请求仍需确认，不会永久放行，也不改变自动通过设置。\n持续或定时放行请使用下方“只读工具自动通过”。它仅用于这台电脑当前主对话派出的帮手，"
                 + "只覆盖明确的文件读取、目录和文本检索；可持续开启或自定时长，随时关闭。命令、修改、删除、付费及联网外发"
                 + "仍需你确认，可在下方批量处理。独立桌面会话、其他电脑和卡住后是否继续仍需单独处理。"
                 + "这是你的预授权，系统不会逐项判断风险；支持时长设置的 Runtime 会保存设置，重启后仍按原期限生效。");
         scope.setPadding(0, pad / 2, 0, pad / 2); page.addView(scope);
+        TextView updates = new TextView(activity);
+        updates.setText("页面每 3 秒自动更新，无需反复点击。\n“更新状态”只拉取待确认数量、最近记录和自动通过期限，不会开启或延长自动通过。");
+        updates.setPadding(0, 0, 0, pad / 2); page.addView(updates);
         batch = new Button(activity); batch.setText("正在读取待审核操作…"); page.addView(batch);
+        batch.setTooltipText("仅允许当前列表中的操作；新请求仍需确认，不改变自动通过设置。");
         durationControls = new LinearLayout(activity); durationControls.setOrientation(LinearLayout.VERTICAL);
         TextView durationLabel = new TextView(activity); durationLabel.setText("自动通过的有效时间");
         durationControls.addView(durationLabel);
@@ -98,7 +102,7 @@ final class QuickReviewDialog {
         dialog = new AlertDialog.Builder(activity).setTitle("快速审核 · " + target.name)
                 .setView(page).setNegativeButton("关闭", null)
                 .setNeutralButton("逐条确认", (d, which) -> individual.run())
-                .setPositiveButton("刷新", null).create();
+                .setPositiveButton("更新状态", null).create();
         dialog.setOnDismissListener(d -> {
             handler.removeCallbacks(poll);
             long elapsed = android.os.SystemClock.elapsedRealtime() - openedAt;
@@ -106,6 +110,7 @@ final class QuickReviewDialog {
         });
         dialog.show();
         dialog.getWindow().setLayout(-1, (int) (activity.getResources().getDisplayMetrics().heightPixels * 0.88));
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTooltipText("重新读取电脑上的最新状态，不开启、不延长自动通过。");
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> load(null, null));
         batch.setOnClickListener(v -> {
             if (snapshot != null && !busy) load("batch", snapshot.batchBody());
@@ -153,7 +158,7 @@ final class QuickReviewDialog {
                     dialog.dismiss(); individual.run(); return;
                 }
                 snapshot = null;
-                status.setText(problem + "\n未确认结果的操作请先刷新核实；也可继续逐条确认。");
+                status.setText(problem + "\n自动更新已暂停，请点“更新状态”核实结果并恢复更新；也可逐条确认。自动通过仍以电脑上的设置为准。");
                 return;
             }
             snapshot = new QuickReview(data);
@@ -174,12 +179,13 @@ final class QuickReviewDialog {
             for (Object raw : Json.list(snapshot.data, "results")) {
                 if ("allowed".equals(Json.string(Json.object(raw), "status"))) allowed++; else other++;
             }
-            message = "已允许 " + allowed + " 项，已变化或未允许 " + other + " 项。\n" + message;
+            message = "已允许 " + allowed + " 项，已变化或未允许 " + other + " 项。本次仅处理刚才列表中的操作，新请求仍需确认。\n" + message;
         }
         String error = Json.string(snapshot.data, "error");
         status.setText(message + (error.isEmpty() ? "" : "\n" + error));
         status.setTextColor(snapshot.automatic() ? 0xff8a5413 : Color.DKGRAY);
-        batch.setText("一键允许下列 " + snapshot.pending.size() + " 项");
+        batch.setText(snapshot.pending.isEmpty() ? "当前没有待确认操作"
+                : "仅允许当前 " + snapshot.pending.size() + " 项");
         batch.setEnabled(!snapshot.pending.isEmpty());
         mode.setText(snapshot.automatic() ? "关闭自动通过，恢复逐条确认" : snapshot.readOnlyModeSupported()
                 ? snapshot.durationConfigSupported() ? "按所选时长开启只读工具自动通过"
@@ -220,7 +226,7 @@ final class QuickReviewDialog {
             });
         }
         if (Json.number(snapshot.data, "pending_total") > snapshot.pending.size())
-            add("当前仅列出前 100 项，处理后刷新查看剩余操作。", false);
+            add("当前仅列出前 100 项，本次只允许这批；处理后会自动更新剩余操作。", false);
         add("最近审核记录（本电脑，最多 50 条）", false);
         java.util.List<Object> audit = Json.list(snapshot.data, "audit");
         for (int i = audit.size() - 1; i >= 0; i--) {

@@ -28,6 +28,7 @@
     "voice_agent": null,
     "max_parallel": 0,
     "voice_timeout_seconds": 60,
+    "decide_first": false,
     "router": {
       "type": "mention"
     }

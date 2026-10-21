@@ -592,4 +592,6 @@ typedef struct {
      * application task. Percent is how much of it is in flash. */
     pocket_update_phase_t update_phase;
     uint8_t update_percent;
+    /* The focused card has images; supplied by the application task. */
+    bool image_available;
 } buddy_ui_snapshot_t;

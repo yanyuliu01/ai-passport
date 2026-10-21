@@ -156,6 +156,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         history = plain_history(history)
     system = "\n\n".join(part for part in (job.system or "", "" if tools is not None else schema_note(job.schema)) if part)
     messages: List[Dict[str, Any]] = history + [{"role": "user", "content": job.text}]
+    if job.decision_messages:
+        messages.extend(job.decision_messages)
     base = (env.get("DEEPSEEK_BASE_URL") or BASE_URL).rstrip("/")
     url = base if base.endswith("/v1") else base + "/v1"
     timeout = job.timeout or spec.timeout_seconds or 60
@@ -173,7 +175,9 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         if system:
             body["system"] = system
         if tools is not None:
-            body["tools"] = tools.definitions()
+            definitions = tools.definitions()
+            if definitions:
+                body["tools"] = definitions
         request = urllib.request.Request(
             url + "/messages", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             method="POST")

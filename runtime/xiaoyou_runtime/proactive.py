@@ -140,10 +140,21 @@ class Pulse:
                       xiaoyou.memory, lambda query: xiaoyou.recall(self._conversation, query), xiaoyou.promises,
                       self._conversation, only=only)
         text = "%s\n\n（你最近跟主人说过的话：）\n%s" % (event, self._recent_said() or "（还没有）")
+        messages = None
+        began = time.monotonic()
         try:
+            if xiaoyou.config.decide_first and voice.talks_with_tools():
+                decision = voice.run(Job(text=text, system=system, plain=True,
+                                          timeout=xiaoyou.config.voice_timeout_seconds, tools=box,
+                                          decision_only=True))
+                data = (decision.fields or {}).get("_decision", {})
+                system += "\n\n这一轮已落实的事实：" + data.get("facts", "没有执行任何承诺。")
+                system += "\n现在只说话或查记录，不能新增任务、记忆或约定。"
+                messages = data.get("messages", [])
+                box = box.speaking()
             outcome = voice.run(Job(text=text, session_id=None, conversation=self._conversation, system=system,
-                                    plain=True, timeout=xiaoyou.config.voice_timeout_seconds,
-                                    on_text=lambda raw: None, tools=box))
+                                    plain=True, timeout=max(0.001, xiaoyou.config.voice_timeout_seconds - (time.monotonic() - began)),
+                                    on_text=lambda raw: None, tools=box, decision_messages=messages))
         except AgentError as error:
             sys.stderr.write("后台叫醒小幽没成：%s\n" % error)
             return None

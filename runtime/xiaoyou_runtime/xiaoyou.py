@@ -245,6 +245,7 @@ CHAT_STYLE = (
     "## 在哪里说话\n"
     "你是在主人的手机上跟他聊天：他随时可能插话，屏幕不大，能显示加粗和列表。说几条、每条多长、"
     "用什么语气，你看情况自己定。想另起一条消息的地方，单独写一行 ---（三个短横线）。\n"
+    "手机等一条写完才显示：先给简短、与本轮有关的有意义回复，后续需要解释再另起一条；不要用空泛的确认句凑首答。\n"
     "三条底线：没调工具就不要说“我已经去做了”“已经让谁去查了”；不编进度和结果，推测的说是推测；"
     "已经跟主人说过的，不要换个说法再说一遍。"
 )
@@ -812,6 +813,33 @@ class Xiaoyou:
                 return agent
         return speakers[0] if speakers else None
 
+    def image_agent(self, asked=None):
+        if asked:
+            candidate = self._agents.get(asked)
+            return candidate if candidate and candidate.type == "codex" else None
+        return next((item for item in self._agents.values() if item.type == "codex"), None)
+
+    def hear_images(self, text, conversation, turn_id, attachments, asked=None, hop=0):
+        agent = self.image_agent(asked)
+        if agent is None:
+            raise AgentError("当前代理不能看图，请选择 Codex")
+        paths = []
+        for item in attachments:
+            stream, meta, mime, size = self.artifacts.open_content(item["id"])
+            stream.close()
+            paths.append(str(self.artifacts._blobs / meta["sha256"]))
+        card = self._record.task_open(conversation, text, "working", agent.name)
+        reply = "图片收到了，交给 %s 看图。" % agent.name
+        self._record.exchange(card["id"], said=text, say=reply, turn_id=turn_id,
+                              kind="handoff", brief=reply, mood="busy")
+        current = self._cards.get(card["id"])
+        owner_index = next(i for i, entry in enumerate(current["entries"])
+                           if entry.get("id") == turn_id + ":you")
+        self._record.attach(card["id"], attachments, owner_index)
+        self._store.transcript.add(conversation, turn_id, text, reply, agent.name, [])
+        self._launch(card["id"], agent, text, conversation, hop, images=tuple(paths))
+        return Turn(reply, reply, "busy", agent.name, card["id"], True)
+
     def hear(self, text: str, conversation: str, turn_id: str, asked: Optional[str] = None,
              card: Optional[str] = None, hop: int = 0, report: Optional[Report] = None,
              pin: bool = False, effort: Optional[str] = None,
@@ -925,7 +953,7 @@ class Xiaoyou:
     def _continue_desktop(self, desktop: Dict[str, Any], said: str, conversation: str,
                           turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
                           model: Optional[str] = None, task: Optional[str] = None,
-                          reply: Optional[str] = None) -> Turn:
+                          reply: Optional[str] = None, defer_reply: bool = False) -> Turn:
         """接着电脑上的会话做一轮：另开一件事，在那个会话的目录里用它的会话编号跑。
 
         主人点名让帮手接着做时 task 就是主人的原话；小幽判断要接着做时 task 是她交代的话，
@@ -944,12 +972,13 @@ class Xiaoyou:
         if desktop.get("desktop_status") in ("running", "waiting") and not desktop.get("stale"):
             raise AgentError("电脑上这一轮还在跑，等它停下再发")
         name = desktop.get("title") or "电脑上的会话"
-        reply = reply or "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
+        reply = "" if defer_reply else reply or "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
         card = self._record.task_open(conversation, "接着：" + name, "working", agent.name)
-        self._record.exchange(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff",
+        self._record.exchange(card["id"], said=said, say=None if defer_reply else reply, turn_id=turn_id, kind="handoff",
                            brief=clip(reply, self._config.brief_max_chars), mood="busy",
                            borrowed_session=session, borrowed_cwd=where, desktop_card=desktop["id"])
-        self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
+        if not defer_reply:
+            self._store.transcript.add(conversation, turn_id, said, reply, agent.name, [])
         say("handoff", agent.name, reply)
         self._launch(card["id"], agent, task or said, conversation, hop, effort, model)
         return Turn(reply, clip(reply, self._config.brief_max_chars), "busy", agent.name,
@@ -1003,6 +1032,9 @@ class Xiaoyou:
                        focus: Optional[Dict[str, Any]], available: List[Agent], hop: int, say: Report,
                        pinned: bool, effort: Optional[str], model: Optional[str], prompt: Any,
                        schema: Dict[str, Any], toolbox: Optional[Toolbox], cut: threading.Event) -> Turn:
+        if self._config.decide_first and toolbox is not None:
+            return self._converse_decided(lead, text, conversation, turn_id, focus, available, hop,
+                                          say, pinned, effort, model, prompt, toolbox, cut)
         outcome = None
         if toolbox is not None:
             # 说的话直接写、做事调工具（voice_tools）。这条路不通（接口出错、超时）就退回写 JSON 的老路。
@@ -1043,6 +1075,18 @@ class Xiaoyou:
             plan = {"type": "none", "card": None}
             reply = "这件事我没办成：%s" % problem
             mood, brief = "oops", None
+        return self._apply_conversation(lead, text, conversation, turn_id, plan, reply, brief, mood,
+                                        hop, say, pinned, effort, model)
+
+    def _apply_conversation(self, lead: Agent, text: str, conversation: str, turn_id: str,
+                            plan: Dict[str, Any], reply: str, brief: Any, mood: Any, hop: int,
+                            say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
+                            defer_reply: bool = False) -> Turn:
+        def exchange(*args: Any, **kwargs: Any) -> Any:
+            if defer_reply:
+                kwargs["say"] = None
+            return self._record.exchange(*args, **kwargs)
+
         kind = plan["type"]
         target: Optional[Dict[str, Any]] = plan["card"]
         if target is not None and target.get("mesh_origin"):
@@ -1060,14 +1104,14 @@ class Xiaoyou:
             try:
                 return self._continue_desktop(target, text, conversation, turn_id, hop, say,
                                               plan.get("effort") or effort,
-                                              plan.get("model") or model, plan["task"], reply)
+                                              plan.get("model") or model, plan["task"], reply, defer_reply=defer_reply)
             except AgentError as error:
                 kind, reply, mood, brief = "none", "电脑上的会话这次接不了：%s" % error, "oops", None
         if target is not None and target.get("monitoring_only"):
             # 会话不归 Runtime：她的回答另记一件，不写进它。_plan 只给电脑会话 desktop（上面已经
             # 处理了）或 none，所以这里不会留下一个没有目标的补充。
             target = None
-        if not reply:
+        if not reply and not defer_reply:
             if kind == "none":
                 raise AgentError("%s 返回了空的回复" % lead.name)
             reply = {"start": "交给 %s 了", "amend": "好，告诉 %s 了",
@@ -1082,10 +1126,10 @@ class Xiaoyou:
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
             # 那件事还在做时，卡上的简报和表情留给它的结果，不被一句闲聊盖掉。
             extra = {} if quiet else {"brief": turn.brief, "mood": turn.mood}
-            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
+            exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
         elif kind == "cancel":
             self.cancel(target["id"])
-            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
+            exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
         elif kind == "amend":
             worker = target["agent"] or lead.name
@@ -1093,16 +1137,16 @@ class Xiaoyou:
                                plan.get("effort") or effort, plan.get("model") or model)
             if done == "full":
                 reply = QUEUE_FULL_NOTE
-                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
+                exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             elif done is None:
                 # 那件事已经不在做了：接着它原来的会话再做一轮。
-                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
+                exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", brief=clip(
                     reply, self._config.brief_max_chars), mood="busy", state="working",
                     edits=target["edits"] + 1)
                 self._launch(target["id"], self._agents[worker], plan["task"], conversation, hop,
                              plan.get("effort") or effort, plan.get("model") or model)
             else:
-                self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", edits=target["edits"] + 1)
+                exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", edits=target["edits"] + 1)
                 self._workspace.note(target, worker, plan["task"], done)
             say("handoff", worker, reply)
             started = True
@@ -1115,7 +1159,7 @@ class Xiaoyou:
                 target = self._record.task_open(
                     conversation, plan.get("title") or text, "working", helper.name,
                     title_source="task" if plan.get("title") else "request")
-            self._record.exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
+            exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._config.brief_max_chars))
             say("handoff", helper.name, reply)
@@ -1124,8 +1168,73 @@ class Xiaoyou:
             started = True
             turn = shape(reply, brief, "busy", self._config.brief_max_chars, helper.name,
                          target["id"], True)
-        self._store.transcript.add(conversation, turn_id, text, reply, worker, [lead.name])
+        if not defer_reply:
+            self._store.transcript.add(conversation, turn_id, text, reply, worker, [lead.name])
         return turn
+
+    def _converse_decided(self, lead: Agent, text: str, conversation: str, turn_id: str,
+                          focus: Optional[Dict[str, Any]], available: List[Agent], hop: int,
+                          say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
+                          prompt: Any, toolbox: Toolbox, cut: threading.Event) -> Turn:
+        began = time.monotonic()
+        decision = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
+                               tools=toolbox, interrupt=cut, decision_only=True)
+        data = (decision.fields or {}).get("_decision", {})
+        facts = data.get("facts", "这轮没有执行任何承诺。")
+        plan, problem = self._plan(decision, conversation, focus, available, pinned)
+        committed = None
+        if problem or cut.is_set():
+            plan = {"type": "none", "card": None}
+            facts = "没有执行任务：%s" % (problem or "主人已打断这一轮")
+        elif plan["type"] != "none":
+            committed = self._apply_conversation(lead, text, conversation, turn_id, plan, "", None,
+                                                  "busy", hop, say, pinned, effort, model, defer_reply=True)
+            original = plan.get("card") or {}
+            card = self._cards.get(original["id"] if original.get("mesh_origin") else committed.card) or {}
+            facts = ("操作未完成：" + committed.reply) if committed.reply else (
+                "决定已落实：类型 %s；任务 %s；当前状态 %s。" % (
+                    plan["type"], card.get("id", committed.card), card.get("state", "unknown")))
+        messages = data.get("messages", [])
+        if messages:
+            messages[-1]["content"][0]["content"] = facts
+        speaking = toolbox.speaking()
+        system = prompt(True) + "\n\n这一轮已经发生的事实：" + facts + (
+            "\n现在只向主人说话或查记录，不得再启动任务、改记忆或作新的约定。"
+            "根据上述真实结果回答一次；没有执行就不能说已经做了，失败就照实说明。")
+        first = []
+        stream = self._streamer(lead.name, say, plain=True)
+
+        def on_text(raw: str) -> None:
+            if raw.strip() and not first:
+                first.append(time.monotonic() - began)
+            stream(raw)
+
+        outcome = None
+        try:
+            outcome = self._speak(lead, text, conversation, system, None, hop, catch_up=True,
+                                   on_text=on_text, tools=speaking, interrupt=cut, decision_messages=messages,
+                                   timeout_seconds=max(0.001, self._config.voice_timeout_seconds - (time.monotonic() - began)))
+            reply = reply_text(outcome)
+        except AgentError:
+            # Commitments survive a failed speaking request; never replay the decision or fall back to JSON.
+            reply = "这次回复中断了。" + facts
+        sys.stderr.write("Decide/speak turn=%s decision=%s decision_s=%.3f first_body_s=%s total_s=%.3f promise_without_commitment=%d\n" % (
+            turn_id, data.get("status", "unknown"), data.get("seconds", 0.0),
+            "%.3f" % first[0] if first else "none", time.monotonic() - began,
+            int(data.get("name") == "just_reply" and toolbox.promised(reply))))
+        if committed is None:
+            if outcome is not None:
+                spoken_plan, spoken_problem = self._plan(outcome, conversation, focus, available, pinned)
+                if spoken_problem is None:
+                    plan = spoken_plan
+            return self._apply_conversation(lead, text, conversation, turn_id, plan, reply, None,
+                                             "happy", hop, say, pinned, effort, model)
+        current = self._cards.get(committed.card) or {}
+        extra = {} if current.get("state") in ACTIVE else {"brief": clip(reply, self._config.brief_max_chars)}
+        self._record.reply(committed.card, reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
+        self._store.transcript.add(conversation, turn_id, text, reply, committed.agent, [lead.name])
+        return shape(reply, None, "busy" if committed.started else "happy", self._config.brief_max_chars,
+                     committed.agent, committed.card, committed.started)
 
     def _toolbox(self, conversation: str, focus: Optional[Dict[str, Any]], available: List[Agent],
                  pinned: bool) -> Toolbox:
@@ -1330,7 +1439,8 @@ class Xiaoyou:
     def _speak(self, agent: Agent, text: str, conversation: str, system: str,
                schema: Optional[Dict[str, Any]], hop: int, catch_up: bool,
                on_text: Optional[Callable[[str], None]] = None, tools: Any = None,
-               interrupt: Optional[threading.Event] = None) -> Outcome:
+               interrupt: Optional[threading.Event] = None, decision_only: bool = False,
+               decision_messages: Any = None, timeout_seconds: Optional[float] = None) -> Outcome:
         """让能说话的代理在这个对话自己的会话里接一段话。只说话，不给工具。"""
         session = self._store.session(conversation, agent.name)
         missed = self._store.transcript.unseen(conversation, agent.name) if catch_up else []
@@ -1341,11 +1451,13 @@ class Xiaoyou:
             text=recap(missed, text) if missed else text,
             session_id=session,
             conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
-            timeout=self._config.voice_timeout_seconds, on_text=on_text, tools=tools, interrupt=interrupt,
+            timeout=self._config.voice_timeout_seconds if timeout_seconds is None else timeout_seconds,
+            on_text=on_text, tools=tools, interrupt=interrupt,
+            decision_only=decision_only, decision_messages=decision_messages,
         ))
         if outcome.session_id:
             self._store.remember(conversation, agent.name, outcome.session_id)
-        if missed:
+        if missed and not decision_only:
             self._store.transcript.mark(conversation, agent.name, [turn["id"] for turn in missed])
         return outcome
 
@@ -1388,7 +1500,7 @@ class Xiaoyou:
         return done
 
     def _launch(self, card_id: str, agent: Agent, task: str, conversation: str, hop: int,
-                effort: Optional[str] = None, model: Optional[str] = None) -> None:
+                effort: Optional[str] = None, model: Optional[str] = None, images=()) -> None:
         opened = self._cards.get(card_id) or {}
         borrowed = opened.get("borrowed_session") if opened.get("borrowed_cwd") else None
         # 借来的电脑会话是主人自己的：不给它加小幽的人设和回复格式。
@@ -1400,7 +1512,7 @@ class Xiaoyou:
         known = next((entry["model"] for entry in self._usage.snapshot()["agents"]
                       if entry["name"] == agent.name), None)
         task_run = Task(
-            card=card_id, conversation=conversation, agent=agent, text=task, hop=hop,
+            card=card_id, conversation=conversation, agent=agent, text=task, hop=hop, images=images,
             system=task_prompt(self._config.persona, self._config.brief_max_chars) if speaking else None,
             schema=reply_schema() if speaking else None, effort=effort, model=model,
             borrowed_session=borrowed, cwd=opened.get("borrowed_cwd") if borrowed else None,

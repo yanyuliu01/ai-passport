@@ -96,6 +96,10 @@ run_app_host_tests() {
             -o "${test_dir}/test_buddy_${name}"
         "${test_dir}/test_buddy_${name}"
     done
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests/image_shims -I"${cjson}" \
+        tests/test_pocket_images.c main/pocket_images.c "${test_dir}/cJSON.o" -lm \
+        -o "${test_dir}/test_pocket_images"
+    "${test_dir}/test_pocket_images"
     echo "Host tests (protocol/state/orchestrator): PASS"
     run_update_interop "${test_dir}" "${cjson}"
 }
@@ -180,6 +184,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_task_activity.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_app_release.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_app_packs.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_image_inputs.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifacts.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifact_delivery.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_content.py

@@ -249,19 +249,33 @@ class Service:
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
                agent: Any = None, hop: Any = 0, card: Any = None,
                pin: Any = False, effort: Any = None, model: Any = None,
-               mesh: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
         pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
         effort / model 是给这句话选的努力程度和模型，交给帮手时用。
         mesh 只由 mesh.py 给（网络里别的 Runtime 交来的话，不经 HTTP）：{"message_id"：用那台
         给的编号，两边同一句话同一个编号；"delegated_from"：那台的哪件事交来的}。"""
-        if not isinstance(text, str) or not text.strip():
+        from .image_inputs import resolve
+        from .artifacts import ArtifactError
+        try:
+            attachments = resolve(self.artifacts, image_ids) if image_ids is not None else []
+        except ArtifactError as error:
+            raise RequestError(str(error)) from None
+        if attachments:
+            if text is None:
+                text = ""
+            if pin or card is not None or mesh:
+                raise RequestError("带图消息请从主对话发送；任务续聊和跨电脑转发暂不支持图片")
+            if not self._xiaoyou.image_agent(agent):
+                raise RequestError("这台 Runtime 没有可看图的 Codex 代理，请先配置后再发送")
+        if not isinstance(text, str) or (not text.strip() and not attachments):
             raise RequestError("text 不能为空")
+        text = text if text.strip() else "请看看这些图片"
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
         return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
-                             pin is True, effort, model, mesh or {})
+                             pin is True, effort, model, mesh or {}, attachments=attachments)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
@@ -282,7 +296,7 @@ class Service:
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
                  client_id: Any, agent: Any, hop: Any, card: Any = None,
                  pin: bool = False, effort: Any = None, model: Any = None,
-                 mesh: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 mesh: Optional[Dict[str, Any]] = None, attachments=None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         mesh = mesh or {}
         relay = None
@@ -312,6 +326,9 @@ class Service:
         if relay is None:
             effort, model = self._tier(agent, effort, model)  # 转交的由那台检查
         fingerprint = content_hash(kind, text, audio)
+        if attachments:
+            fingerprint = content_hash("images", fingerprint + json.dumps(
+                [(item["id"], item["sha256"]) for item in attachments]), None)
         # 一次只收一句：收下（落盘）的先后就是排队的先后；同一个 client_id 的重试要等前一次
         # 写完（或者写失败、撤回）才看得到结果，不会对一句还没写下去的话回“收到了”。
         with self._write_lock:
@@ -345,6 +362,7 @@ class Service:
                     "kind": kind,
                     "status": "queued",
                     "text": text,
+                    "attachments": attachments or [],
                     "reply": None,
                     # 回复还在生成时，已经生成的那部分（整段）；没有流式、或者已经说完时是空串
                     "partial": "",
@@ -731,6 +749,7 @@ class Service:
         snapshot = dict(message)
         snapshot["event_stream"] = True
         snapshot["events"] = [dict(event) for event in message["events"]]
+        snapshot["attachments"] = [dict(item) for item in message.get("attachments", [])]
         return snapshot
 
     def get(self, message_id: str, wait: float = 0.0,
@@ -920,11 +939,15 @@ class Service:
             return
         try:
             with self._xiaoyou.record.opening(**({"delegated_from": delegated} if delegated else {})):
-                turn = self._xiaoyou.hear(
-                    text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
-                    effort=effort, model=model,
-                    report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
-                )
+                if message.get("attachments"):
+                    turn = self._xiaoyou.hear_images(text, conversation, message_id,
+                        message["attachments"], asked=asked, hop=hop)
+                else:
+                    turn = self._xiaoyou.hear(
+                        text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
+                        effort=effort, model=model,
+                        report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
+                    )
         except AgentError as error:
             self._fail(message_id, conversation, text, str(error), pin)
             return
