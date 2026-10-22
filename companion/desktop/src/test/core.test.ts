@@ -153,7 +153,6 @@ test('accepted replies bypass blocked history replay, survive restart, and retai
   entry.state = 'accepted'; entry.messageId = 'live'; db.updatePending(entry);
   // Simulate restoration of an accepted request after closing the app.
   const reopened = new ClientDatabase(path);
-  t.after(() => reopened.close());
   let state = 'queued', polling = 0;
   const owner = message('live:you', 100, { status: 'final', author: { kind: 'owner' } });
   const reply = () => message('live:reply', state === 'done' ? 102 : 101,
@@ -171,7 +170,7 @@ test('accepted replies bypass blocked history replay, survive restart, and retai
       runtime_id: runtime, subject_id: space, epoch: 'epoch-a', messages: [owner, reply()] } };
   } };
   const client = new DesktopClient(reopened, transport, secrets(), () => {});
-  t.after(() => client.stop());
+  try {
   client.add(endpoint);
   await until(() => reopened.records<Message>(space, 'message').some(m => m.id === 'live:reply'));
   assert.equal(reopened.pending().length, 1, 'Synchronizing the owner alone cannot acknowledge the reply');
@@ -182,6 +181,10 @@ test('accepted replies bypass blocked history replay, survive restart, and retai
   assert.equal(reopened.cursor(runtime).cursor, 'history:old');
   reopened.apply(space, runtime, page({ seq: 'history:next', messages: [message('live:reply', 1)] }));
   assert.equal(reopened.records<Message>(space, 'message').find(m => m.id === 'live:reply')?.rev, 102);
+  } finally {
+    client.stop();
+    reopened.close();
+  }
 });
 test('approval routing binds Runtime and current epoch, never a bare colliding card ID', async t => {
   const { db } = fixture(t);
