@@ -243,9 +243,13 @@ _LIST_LINE = re.compile(r"^(· |\d+[.、）)])")
 
 CHAT_STYLE = (
     "## 在哪里说话\n"
-    "你是在主人的手机上跟他聊天：他随时可能插话，屏幕不大，能显示加粗和列表。说几条、每条多长、"
-    "用什么语气，你看情况自己定。想另起一条消息的地方，单独写一行 ---（三个短横线）。\n"
+    "你在主人的聊天界面跟他交谈，他随时可能插话；手机屏幕不大，能显示加粗和列表。"
+    "遵守人设中的语气、长度和消息节奏：先直接回答，再按自然的意思分消息，"
+    "不要把答案和后续解释的几段话全塞进一个气泡。消息之间必须单独写一行 ---（三个短横线），"
+    "不能只空一行；同一份清单或主人要求的完整段落保持在一起。简单回答不强行拆开。\n"
     "手机等一条写完才显示：先给简短、与本轮有关的有意义回复，后续需要解释再另起一条；不要用空泛的确认句凑首答。\n"
+    "多条消息的正文格式示例（只示范边界，不照搬内容）：\n先说答案。\n---\n补充必要的原因。\n"
+    "本轮要求 JSON 时，上述消息正文和分隔换行都放进 reply 字符串，不在 JSON 外另写文字。\n"
     "三条底线：没调工具就不要说“我已经去做了”“已经让谁去查了”；不编进度和结果，推测的说是推测；"
     "已经跟主人说过的，不要换个说法再说一遍。"
 )
@@ -488,8 +492,6 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         "不要为了显得在做事，去派一件自己编出来的任务。"
     )
     parts.append("")
-    parts.append(CHAT_STYLE)
-    parts.append("")
     if memory:
         parts.extend(memory_section(memory))
         parts.append("")
@@ -504,6 +506,13 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         parts.append("")
         parts.append("## 你的帮手")
         _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+        parts.extend(["", CHAT_STYLE, "", "## 本轮输出检查",
+                      "工具结果不是主人又发来的一句话，不再重新确认收到。"
+                      "记忆操作先调用 remember、replace 或 forget，返回成功后才说一次保存或修改结果；"
+                      "工具前不要说记好了，工具后不要重复工具前已经说过的话。"
+                      "答案后还有独立的原因或补充时，必须写出 --- 分隔行，不能只换段。"
+                      "但同一份步骤或清单的全部条目必须放在同一条消息，条目之间用普通换行，不能逐项写 ---。"
+                      "主人只要知识解释、清单或步骤时，按要求答完就停，不为续聊另加交办建议或追问。"])
         text = "\n".join(parts)
         for json_word, tool_word in TOOL_WORDING:
             text = text.replace(json_word, tool_word)
@@ -530,6 +539,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     parts.append("")
     parts.append("## 你的帮手")
     _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+    parts.extend(["", CHAT_STYLE])
     return "\n".join(parts)
 
 
@@ -622,7 +632,7 @@ def voice_prompt(persona: str, brief_max_chars: int, text: bool = False,
         CHAT_STYLE, "",
         "## 转述帮手的结果",
         "帮手交回的原文主人看不到，完整的留在任务里。你用自己的话把结果告诉主人，"
-        "不复述帮手的过程、文件名和代码位置，"
+        "主人没要求技术细节时，不复述帮手的过程、文件名和代码位置；主人明确要原文、路径或依据时照实提供。"
         "帮手原文里的英文和术语换成主人听得懂的话。", "",
         "## 回复格式",
         "只输出一个 JSON 对象，不要在它前后加任何文字，按给定的结构：" + REPLY_FORMAT % brief_max_chars,
@@ -635,7 +645,7 @@ def task_prompt(persona: str, brief_max_chars: int) -> str:
         persona, "",
         "## 这一次",
         "你正在后台替主人做一件事。把它做完，然后用你自己的话告诉主人：做了什么、结论是什么、"
-        "有没有需要主人决定的事。不要原样贴一大段输出。", "",
+        "有没有需要主人决定的事。除非主人明确要原文，不要原样贴一大段输出。", "",
         CHAT_STYLE, "",
         "## 回复格式",
         "做完后只输出一个 JSON 对象，按给定的结构：" + REPLY_FORMAT % brief_max_chars,

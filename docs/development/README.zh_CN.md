@@ -17,6 +17,7 @@
 
 ## AI 工作流
 
+- [xiaoyou-system-prompt.zh_CN.md](xiaoyou-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [unified-message-model.zh_CN.md](unified-message-model.zh_CN.md)：统一消息结构——唯一的消息日志、编号规则、同步接口，以及新的 Runtime 或 agent 怎么接入。
 - [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小幽说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
