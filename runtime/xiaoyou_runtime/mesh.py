@@ -647,6 +647,11 @@ class Mesh:
             record.pop(key, None)
         self._record.replica_message(record)
         self._remember_turn(origin, data)
+        if (data.get("author") or {}).get("kind") == "owner":
+            for item in self._replicas.since(origin, 0):
+                reply = item.get("data") or {}
+                if item.get("k") == "message" and reply.get("reply_to") == data["id"]:
+                    self._remember_turn(origin, reply)
         return task
 
     def _remember_turn(self, origin: str, data: Dict[str, Any]) -> None:
@@ -657,7 +662,9 @@ class Mesh:
                 or not data.get("text")):
             return
         asked = self._replicas.get(origin, "message", data["reply_to"]) if data.get("reply_to") else None
-        said = (asked or {}).get("text") or "（在「%s」上的一件事有了结果）" % self._peer_name(origin)
+        if not asked or (asked.get("author") or {}).get("kind") != "owner":
+            return  # The result remains attributed in the record hub until its parent arrives.
+        said = asked.get("text") or ""
         try:
             self._xiaoyou.share(data.get("conversation") or "default", [{
                 "id": _base(data["id"]), "text": said, "reply": data["text"],
@@ -753,7 +760,7 @@ class Mesh:
             self._relays[message["id"]] = target
         self.command(target, "message", {
             "conversation": message["conversation"], "text": message["text"], "card": message.get("relay_card"),
-            "pin": True, "agent": message.get("asked"), "effort": message.get("effort"),
+            "pin": True, "agent": message.get("asked"), "effort": message.get("effort"), "reply_scope": message.get("reply_scope"),
             "model": message.get("model"), "message_id": message["id"]})
         return None
 
@@ -805,6 +812,12 @@ class Mesh:
                 card = args.get("card")
                 if not isinstance(card, str) or self._service.cancel(card) is None:
                     raise MeshError("这台没有这件事")
+            elif kind == "directory":
+                extra = self._service.directory_edit(args.get('uid'), {k: args[k] for k in ('fields', 'revision') if k in args})
+            elif kind == 'directory_metadata':
+                extra = self._service.directory_metadata(args.get('uid'))
+            elif kind == 'directory_history':
+                extra = {'history': self._service.directory_history(args.get('uid'), args.get('cursor'))}
             elif kind == "approve":
                 answered = self._service.approve(str(args.get("approval")), args.get("decision"))
                 if answered is None:
@@ -847,7 +860,7 @@ class Mesh:
         snapshot = self._service.submit(
             args.get("text"), args.get("conversation") or "default", client_id=message_id,
             agent=agent, hop=hop if isinstance(hop, int) and not isinstance(hop, bool) else 0,
-            card=card, pin=args.get("pin") is True, effort=args.get("effort"), model=args.get("model"),
+            card=card, pin=args.get("pin") is True, effort=args.get("effort"), model=args.get("model"), reply_scope=args.get("reply_scope"),
             mesh=mesh)
         return {"message": snapshot["id"]}
 

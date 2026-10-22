@@ -187,6 +187,12 @@ final class Usage {
      * 这位帮手还剩百分之几：5 小时和本周两个窗口里更紧的那个。已经过了重置时间的窗口不算；
      * 按量计费、没有额度账号或都不知道时是 -1。
      */
+    int fiveHourLeft(String role, long now) {
+        Account account = account(helper(role), role);
+        if (account == null || account.reset5h > 0 && account.reset5h <= now) return -1;
+        return account.left5h;
+    }
+
     int left(String role, long now) {
         Account account = account(helper(role), role);
         if (account == null) return -1;

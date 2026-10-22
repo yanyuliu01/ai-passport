@@ -38,7 +38,67 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Shared display rules (App 0.31.1 / Runtime 0.23.0)
+
+When the Runtime supplies `presentation_v1`, the phone uses its message/block
+boundaries, formatting runs, author, order, placement and task status/group.
+Polling, streaming, synchronized history and cached history keep that projection;
+the phone no longer applies its own separator/Markdown rules to these records.
+Older Runtimes keep the legacy path. An unsupported policy is explicitly labelled.
+The new version preserves pairing, drafts, images, approvals and retry identities.
+
+The same contract is consumed by Xiaoyou desktop 0.1.6. Native source history uses
+it too, while Codex/Claude native-window display and continuation convergence
+remain incomplete and labelled in the directory. Shared records do not establish
+native-window acceptance. Phone installation, real rendered timing and live
+cross-device recovery still require separate validation.
+
+## Conversation navigation (App 0.28.0 / Runtime 0.21.0)
+
+The phone keeps its portrait Home and voice controls. The drawer has Main chat,
+a top-level Work records entry, a flat Side chats list with a create button,
+helper usage sheets, and connection/settings. Side chats start empty without
+asking for a title; the Runtime generates the first title from the first owner
+message, and long-pressing the row allows renaming. Selecting a message offers
+Start side chat with an attributed quotation; it does not copy it as a new
+owner message or change the source conversation. Each chat keeps its own drafts
+and message scope. The composer attachment `+` is on the right before Send;
+photo preview/upload/retry stays available. File upload is labelled unavailable
+until a compatible service provides it.
+
+Since 0.28.1, Work records groups real pending approvals and confirmed running
+work separately from collapsed **Status unconfirmed** and **History** sections.
+A stale/unknown desktop observation, an active desktop snapshot without a source
+event for five minutes, or an offline outstanding task cannot appear as running
+or completed. Those records remain readable and are not deleted or archived.
+Rows show source computer, helper and project/directory separately from the
+task title. Missing desktop names use an explicit unnamed-conversation label;
+technical session IDs remain in details. Desktop rows show the last observed
+activity timestamp, never a fabricated meaningful-progress timer.
+Details show the latest public progress, age since meaningful progress,
+source chat, and native session/directory details. Add instructions returns to
+the originating chat with a task reference and targets the existing task and
+executor. A busy task retains the addition before accepting it into its queue;
+queued additions do not count as worker progress. Restart preserves the text
+and marks an interrupted relay instead of silently executing it again.
+
+Native records on the phone are read-only public excerpts. They do not prove
+that every native transcript or tool output has been mirrored. Independent CLI
+sessions whose safe same-task relay is unavailable remain read-only and tell
+the owner to continue on the source computer. The existing native desktop
+handoff has separate capability and validation limits; this UI release does not
+establish live bidirectional native-backend synchronization.
+
+Runtime 0.21.0 supplies the catalog, scoped chat synchronization and durable
+public audit API described in its README. Older Runtimes retain their main
+conversation and existing task APIs; creation of side chats reports that the
+capability is unavailable. BLE, approvals, pairing, speech resources and update
+transport retain their existing contracts. Phone installation, rendered first
+response timing, and real multi-client acceptance remain separate checks.
+
 ## Sidebar phone interface
+
+The following section describes versions before 0.28.0; the current navigation is described above.
 
 DS is the main thread: she keeps you company, takes requests and hands them to
 helpers. You only talk and watch, so the app offers no helper or effort picker;
@@ -222,8 +282,9 @@ running Codex and Claude Code conversations appear on their helper's page. Each
 uses the conversation title shown in the desktop sidebar, together with its
 desktop source, project, current state and latest activity. The app preserves
 the runtime's title verbatim; desktop renames update the same task. If the
-desktop title is unavailable, the recent request or session identifier is
-shown with an explicit fallback notice. Titles longer than the runtime's
+desktop title is unavailable, the earliest readable request or an unnamed-session
+label is shown with an explicit fallback notice; the identifier stays in details.
+Titles longer than the runtime's
 200-character limit are marked as shortened. The hardware's task and history
 lists devote their 47-byte UTF-8 title field to that same title, clipping at a
 character boundary without prepending the project or source. All connected
@@ -246,9 +307,9 @@ visible message. This view is recent conversation content, rather than a
 complete conversation archive or a live character-by-character stream.
 
 When observation or the phone's connection to the runtime is lost, the task
-stays in the current list as unknown, keeping the last observed content without
-a running timer; it does not
-move into completed history. After reconnecting the app refreshes the states
+stays in the collapsed Status unconfirmed section, keeping its last observed
+content and source time without a running timer; it does not move into completed
+history. After reconnecting the app refreshes the states
 from the runtime. Firmware announcing `desktop` displays unknown and ended
 turns distinctly. Older firmware receives a stopped-state fallback, with the
 actual status written in the card's reply and no running timer.
@@ -777,6 +838,20 @@ restarted, background behavior over hours, and real assistant notifications.
 
 ## Image messages
 
-The main-chat composer can upload an image with optional text. Received image
+From 0.27.1, the main-chat composer's Photos entry opens the system photo picker.
+A local preview appears at the left before upload completes, with a separate
+remove button, upload status and retry. Large JPEG photos are optimized before
+transfer; PNG screenshots retain original bytes. Images can be sent with optional text. Received image
 attachments open from their message. Optional device previews, supported routes,
 limits and verification are described in [Image messages](../docs/development/multimodal-images.md).
+
+### Shared conversation directory
+
+The additive transport increment is Android 0.30.1/code 56 and desktop 0.1.5; it retains this directory and adds a pinned-TLS node on an always-on computer. Public ingress and physical phone acceptance remain unverified; see the [desktop node checkpoint](desktop/README.md#embedded-node-on-an-always-on-computer-015--android-0301).
+
+Android 0.30.0 / code 55 and desktop 0.1.4 consume Runtime 0.22.0's same
+`/v1/directory` projection. Work records links to source-aware search, shared
+name/pin/archive/restore/project edits and paged public history. Old phone-local
+marks have an explicit migration preview. Short messages stay in their existing
+logical chats. See [current coverage and native-control gaps](../docs/development/conversation-presentation.md#unified-directory-increment-2026-10-22);
+a shared alias does not rewrite native agent databases or prove safe native takeover.

@@ -19,6 +19,7 @@ final class MessageStream implements AutoCloseable {
     }
 
     static MessageStream open(String base, String token, String id, String rev) throws IOException {
+        if (base.startsWith("relay://")) throw new IOException("加密通道使用可恢复长轮询");
         HttpURLConnection connection = (HttpURLConnection) new URL(base + "/v1/messages/" + id
                 + "/stream" + (rev == null ? "" : "?rev=" + rev)).openConnection();
         boolean owned = false;
@@ -44,7 +45,7 @@ final class MessageStream implements AutoCloseable {
         while ((line = input.readLine()) != null) {
             if (line.isEmpty()) {
                 if (data.length() == 0) continue;
-                Map<String, String> message = BuddyProtocol.parseFlatObject(data.toString());
+                Map<String, String> message = Presentation.snapshot(data.toString());
                 if (message == null || message.get("id") == null || message.get("status") == null)
                     throw new IOException("回复事件内容不完整");
                 return message;

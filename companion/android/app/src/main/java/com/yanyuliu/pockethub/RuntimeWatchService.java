@@ -14,10 +14,10 @@ import android.os.IBinder;
 /** Keep desktop approval monitoring alive when no BLE device is connected. */
 public final class RuntimeWatchService extends Service {
     static void start(Context context) {
-        if (RuntimeClient.selected(context) != null) context.startForegroundService(new Intent(context, RuntimeWatchService.class));
+        if (RuntimeClient.selected(context) != null || RelayManager.hasConnections()) context.startForegroundService(new Intent(context, RuntimeWatchService.class));
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (RuntimeClient.selected(this) == null) { stopSelf(); return START_NOT_STICKY; }
+        if (RuntimeClient.selected(this) == null && !RelayManager.hasConnections()) { stopSelf(); return START_NOT_STICKY; }
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel("runtime", "电脑连接与审批同步", NotificationManager.IMPORTANCE_LOW));
         PendingIntent open = PendingIntent.getActivity(this, 2, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);

@@ -1,0 +1,1324 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "two-complete-messages",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "First message\n\n---\n\nSecond message"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "First message\n\n---\n\nSecond message",
+        "presentation": {
+          "version": 1,
+          "input_revision": "2ad6281aec619474fbf9",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "First message",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "First message",
+                  "bold": false
+                }
+              ]
+            },
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#1",
+              "text": "Second message",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Second message",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "First message",
+        "Second message"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "First message",
+        "Second message"
+      ]
+    },
+    {
+      "name": "one-complete-one-unfinished",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": "First message\n---\nUnfinished"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": "First message\n---\nUnfinished",
+        "presentation": {
+          "version": 1,
+          "input_revision": "dd1a06a501405c58c28f",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "streaming",
+          "status_label": "正在回复",
+          "complete": false,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "First message",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "First message",
+                  "bold": false
+                }
+              ]
+            },
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#1",
+              "text": "Unfinished",
+              "complete": false,
+              "runs": [
+                {
+                  "text": "Unfinished",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "First message"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "First message"
+      ]
+    },
+    {
+      "name": "no-complete-message",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": "Unfinished"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": "Unfinished",
+        "presentation": {
+          "version": 1,
+          "input_revision": "a76cdc48f3a1edf60be1",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "streaming",
+          "status_label": "正在回复",
+          "complete": false,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Unfinished",
+              "complete": false,
+              "runs": [
+                {
+                  "text": "Unfinished",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [],
+      "placement": "chat",
+      "rendered": []
+    },
+    {
+      "name": "empty-snapshot-retracts-blocks",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": ""
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "streaming",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "",
+        "partial": "",
+        "presentation": {
+          "version": 1,
+          "input_revision": "4dc37d2e057cd3f8b3a8",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "streaming",
+          "status_label": "正在回复",
+          "complete": false,
+          "blocks": [],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [],
+      "placement": "chat",
+      "rendered": []
+    },
+    {
+      "name": "fenced-code-preserves-separator",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Example\n```text\n---\n```\n---\nDone"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Example\n```text\n---\n```\n---\nDone",
+        "presentation": {
+          "version": 1,
+          "input_revision": "bd6932bce02ee6c8cb00",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Example\n```text\n---\n```",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Example",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "```text",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "---",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "```",
+                  "bold": false
+                }
+              ]
+            },
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#1",
+              "text": "Done",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Done",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Example\n```text\n---\n```",
+        "Done"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "Example\n```text\n---\n```",
+        "Done"
+      ]
+    },
+    {
+      "name": "owner-literal-separator",
+      "input": {
+        "id": "turn:you",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "owner",
+          "name": "you"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "user",
+        "reply_to": null,
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "My text\n---\nMore"
+      },
+      "wire": {
+        "id": "turn:you",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "owner",
+          "name": "you"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "user",
+        "reply_to": null,
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "My text\n---\nMore",
+        "presentation": {
+          "version": 1,
+          "input_revision": "29bde87d233edfb2266a",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:you",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "owner",
+            "name": "you",
+            "label": "主人"
+          },
+          "kind": "user",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:you#0",
+              "text": "My text\n---\nMore",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "My text\n---\nMore",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            0,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:you"
+          ]
+        }
+      },
+      "visible": [
+        "My text\n---\nMore"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "My text\n---\nMore"
+      ]
+    },
+    {
+      "name": "native-item-boundary",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "agent",
+          "name": "codex"
+        },
+        "source": {
+          "type": "desktop",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Native answer\n---\nLiteral separator"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "agent",
+          "name": "codex"
+        },
+        "source": {
+          "type": "desktop",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Native answer\n---\nLiteral separator",
+        "presentation": {
+          "version": 1,
+          "input_revision": "a5b7c2e9ff308742b1db",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "agent",
+            "name": "codex",
+            "label": "Codex"
+          },
+          "kind": "reply",
+          "placement": "source",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Native answer\n---\nLiteral separator",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Native answer",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "---",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "Literal separator",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Native answer\n---\nLiteral separator"
+      ],
+      "placement": "source",
+      "rendered": [
+        "Native answer\n---\nLiteral separator"
+      ]
+    },
+    {
+      "name": "native-protocol-input",
+      "input": {
+        "id": "native:you",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "owner",
+          "name": "you"
+        },
+        "source": {
+          "type": "desktop",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "user",
+        "reply_to": null,
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "input_origin": "native_protocol",
+        "text": "Forwarded input"
+      },
+      "wire": {
+        "id": "native:you",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "owner",
+          "name": "you"
+        },
+        "source": {
+          "type": "desktop",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "user",
+        "reply_to": null,
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "input_origin": "native_protocol",
+        "text": "Forwarded input",
+        "presentation": {
+          "version": 1,
+          "input_revision": "220f896958789204c0e6",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/native:you",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/native",
+          "conversation": "default",
+          "author": {
+            "kind": "owner",
+            "name": "you",
+            "label": "原生会话输入"
+          },
+          "kind": "user",
+          "placement": "source",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/native:you#0",
+              "text": "Forwarded input",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Forwarded input",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/native",
+            0,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/native:you"
+          ]
+        }
+      },
+      "visible": [
+        "Forwarded input"
+      ],
+      "placement": "source",
+      "rendered": [
+        "Forwarded input"
+      ]
+    },
+    {
+      "name": "tool-evidence",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "task",
+        "author": {
+          "kind": "agent",
+          "name": "claude"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "activity",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "phase": "tool_result",
+        "text": "Tool text\n---\nOutput"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "task",
+        "author": {
+          "kind": "agent",
+          "name": "claude"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "activity",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "phase": "tool_result",
+        "text": "Tool text\n---\nOutput",
+        "presentation": {
+          "version": 1,
+          "input_revision": "683e85e47cb845ebd1c8",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "agent",
+            "name": "claude",
+            "label": "Claude"
+          },
+          "kind": "activity",
+          "placement": "work",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Tool text\n---\nOutput",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Tool text\n---\nOutput",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Tool text\n---\nOutput"
+      ],
+      "placement": "work",
+      "rendered": [
+        "Tool text\n---\nOutput"
+      ]
+    },
+    {
+      "name": "task-result",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "task",
+        "author": {
+          "kind": "agent",
+          "name": "codex"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "result",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Result"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "task",
+        "author": {
+          "kind": "agent",
+          "name": "codex"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "result",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Result",
+        "presentation": {
+          "version": 1,
+          "input_revision": "c00ac8c8f608e1ab9869",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "agent",
+            "name": "codex",
+            "label": "Codex"
+          },
+          "kind": "result",
+          "placement": "work",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Result",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Result",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Result"
+      ],
+      "placement": "work",
+      "rendered": [
+        "Result"
+      ]
+    },
+    {
+      "name": "failed-reply",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "failed",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Unavailable"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "failed",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Unavailable",
+        "presentation": {
+          "version": 1,
+          "input_revision": "e2905748b0f6ea5a08f9",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "failed",
+          "status_label": "未完成",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Unavailable",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Unavailable",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Unavailable"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "Unavailable"
+      ]
+    },
+    {
+      "name": "cancelled-reply",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "cancelled",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Stopped"
+      },
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "cancelled",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "Stopped",
+        "presentation": {
+          "version": 1,
+          "input_revision": "d977748958c7523cb3a9",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "cancelled",
+          "status_label": "已停止",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "Stopped",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Stopped",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      },
+      "visible": [
+        "Stopped"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "Stopped"
+      ]
+    },
+    {
+      "name": "same-text-new-turn",
+      "input": {
+        "id": "next:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "next:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 11,
+        "turn_at": 11,
+        "attachments": [],
+        "text": "First message"
+      },
+      "wire": {
+        "id": "next:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "next:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 11,
+        "turn_at": 11,
+        "attachments": [],
+        "text": "First message",
+        "presentation": {
+          "version": 1,
+          "input_revision": "a849723cde2fc45b7256",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/next:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/next",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/next:reply#0",
+              "text": "First message",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "First message",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "order": [
+            11,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/next",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/next:reply"
+          ]
+        }
+      },
+      "visible": [
+        "First message"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "First message"
+      ]
+    },
+    {
+      "name": "shared-formatting-runs",
+      "input": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "**Ready**\n- First\n- **Second**"
+      },
+      "visible": [
+        "**Ready**\n- First\n- **Second**"
+      ],
+      "placement": "chat",
+      "rendered": [
+        "Ready\n•  First\n•  Second"
+      ],
+      "wire": {
+        "id": "turn:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "turn:you",
+        "status": "final",
+        "rev": 9,
+        "created_at": 10,
+        "turn_at": 10,
+        "attachments": [],
+        "text": "**Ready**\n- First\n- **Second**",
+        "presentation": {
+          "version": 1,
+          "input_revision": "c37b3b5ab3bab461a67f",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已回复",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply#0",
+              "text": "**Ready**\n- First\n- **Second**",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "Ready",
+                  "bold": true
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "•  First",
+                  "bold": false
+                },
+                {
+                  "text": "\n",
+                  "bold": false
+                },
+                {
+                  "text": "•  ",
+                  "bold": false
+                },
+                {
+                  "text": "Second",
+                  "bold": true
+                }
+              ]
+            }
+          ],
+          "order": [
+            10,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
+          ]
+        }
+      }
+    }
+  ]
+}

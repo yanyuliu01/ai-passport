@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+from pathlib import Path
 import uuid
 from collections import OrderedDict, deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Union
@@ -38,6 +39,7 @@ from .store import Store
 from .quick_review import QuickReview
 from .iterate.events import EventStore
 from .xiaoyou import Xiaoyou
+from . import presentation
 
 MAX_TEXT_CHARS = 8000
 MAX_AUDIO_BYTES = 4 * 1024 * 1024
@@ -127,7 +129,19 @@ class Service:
         self._review_loading = False
         # Recovered queued work may request a tool immediately. Restore its
         # durable policy and event sink before starting any recovery workers.
+        from .conversation_metadata import ConversationMetadata
+        self.metadata = ConversationMetadata(xiaoyou._config, xiaoyou.record)
+        source_seq = max([int(v.get('source_revision', 0)) for v in xiaoyou.cards.directory.source_snapshot().values() if v.get('authority') == self.runtime_id] + [xiaoyou.cards.seq])
+        if source_seq > xiaoyou.cards.seq:
+            xiaoyou.record.sequence(at_least=source_seq)
         self._recover()
+        from .directory_discovery import Discovery
+        self.discovery = Discovery(xiaoyou._config, xiaoyou.record, self.runtime_id, owned=store.session_ids,
+            bound_titles=lambda: {r['uid']: r['original_title'] for r in self.directory()['entries'] if r['kind']=='native' and r.get('bound')})
+        if xiaoyou._config.desktop_sync:
+            self.discovery.start()
+        else:
+            self.discovery.status = {'phase': 'disabled', 'indexed_files': 0, 'pending_files': 0}
 
     def _review_event(self, event: Dict[str, Any]) -> None:
         from . import __version__
@@ -249,7 +263,7 @@ class Service:
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
                agent: Any = None, hop: Any = 0, card: Any = None,
                pin: Any = False, effort: Any = None, model: Any = None,
-               mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None) -> Dict[str, Any]:
+               mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None, reply_scope: Any = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
         pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
@@ -275,12 +289,12 @@ class Service:
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
         return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
-                             pin is True, effort, model, mesh or {}, attachments=attachments)
+                             pin is True, effort, model, mesh or {}, attachments=attachments, reply_scope=reply_scope)
 
     def submit_voice(self, audio: Any, conversation: Any = "default",
                      client_id: Any = None, agent: Any = None,
                      card: Any = None, pin: Any = False, effort: Any = None,
-                     model: Any = None) -> Dict[str, Any]:
+                     model: Any = None, reply_scope: Any = None) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
@@ -291,12 +305,12 @@ class Service:
                 "Runtime 还没有配置语音识别。在 config.json 里设置 stt（见 README 的“语音”一节）"
             )
         return self._enqueue("voice", "", bytes(audio), conversation, client_id, agent, 0, card,
-                             pin is True, effort, model)
+                             pin is True, effort, model, reply_scope=reply_scope)
 
     def _enqueue(self, kind: str, text: str, audio: Optional[bytes], conversation: Any,
                  client_id: Any, agent: Any, hop: Any, card: Any = None,
                  pin: bool = False, effort: Any = None, model: Any = None,
-                 mesh: Optional[Dict[str, Any]] = None, attachments=None) -> Dict[str, Any]:
+                 mesh: Optional[Dict[str, Any]] = None, attachments=None, reply_scope=None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
         mesh = mesh or {}
         relay = None
@@ -325,7 +339,15 @@ class Service:
             raise RequestError("hop 应该是 0 到 %d 的整数" % MAX_HOP)
         if relay is None:
             effort, model = self._tier(agent, effort, model)  # 转交的由那台检查
+        if reply_scope not in (None, "main"):
+            raise RequestError("reply_scope 不支持")
+        if reply_scope == "main" and card is not None:
+            current = self._xiaoyou.cards.get(card)
+            if current and not current.get("monitoring_only") and current["conversation"] != conversation:
+                raise RequestError("补充要求须发回任务的来源聊天")
         fingerprint = content_hash(kind, text, audio)
+        if reply_scope == "main":
+            fingerprint = content_hash("chat-supplement", fingerprint + "\0" + str(card) + "\0" + str(pin), None)
         if attachments:
             fingerprint = content_hash("images", fingerprint + json.dumps(
                 [(item["id"], item["sha256"]) for item in attachments]), None)
@@ -375,6 +397,7 @@ class Service:
                     "card": card,
                     # 主人是在那件事里面说的：这句话一定归到它
                     "pin": pin and card is not None,
+                    "reply_scope": reply_scope,
                     # 给这句话选的努力程度和模型；没选就是 None
                     "effort": effort,
                     "model": model,
@@ -581,14 +604,260 @@ class Service:
         except ReportError as error:
             raise RequestError(str(error))
 
+    def conversations(self):
+        from .conversation_directory import uid
+        preferences = self.card_store.directory.snapshot()
+        values = self.card_store.conversations.list()
+        for item in values:
+            key = uid('chat', item['id'])
+            metadata = preferences.get(key, {})
+            if metadata.get('origin') != (item.get('origin') or self.runtime_id):
+                metadata = {}
+            item.update(directory_id=key, metadata_revision=metadata.get('revision', 0))
+            item.update({k: metadata[k] for k in ('title', 'pinned', 'archived', 'project') if k in metadata})
+        return {"conversations": values}
+
+    def directory(self, include_retained=True):
+        seq = self.card_store.seq
+        cache = getattr(self, '_directory_cache', {})
+        cached = cache.get(include_retained)
+        if cached and cached[0] == seq:
+            return dict(cached[1], discovery=dict(getattr(getattr(self, 'discovery', None), 'status', {})))
+        from .conversation_directory import project, home_scope
+        config = self._xiaoyou._config
+        homes = {kind: home_scope(path or Path.home() / default) for kind, path, default in (
+            ('codex', config.desktop_codex_dir, '.codex'), ('claude', config.desktop_claude_dir, '.claude'))}
+        cards = self.card_store.recent(None, 10 ** 6)
+        if include_retained:
+            cards += self.card_store.retained()
+        for card in cards:
+            if not card.get('monitoring_only') and not card.get('worker_session') and card.get('agent'):
+                session = self._store.session('%s/%s' % (card.get('conversation', 'default'), card['id']), card['agent'])
+                if session:
+                    card.update(worker_session=session, worker_agent=card['agent'])
+        rows = project(cards, self.card_store.conversations.list(),
+                       self.card_store.directory.snapshot(), self.runtime_id,
+                       getattr(config, 'name', ''), config.agents, self.card_store.epoch, homes,
+                       self.card_store.directory.source_snapshot())
+        owned = self._store.session_ids()
+        for row in rows:
+            if row['kind'] == 'native':
+                row['native_open'] = self._native_open_capability(row, owned, cards)
+                row['native_presentation'] = dict(presentation.policy()['native_surfaces'].get(row.get('agent'),
+                    {'status': 'incomplete', 'reason': 'native-rendering-not-verified'}),
+                    label='原生窗口显示尚未统一；共享记录视图不代表原生端已完成')
+        generated = self.card_store.directory.generated_snapshot()
+        for row in rows:
+            if row['uid'] in generated and generated[row['uid']].get('origin') == row['authority']:
+                value = dict(generated[row['uid']])
+                value['stale'] = value.get('input_version') != str(row.get('source_revision') or row.get('updated_at') or 0) or value.get('base_revision') != row['metadata_revision']
+                row['generated'] = value
+        result = {"entries": rows, "policy": "shared-directory-v1", "seq": seq, "storage_errors": sorted(self.card_store.directory.errors),
+                  'discovery': dict(getattr(getattr(self, 'discovery', None), 'status', {}))}
+        cache[include_retained] = (seq, result)
+        self._directory_cache = cache
+        return result
+
+    def _native_open_capability(self, row, owned, cards):
+        import sys
+        from .conversation_directory import home_scope
+        reason = ''
+        if row['authority'] != self.runtime_id:
+            reason = '请在来源电脑的原生客户端打开；此处保留共享记录'
+        elif sys.platform != 'darwin' or row.get('agent') != 'codex':
+            reason = '来源尚未验证原生打开适配器；可查看公开记录'
+        elif row.get('native_session_id') in owned or row.get('bound'):
+            reason = 'Runtime 管理的会话尚未验证控制权交接；请通过任务补充要求'
+        elif row.get('native_scope') != home_scope(Path.home()/'.codex'):
+            reason = '此会话使用隔离配置目录，原生应用无法保证接入同一份记录'
+        elif row.get('available') is False or row.get('state') not in ('turn_ended','done','failed','cancelled'):
+            reason = '来源正在执行、离线或状态未知；暂不切换控制入口'
+        elif any(c.get('borrowed_session') == row.get('native_session_id') and c.get('state') in ('working','talking','waiting') for c in cards):
+            reason = 'Runtime 正在使用此原生会话，请等待本轮结束'
+        return {'supported': not bool(reason), 'reason': reason, 'effect': 'navigate-existing-session'}
+
+    def directory_open(self, key):
+        import re
+        import subprocess
+        row = next((r for r in self.directory()['entries'] if r['uid'] == key), None)
+        if row is None or not row.get('native_open',{}).get('supported'):
+            raise RequestError((row or {}).get('native_open',{}).get('reason') or '此记录没有可用的原生打开入口')
+        sid = row.get('native_session_id')
+        if not isinstance(sid,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',sid):
+            raise RequestError('原生会话身份无效')
+        try:
+            result = subprocess.run(['open','codex://threads/'+sid],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
+        except (OSError,subprocess.TimeoutExpired):
+            raise RequestError('未能请求原生应用打开，请检查来源电脑安装状态')
+        if result.returncode:
+            raise RequestError('原生打开请求失败，来源记录仍保留')
+        return {'status':'launch_requested','uid':key,'native_session_id':sid,'verified_visible':False}
+
+    def directory_page(self, cursor=None, query='', limit=100):
+        import base64
+        import hashlib
+        import json
+        if not isinstance(query, str) or len(query) > 200 or not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+            raise RequestError('Invalid directory query')
+        query = query.strip().casefold()
+        scope = hashlib.sha256(json.dumps([self.runtime_id,self.card_store.epoch,'chat-task-native-v1',query]).encode()).hexdigest()
+        last = ''
+        if cursor:
+            try:
+                if len(cursor) > 1024:
+                    raise ValueError()
+                token = json.loads(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)))
+                if token['scope'] != scope or not isinstance(token['last'], str):
+                    raise ValueError()
+                last = token['last']
+            except (ValueError, KeyError, TypeError):
+                raise RequestError('目录来源、顺序或查询已变化，请刷新后继续')
+        result = dict(self.directory())
+        def order(key):
+            # Immutable identity kind keeps pages stable while ensuring old native
+            # sources cannot displace the chats/goals the owner manages now.
+            rank = 0 if key.startswith('chat-') else 1 if key.startswith('task-') else 2
+            return rank, key
+        rows = sorted((r for r in result['entries'] if (not last or order(r['uid']) > order(last)) and
+                       (not query or query in ' '.join(str(r.get(k) or '') for k in ('title','original_title','project','source_name','agent')).casefold())), key=lambda r: order(r['uid']))
+        more = len(rows) > limit
+        result['entries'], result['more'] = [{k:v for k,v in row.items() if k != 'legacy_message_ids'} for row in rows[:limit]], more
+        result['cursor'] = base64.urlsafe_b64encode(json.dumps({'scope':scope,'last':rows[limit-1]['uid']}).encode()).decode().rstrip('=') if more else None
+        return result
+
+    def directory_edit(self, key, body):
+        if not isinstance(body, dict) or set(body) - {'fields', 'revision'} or not isinstance(body.get('fields'), dict):
+            raise RequestError('Invalid display metadata request')
+        row = next((item for item in self.directory()['entries'] if item['uid'] == key), None)
+        if row is None:
+            raise RequestError('Directory entry not found')
+        if row['authority'] != self.runtime_id:
+            if self.mesh is None:
+                raise RequestError('Source Runtime is unavailable; no local copy was changed')
+            command = self.mesh.command(row['authority'], 'directory', {'uid': key, **body})
+            return {'status': 'queued', 'command_id': command, 'authority': row['authority']}
+        if row['kind'] == 'conversation' and row['conversation_id'] == 'default' and ('title' in body.get('fields', {}) or body.get('fields', {}).get('archived')):
+            raise RequestError('The main chat keeps its fixed navigation entry')
+        try:
+            result = self._xiaoyou.record.directory_edit(key, body.get('fields'), self.runtime_id, body.get('revision'),
+                                                       [row['task_id']] if row.get('task_id') and not row.get('retained_only') else [])
+        except ValueError as error:
+            raise RequestError(str(error))
+        return {'status': 'applied', 'metadata': result}
+
+    def _directory_tasks(self, tasks):
+        rows = {row.get('task_id'): row for row in self.directory(False)['entries'] if row.get('task_id')}
+        for task in tasks:
+            row = rows.get(task['id'])
+            if row:
+                task.update(directory_id=row['uid'], original_title=task['title'], title=row['title'],
+                            title_source=row['title_source'], shared_pinned=row['pinned'],
+                            shared_archived=row['archived'], display_project=row.get('project', ''),
+                            metadata_revision=row['metadata_revision'], native_sources=row.get('native_sources', []))
+        return tasks
+
+    def directory_history(self, key, cursor=None):
+        row = next((item for item in self.directory()['entries'] if item['uid'] == key), None)
+        if row is None:
+            raise RequestError('Directory source not found')
+        if row['authority'] != self.runtime_id and row['kind'] != 'conversation':
+            if self.mesh is None:
+                raise RequestError('The source computer is unavailable; no new execution was started')
+            command = self.mesh.command(row['authority'], 'directory_history', {'uid': key, 'cursor': cursor})
+            return {'status': 'queued', 'command_id': command, 'authority': row['authority']}
+        try:
+            if row['kind'] == 'native':
+                from .native_history import read
+                native = read(self._xiaoyou._config, row, cursor)
+                if native is not None:
+                    return presentation.history(dict(native, uid=key, title=row['title']), self.runtime_id)
+            from .message_history import page
+            def matches(message):
+                if row['kind'] == 'conversation':
+                    return message.get('conversation') == row['conversation_id'] and message.get('scope') == 'main'
+                if row['kind'] == 'task':
+                    return message.get('task') == row['task_id'] and (message.get('task_epoch') == row['origin_epoch'] if message.get('task_epoch') else message.get('id') in row.get('legacy_message_ids', []))
+                source = message.get('source') or {}
+                return source.get('session_id') == row.get('native_session_id') and not message.get('mesh_origin') and (source.get('native_scope') == row.get('native_scope') if source.get('native_scope') else bool(row.get('task_id')) and message.get('task') == row['task_id'])
+            return presentation.history(dict(page(self.card_store._log._path, matches, key + '@' + self.runtime_id, cursor), uid=key, title=row['title']), self.runtime_id)
+        except (ValueError, OSError) as error:
+            raise RequestError(str(error))
+
+    def directory_metadata(self, key):
+        row = next((r for r in self.directory()['entries'] if r['uid'] == key), None)
+        if row is None:
+            raise RequestError('Directory source not found')
+        if row['authority'] != self.runtime_id:
+            if self.mesh is None:
+                raise RequestError('Source Runtime unavailable')
+            command = self.mesh.command(row['authority'], 'directory_metadata', {'uid':key})
+            return {'status':'queued','command_id':command,'authority':row['authority']}
+        def read_metadata_source():
+            if row['kind'] == 'native':
+                from .native_history import recent
+                return recent(self._xiaoyou._config,row)
+            return self.directory_history(key)
+        return self.metadata.directory_request(row, read_metadata_source,
+            lambda: next((r for r in self.directory()['entries'] if r['uid'] == key), None))
+
+    def directory_operation(self, command, authority):
+        if self.mesh is None:
+            raise RequestError('Source Runtime unavailable')
+        result = self.mesh.outcome(command, authority, 'accepted')
+        return dict(result or {}, status='applied' if result and result.get('ok') else 'failed' if result else 'queued')
+
+    def conversation_create(self, body):
+        if not isinstance(body, dict):
+            raise RequestError("请求体应为对象")
+        from .desktop_content import redact_credentials
+        name = body.get("id")
+        if name is not None:
+            name = _name(name, "id")
+            if not name.startswith("side-"):
+                raise RequestError("旁聊编号应以 side- 开头")
+        context = None
+        if body.get("from_message"):
+            original = self.card_store.message(_name(body["from_message"], "from_message"))
+            if original is None or original.get("kind") == "activity":
+                raise RequestError("来源消息已不在可读历史里")
+            context = {key: original.get(key) for key in ("id", "conversation", "author", "source")}
+            context["text"] = redact_credentials(original.get("text") or "")[:4000]
+        return self._xiaoyou.record.conversation_create(name, context)
+
+    def conversation_rename(self, name, title):
+        try:
+            name = _name(name, 'conversation')
+            from .conversation_directory import uid
+            existing = self.card_store.conversations.get(name)
+            if existing and existing.get('origin') and existing['origin'] != self.runtime_id:
+                return self.directory_edit(uid('chat',name),{'fields':{'title':title}})
+            # Keep legacy clients on the same shared owner alias. The catalog's
+            # original manual rename also fences any late generated title.
+            self._xiaoyou.record.conversation_rename(name,title)
+            from .conversation_directory import uid
+            result = self.directory_edit(uid('chat',name),{'fields':{'title':title}})
+            if result.get('status') != 'applied':
+                return result
+            return next(c for c in self.conversations()['conversations'] if c['id']==name)
+        except ValueError as error:
+            raise RequestError(str(error))
+
+    def task_audit(self, task, before=None):
+        task = _name(task, "task")
+        try:
+            return self.card_store.audit.page(task, int(before) if before else None)
+        except (ValueError, TypeError):
+            raise RequestError("before 应为事件序号")
+
     def info(self) -> Dict[str, Any]:
         """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
         capabilities = list(CAPABILITIES) + ["quick_review"] + (["mesh"] if self.mesh is not None else [])
         return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
-                "protocol": PROTOCOL, "capabilities": capabilities}
+                "protocol": PROTOCOL, "capabilities": capabilities,
+                "presentation_policy": presentation.policy()}
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
-             wait: float = 0.0, usage: Any = None, states: Any = ()) -> Dict[str, Any]:
+             wait: float = 0.0, usage: Any = None, states: Any = (), all_conversations: bool = False) -> Dict[str, Any]:
         """统一同步接口（见 docs/development/unified-message-model）。
 
         返回序号比 after 大的消息（messages）和事（tasks，卡去掉 entries、换成 members），
@@ -621,19 +890,21 @@ class Service:
         deadline = time.monotonic() + max(0.0, wait)
         while True:
             seq, tasks, messages, floor = cards_store.sync_since(
-                conversation, after, unavailable="unavailable" in states)
+                None if all_conversations else conversation, after, unavailable="unavailable" in states)
             if after > 0 and after < floor:
                 # 等的时候日志挤掉了游标之后的消息：改给全量快照。
                 after, reset = 0, True
                 continue
             # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
-            approvals = self._xiaoyou.approvals.since(conversation, after)
+            approvals = self._xiaoyou.approvals.since(None if all_conversations else conversation, after)
             remaining = deadline - time.monotonic()
-            if (tasks or messages or approvals or reset or remaining <= 0
+            if (tasks or messages or approvals or reset or cards_store.catalog_seq > after or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
             cards_store.wait_beyond(seq, remaining if usage is None
                                     else min(remaining, FEED_USAGE_SECONDS))
+        tasks = [presentation.task(item) for item in tasks]
+        messages = [presentation.message(item, self.runtime_id) for item in messages]
         items = sorted([("task", item) for item in tasks] + [("message", item) for item in messages],
                        key=lambda pair: pair[1]["seq"])
         more, size = False, 0
@@ -646,8 +917,10 @@ class Service:
             "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
             "epoch": cards_store.epoch,
             "seq": seq, "reset": reset, "more": more,
+            "presentation_policy": presentation.policy(),
+            "conversations": self.conversations()['conversations'],
             "messages": [item for kind, item in items if kind == "message"],
-            "tasks": [item for kind, item in items if kind == "task"],
+            "tasks": self._directory_tasks([item for kind, item in items if kind == "task"]),
             # 序号比 after 大的授权变化，含已经有结局的（status：pending / allowed / denied / withdrawn）。
             "approvals": approvals,
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
@@ -692,8 +965,9 @@ class Service:
         return self._xiaoyou.approvals.answer(approval_id, decision)
 
     def cards(self, conversation: Any = "default") -> List[Dict[str, Any]]:
-        return self._xiaoyou.cards.recent(_name(conversation, "conversation"), 50,
-                                         include_desktop=True)
+        return [presentation.card(card, self.runtime_id, self.card_store.message)
+                for card in self._xiaoyou.cards.recent(_name(conversation, "conversation"), 50,
+                                                     include_desktop=True)]
 
     def cancel(self, card_id: str) -> Optional[Dict[str, Any]]:
         """取消一件事。没有这张卡返回 None；它已经不在做了就原样返回。"""
@@ -744,9 +1018,19 @@ class Service:
         else:
             self._update(message_id, status="failed", error=text or "那台没说明原因", mood="oops", **fields)
 
-    @staticmethod
-    def _snapshot(message: Dict[str, Any]) -> Dict[str, Any]:
+    def _snapshot(self, message: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = dict(message)
+        snapshot["presentation"] = presentation.response(message, self.runtime_id)
+        # Current replies must not wait behind a paginated history replay. These
+        # are the same log records/revisions as /sync, never request-local revs.
+        snapshot["message_snapshot"] = {
+            "runtime_id": self.runtime_id, "subject_id": self.subject_id,
+            "epoch": self.card_store.epoch,
+            "messages": [presentation.message(record, self.runtime_id)
+                         for suffix in (":you", ":reply")
+                         for record in [self.card_store.message(message["id"] + suffix)]
+                         if record is not None],
+        }
         snapshot["event_stream"] = True
         snapshot["events"] = [dict(event) for event in message["events"]]
         snapshot["attachments"] = [dict(item) for item in message.get("attachments", [])]
@@ -806,6 +1090,8 @@ class Service:
         return self._xiaoyou.share(conversation, cleaned)
 
     def close(self) -> None:
+        self.discovery.close()
+        self.metadata.pool.shutdown(wait=False, cancel_futures=True)
         self.review.close()
         with self._changed:
             self._closed = True
@@ -892,6 +1178,10 @@ class Service:
             text, conversation = message["text"], message["conversation"]
             asked, hop, card = message["asked"], message["hop"], message["card"]
             pin = bool(message.get("pin"))
+            if message.get("reply_scope") == "main" and pin and card:
+                bound = self._xiaoyou.cards.get(card)
+                if bound and not bound.get("monitoring_only") and bound.get("agent"):
+                    asked = bound["agent"]
             effort, model = message.get("effort"), message.get("model")
             relay_to, delegated = message.get("relay_to"), message.get("delegated_from")
             audio = self._audio.pop(message_id, None)
@@ -919,6 +1209,10 @@ class Service:
                 return
             text = text[:MAX_TEXT_CHARS]
         try:
+            self.metadata.first_message(conversation, text)
+        except (OSError, ValueError) as error:
+            sys.stderr.write("会话标题更新失败：%s\n" % type(error).__name__)
+        try:
             # 交给模型之前，“开始处理”必须已经写下去：否则断电重启后会把它当成没开始，再做一遍。
             self._update(message_id, strict=True, status="running", text=text)
         except OSError as error:
@@ -938,7 +1232,7 @@ class Service:
                 self._update(message_id, stage="交给 %s 了" % name, mood="busy")
             return
         try:
-            with self._xiaoyou.record.opening(**({"delegated_from": delegated} if delegated else {})):
+            with self._xiaoyou.record.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
                 if message.get("attachments"):
                     turn = self._xiaoyou.hear_images(text, conversation, message_id,
                         message["attachments"], asked=asked, hop=hop)

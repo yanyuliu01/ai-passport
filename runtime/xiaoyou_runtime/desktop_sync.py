@@ -79,6 +79,9 @@ class Session:
     content_truncated: bool = False
     progress: List[str] = field(default_factory=list)
     content_at: float = 0.0
+    request_text: str = ""
+    request_at: float = float("inf")
+    originator: str = ""
 
     def transition(self, status: str, at: float, turn: str = "") -> None:
         if at < self.observed_at:
@@ -111,11 +114,12 @@ class DesktopSync:
                  approvals: Optional[Approvals] = None,
                  clock: Callable[[], float] = time.time,
                  content_entries: int = MAX_CONTENT_ENTRIES, content_bytes: int = MAX_CONTENT_BYTES,
-                 read_bytes: int = MAX_READ_BYTES):
+                 read_bytes: int = MAX_READ_BYTES, read_owned: bool = False):
         home = home or Path.home()
         # 每个会话留多少可见内容、从多大的转录文件末尾读起。手机卡片用默认的小窗口；
         # 导出给别的电脑看的完整记录（desktop_history.py）用大一些的。
         self.content_entries, self.content_bytes, self.read_bytes = content_entries, content_bytes, read_bytes
+        self.read_owned = read_owned
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
         # 观察到的会话经记录中心写（record.py）；self.cards 只用来读。
         self.record = Record(cards)
@@ -198,6 +202,8 @@ class DesktopSync:
         text = visible_text(raw)
         if not text:
             return
+        if role == "you" and at < session.request_at:
+            session.request_text, session.request_at = text, at
         session.content_loaded = True
         session.content_at = max(session.content_at, at)
         # Transcript UUIDs are stable across prefix/tail replay. A Claude API
@@ -270,10 +276,11 @@ class DesktopSync:
                     return
                 cursor.session = self._session("codex", sid)
                 session = cursor.session
+                session.originator = _text(payload.get('originator'), 80)
                 source = payload.get("source")
                 session.skip = (isinstance(source, dict) and "subagent" in source
                                 or bool(payload.get("parent_thread_id"))
-                                or payload.get("originator") == "xiaoyou-runtime")
+                                or (payload.get("originator") == "xiaoyou-runtime" and not self.read_owned))
                 session.cwd = _text(payload.get("cwd"), 2048)
                 return
             session = cursor.session
@@ -520,8 +527,10 @@ class DesktopSync:
         if session.content_loaded:
             fields.update(entries=[dict(entry) for entry in session.entries],
                           content_scope="recent", content_truncated=session.content_truncated)
+        from .conversation_directory import home_scope
         self.record.observed(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, desktop_cwd=session.cwd,
+                          native_scope=home_scope(next(root.parent for kind, root in self.roots if kind == session.agent)),
                           monitoring_only=True, desktop_status=status,
                           observed_at=observed_at, stale=stale, model=session.model or None,
                           started_at=session.started_at, approval=waiting, queued=False,
@@ -533,10 +542,13 @@ class DesktopSync:
         session.published_at = now
 
     def _title(self, agent: str, sid: str, project: str, entries: List[Dict[str, Any]]):
-        request = next((entry["text"] for entry in reversed(entries)
-                        if entry["role"] == "you"), "")
+        session = self.sessions.get((agent, sid))
+        request = (session.request_text if session else "") or next(
+            (visible_text(entry["text"]) for entry in entries
+             if entry["role"] == "you" and visible_text(entry["text"])), "")
+        label = {"codex": "Codex", "claude": "Claude"}.get(agent, agent)
         return select_title(upstream=self.titles.get(agent, sid), request=request,
-                            fallback="%s %s %s" % (agent, project[:10] or "project", sid[-6:]))
+                            fallback="未命名 %s 会话" % label)
 
     def poll(self) -> None:
         now = self.clock()

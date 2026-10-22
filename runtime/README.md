@@ -44,6 +44,74 @@ Status: verification stage, intended to run on your own computer. The same
 code is meant to move to a virtual machine later; nothing in it assumes a
 particular host. See [What is and is not verified](#what-is-and-is-not-verified).
 
+## Current request snapshots (0.23.1)
+
+Acceptance and `GET /v1/messages/<id>` include an additive `message_snapshot`
+with `runtime_id`, `subject_id`, `epoch` and the current turn's canonical
+`messages`. These records have the exact log IDs/revisions and shared presentation
+used by `/v1/sync`. Merge them using normal revision and terminal-state rules;
+never advance a history cursor from this subset. This lets a current reply render
+while historical sync is paging. Older clients may ignore the added field.
+
+## Shared display projection (0.23.0)
+
+`presentation_v1` extends existing records rather than adding another history.
+The Runtime resolves author labels, turn/block identities, order, placement,
+complete-message boundaries, lightweight formatting runs and task status/groups
+once. `/v1/sync`, message polling/SSE, card entries and directory history carry
+the same additive `presentation` contract; `/v1/info` and sync advertise
+`presentation_policy`. A legacy Runtime/record remains readable. Clients
+reconcile their cached records once when the policy becomes available, keeping
+history, pending requests and their identities.
+
+Android 0.31.1 and desktop 0.1.6 consume those decisions instead of independently
+splitting replies or parsing their formatting. The shared golden cases in
+`tests/fixtures/presentation-v1.json` are exercised in Python, Java and TypeScript.
+Native Codex/Claude sources can be read with the same shared projection, but
+their own windows have not been verified to consume it. The native directory
+and policy explicitly report that integration as incomplete. Context injection,
+session resume or schema availability alone is not native rendering acceptance.
+See the [presentation contract](../docs/development/conversation-presentation.md).
+
+## Conversation catalog and public audit (0.21.0)
+
+The record hub owns `state/conversations.json`; clients do not derive competing
+conversation IDs or titles. `side_chats`, `all_conversations` and `task_audit`
+are additive `/v1/info` capabilities. All routes below require the existing
+Runtime token:
+
+- `GET /v1/conversations`: durable catalog with stable IDs, titles, activity time
+  and optional attributed quote context.
+- `POST /v1/conversations`: `{id?: "side-...", from_message?: "message-id"}`.
+  Retrying the same ID returns the existing conversation. A quote must refer to
+  a retained public message and never becomes a new owner turn.
+- `POST /v1/conversations/<id>/rename`: `{title}`. Manual names survive late
+  generated-title results through a revision check.
+- `GET /v1/sync?conversation=default&all_conversations=1`: tasks/messages across
+  chats plus the catalog, using the existing cursor, epoch and paging contract.
+  Omitting the opt-in preserves conversation-scoped synchronization.
+- `POST /v1/messages` and `/v1/voice`: existing task `card`/`pin` plus optional
+  `reply_scope=main` keep a task addition in its originating chat without changing
+  its executor or creating another task. The source chat is validated.
+- `GET /v1/tasks/<card>/activity?before=<seq>`: latest 100 retained public audit
+  events, a continuation cursor and explicit coverage. These append-only files
+  in `state/audit/` are independent of the transient 2,000-event sync window;
+  they contain sanitized public activity, not private reasoning.
+
+Tasks retain `worker_session`, `worker_cwd`, `worker_agent`, `origin_message`,
+`relay_state`, `supplements` and `last_meaningful_at`. Received/queued additions
+never reset meaningful worker progress. An interrupted queued relay stays
+visible after restart without automatic replay. The native IDs are bindings,
+not evidence that every platform supports live continuation.
+
+The shared `conversation.title` model-gateway purpose is optional and only runs
+when `conversation.title` or `conversation` is explicitly routed. It uses one
+background worker, bounded pending work and revision checks; it never creates an
+agent session or delays the owner's request. Without a route, the shared
+request-derived title is immediately usable. Catalog metadata is shared through
+the authenticated mesh without manufacturing owner messages. A remote result
+without its parent remains an attributed result until the parent arrives.
+
 ## Requirements
 
 - Python 3.9 or newer. No third-party packages, unless you enable the built-in
@@ -174,7 +242,14 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync \
 
 Every integrated agent uses one canonical `card.title`: the upstream desktop
 sidebar name takes priority, followed by an explicit local task name, a short
-version of the latest human request, then a stable session/task fallback. A
+human request, then an explicit unnamed-session/task fallback. For observed
+desktop sessions since 0.21.1, the earliest readable human request supplies the
+fallback topic and remains stable as later follow-ups rotate out of the content
+window; native sidebar renames still take priority. Injected task notifications
+are not human requests. A missing title never becomes a directory plus an ID;
+the project, original session ID and available execution directory are separate
+metadata. Directory metadata survives restart. Retained older technical titles
+are repaired without changing their observed time, status or messages. A
 result summary or assistant reply never replaces the task name. Original sidebar
 and explicit task names retain their wording and internal spacing, with
 recognizable credentials scrubbed and a 200-character limit; a request-derived
@@ -2083,3 +2158,71 @@ python3 runtime/tests/test_artifact_delivery.py
 Image uploads require `python -m pip install -r requirements-images.txt` in the
 Runtime environment. The authenticated upload/message contract, supported vision
 route and compatibility limits are specified in [Image messages](../docs/development/multimodal-images.md).
+
+## Unified directory increment (2026-10-22)
+
+Android 0.30.0 / code 55, Runtime 0.22.0 and desktop 0.1.4 add a shared
+conversation directory. Open **Work records → Unified conversation directory**
+on Android, or **Unified conversation directory** in the desktop sidebar.
+Ordinary short messages stay inside one main/side conversation. Managed goals
+and actual native sources remain distinct; linked sources are hidden from the
+unfiltered directory to avoid listing the same work twice. Search includes the
+original title, project classification and source computer. It never merges
+records because names or directory basenames match.
+
+The authenticated Gateway exposes paged `GET /v1/directory?q=&cursor=`,
+`POST /v1/directory/<uid>` with `fields` and `revision`, paged
+`GET /v1/directory/<uid>/history`, and explicit `POST .../metadata` and
+`POST .../open`. Source-authoritative edits support shared aliases, pin, archive,
+restore and display project. Original names and actual execution directories
+remain separate. Remote pending edits are not reported as applied; stale edits
+are rejected. A phone can preview migrating old local pin/archive marks; existing
+shared edits are skipped. Old scoped message APIs and side-chat rename remain
+compatible. A damaged metadata file is preserved and editing it is disabled.
+
+`python3 -m xiaoyou_runtime conversations list --query <text>` and its
+`show`, `history`, `rename`, `pin`, `unpin`, `archive`, `restore`, `project`,
+`metadata` and `open` actions use the same authenticated API. Select the exact
+`--id` returned by list. Both desktop agents can use
+`shared_history.py --directory` or `--conversation <uid> --cursor <cursor>`.
+These reads never start an agent/model, submit an owner turn or modify a native
+database. Existing fail-open context hooks keep their bounded historical context.
+
+Enabled native discovery scans available Codex/CC transcript roots incrementally,
+including old sources outside the recent work-card window. It reports indexing
+backlog and missing sources. Public source text is read in bounded pages;
+reasoning and raw tool output remain excluded. Canonical message compaction seals
+evicted public records in the same JSONL format. Tasks leaving the live card
+window retain canonical snapshots, without becoming executable tasks again.
+Previously deleted records cannot be recovered; coverage gaps, unavailable files
+and expired/replaced-file cursors are explicit. Clients can restart a source read.
+
+Execution attempts retain native home scope and actual session IDs. Codex
+app-server turn IDs are recorded when supplied; adapters without a turn boundary
+mark the range unavailable. A source can contain several goals; later native
+inputs are not automatically assigned to an older goal or repeated into main chat.
+The shared directory is a projection, not another writable task/message registry.
+
+Title/summary suggestions reuse the existing model gateway in one bounded
+background pool, with source/input version, revision fencing and provenance.
+Only an explicitly configured `conversation.metadata`/`conversation` route enables
+optional inference; no generic paid default or Astra route is substituted.
+Without an eligible route or on provider failure, an attributed bounded extract
+remains available. Suggestions do not automatically rename an owner conversation
+or mark a task complete. Source-owned suggestions replicate through Mesh.
+
+Native opening is capability-gated. This increment can request navigation to an
+ended, available, externally controlled Codex session in the default macOS home.
+Launcher success is labelled only as a request, never as verified visibility or
+resumption. Managed/busy/unknown/isolated-home sources, CC/Windows launchers and
+unverified writer transfers stay disabled with reasons; their public history
+remains readable. Existing explicit desktop handoff CLI remains a separate path.
+This does **not** establish full live native writer transfer, App conversation
+import into a native sidebar, or native follow-up reconciliation into a goal.
+Those acceptance cases in the design remain open.
+
+Source/build tests and fixture-rendered desktop UI do not establish phone install,
+real model first render <=3 seconds, physical connection recovery or live multi-end
+convergence. Report those independently in delivery evidence. Preserve native
+transcripts, credentials, pairing and retained logs on rollback; old clients ignore
+the additive metadata/history files and continue using their existing APIs.

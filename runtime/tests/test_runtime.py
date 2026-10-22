@@ -232,6 +232,9 @@ send({"id": opened["id"], "result": {"thread": {"id": thread}, "model": "gpt-fak
                                     "reasoningEffort": "high"}})
 send({"method": "thread/started", "params": {"thread": {"id": thread}}})
 begun = read()
+while begun and begun.get("method") == "thread/name/set":
+    send({"id": begun["id"], "result": {}})
+    begun = read()
 text = begun["params"]["input"][0]["text"]
 send({"id": begun["id"], "result": {"turn": {"id": "turn-1", "status": "inProgress", "items": []}}})
 send({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": "turn-1"}}})
@@ -1309,14 +1312,17 @@ class AppRecapTests(TempDirCase):
                  for role, text in turns]
         (folder / "s-app.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def test_fresh_session_gets_the_app_recap_prepended(self):
+    def test_fresh_session_keeps_app_recap_out_of_owner_input(self):
         self._write_app_session("proj", [("user", "我们在聊固件的事"), ("assistant", "已经查过日志了")])
         agent, _ = self._agent()
         agent.run(Job("接着刚才说的做"))
         stdin = self.calls()[0]["stdin"]
-        self.assertIn("我们在聊固件的事", stdin)
-        self.assertIn("已经查过日志了", stdin)
-        self.assertTrue(stdin.endswith("接着刚才说的做"))
+        self.assertEqual("接着刚才说的做", stdin)
+        command = self.calls()[0]["args"]
+        historical = command[command.index("--append-system-prompt") + 1]
+        self.assertIn("我们在聊固件的事", historical)
+        self.assertIn("已经查过日志了", historical)
+        self.assertIn("not a new owner request", historical)
 
     def test_resuming_a_session_skips_the_recap(self):
         self._write_app_session("proj", [("user", "不该出现在这里")])
@@ -1527,6 +1533,12 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual(turn, {"threadId": "thread-1", "model": "some-model", "effort": "medium",
                                 "input": [{"type": "text", "text": "review -- $(x)"}]})
 
+    def test_new_task_title_and_runtime_context_are_not_owner_messages(self):
+        self.agent.run(Job("fix upload", title="优化图片上传", system="Task files for the phone", control=self.control()))
+        self.assertEqual(self.sent("thread/name/set")[0]["params"]["name"], "优化图片上传")
+        self.assertEqual(self.sent("turn/start")[0]["params"]["input"][0]["text"], "fix upload")
+        self.assertEqual(self.sent("thread/start")[0]["params"]["developerInstructions"], "Task files for the phone")
+
     def test_public_agent_messages_are_auditable(self):
         os.environ["FAKE_CODEX_MODE"] = "audit"
         control = self.control()
@@ -1576,7 +1588,8 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual(self.sent("thread/resume")[0]["params"]["threadId"], "thread-7")
         self.assertEqual(self.sent("thread/start"), [])
         turn = self.sent("turn/start")[0]["params"]
-        self.assertEqual((turn["input"][0]["text"], turn["outputSchema"]), ("PERSONA\n\nmore", schema))
+        self.assertEqual((turn["input"][0]["text"], turn["outputSchema"]), ("more", schema))
+        self.assertEqual(self.sent("thread/resume")[0]["params"]["developerInstructions"], "PERSONA")
 
     def test_what_codex_asks_goes_to_the_owner_as_it_is(self):
         os.environ["FAKE_CODEX_MODE"] = "ask-all"
@@ -4095,6 +4108,23 @@ class HttpTests(TempDirCase):
         self.assertTrue(body["name"])
         self.assertEqual(sorted(body), ["backend", "name", "ok", "version"])
         self.assertNotIn(TOKEN, json.dumps(body))
+
+    def test_side_chat_endpoints_scope_and_quote_provenance(self):
+        self.assertEqual(self.call("GET", "/v1/conversations", token=None)[0], 401)
+        status, side = self.call("POST", "/v1/conversations", {"id": "side-http"})
+        self.assertEqual((status, side["id"]), (200, "side-http"))
+        self.assertEqual(self.call("POST", "/v1/conversations", {"id": "side-http"})[1], side)
+        status, message = self.call("POST", "/v1/messages", {"text": "side message", "conversation": side["id"]})
+        self.assertEqual(status, 202)
+        self.call("GET", "/v1/messages/" + message["id"] + "?wait=5")
+        scoped = self.call("GET", "/v1/sync?conversation=default")[1]
+        self.assertFalse(any(m["conversation"] == side["id"] for m in scoped["messages"]))
+        all_ = self.call("GET", "/v1/sync?conversation=default&all_conversations=1")[1]
+        self.assertTrue(any(m["conversation"] == side["id"] for m in all_["messages"]))
+        self.assertEqual(self.call("POST", "/v1/conversations/side-http/rename", {"title": "named"})[1]["title"], "named")
+        quoted = self.call("POST", "/v1/conversations", {"id": "side-quote", "from_message": message["id"] + ":you"})[1]
+        self.assertEqual(quoted["context"]["text"], "side message")
+        self.assertEqual(self.call("POST", "/v1/conversations", [1])[0], 400)
 
     def test_everything_else_needs_the_token(self):
         for token in (None, "wrong-token-wrong-token"):

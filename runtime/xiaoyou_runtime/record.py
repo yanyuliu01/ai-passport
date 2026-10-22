@@ -6,6 +6,7 @@ MessageLog 决定。授权的序号也从这里取。卡、/v1/feed、/v1/sync�
 不写；tests/test_record.py 检查别的模块没有绕过这里直接写卡或取序号。
 """
 
+import sys
 import threading
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
@@ -20,7 +21,8 @@ KINDS = ("reply", "handoff", "worker_result", "summary", "note")
 TASK_FIELDS = {"state", "agent", "brief", "mood", "started_at", "queued", "fresh", "effort", "model",
                "model_asked", "run_id", "result_ready", "summary_partial", "approval", "cost", "edits",
                "title", "title_source", "attachments", "progress_lines", "borrowed_session",
-               "borrowed_cwd", "desktop_card", "finished_at", "error", "delegated_to"}
+               "borrowed_cwd", "desktop_card", "finished_at", "error", "delegated_to",
+               "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "last_meaningful_at", "supplements"}
 
 
 class RecordError(ValueError):
@@ -31,6 +33,62 @@ class Record:
     def __init__(self, cards: Cards):
         self._cards = cards
         self._local = threading.local()
+
+    def directory_edit(self, key, fields, origin, expected=None, affected=()):
+        result = self._cards.directory.edit(key, fields, origin, expected)
+        self._cards.catalog_seq = self.sequence()
+        self._cards.directory_changed(affected)
+        return result
+
+    def directory_replica(self, origin, item):
+        changed = self._cards.directory.merge(origin, item)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+            self._cards.directory_changed([c['id'] for c in self._cards.recent(None, 10 ** 6) if c.get('mesh_origin') == origin])
+        return changed
+
+    def directory_sources(self, values, origin):
+        if origin == self._cards.conversations.origin:
+            previous = self._cards.directory.source_snapshot()
+            values = [dict(item, source_revision=self.sequence()) for item in values
+                      if any(previous.get(item['uid'], {}).get(k) != v for k, v in item.items() if k != 'source_revision')]
+        changed = self._cards.directory.observe_sources(values, origin)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return changed
+
+    def directory_generated_replica(self, origin, key, value):
+        changed = self._cards.directory.merge_generated(origin, key, value)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return changed
+
+    def directory_generated(self, key, value, expected):
+        changed = self._cards.directory.save_generated(key, value, expected)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return changed
+
+    def conversation_create(self, name=None, context=None):
+        result = self._cards.conversations.create(name, context)
+        self._cards.catalog_seq = self.sequence()
+        return result
+
+    def conversation_rename(self, name, title, expected=None, source="owner"):
+        result = self._cards.conversations.rename(name, title, expected, source)
+        self._cards.catalog_seq = self.sequence()
+        return result
+
+    def conversation_replica(self, origin, data):
+        changed = self._cards.conversations.merge(origin, data)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return changed
+
+    def conversation_touch(self, name, text="", at=None):
+        result = self._cards.conversations.touch(name, text, at)
+        self._cards.catalog_seq = self.sequence()
+        return result
 
     # ---- 事 ----
 
@@ -58,6 +116,20 @@ class Record:
             raise RecordError("task() 不改这些字段：%s（说的话走 exchange / reply）" % sorted(unknown))
         return self._cards.update(card_id, **fields)
 
+    def execution_binding(self, card_id, attempt, **fields):
+        allowed = {'run_id','agent','native_scope','native_session_id','native_turn_id','range_state','started_at','ended_at'}
+        if set(fields)-allowed:
+            raise RecordError('Unknown execution binding field')
+        try:
+            self._cards.bind_execution(card_id, attempt, fields)
+            return True
+        except OSError:
+            # An optional association cannot strand the worker before its
+            # result/failure is reconciled. Persist the audit gap when possible.
+            sys.stderr.write('Execution binding storage unavailable; audit has a gap.\n')
+            self._cards.update(card_id, binding_error='audit_gap')
+            return False
+
     def progress(self, card_id: str, line: str) -> Optional[Dict[str, Any]]:
         """帮手报了一行进展。"""
         return self._cards.update(card_id, progress=redact_credentials(line))
@@ -65,7 +137,7 @@ class Record:
     def activity(self, card_id: str, author: str, phase: str, text: str,
                  event_id: str) -> None:
         """Persist a public task event separately from conversation messages."""
-        if phase not in ("dispatch", "message", "tool_start", "tool_result", "completed", "failed", "cancelled"):
+        if phase not in ("dispatch", "message", "tool_start", "tool_result", "completed", "failed", "cancelled", "supplement_received", "relay_queued", "relayed"):
             raise RecordError("Unknown activity phase: %s" % phase)
         text = redact_credentials(text).strip()
         if not text:
@@ -84,17 +156,31 @@ class Record:
     def exchange(self, card_id: str, said: Optional[str], say: Optional[str], *, turn_id: Optional[str] = None,
                  scope: str = "main", kind: str = "reply", **fields: Any) -> Optional[Dict[str, Any]]:
         """主人说的一句（said，可以没有）和对它的回答（say）。编号是 turn_id + :you / :reply。"""
+        if getattr(self._local, "fields", {}).get("reply_scope") == "main":
+            scope = "main"
         self._check(scope, kind)
-        return self._cards.update(card_id, said=said, say=say, turn_id=turn_id, scope=scope, kind=kind,
+        result = self._cards.update(card_id, said=said, say=say, turn_id=turn_id, scope=scope, kind=kind,
                                   **self._task_fields(fields))
+        if result is not None and scope == "main":
+            try:
+                self.conversation_touch(result["conversation"])
+            except OSError:
+                pass  # Metadata failure does not retract a durably recorded message.
+        return result
 
     def reply(self, card_id: str, say: str, *, turn_id: Optional[str] = None, scope: str = "main",
               kind: str = "reply", author: str = "xiaoyou",
               attachments: Optional[List[Dict[str, Any]]] = None, **fields: Any) -> Optional[Dict[str, Any]]:
         """小幽或帮手单独说的一句（帮手的结果、小幽的总结）。"""
         self._check(scope, kind)
-        return self._cards.update(card_id, say=say, turn_id=turn_id, scope=scope, kind=kind, author=author,
+        result = self._cards.update(card_id, say=say, turn_id=turn_id, scope=scope, kind=kind, author=author,
                                   attachments=attachments, **self._task_fields(fields))
+        if result is not None and scope == "main":
+            try:
+                self.conversation_touch(result["conversation"])
+            except OSError:
+                pass
+        return result
 
     # ---- 观察来的（电脑上的会话、外部上报）：只读，内容由来源决定 ----
 

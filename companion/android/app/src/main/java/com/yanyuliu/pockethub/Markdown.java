@@ -24,6 +24,19 @@ final class Markdown {
 
     private Markdown() { }
 
+    /** Gateway formatting runs: no local Markdown parsing for projected records. */
+    static CharSequence projected(Presentation view, int index) {
+        java.util.List<Object> runs = view.runs(index);
+        if (runs.isEmpty()) return view.blocks().get(index);
+        SpannableStringBuilder out = new SpannableStringBuilder();
+        for (Object value : runs) {
+            java.util.Map<String,Object> run = Json.object(value);
+            int start = out.length(); out.append(Json.string(run,"text"));
+            if (Json.flag(run,"bold")) out.setSpan(new StyleSpan(Typeface.BOLD), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        return out;
+    }
+
     /** 她要发的几条消息：按单独一行的 --- 分开，去掉空的。 */
     static List<String> messages(String text) {
         List<String> parts = new ArrayList<>();

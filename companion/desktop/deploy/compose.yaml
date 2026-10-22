@@ -1,0 +1,26 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      XIAOYOU_RELAY_TOKEN: ${XIAOYOU_RELAY_TOKEN:?run setup.sh first}
+    expose:
+      - "8795"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  tls:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      XIAOYOU_RELAY_DOMAIN: ${XIAOYOU_RELAY_DOMAIN:?run setup.sh first}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy_config:/config
+volumes:
+  certificates:
+  caddy_config:

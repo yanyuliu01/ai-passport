@@ -7,12 +7,23 @@ public class ImageMessagesTest {
     }
     @Test public void attachmentsSurviveLocalAcceptanceAndRestore() {
         ChatHistory history = new ChatHistory();
-        history.begin("client",null,"look",10); history.image("client",image()); history.accepted("client","server");
+        history.begin("client",null,"look",10); history.images("client",java.util.Collections.singletonList(image())); history.accepted("client","server");
         ChatHistory restored = ChatHistory.restore(history.json());
         ChatHistory.Message message = restored.main().get(0);
         assertEquals("server:you",message.id); assertEquals(1,message.attachments.size());
         assertEquals("owner.jpg",message.attachments.get(0).name);
         assertEquals(2048,message.attachments.get(0).size); assertTrue(message.attachments.get(0).thumbnail);
+    }
+    @Test public void severalImagesTravelTogetherInOneMessage() {
+        Attachment second = Attachment.from(Json.parseObject("{\"id\":\"a22222222222222222222222222222222\",\"name\":\"two.png\",\"kind\":\"image\",\"mime\":\"image/png\",\"status\":\"ready\"}"));
+        java.util.List<Attachment> both = java.util.Arrays.asList(image(), second);
+        java.util.Map<String, Object> body = Json.parseObject(RuntimeClient.imageMessageJson("look", "client", null, null, null, both));
+        assertEquals(java.util.Arrays.asList(image().id, second.id), Json.list(body, "image_ids"));
+        assertNull(Json.parseObject(RuntimeClient.imageMessageJson("look", "client", null, null, null, null)).get("image_ids"));
+        ChatHistory history = new ChatHistory();
+        history.begin("client", null, "look", 10); history.images("client", both);
+        ChatHistory.Message message = ChatHistory.restore(history.json()).main().get(0);
+        assertEquals(2, message.attachments.size()); assertEquals(second.id, message.attachments.get(1).id);
     }
     @Test public void cardImagesRemainBoundToTheOwnerMessage() {
         ChatHistory history = new ChatHistory();

@@ -5,6 +5,7 @@
 """
 
 import argparse
+import dataclasses
 import ipaddress
 import json
 import os
@@ -91,6 +92,8 @@ def main(argv=None) -> int:
     app_release.add_arguments(commands)
     reports_module.add_arguments(commands)
     desktop_handoff.add_arguments(commands)
+    from . import conversation_cli
+    conversation_cli.add_arguments(commands)
     iterate_cli.add_arguments(commands)
     iterate_cli.add_event_arguments(commands)
     model_gateway.add_arguments(commands)
@@ -107,10 +110,16 @@ def main(argv=None) -> int:
     except ConfigError as error:
         print("配置有问题：%s" % error, file=sys.stderr)
         return 2
+    config = dataclasses.replace(config, desktop_sync=args.desktop_sync or config.desktop_sync,
+        desktop_codex_dir=args.desktop_codex_dir.expanduser() if args.desktop_codex_dir else config.desktop_codex_dir,
+        desktop_claude_dir=args.desktop_claude_dir.expanduser() if args.desktop_claude_dir else config.desktop_claude_dir,
+        desktop_projects=[Path(path) for path in args.desktop_project] or config.desktop_projects)
     for notice in config.notices:
         print("提示：%s" % notice, file=sys.stderr)
     if args.command == "desktop":
         return desktop_handoff.run_cli(config, args)
+    if args.command == 'conversations':
+        return conversation_cli.run_cli(config, args)
     if args.command == "firmware":
         # 只动固件仓库，不需要代理、语音识别这些，所以在它们之前就处理掉。
         return firmware_cli.run(config, Path(args.config), args,

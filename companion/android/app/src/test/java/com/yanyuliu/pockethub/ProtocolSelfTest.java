@@ -656,8 +656,8 @@ public final class ProtocolSelfTest {
         Card request = card("{\"id\":\"c100\",\"source\":\"desktop\",\"title\":\"需求回退\","
                 + "\"title_source\":\"request\"}");
         Card fallback = card("{\"id\":\"c101\",\"source\":\"desktop\",\"title_source\":\"fallback\"}");
-        check(CardViews.titleNotice(request).contains("最近需求")
-                && CardViews.titleNotice(fallback).contains("会话标识")
+        check(CardViews.titleNotice(request).contains("首条可读需求")
+                && CardViews.titleNotice(fallback).contains("会话编号")
                 && CardViews.deviceTitle(request).equals("需求回退")
                 && CardViews.titleNotice(card("{\"id\":\"c102\",\"source\":\"desktop\"}")).isEmpty(),
                 "title fallbacks and older runtime do not pretend to supply an exact desktop title");

@@ -238,7 +238,31 @@ public final class HubStore {
         return all.subList(Math.max(0, all.size() - limit), all.size());
     }
 
-    synchronized List<ChatHistory.Message> mainMessages() { return history.main(); }
+    private String activeConversation = "default";
+    private List<Map<String, Object>> conversations = new ArrayList<>();
+    synchronized void activeConversation(String id) { activeConversation = id; }
+    synchronized String activeConversation() { return activeConversation; }
+    synchronized String streamingFor(String conversation) {
+        String value = ""; for (ChatHistory.Message message : history.main(conversation))
+            if (!message.role.equals("you") && message.status.equals("streaming")) value = message.text;
+        return value;
+    }
+    synchronized boolean busyIn(String conversation) {
+        for (ChatHistory.Message message : history.main(conversation))
+            if (message.status.equals("thinking") || message.status.equals("streaming") || message.status.equals("sending")) return true;
+        return false;
+    }
+    synchronized List<Map<String, Object>> conversations() { return new ArrayList<>(conversations); }
+    synchronized void conversations(List<Object> items) {
+        conversations = new ArrayList<>();
+        for (Object item : items) if (item instanceof Map) conversations.add(Json.object(item));
+    }
+    synchronized void detachHistoryTasks() { history.detachTasks(); saveHistory(); }
+    synchronized List<ChatHistory.Message> mainMessages() { return history.main(activeConversation); }
+    synchronized List<ChatHistory.Message> mainMessages(String id) { return history.main(id); }
+    synchronized void messageScope(String id, String conversation, boolean mainScope) {
+        history.scope(id, conversation, mainScope); saveHistory();
+    }
     synchronized List<ChatHistory.Message> pendingMessages(String card) { return history.pending(card); }
     synchronized String retryMessage(String id) { return history.retry(id); }
     private long sequence;
@@ -383,7 +407,7 @@ public final class HubStore {
         selectedRuntime = url;
         String key = history == null ? url : history;
         if (!historyRuntime.equals(key == null ? "" : key)) {
-            loadHistory(key); pending = 0; streaming = ""; messageKey = "";
+            loadHistory(key); activeConversation = "default"; conversations.clear(); pending = 0; streaming = ""; messageKey = "";
             turn = new Turn("idle", "", "", "", "", "idle");
         }
         adoptHistory(url);
@@ -483,7 +507,7 @@ public final class HubStore {
     private final Map<String, Shelf> shelves = new HashMap<>();
     /** 现在摆出来的是哪台电脑的（RuntimeClient.historyKey）。 */
     private String cardsKey = "";
-    private SyncCache sync = new SyncCache("default");
+    private SyncCache sync = new SyncCache("*");
 
     /** 现在这台电脑的 /v1/sync 进度；和卡一起收起、一起放回，所以两者总是对得上。 */
     public synchronized SyncCache syncCache() { return sync; }
@@ -505,7 +529,7 @@ public final class HubStore {
                 feedSeq = shelf.feedSeq; usage = shelf.usage; sync = shelf.sync;
             } else {
                 catchingUp = true;
-                feedSeq = 0; usage = null; sync = new SyncCache("default");
+                feedSeq = 0; usage = null; sync = new SyncCache("*");
             }
             cardsKey = next;
         }
@@ -521,7 +545,7 @@ public final class HubStore {
             cards.clear();
             runtimeConnected = false;
             cardOrder.clear();
-            sync = new SyncCache("default");
+            sync = new SyncCache("*");
             // Approval origins have their own lifecycle; changing task Runtime must retain them.
             feedSeq = 0;
             turnCard = null;
@@ -697,8 +721,8 @@ public final class HubStore {
     // ---- 和小幽聊天 ----
 
     /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
-    void chatImage(String id, Attachment item) {
-        synchronized (this) { history.image(id, item); saveHistory(); }
+    void chatImages(String id, List<Attachment> items) {
+        synchronized (this) { history.images(id, items); saveHistory(); }
         notifyChanged();
     }
 
@@ -754,6 +778,10 @@ public final class HubStore {
      */
     public void chatStreaming(String text) {
         chatStreaming(null, text);
+    }
+
+    public void chatPresentation(String key, String json) {
+        synchronized (this) { history.presentation(key, Presentation.restore(json)); }
     }
 
     /**

@@ -147,7 +147,7 @@ class DesktopTests(unittest.TestCase):
         self.sync.poll()
         fallback = self.cards.get(card["id"])
         self.assertEqual((fallback["title"], fallback["title_source"]),
-                         ("a later follow-up", "request"))
+                         ("original request", "request"))
 
     def test_claude_custom_title_and_index_rename_use_same_card(self):
         path = self.root / ".claude/projects/project/s-cc.jsonl"
@@ -196,6 +196,36 @@ class DesktopTests(unittest.TestCase):
                           for entry in restored["entries"]],
                          [(entry["role"], entry["text"], entry["at"])
                           for entry in card["entries"]])
+
+    def test_fallback_title_keeps_topic_when_window_rotates_and_skips_task_notifications(self):
+        path = self.codex()
+        self.append(path, [self.message("user", "<task-notification><task-id>system</task-id></task-notification>"),
+                           self.message("user", "修复图片上传"), self.cevent("task_started")])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual('修复图片上传', card['title'])
+        self.now += 1
+        self.append(path, [self.message('user', '继续 %s' % i) for i in range(25)])
+        self.sync.poll()
+        current = self.cards.get(card['id'])
+        self.assertEqual('修复图片上传', current['title'])
+        self.assertFalse(any(e['text'] == '修复图片上传' for e in current['entries']))
+        self.assertFalse(any('task-notification' in e['text'] for e in current['entries']))
+
+    def test_old_technical_fallback_is_repaired_without_changing_status_or_history(self):
+        card = self.sync.record.observed_open('__desktop__', 'codex workdir abcdef', 'unknown', 'codex', title_source='fallback')
+        card = self.sync.record.observed(card['id'], source='desktop', monitoring_only=True,
+            session_id='old-session', project='workdir', observed_at=self.now - 864000,
+            stale=True, desktop_cwd='/project/workdir')
+        reloaded = Cards(self.state / 'cards.json')
+        self.assertEqual('/project/workdir', reloaded.get(card['id'])['desktop_cwd'])
+        observer = DesktopSync(reloaded, self.state, home=self.root, clock=lambda: self.now)
+        observer.poll()
+        changed = reloaded.get(card['id'])
+        self.assertEqual(('未命名 Codex 会话', 'fallback'), (changed['title'], changed['title_source']))
+        self.assertEqual(('unknown', True, self.now - 864000),
+                         (changed['state'], changed['stale'], changed['observed_at']))
+        self.assertEqual(card['entries'], changed['entries'])
 
     def test_retained_history_title_renames_without_reopening_transcript(self):
         path = self.codex()
@@ -449,7 +479,7 @@ class DesktopTests(unittest.TestCase):
                            self.message("user", "第二个需求")])
         self.sync.poll()
         card = self.observed()[0]
-        self.assertEqual(card["title"], "第二个需求")
+        self.assertEqual(card["title"], "第一个需求")  # The session's topic is stable; its brief is per turn.
         self.assertNotIn("第一个需求的结果", card["brief"])
         self.assertEqual(len(card["entries"]), 3)
 

@@ -280,7 +280,7 @@ class Approvals:
                      or (include_desktop and item.get("source") == "desktop"))
             ]
 
-    def since(self, conversation: str, after: int, *, include_desktop: bool = True) -> List[Dict[str, Any]]:
+    def since(self, conversation: Optional[str], after: int, *, include_desktop: bool = True) -> List[Dict[str, Any]]:
         """序号比 after 大的授权变化，含已经有结局的（/v1/sync 增量给）：出现又消失的授权，
         客户端也能看到它的结局。按序号排。"""
         with self._changed:
@@ -291,7 +291,7 @@ class Approvals:
                      **{key: item[key] for key in ("by", "reason") if key in item})
                 for item in self._items.values()
                 if item.get("seq", 0) > after
-                and (item["conversation"] == conversation
+                and (conversation is None or item["conversation"] == conversation
                      or (include_desktop and item.get("source") == "desktop"))
             ]
         return sorted(changed, key=lambda item: item["seq"])

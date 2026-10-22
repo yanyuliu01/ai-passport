@@ -35,7 +35,7 @@ KINDS = {"worker_result": "result"}
 
 # 记录里由卡决定、请求那边不覆盖的字段
 CARD_FIELDS = ("conversation", "task", "scope", "author", "kind", "reply_to", "source",
-               "attachments", "created_at")
+               "attachments", "created_at", "task_epoch")
 
 
 def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,6 +51,8 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
         author = {"kind": "owner", "name": "you"} if you else {
             "kind": "desktop", "name": card.get("agent") or "desktop"}
         source = {"type": "desktop", "session_id": card.get("session_id") or ""}
+        if card.get('native_scope'):
+            source['native_scope'] = card['native_scope']
     else:
         name = entry.get("author") or ("you" if you else "xiaoyou")
         if you:
@@ -68,6 +70,7 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
         "id": message_id,
         "conversation": card["conversation"],
         "task": card["id"],
+        "task_epoch": card.get("mesh_epoch") or card.get("record_epoch") or "",
         "scope": entry.get("scope") or "main",
         "author": author,
         "kind": KINDS.get(entry.get("kind") or "", entry.get("kind") or ("user" if you else "reply")),
@@ -100,6 +103,9 @@ class MessageLog:
         if self.origin and isinstance(source, dict) and source.get("type") == "runtime" \
                 and not source.get("runtime_id"):
             source["runtime_id"] = self.origin
+        if 'turn_at' not in record:
+            parent = self._messages.get(record.get('reply_to')) or {}
+            record['turn_at'] = parent.get('turn_at', parent.get('created_at', record.get('created_at', 0)))
 
     # ---- 文件 ----
 
@@ -183,6 +189,8 @@ class MessageLog:
     def compact(self) -> None:
         temporary = self._path.with_suffix(self._path.suffix + ".tmp")
         try:
+            from .message_history import seal
+            seal(self._path, self._messages)
             with open(temporary, "w", encoding="utf-8") as handle:
                 if self.floor:
                     handle.write(json.dumps({"id": "", "floor": self.floor}) + "\n")
@@ -201,12 +209,12 @@ class MessageLog:
         record = self._messages.get(message_id)
         return dict(record) if record is not None else None
 
-    def since(self, conversation: str, after: int, upto: int,
+    def since(self, conversation: Optional[str], after: int, upto: int,
               include_desktop: bool = False) -> List[Dict[str, Any]]:
         return sorted(
             (self._copy(record) for record in self._messages.values()
              if after < record["seq"] <= upto
-             and (record["conversation"] == conversation
+             and (conversation is None or record["conversation"] == conversation
                   or (include_desktop and record["conversation"] == DESKTOP_CONVERSATION))),
             key=lambda record: record["seq"])
 
@@ -280,7 +288,8 @@ class MessageLog:
                                        and current["partial"] != text):
                     record = dict(current) if current is not None else {
                         "rev": 0, "id": live, "conversation": card["conversation"],
-                        "task": card["id"], "scope": "main",
+                        "task": card["id"],
+        "task_epoch": card.get("mesh_epoch") or card.get("record_epoch") or "", "scope": "main",
                         "author": {"kind": "xiaoyou", "name": "xiaoyou"}, "kind": "summary",
                         "reply_to": None, "text": "", "source": {"type": "runtime"},
                         "attachments": [], "created_at": card.get("updated_at") or 0}
@@ -385,7 +394,7 @@ class MessageLog:
             **extra,
             "rev": 0, "id": message["id"] + suffix, "conversation": message["conversation"],
             "task": message.get("card") if message.get("pin") else None,
-            "scope": "task" if message.get("pin") else "main",
+            "scope": "main" if message.get("reply_scope") == "main" else "task" if message.get("pin") else "main",
             "author": {"kind": "owner", "name": "you"} if you
             else {"kind": "xiaoyou", "name": "xiaoyou"},
             "kind": "user" if you else "reply",
@@ -393,6 +402,7 @@ class MessageLog:
             "text": "", "partial": "", "source": {"type": "runtime"},
             "attachments": [dict(item) for item in message.get("attachments", [])] if you else [],
             "created_at": message.get("created_at") or 0,
+            "turn_at": message.get("created_at") or 0,
         }
 
     def retain(self, keep: Iterable[str]) -> None:

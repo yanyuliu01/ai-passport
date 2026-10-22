@@ -16,9 +16,26 @@ updates, partitions and task routing remain acceptance checks, not assumed passe
 
 ## Supported interaction and limits
 
-- In the phone's main conversation, choose **Add image**, inspect its preview,
-  optionally type text, then Send. Tap the selection button to remove a draft.
-  One image can be chosen per send; the Runtime protocol allows up to four.
+- From App 0.27.1, **Photos** lives inside the main-chat composer and opens the
+  system photo picker on Android 13+ (document-picker fallback on older devices).
+  Selection creates a small left-aligned local preview before upload completes;
+  no thumbnail download is required. Add text while it uploads, then Send when
+  ready (Send during an upload waits and sends once every image is in). The Photos
+  entry adds more images; each preview has its own remove button. Cancelling the picker preserves the current draft.
+  Several images can be chosen per send, up to four (the Runtime protocol limit); each starts uploading as soon as it is picked, and the uploaded bytes seed the phone cache so the sent bubble shows them without downloading from the computer.
+- Upload status distinguishes local preparation, bytes written, waiting for the
+  computer, ready and failed. Failure keeps the selected URI and text for an
+  explicit retry; an incomplete upload cannot silently become a text-only send.
+  A 45-second deadline per image, counted from when its transfer starts, bounds stalled transfers. Remove, replacement,
+  source changes and activity destruction invalidate callbacks and cancel the
+  active connection. On activity recreation, a ready attachment is restored;
+  an unfinished selection offers retry when the provider still grants access.
+- Large JPEG photos (over 1 MiB and a longest edge over 2,560 pixels) are resized
+  proportionally to 2,560 pixels and encoded at JPEG quality 90, only using the
+  result when smaller. EXIF rotation/mirroring is applied first. PNG, GIF, WebP,
+  smaller JPEGs and screenshots in PNG retain their original upload bytes.
+  This reduces eligible photo payloads; actual phone-network latency is not yet
+  measured and no unconditional speed improvement is claimed.
 - Received images appear with their original message. Tap to open the original
   or save it through the existing file picker. JPEG EXIF orientation is applied
   to the original viewer; Runtime thumbnails also apply orientation.
@@ -107,6 +124,14 @@ request identity, unsupported routing and native Codex image arguments.
 invalid metadata, timeout, low heap and generation invalidation. Its codec shim
 supplies fixed pixel fixtures; the firmware links the actual mbedTLS codec.
 The existing gate runs this test when cJSON is available.
+
+App 0.27.1 adds host coverage for stale completion after removal/retry, photo
+eligibility, preview sizing and aspect-ratio preservation. Phone acceptance must
+exercise picker cancellation, replacement during upload, offline failure/retry,
+rotation/activity recreation, source switching, portrait EXIF/mirrored photos,
+transparent PNGs, image-only and image-plus-text sends, and returning to voice.
+Compare original/optimized byte counts and pick-to-preview/upload-ready times on
+the same phone/network. These are separate from send-to-assistant TTFT.
 
 Real installed phone/device rendering, image colors, glyphs, voice coexistence,
 BLE reconnect, OTA/rollback, provider visual understanding and cross-client

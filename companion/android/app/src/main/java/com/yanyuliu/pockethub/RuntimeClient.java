@@ -206,7 +206,7 @@ final class RuntimeClient {
                 String id = Json.string(info, "runtime_id");
                 if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
                 // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
-                String subject = abilities.contains("mesh") ? Json.string(info, "subject_id") : "";
+                String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
                 prefs(context).edit().putString("sid:" + target.url, subject).apply();
             }
         } catch (IOException error) {
@@ -223,6 +223,7 @@ final class RuntimeClient {
         HubStore.get().showComputer(now == null ? "" : historyKey(context, now));
         HubStore.get().selectedRuntime(url, now == null ? url : historyKey(context, now));
         HubStore.get().helpersChanged();
+        RelayManager.cancelReads();
         HttpURLConnection waiting = feedConnection;
         if (waiting != null) {
             waiting.disconnect();
@@ -235,6 +236,7 @@ final class RuntimeClient {
 
     /** 开始盯着现在用的那台 Runtime 的卡；已经在盯就什么都不做。进程在它就在。 */
     static synchronized void watch(Context context) {
+        try { RelayManager.init(context); } catch (Exception issue) { /* Keep direct connections and original sealed records. */ }
         if (watcher != null) {
             return;
         }
@@ -271,6 +273,7 @@ final class RuntimeClient {
                     // 另一台电脑：摆出它自己的卡和同步进度（没见过就从头取）；同一台不动。
                     store.showComputer(key);
                     store.selectedRuntime(target.url, key);
+                    if (abilities.contains("presentation_v1")) store.syncCache().requirePresentation();
                     final Target shared = target;
                     QUICK.execute(() -> shareHistory(app, shared));
                 }
@@ -377,7 +380,7 @@ final class RuntimeClient {
         HubStore store = HubStore.get();
         long epoch = store.cardsEpoch();
         long usageRev = store.usageRev();
-        String body = requestText("GET", target.url + "/v1/sync?conversation=default&after="
+        String body = requestText("GET", target.url + "/v1/sync?conversation=default&all_conversations=1&after="
                         + java.net.URLEncoder.encode(cache.cursor(), "UTF-8") + "&wait=" + wait
                         + (cache.epoch().isEmpty() ? "" : "&epoch=" + java.net.URLEncoder.encode(cache.epoch(), "UTF-8"))
                         + (usageRev >= 0 ? "&usage=" + usageRev : "")
@@ -394,8 +397,10 @@ final class RuntimeClient {
             if (store.cardsEpoch() != epoch) {
                 return false;  // 等的时候换了 Runtime：这是上一台的回答
             }
+            if (page.containsKey("conversations")) store.conversations(Json.list(page, "conversations"));
             SyncCache.Result result = cache.apply(page);
             if (result.replaced) {
+                store.detachHistoryTasks();
                 // Runtime 换了一份记录：手里的卡不算数了。聊天记录按编号留着。
                 store.resetCards();
                 epoch = store.cardsEpoch();
@@ -603,6 +608,7 @@ final class RuntimeClient {
     }
 
     static synchronized void remove(Context context, String url) {
+        if (url.startsWith("relay://")) RelayManager.remove(url);
         List<Target> list = targets(context);
         Target current = selected(context);
         Target removed = target(context, url);
@@ -648,8 +654,21 @@ final class RuntimeClient {
      * 用连接串登记一台 Runtime 并切换到它；同一个地址再登记一次只更新令牌。
      * 格式不对时返回说明，成功返回 null。
      */
+    static synchronized void registerRelay(Context context, String url, String name) {
+        if (target(context, url) != null) return;
+        List<Target> list = targets(context);
+        if (list.size() >= MAX_TARGETS) return;
+        list.add(new Target(name.isEmpty() ? "已配对电脑" : name, url, "paired-device-public-key"));
+        store(context, list, url); select(context, url);
+    }
+
     static String savePairing(Context context, String pairing) {
         String text = pairing == null ? "" : pairing.trim();
+        if (text.startsWith("xiaoyou://")) {
+            String problem = RelayManager.join(context, text);
+            if (problem == null) RuntimeWatchService.start(context);
+            return problem;
+        }
         int hash = text.indexOf('#');
         if (hash <= 0 || hash == text.length() - 1) {
             return "连接串应该像 http://192.168.1.5:8765#令牌";
@@ -754,13 +773,20 @@ final class RuntimeClient {
      * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
      * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
      */
-    static void sendImage(Context context, String text, Attachment image) {
-        submit(context, text.isEmpty() ? "请看看这张图片" : text, null, null, false, null, null, null, image);
+    static void sendImage(Context context, String text, List<Attachment> images) {
+        submit(context, text.isEmpty() ? "请看看这张图片" : text, null, null, false, null, null, null, images);
     }
 
-    static Attachment uploadImage(Target target, byte[] bytes) throws IOException {
-        Map<String, String> raw = request("POST", target.url + "/v1/images", target.token,
-                bytes, "application/octet-stream", 30);
+    interface UploadProgress {
+        void connection(HttpURLConnection connection) throws IOException;
+        void sent(int bytes, int total) throws IOException;
+    }
+
+    static Attachment uploadImage(Target target, byte[] bytes, UploadProgress progress) throws IOException {
+        // Registration is not an idempotent message send; never retry it implicitly.
+        Map<String, String> raw = BuddyProtocol.parseFlatObject(requestOnce("POST", target.url + "/v1/images", target.token,
+                bytes, "application/octet-stream", 30, false, progress));
+        if (raw == null) throw new IOException("Runtime 返回的内容看不懂");
         Map<String, Object> item = new java.util.HashMap<>(raw);
         for (String key : new String[]{"size", "width", "height"}) {
             try { item.put(key, Long.parseLong(raw.get(key))); } catch (RuntimeException ignored) { }
@@ -786,15 +812,113 @@ final class RuntimeClient {
     }
 
     static String imageMessageJson(String text, String client, String card, String effort,
-                                   String agent, Attachment image) {
+                                   String agent, List<Attachment> images) {
         String body = CardViews.messageJson(text, client, card, effort, agent);
-        return image == null ? body : body.substring(0, body.length() - 1)
-                + ",\"image_ids\":[\"" + image.id + "\"]}";
+        if (images == null || images.isEmpty()) return body;
+        StringBuilder ids = new StringBuilder();
+        for (Attachment image : images) ids.append(ids.length() == 0 ? "" : ",").append(quoted(image.id));
+        return body.substring(0, body.length() - 1) + ",\"image_ids\":[" + ids + "]}";
     }
 
-    static void retryImage(Context context, String id, String text, Attachment image) {
+    static String scopedMessageJson(String text, String client, String card, String effort,
+                                    String agent, List<Attachment> images, String conversation, boolean mainScope) {
+        String body = imageMessageJson(text, client, card, effort, agent, images);
+        return body.substring(0, body.length() - 1) + ",\"conversation\":" + quoted(conversation)
+                + (mainScope && card != null ? ",\"reply_scope\":\"main\"" : "") + "}";
+    }
+    private static String quoted(String value) { StringBuilder b = new StringBuilder(); BuddyProtocol.quote(b, value); return b.toString(); }
+
+    interface CatalogCallback { void done(Map<String, Object> result, String error); }
+    static void directoryEdit(Context context, String id, long revision, String fields, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory/" + id, "{\"revision\":" + revision + ",\"fields\":" + fields + "}", callback);
+    }
+    static void directoryHistory(Context context, String id, String cursor, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory/" + id + "/history" + (cursor == null ? "" : "?cursor=" + android.net.Uri.encode(cursor)), null, callback);
+    }
+    static void directoryOpen(Context context, String id, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory/" + id + "/open", "{}", callback);
+    }
+    static void directoryMetadata(Context context, String id, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory/" + id + "/metadata", "{}", callback);
+    }
+    static void directoryPage(Context context, String query, String cursor, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory?q=" + android.net.Uri.encode(query) + (cursor == null ? "" : "&cursor=" + android.net.Uri.encode(cursor)), null, callback);
+    }
+    static void directory(Context context, CatalogCallback callback) {
+        directoryRequest(context, "/v1/directory", null, callback);
+    }
+    private static void directoryRequest(Context context, String path, String body, CatalogCallback callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, "电脑未连接"); return; }
+        long generation = HubStore.get().cardsEpoch();
+        QUICK.execute(() -> {
+            Map<String, Object> result = null; String error = null;
+            try {
+                result = Json.parseObject(requestText(body == null ? "GET" : "POST", target.url + path, target.token,
+                        body == null ? null : body.getBytes(StandardCharsets.UTF_8), "application/json", 15, false));
+                String command = Json.string(result, "command_id"), authority = Json.string(result, "authority");
+                long until = System.currentTimeMillis() + 15000;
+                while (Json.string(result, "status").equals("queued") && !command.isEmpty() && System.currentTimeMillis() < until) {
+                    Thread.sleep(350);
+                    result = Json.parseObject(requestText("GET", target.url + "/v1/directory/operations/" + command + "?authority=" + android.net.Uri.encode(authority), target.token, null, null, 10, false));
+                }
+                if (Json.string(result, "status").equals("failed")) throw new java.io.IOException(Json.string(result, "error"));
+                if (result.get("history") instanceof Map) result = Json.object(result.get("history"));
+            } catch (Exception problem) { error = problem.getMessage(); }
+            Map<String, Object> output = result; String issue = error;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target current = selected(context);
+                if (current != null && current.url.equals(target.url) && current.token.equals(target.token)
+                        && generation == HubStore.get().cardsEpoch()) callback.done(output, issue);
+            });
+        });
+    }
+    static void catalog(Context context, String message, CatalogCallback callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, "请先连接电脑"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> result = null; String error = null;
+            try {
+                String body = "{\"id\":" + quoted("side-" + UUID.randomUUID().toString().replace("-", ""))
+                        + (message == null ? "" : ",\"from_message\":" + quoted(message)) + "}";
+                result = Json.parseObject(requestText("POST", target.url + "/v1/conversations", target.token,
+                        body.getBytes(StandardCharsets.UTF_8), "application/json", 15, false));
+            } catch (Exception problem) { error = "旁聊暂不可用：" + problem.getMessage(); }
+            Map<String, Object> output = result; String issue = error;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> callback.done(output, issue));
+        });
+    }
+
+    static void renameConversation(Context context, String id, String title, CatalogCallback callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, "电脑未连接"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> result = null; String error = null;
+            try { result = Json.parseObject(requestText("POST", target.url + "/v1/conversations/" + id + "/rename", target.token,
+                    ("{\"title\":" + quoted(title) + "}").getBytes(StandardCharsets.UTF_8), "application/json", 15, false)); }
+            catch (Exception problem) { error = problem.getMessage(); }
+            Map<String, Object> out = result; String issue = error;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target selected = selected(context);
+                if (selected != null && selected.url.equals(target.url) && selected.token.equals(target.token)) callback.done(out, issue);
+            });
+        });
+    }
+
+    static void audit(Context context, String card, String before, CatalogCallback callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, "电脑未连接"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> result = null; String error = null;
+            try { result = Json.parseObject(requestText("GET", target.url + "/v1/tasks/" + card + "/activity" + (before == null ? "" : "?before=" + before), target.token, null, null, 15, false)); }
+            catch (Exception problem) { error = problem.getMessage(); }
+            Map<String, Object> out = result; String issue = error;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target selected = selected(context);
+                if (selected != null && selected.url.equals(target.url) && selected.token.equals(target.token)) callback.done(out, issue);
+            });
+        });
+    }
+
+    static void retryImages(Context context, String id, String text, List<Attachment> images) {
         String client = HubStore.get().retryMessage(id);
-        if (client != null) submit(context, text, null, null, false, null, null, client, image);
+        if (client != null) submit(context, text, null, null, false, null, null, client, images);
     }
 
     static void retry(Context context, String id, String text, String card) {
@@ -809,7 +933,21 @@ final class RuntimeClient {
     }
 
     private static void submit(Context context, String text, byte[] wav, String card,
-                               boolean pin, String effort, String agent, String retryId, Attachment image) {
+                               boolean pin, String effort, String agent, String retryId, List<Attachment> images) {
+        submitScoped(context, text, wav, card, pin, effort, agent, retryId, images, "default", false);
+    }
+
+    static void sendVoiceChat(Context context, byte[] wav, String conversation, String card) {
+        submitScoped(context, VOICE_PLACEHOLDER, wav, card, card != null, null, null, null, null, conversation, true);
+    }
+
+    static void sendChat(Context context, String text, String conversation, String card, List<Attachment> images) {
+        submitScoped(context, text, null, card, card != null, null, null, null, images, conversation, true);
+    }
+
+    private static void submitScoped(Context context, String text, byte[] wav, String card,
+                               boolean pin, String effort, String agent, String retryId, List<Attachment> images,
+                               String conversation, boolean fromChat) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -824,7 +962,8 @@ final class RuntimeClient {
         store.selectedRuntime(url, historyKey(app, target));
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);
-        if (image != null) store.chatImage(clientId, image);
+        store.messageScope(clientId, conversation, fromChat);
+        if (images != null && !images.isEmpty()) store.chatImages(clientId, images);
         // 这句话在聊天记录里的编号：回话途中主人又说了一句时，几句各写各的（HubStore 的 key 版本）。
         final String[] key = {clientId};
         CHAT.execute(() -> {
@@ -833,13 +972,13 @@ final class RuntimeClient {
                 // 别处的对话在连上时已经在后台带过去了（shareHistory），这里不再等它。
                 Map<String, String> message;
                 if (wav != null) {
-                    message = request("POST", url + "/v1/voice?client_id=" + clientId
+                    message = request("POST", url + "/v1/voice?conversation=" + java.net.URLEncoder.encode(conversation, "UTF-8") + (fromChat && card != null ? "&reply_scope=main" : "") + "&client_id=" + clientId
                                     + (BuddyProtocol.cardId(card) ? "&card=" + card + (pin ? "&pin=1" : "")
                                     : ""), token,
                             wav, "audio/wav", 30);
                 } else {
                     message = request("POST", url + "/v1/messages", token,
-                            imageMessageJson(text, clientId, card, effort, agent, image)
+                            scopedMessageJson(text, clientId, card, effort, agent, images, conversation, fromChat)
                                     .getBytes(StandardCharsets.UTF_8),
                             "application/json; charset=utf-8", 20);
                 }
@@ -856,6 +995,7 @@ final class RuntimeClient {
                 while (true) {
                     if (store.cardsEpoch() != epoch) return;
                     String status = message.get("status");
+                    store.chatPresentation(key[0], message.get("presentation_json"));
                     String recognized = message.get("text");
                     if (!heard && recognized != null && !recognized.isEmpty()) {
                         heard = true;
@@ -1079,7 +1219,7 @@ final class RuntimeClient {
                                                byte[] body, String contentType,
                                                int timeoutSeconds)
             throws IOException {
-        Map<String, String> fields = BuddyProtocol.parseFlatObject(
+        Map<String, String> fields = Presentation.snapshot(
                 requestText(method, address, token, body, contentType, timeoutSeconds, false));
         if (fields == null) {
             throw new IOException("Runtime 返回的内容看不懂");
@@ -1108,12 +1248,25 @@ final class RuntimeClient {
     private static String requestOnce(String method, String address, String token,
                                       byte[] body, String contentType, int timeoutSeconds,
                                       boolean feed) throws IOException {
+        return requestOnce(method, address, token, body, contentType, timeoutSeconds, feed, null);
+    }
+
+    private static String requestOnce(String method, String address, String token,
+                                      byte[] body, String contentType, int timeoutSeconds,
+                                      boolean feed, UploadProgress progress) throws IOException {
+        if (address.startsWith("relay://")) {
+            if (progress != null && body != null) progress.sent(0, body.length);
+            String result = RelayManager.request(method, address, body, contentType, timeoutSeconds);
+            if (progress != null && body != null) progress.sent(body.length, body.length);
+            return result;
+        }
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setInstanceFollowRedirects(false);
         if (feed) {
             feedConnection = connection;
         }
         try {
+            if (progress != null) progress.connection(connection);
             connection.setRequestMethod(method);
             connection.setConnectTimeout(10000);
             connection.setReadTimeout(timeoutSeconds * 1000);
@@ -1123,7 +1276,13 @@ final class RuntimeClient {
                 connection.setRequestProperty("Content-Type", contentType);
                 connection.setFixedLengthStreamingMode(body.length);
                 try (OutputStream out = connection.getOutputStream()) {
-                    out.write(body);
+                    if (progress == null) out.write(body);
+                    else for (int offset = 0; offset < body.length;) {
+                        int count = Math.min(32768, body.length - offset);
+                        if (progress != null) progress.sent(offset, body.length);
+                        out.write(body, offset, count); offset += count;
+                    }
+                    if (progress != null) progress.sent(body.length, body.length);
                 }
             }
             int code = connection.getResponseCode();

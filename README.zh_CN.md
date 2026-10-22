@@ -156,6 +156,8 @@ Buddy（这时没有语音和卡）。
 | [小幽 Harness 审查](docs/assets/xiaoyou-harness-review.zh_CN.md) | Fork 架构审查、本地可靠性问题、接入能力边界、实验及渐进 PR 计划 |
 | [开发指南](docs/development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
 | [App／Runtime／固件可靠性](docs/development/cross-stack-reliability.zh_CN.md) | 强制回归、3 秒首回复、连接恢复与多端一致性契约 |
+| [小幽桌面客户端方案](docs/development/xiaoyou-desktop-plan.zh_CN.md) | 周五前 Mac/Windows 私测交付目标、统一会话、可自建加密通信、依赖与验收 |
+| [小幽桌面客户端实现](companion/desktop/README.zh_CN.md) | 当前客户端增量、原生构建、加密中继、测试命令与待完成验收 |
 | [Agent gateway 方案](docs/development/agent-gateway.zh_CN.md) | App 控制 CLI 安装、能力适配、审计、生命周期与回退设计 |
 | [自动迭代流水线](docs/development/auto-iteration.zh_CN.md) | 插件化闭环：发现 App 使用问题，本地模型改代码，过门禁后发布，出问题自动撤回 |
 | [产品原则](docs/product-principles.zh_CN.md) | 草稿 v0.1：小幽是什么、不做什么，以及版本方案必须对照的编号原则 |

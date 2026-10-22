@@ -40,6 +40,22 @@ final class ArtifactClient {
         return new File(directory, ArtifactDownload.key(target.url + "\n" + item.id + "\n" + item.sha256 + (thumb ? "\nthumb" : "\ncontent")) + ".bin");
     }
 
+    /** The phone already holds what it just uploaded; seed the cache so the sent bubble never re-downloads it. */
+    static void seed(Context context, RuntimeClient.Target target, Attachment item, byte[] content, byte[] thumb) {
+        try {
+            write(cached(context, target, item, false), content);
+            if (thumb != null) write(cached(context, target, item, true), thumb);
+        } catch (java.io.IOException ignored) { /* Falls back to downloading from the Runtime. */ }
+    }
+
+    private static void write(File file, byte[] bytes) throws java.io.IOException {
+        File directory = file.getParentFile();
+        if (directory != null && !directory.isDirectory() && !directory.mkdirs()) throw new java.io.IOException("cache");
+        File partial = new File(file.getPath() + ".part");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(partial)) { out.write(bytes); }
+        if (!partial.renameTo(file)) { partial.delete(); throw new java.io.IOException("cache"); }
+    }
+
     static void fetch(Context context, RuntimeClient.Target target, Attachment item, boolean thumb, Callback callback) {
         Context app = context.getApplicationContext();
         WORKER.execute(() -> {

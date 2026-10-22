@@ -54,6 +54,7 @@ final class AppPresentation {
     }
 
     static String stateLabel(Card card, boolean connected) {
+        if (card.presentation != null && connected) return card.presentation.label();
         switch (DsState.state(card, connected)) {
             case "working": case "talking": return "执行中";
             case "waiting": return "待确认";
@@ -124,6 +125,8 @@ final class AppPresentation {
 
     /** One status word; an ended task has none and is shown as muted text instead. */
     static String stateWord(Card card, boolean connected) {
+        if (card.presentation != null && connected)
+            return card.presentation.value("group").equals("history") ? "" : card.presentation.label();
         if (connected && card.resultReady && card.active()) return "总结中";
         switch (DsState.state(card, connected)) {
             case "working": case "talking": return "进行中";

@@ -428,10 +428,27 @@ def main(argv=None):
     parser.add_argument("--consumer", default="desktop", help="Separate per-agent delivery cursors")
     parser.add_argument("--print-hooks", action="store_true", help="Print mergeable configuration")
     parser.add_argument("--export", type=Path, help="Write the retained history to a private local file")
+    parser.add_argument('--directory', action='store_true', help='Read unified names and management state from the running Gateway')
+    parser.add_argument('--conversation', help='Exact unified directory UID; page its public source history')
+    parser.add_argument('--cursor', help='Opaque source history cursor')
     args = parser.parse_args(argv)
     if args.print_hooks:
         print(json.dumps(hook_config(args.config, args.project, args.consumer), ensure_ascii=False, indent=2))
         return 0
+    if args.directory or args.conversation:
+        from xiaoyou_runtime.config import load
+        from xiaoyou_runtime.conversation_cli import call, settle, directory
+        import urllib.parse
+        try:
+            config = load(args.config)
+            result = call(config, '/v1/directory/' + urllib.parse.quote(args.conversation) + '/history'
+                          + ('?cursor=' + urllib.parse.quote(args.cursor) if args.cursor else '')) if args.conversation else {'entries':directory(config)}
+            result = settle(config, result)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        except (OSError, ValueError):
+            print('Unified directory unavailable; no native session was started.', file=sys.stderr)
+            return 1
     payload = {}
     try:
         if args.hook:

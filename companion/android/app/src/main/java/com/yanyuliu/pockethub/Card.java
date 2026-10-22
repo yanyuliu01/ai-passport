@@ -18,6 +18,7 @@ final class Card {
         final List<Attachment> attachments;
         final String id, scope, kind, author;
         final double at;
+        Presentation presentation;
 
         Entry(String role, String text) {
             this(role, text, Collections.emptyList());
@@ -105,6 +106,7 @@ final class Card {
     final boolean titleTruncated;
     /** talking、working、waiting、done、failed、cancelled；电脑观察还可能是 unknown。 */
     final String state;
+    Presentation presentation;
     /** 谁在做或做的；小幽自己答的是空串。 */
     final String agent;
     final String brief;
@@ -195,6 +197,7 @@ final class Card {
                 entries.add(new Entry(role, Json.string(entry, "text"), Attachment.parse(entry),
                         Json.string(entry, "id"), Json.string(entry, "scope"), Json.string(entry, "kind"),
                         Json.string(entry, "author"), Json.number(entry, "at")));
+                entries.get(entries.size() - 1).presentation = Presentation.from(entry.get("presentation"));
             }
         }
         List<String> progress = new ArrayList<>();
@@ -232,6 +235,7 @@ final class Card {
                 Json.flag(raw, "content_truncated"), Json.string(raw, "title_source"),
                 Json.flag(raw, "title_truncated"), allAttachments(raw, entries));
         card.resultReady = Json.flag(raw, "result_ready");
+        card.presentation = Presentation.from(raw.get("presentation"));
         card.turnEnded = turnEnded;
         card.summaryPartial = Json.string(raw, "summary_partial");
         List<Entry> activity = new ArrayList<>();
@@ -242,9 +246,31 @@ final class Card {
                     Json.string(event, "author"), Json.number(event, "at")));
         }
         card.activity = Collections.unmodifiableList(activity);
+        card.conversation = Json.string(raw, "conversation").isEmpty() ? "default" : Json.string(raw, "conversation");
+        card.originHost = Json.string(raw, "origin_name");
+        card.directoryId = Json.string(raw, "directory_id"); card.originalTitle = Json.string(raw, "original_title");
+        card.metadataRevision = (long) Json.number(raw, "metadata_revision");
+        card.sharedPinned = Json.flag(raw, "shared_pinned"); card.sharedArchived = Json.flag(raw, "shared_archived");
+        card.displayProject = Json.string(raw, "display_project");
+        for (Object source : Json.list(raw, "native_sources")) if (source instanceof String) card.nativeSources.add((String) source);
+        card.workerSession = Json.string(raw, "worker_session"); card.workerCwd = Json.string(raw, "worker_cwd");
+        if (card.workerCwd.isEmpty()) card.workerCwd = Json.string(raw, "desktop_cwd");
+        card.originMessage = Json.string(raw, "origin_message"); card.relayState = Json.string(raw, "relay_state");
+        card.lastMeaningfulAt = Json.number(raw, "last_meaningful_at");
+        for (Object item : Json.list(raw, "supplements")) {
+            Map<String, Object> addition = Json.object(item);
+            if (Json.string(addition, "state").equals("queued")) card.pendingSupplement += Json.string(addition, "text") + "\n";
+        }
         return card;
     }
 
+    String conversation = "default", workerSession = "", workerCwd = "", relayState = "", originMessage = "";
+    double lastMeaningfulAt;
+    String pendingSupplement = "", originHost = "";
+    String directoryId = "", originalTitle = "", displayProject = "";
+    long metadataRevision;
+    boolean sharedPinned, sharedArchived;
+    List<String> nativeSources = new ArrayList<>();
     boolean resultReady;
     /** Runtime 明说的是“本轮结束”（不是整件事做完）。 */
     boolean turnEnded;
@@ -322,7 +348,13 @@ final class Card {
                 startedAt, edits, queued, seq, finishedAt, effort, model, tokens, spent5h, spent7d,
                 source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
                 contentScope, contentTruncated, titleSource, titleTruncated, attachments);
-        copy.activity = activity;
+        copy.activity = activity; copy.conversation = conversation; copy.workerSession = workerSession;
+        copy.workerCwd = workerCwd; copy.originMessage = originMessage; copy.relayState = relayState;
+        copy.lastMeaningfulAt = lastMeaningfulAt;
+        copy.originHost = originHost; copy.pendingSupplement = pendingSupplement; copy.turnEnded = turnEnded;
+        copy.directoryId = directoryId; copy.originalTitle = originalTitle; copy.displayProject = displayProject;
+        copy.metadataRevision = metadataRevision; copy.sharedPinned = sharedPinned; copy.sharedArchived = sharedArchived;
+        copy.nativeSources = new ArrayList<>(nativeSources);
         return copy;
     }
 
@@ -368,6 +400,7 @@ final class Card {
 
     /** 给人看的状态。 */
     String stateLabel() {
+        if (presentation != null) return presentation.label();
         if (monitoringOnly) {
             switch (state) {
                 case "working":

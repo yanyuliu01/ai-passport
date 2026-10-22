@@ -109,13 +109,15 @@ final class CardViews {
             return "";
         }
         switch (card.titleSource) {
+            case "owner_alias":
+                return "各端共用的显示名称；原生原名保留在来源详情。";
             case "upstream":
             case "desktop":
                 return card.titleTruncated ? "标题取自电脑侧栏，较长部分已省略。" : "标题与电脑侧栏一致。";
             case "request":
-                return "电脑端标题暂未获取，显示最近需求。";
+                return "电脑端标题暂未获取，按首条可读需求命名。";
             case "fallback":
-                return "电脑端标题暂未获取，显示会话标识。";
+                return "来源未提供可读标题，会话编号可在详情查看。";
             default:
                 return "";
         }

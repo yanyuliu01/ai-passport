@@ -71,11 +71,21 @@ final class NavIconView extends View {
         } else if (icon.equals("history")) {
             canvas.drawCircle(12, 12, 8.5f, paint);
             canvas.drawLine(12, 7.5f, 12, 12, paint); canvas.drawLine(12, 12, 15, 14, paint);
+        } else if (icon.equals("back")) {
+            canvas.drawLine(15, 5, 8, 12, paint); canvas.drawLine(8, 12, 15, 19, paint);
+        } else if (icon.equals("chevron")) {
+            canvas.drawLine(9, 6, 15, 12, paint); canvas.drawLine(15, 12, 9, 18, paint);
         } else if (icon.equals("menu")) {
             canvas.drawLine(4, 7, 20, 7, paint); canvas.drawLine(4, 12, 15, 12, paint); canvas.drawLine(4, 17, 20, 17, paint);
         } else if (icon.equals("more")) {
             paint.setStyle(Paint.Style.FILL);
             canvas.drawCircle(5.5f, 12, 1.7f, paint); canvas.drawCircle(12, 12, 1.7f, paint); canvas.drawCircle(18.5f, 12, 1.7f, paint);
+        } else if (icon.equals("image")) {
+            canvas.drawRoundRect(new RectF(3, 3, 21, 21), 3, 3, paint);
+            canvas.drawCircle(8, 8, 1.5f, paint);
+            Path mountains = new Path(); mountains.moveTo(4, 18); mountains.lineTo(10, 12);
+            mountains.lineTo(13, 15); mountains.lineTo(16, 11); mountains.lineTo(21, 17);
+            canvas.drawPath(mountains, paint);
         } else if (icon.equals("send")) {
             paint.setStrokeWidth(2.2f);
             canvas.drawLine(12, 19, 12, 5, paint); canvas.drawLine(6, 11, 12, 5, paint); canvas.drawLine(18, 11, 12, 5, paint);

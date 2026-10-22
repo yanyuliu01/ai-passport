@@ -11,11 +11,25 @@ import java.security.MessageDigest;
 
 /** Testable bounded binary download and integrity verification, independent of Android. */
 final class ArtifactDownload {
+    interface RelayBytes { byte[] read(String address) throws Exception; }
+    static RelayBytes relayBytes;
     private static final long MAX_BYTES = 256L * 1024 * 1024;
     static void download(String address, String token, Attachment item, boolean thumb, File file) throws Exception {
         if (!item.ready()) throw new java.io.IOException(item.error.isEmpty() ? "附件还没有准备好" : item.error);
         if (!thumb && item.size > MAX_BYTES) throw new java.io.IOException("附件超过 256 MB，请在电脑端打开");
         if (!file.getParentFile().isDirectory() && !file.getParentFile().mkdirs()) throw new java.io.IOException("无法建立附件缓存");
+        if (address.startsWith("relay://")) {
+            if (relayBytes == null) throw new java.io.IOException("加密附件连接未就绪");
+            byte[] data = relayBytes.read(address + "/v1/artifacts/" + item.id + (thumb ? "/thumbnail" : "/content"));
+            if (data.length > 2_800_000) throw new java.io.IOException("附件超过加密传输上限");
+            if (!thumb && item.size > 0 && data.length != item.size) throw new java.io.IOException("附件下载不完整");
+            if (!thumb && item.sha256.matches("[0-9a-f]{64}") && !hex(MessageDigest.getInstance("SHA-256").digest(data)).equals(item.sha256)) throw new java.io.IOException("附件校验失败");
+            File partial = File.createTempFile("relay-", ".part", file.getParentFile());
+            try { try (OutputStream output = new FileOutputStream(partial)) { output.write(data); }
+                if (!partial.renameTo(file)) throw new java.io.IOException("无法保存附件");
+            } finally { partial.delete(); }
+            return;
+        }
         HttpURLConnection connection = (HttpURLConnection) new URL(address + "/v1/artifacts/" + item.id
                 + (thumb ? "/thumbnail" : "/content")).openConnection();
         connection.setInstanceFollowRedirects(false);

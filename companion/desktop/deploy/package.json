@@ -1,0 +1,8 @@
+{
+  "name": "xiaoyou-encrypted-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node start.mjs" },
+  "dependencies": { "ws": "8.22.0" }
+}

@@ -24,6 +24,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .task_audit import TaskAudit
+from .conversations import ConversationCatalog
 from .message_log import MessageLog
 from .store import _write
 from .artifacts import clean_attachments
@@ -66,6 +68,12 @@ class Cards:
         self._reserved = 0  # 文件里记着的序号上限：重启后从它往后数
         self._epoch = ""
         self._listeners: List[Listener] = []
+        self.audit = TaskAudit(self._path.with_name("audit"))
+        self.catalog_seq = 0
+        self._retained = {}
+        self.conversations = ConversationCatalog(self._path.with_name("conversations.json"))
+        from .conversation_directory import DirectoryMetadata
+        self.directory = DirectoryMetadata(self._path.with_name("conversation-directory.json"))
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -88,6 +96,16 @@ class Cards:
             # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
             # 只是从这以后它能认出“换了一份记录”。
             self._epoch = uuid.uuid4().hex
+        for card in self._cards.values():
+            card['record_epoch'] = card.get('record_epoch') or self._epoch
+        retained_folder = self._path.with_suffix('.retained')
+        for path in retained_folder.glob('*.json'):
+            try:
+                item = json.loads(path.read_text('utf-8'))
+                if isinstance(item, dict) and isinstance(item.get('id'), str) and isinstance(item.get('record_epoch'), str):
+                    self._retained[path.stem] = item
+            except (OSError, ValueError):
+                continue
         # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
         self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
         # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
@@ -104,6 +122,8 @@ class Cards:
                             brief="电脑会话状态尚未更新", approval=None, queued=False,
                             updated_at=time.time(), finished_at=None, seq=self._seq)
                 continue
+            if card.get("relay_state") == "relay_queued":
+                card["relay_state"] = "interrupted"
             card["entries"].append({"role": "xiaoyou", "text": RESTART_NOTE, "at": time.time(),
                                     "kind": "note"})
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
@@ -127,6 +147,7 @@ class Cards:
                                  attachments=[dict(item) for item in record["attachments"]])
                     changed = True
             before = [entry.get("id") for entry in card["entries"]]
+            card["record_epoch"] = card.get("record_epoch") or self._epoch
             self._log.observe(card)
             changed = changed or before != [entry["id"] for entry in card["entries"]]
         return changed
@@ -197,8 +218,8 @@ class Cards:
                      and not isinstance(value, bool)}
             if isinstance(card.get("cost"), dict) else None,
             "seq": int(number("seq")),
-            "source": text("source"), "project": text("project"),
-            "session_id": text("session_id"),
+            "source": text("source"), "project": text("project"), "record_epoch": text("record_epoch"),
+            "session_id": text("session_id"), "desktop_cwd": text("desktop_cwd"),
             "monitoring_only": card.get("monitoring_only") is True,
             "desktop_status": text("desktop_status"),
             "observed_at": number("observed_at"),
@@ -208,6 +229,11 @@ class Cards:
             "result_ready": card.get("result_ready") is True,
             "summary_partial": text("summary_partial"),
             "run_id": text("run_id"),
+            **{key: text(key) for key in ("native_scope", "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "borrowed_session", "borrowed_cwd", "desktop_card")},
+            "binding_error": text("binding_error"),
+            "last_meaningful_at": number("last_meaningful_at"),
+            "execution_attempts": [dict(i) for i in card.get("execution_attempts", []) if isinstance(i, dict)][-64:],
+            "supplements": [dict(item) for item in card.get("supplements", []) if isinstance(item, dict) and isinstance(item.get("text"), str)],
             **Cards._mesh_fields(card),
         }
 
@@ -229,10 +255,12 @@ class Cards:
     @staticmethod
     def _copy(card: Dict[str, Any]) -> Dict[str, Any]:
         copy = dict(card)
+        copy["execution_attempts"] = [dict(item) for item in card.get("execution_attempts", [])]
         copy["entries"] = [dict(entry, attachments=[dict(item) for item in entry.get("attachments", [])])
                            for entry in card["entries"]]
         copy["attachments"] = [dict(item) for item in card.get("attachments", [])]
         copy["progress"] = list(card["progress"])
+        copy["supplements"] = [dict(item) for item in card.get("supplements", [])]
         copy["cost"] = dict(card["cost"]) if card.get("cost") else None
         return copy
 
@@ -249,6 +277,7 @@ class Cards:
         """本机产生的消息记录都写上这台 Runtime 的编号（见 MessageLog.set_origin）。"""
         with self._changed:
             self._log.set_origin(runtime_id)
+            self.conversations.origin = runtime_id
 
     @property
     def epoch(self) -> str:
@@ -322,6 +351,12 @@ class Cards:
                 return
             if not self._log.activity(card, author, phase, text, event_id, time.time()):
                 return
+            event = self._log.get(event_id)
+            if event:
+                self.audit.append(event)
+            if phase in ("dispatch", "message", "tool_start", "tool_result", "completed", "failed", "cancelled"):
+                card["last_meaningful_at"] = time.time()
+                self._touch(card)
             # This event is not a conversation entry or a card state change.
             # Its log sequence wakes sync; do not rewrite every card for each
             # output chunk. The App derives its activity revision from messages.
@@ -385,11 +420,11 @@ class Cards:
             messages = self._log.own_since(after, self._seq)
             return self._seq, tasks, messages
 
-    def sync_since(self, conversation: str, after: int, unavailable: bool = True) -> Any:
+    def sync_since(self, conversation: Optional[str], after: int, unavailable: bool = True) -> Any:
         """（现在的序号, 变了的事, 变了的消息, floor）：同一刻、同一把锁里取的，不会漏。"""
         with self._changed:
             tasks = [self.task_view(card, unavailable) for card in self._cards.values()
-                     if (card["conversation"] == conversation or card.get("monitoring_only"))
+                     if (conversation is None or card["conversation"] == conversation or card.get("monitoring_only"))
                      and card["seq"] > after]
             tasks.sort(key=lambda task: task["seq"])
             messages = self._log.since(conversation, after, self._seq, include_desktop=True)
@@ -409,6 +444,7 @@ class Cards:
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
         """调用时已经拿着锁：记下这张卡变了（连同它的消息），落盘，叫醒在等的人。"""
         if not card.get("mesh_origin"):
+            card["record_epoch"] = card.get("record_epoch") or self._epoch
             self._log.observe(card)
         self._seq += 1
         card["seq"] = self._seq
@@ -427,6 +463,48 @@ class Cards:
     def subscribe(self, listener: Listener) -> None:
         """每次有卡变化就调用一次（在锁外面，拿到的是那一刻的副本）。"""
         self._listeners.append(listener)
+
+    def bind_execution(self, card_id, attempt, fields):
+        with self._changed:
+            card = self._cards.get(card_id)
+            if card is None or card.get('mesh_origin'):
+                return
+            rows = [dict(i) for i in card.get('execution_attempts', [])]
+            existing = next((i for i in rows if i.get('attempt_id') == attempt), None)
+            if existing is None:
+                existing = {'attempt_id':attempt}
+                rows.append(existing)
+            existing.update(fields)
+            card['execution_attempts'] = rows[-64:]
+            seq = self._issue()
+            self.audit.append({'id':'binding-'+attempt+'-'+str(seq), 'task':card_id, 'seq':seq,
+                               'phase':'binding', 'text':'Native execution association',
+                               'binding':dict(existing), 'created_at':time.time()})
+            snapshot = self._touch(card)
+        self._tell(snapshot)
+
+    def retained(self):
+        """Immutable canonical snapshots evicted from the live sync window."""
+        with self._changed:
+            return [self._copy(card) for card in self._retained.values()]
+
+    def _seal_card(self, card):
+        if not card.get('agent') and not card.get('worker_agent') and not card.get('monitoring_only'):
+            return
+        import hashlib
+        origin = card.get('mesh_origin') or self.conversations.origin
+        epoch = card.get('mesh_epoch') or card.get('record_epoch') or self._epoch
+        key = hashlib.sha256(('%s/%s/%s' % (origin,epoch,card['id'])).encode()).hexdigest()
+        if key in self._retained:
+            return
+        snapshot = self._copy(card)
+        snapshot['record_epoch'] = epoch
+        snapshot['retained_only'] = True
+        snapshot['canonical_message_ids'] = [m['id'] for m in self._log._messages.values() if m.get('task') == card['id']]
+        folder = self._path.with_suffix('.retained')
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _write(folder / (key+'.json'), snapshot, 2)
+        self._retained[key] = snapshot
 
     def _prune(self) -> None:
         """调用时已经拿着锁：只丢已经结束的旧卡，还在做的不能丢；最近做完的
@@ -457,6 +535,7 @@ class Cards:
                 break
             if card["state"] in ACTIVE or card["id"] in protected:
                 continue
+            self._seal_card(card)
             del self._cards[card["id"]]
             left -= 1
 
@@ -489,6 +568,15 @@ class Cards:
         with self._changed:
             card = self._cards.get(card_id)
             return self._copy(card) if card is not None else None
+
+    def directory_changed(self, card_ids):
+        snapshots = []
+        with self._changed:
+            for key in dict.fromkeys(card_ids):
+                if key in self._cards:
+                    snapshots.append(self._touch(self._cards[key]))
+        for snapshot in snapshots:
+            self._tell(snapshot)
 
     def update(self, card_id: str, say: Optional[str] = None, said: Optional[str] = None,
                progress: Optional[str] = None, fresh: bool = False,

@@ -11,7 +11,9 @@ final class ChatHistory {
     static final class Message {
         String id, card, scope, role, text, status, kind;
         String clientId;
+        String conversation = "default";
         List<Attachment> attachments = new ArrayList<>();
+        Presentation presentation;
         double at;
         boolean synced;
         Message(String id, String card, String scope, String role, String text, String status,
@@ -32,9 +34,17 @@ final class ChatHistory {
         put(new Message(id + ":reply", target, scope, "xiaoyou", "", "thinking", "reply", at, false));
     }
 
-    void image(String id, Attachment item) {
+    void scope(String id, String conversation, boolean main) {
+        for (String suffix : new String[]{":you", ":reply"}) {
+            Message m = messages.get(id + suffix);
+            if (m != null) { m.conversation = conversation; if (main) m.scope = "main"; }
+        }
+    }
+
+    void images(String id, List<Attachment> items) {
         Message message = messages.get(id + ":you");
-        if (message != null && item != null) message.attachments = java.util.Collections.singletonList(item);
+        if (message != null && items != null && !items.isEmpty())
+            message.attachments = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(items));
     }
 
     private void put(Message message) { messages.put(message.id, message); }
@@ -73,6 +83,13 @@ final class ChatHistory {
     void streaming(String id, String text) {
         Message message = messages.get(id + ":reply");
         if (message != null && !(message.synced && message.status.equals("done"))) { message.text = text; message.status = text.isEmpty() ? "thinking" : "streaming"; }
+    }
+
+    void presentation(String id, Presentation value) {
+        Message message = messages.get(id + ":reply");
+        if (message == null || value == null) return;
+        if (message.presentation != null && message.presentation.complete() && !value.complete()) return;
+        message.presentation = value;
     }
 
     void finish(String id, String card, String text, boolean failed, Card snapshot) {
@@ -134,7 +151,7 @@ final class ChatHistory {
         }
         for (int index = 0; index < card.entries.size(); index++) {
             Card.Entry entry = card.entries.get(index);
-            if (entry.kind.equals("worker_result")) continue;
+            if (entry.kind.equals("worker_result") && (entry.presentation == null || !entry.presentation.inChat())) continue;
             String id = key(card, entry, index);
             Message known = messages.get(id);
             if (known == null && !entry.id.isEmpty()) known = messages.remove(legacyKey(card, entry, index));
@@ -156,15 +173,18 @@ final class ChatHistory {
             }
             Message next = new Message(id, card.id, scope, entry.role, text, "done", kind,
                     known != null ? known.at : entry.at > 0 ? entry.at : card.createdAt + index * .001, true);
+            next.conversation = card.conversation;
             next.attachments = entry.attachments;
+            next.presentation = entry.presentation != null ? entry.presentation : known == null ? null : known.presentation;
             if (known != null) next.clientId = known.clientId;
             put(next);
         }
         String partialId = card.id + ":summary-live";
         if (!card.summaryPartial.isEmpty() && card.active() && !liveSummary(card.id)) {
             Message previous = messages.get(partialId);
-            put(new Message(partialId, card.id, "main", "xiaoyou", card.summaryPartial, "streaming",
-                    "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true));
+            Message summary = new Message(partialId, card.id, "main", "xiaoyou", card.summaryPartial, "streaming",
+                    "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true);
+            summary.conversation = card.conversation; put(summary);
         } else messages.remove(partialId);
     }
 
@@ -174,15 +194,21 @@ final class ChatHistory {
      */
     boolean pending(SyncCache.Pending item) {
         Message known = messages.get(item.id);
-        if (known != null && (!known.synced || known.status.equals("done"))) return false;
+        if (known != null && ((!known.synced && item.presentation == null)
+                || known.status.equals("done") && (item.presentation == null || !item.presentation.complete()))) return false;
         boolean you = item.role.equals("you");
         String status = you ? "sent" : item.text.isEmpty() ? "thinking" : "streaming";
+        if (item.presentation != null && item.presentation.complete())
+            status = item.presentation.value("status").equals("failed") ? "failed" : "done";
         if (known != null && known.text.equals(item.text) && known.status.equals(status)
                 && known.attachments.size() == item.attachments.size()
+                && (item.presentation == null ? known.presentation == null : known.presentation != null && item.presentation.json().equals(known.presentation.json()))
                 && (item.attachments.isEmpty() || known.attachments.get(0).id.equals(item.attachments.get(0).id))) return false;
         Message next = new Message(item.id, item.task, item.scope, item.role, item.text, status,
                 you ? "user" : "reply", known != null ? known.at : item.at, true);
+        next.conversation = item.conversation;
         next.attachments = item.attachments;
+        next.presentation = item.presentation;
         next.clientId = "";
         put(next);
         if (summary(next)) messages.remove(next.card + ":summary-live");
@@ -217,6 +243,7 @@ final class ChatHistory {
             if (!user.role.equals("you") || !user.scope.equals("main") || !user.id.endsWith(":you")
                     || !user.status.equals("done") || user.text.isEmpty()
                     || user.text.equals(RuntimeClient.VOICE_PLACEHOLDER)) continue;
+            if (!user.conversation.equals("default")) continue;
             String base = user.id.substring(0, user.id.length() - 4);
             Message reply = messages.get(base + ":reply");
             if (reply == null || !reply.status.equals("done") || reply.text.isEmpty()) continue;
@@ -234,7 +261,16 @@ final class ChatHistory {
         return added;
     }
 
-    List<Message> main() { return select("main", null, false); }
+    void detachTasks() {
+        for (Message message : messages.values()) message.card = "";
+    }
+
+    List<Message> main() { return main("default"); }
+    List<Message> main(String conversation) {
+        List<Message> result = select("main", null, false);
+        result.removeIf(m -> !conversation.equals(m.conversation) || m.presentation != null && !m.presentation.inChat());
+        return result;
+    }
     List<Message> pending(String card) { return select("task", card, true); }
 
     private List<Message> select(String scope, String card, boolean unsynced) {
@@ -244,11 +280,19 @@ final class ChatHistory {
                     && (!unsynced || !message.synced)) {
                 Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
                         message.status, message.kind, message.at, message.synced);
+                copy.conversation = message.conversation;
                 copy.clientId = message.clientId; copy.attachments = message.attachments; result.add(copy);
+                copy.presentation = message.presentation;
             }
         }
-        result.sort(Comparator.comparingDouble((Message message) -> message.at)
-                .thenComparingInt(message -> message.role.equals("you") ? 0 : 1));
+        result.sort((a, b) -> {
+            if (a.presentation != null && a.presentation.supported && b.presentation != null && b.presentation.supported)
+                return Presentation.compare(a.presentation, b.presentation);
+            int at = Double.compare(a.at, b.at);
+            if (at != 0) return at;
+            int role = Integer.compare(a.role.equals("you") ? 0 : 1, b.role.equals("you") ? 0 : 1);
+            return role != 0 ? role : a.id.compareTo(b.id);
+        });
         return result;
     }
 
@@ -268,6 +312,8 @@ final class ChatHistory {
                 if (i > 0) out.append(','); out.append(message.attachments.get(i).json());
             }
             out.append(']');
+            out.append(",\"presentation\":").append(message.presentation == null ? "null" : message.presentation.json());
+            out.append(",\"conversation\":"); BuddyProtocol.quote(out, message.conversation);
             out.append(",\"client_id\":"); BuddyProtocol.quote(out, message.clientId);
             out.append(",\"at\":").append(message.at).append(",\"synced\":").append(message.synced).append('}');
         }
@@ -288,7 +334,9 @@ final class ChatHistory {
                     Json.string(item, "role"), Json.string(item, "text"), status, Json.string(item, "kind"),
                     Json.number(item, "at"), Json.flag(item, "synced"));
             if (!Json.string(item, "client_id").isEmpty()) message.clientId = Json.string(item, "client_id");
+            message.conversation = Json.string(item, "conversation").isEmpty() ? "default" : Json.string(item, "conversation");
             message.attachments = Attachment.parse(item);
+            message.presentation = Presentation.from(item.get("presentation"));
             history.put(message);
         }
         return history;

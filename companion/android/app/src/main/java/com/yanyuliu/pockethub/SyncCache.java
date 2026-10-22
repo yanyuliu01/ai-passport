@@ -20,8 +20,10 @@ final class SyncCache {
     /** A message not on any card yet: queued, being transcribed or streamed. */
     static final class Pending {
         final String id, task, scope, role, text, status;
+        String conversation = "default";
         final double at;
         List<Attachment> attachments = new ArrayList<>();
+        Presentation presentation;
         Pending(String id, String task, String scope, String role, String text, String status, double at) {
             this.id = id; this.task = task; this.scope = scope; this.role = role;
             this.text = text; this.status = status; this.at = at;
@@ -46,6 +48,7 @@ final class SyncCache {
     private final String conversation;
     private String epoch = "";
     private String cursor = "0";
+    private int presentationVersion;
     private final Map<String, Map<String, Object>> tasks = new HashMap<>();
     private final Map<String, Map<String, Object>> messages = new HashMap<>();
 
@@ -53,6 +56,7 @@ final class SyncCache {
 
     String cursor() { return cursor; }
     String epoch() { return epoch; }
+    void requirePresentation() { if (presentationVersion != 1) cursor = "0"; }
 
     Result apply(Map<String, Object> page) {
         String next = Json.string(page, "epoch");
@@ -62,6 +66,7 @@ final class SyncCache {
             tasks.clear(); messages.clear();
         }
         if (!next.isEmpty()) epoch = next;
+        presentationVersion = (int) Json.number(Json.object(page.get("presentation_policy")), "version");
         Set<String> touched = new LinkedHashSet<>();
         for (Object item : Json.list(page, "messages")) {
             Map<String, Object> message = Json.object(item);
@@ -70,6 +75,7 @@ final class SyncCache {
             Map<String, Object> known = messages.get(id);
             // Newer revisions win; an older or repeated one changes nothing.
             if (known != null && Json.number(known, "rev") > Json.number(message, "rev")) continue;
+            if (known != null && terminal(known) && !terminal(message)) continue;
             messages.put(id, message);
             String task = Json.string(message, "task");
             if (!task.isEmpty()) touched.add(task);
@@ -151,6 +157,11 @@ final class SyncCache {
         return status.isEmpty() || status.equals("final");
     }
 
+    private static boolean terminal(Map<String, Object> message) {
+        String status = Json.string(message, "status");
+        return status.equals("final") || status.equals("failed") || status.equals("cancelled");
+    }
+
     static String role(Map<String, Object> message) {
         Object author = message.get("author");
         String kind = author instanceof Map ? Json.string(Json.object(author), "kind") : "";
@@ -173,6 +184,7 @@ final class SyncCache {
         entry.put("author", by.equals("agent") ? Json.string(who, "name") : by.equals("owner") ? "you"
                 : by.equals("xiaoyou") ? "xiaoyou" : "");
         if (message.get("attachments") instanceof List) entry.put("attachments", message.get("attachments"));
+        if (message.get("presentation") instanceof Map) entry.put("presentation", message.get("presentation"));
         return entry;
     }
 
@@ -184,17 +196,19 @@ final class SyncCache {
         List<Pending> result = new ArrayList<>();
         for (Map<String, Object> message : messages.values()) {
             if (Json.string(message, "kind").equals("activity")) continue;
-            if (!conversation.equals(Json.string(message, "conversation"))) continue;
+            if (!conversation.equals("*") && !conversation.equals(Json.string(message, "conversation"))) continue;
             String task = Json.string(message, "task");
             if (final_(message) && !task.isEmpty() && tasks.containsKey(task)) continue;
             String status = Json.string(message, "status");
-            if (status.equals("failed") || status.equals("cancelled")) continue;
+            if ((status.equals("failed") || status.equals("cancelled")) && !message.containsKey("presentation")) continue;
             String text = Json.string(message, "text");
             if (text.isEmpty()) text = Json.string(message, "partial");
             String scope = Json.string(message, "scope");
             Pending pending = new Pending(Json.string(message, "id"), task,
                     scope.isEmpty() ? "main" : scope, role(message), text, status,
                     Json.number(message, "created_at"));
+            pending.conversation = Json.string(message, "conversation");
+            pending.presentation = Presentation.from(message.get("presentation"));
             pending.attachments = Attachment.parse(message); result.add(pending);
         }
         result.sort(java.util.Comparator.comparingDouble((Pending item) -> item.at));

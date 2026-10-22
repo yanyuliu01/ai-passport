@@ -1,0 +1,9 @@
+node_modules/
+dist-main/
+dist-ui/
+runtime-dist/
+runtime-dist-win/
+release/
+.runtime-venv/
+.build-cache/
+*.tsbuildinfo

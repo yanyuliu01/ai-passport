@@ -134,6 +134,18 @@ class Shares:
                 text = self._read(path)
                 if text is not None:
                     items.append(("history:" + path.name, {"kind": "history", "path": path.name, "text": text}))
+        for item in self._mesh._xiaoyou.cards.conversations.list():
+            if item.get("kind") == "side" and item.get("origin") == self._mesh.runtime_id:
+                items.append(("conversation:" + item["id"], {"kind": "conversation", "text": json.dumps(item, ensure_ascii=False)}))
+        for key, item in self._mesh._xiaoyou.cards.directory.snapshot().items():
+            if item.get('origin') == self._mesh.runtime_id:
+                items.append(('directory:' + key, {'kind': 'directory', 'text': json.dumps(item, ensure_ascii=False)}))
+        for key, item in self._mesh._xiaoyou.cards.directory.source_snapshot().items():
+            if item.get('authority') == self._mesh.runtime_id:
+                items.append(('directory-source:' + key, {'kind': 'directory_source', 'text': json.dumps(item, ensure_ascii=False)}))
+        for key, item in self._mesh._xiaoyou.cards.directory.generated_snapshot().items():
+            if item.get('origin') == self._mesh.runtime_id:
+                items.append(('directory-generated:' + key, {'kind':'directory_generated', 'text':json.dumps({'uid':key,'metadata':item},ensure_ascii=False)}))
         sent = 0
         for key, data in items:
             sha = "" if data.get("deleted") else _sha(data["text"])
@@ -162,10 +174,37 @@ class Shares:
     def apply(self, origin: str, origin_name: str, data: Dict[str, Any]) -> None:
         key, kind = data.get("key"), data.get("kind")
         at = data.get("at")
-        if not isinstance(key, str) or not isinstance(at, (int, float)) or kind not in ("env", "folder", "history"):
+        if not isinstance(key, str) or not isinstance(at, (int, float)) or kind not in ("env", "folder", "history", "conversation", "directory", "directory_source", "directory_generated"):
             return
         deleted = data.get("deleted") is True
         text = data.get("text") if isinstance(data.get("text"), str) else ""
+        if kind == "conversation":
+            try:
+                item = json.loads(text)
+                if isinstance(item, dict):
+                    self._mesh._xiaoyou.record.conversation_replica(origin, item)
+            except (ValueError, OSError):
+                pass
+            return
+        if kind == 'directory':
+            try:
+                self._mesh._xiaoyou.record.directory_replica(origin, json.loads(text))
+            except (ValueError, OSError):
+                pass
+            return
+        if kind == 'directory_generated':
+            try:
+                item = json.loads(text)
+                self._mesh._xiaoyou.record.directory_generated_replica(origin, item.get('uid'), item.get('metadata'))
+            except (ValueError, OSError, TypeError, AttributeError):
+                pass
+            return
+        if kind == 'directory_source':
+            try:
+                self._mesh._xiaoyou.record.directory_sources([json.loads(text)], origin)
+            except (ValueError, OSError, TypeError, KeyError):
+                pass
+            return
         if kind == "history":
             # 别的电脑的会话记录：按那台各存一份，不和这台的混。
             relative = _safe(str(data.get("path") or ""))

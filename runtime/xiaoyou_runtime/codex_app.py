@@ -314,6 +314,8 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
     model, effort = tier
     if model:
         settings["model"] = model
+    if job.system:
+        settings["developerInstructions"] = job.system
     if job.session_id:
         opened = server.request("thread/resume", dict(settings, threadId=job.session_id))
     else:
@@ -330,7 +332,14 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
         raise AgentError("Codex 没有给出线程编号。可以先把这个代理的 mode 改成 exec")
     control.session(thread_id)
 
-    text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
+    if not job.session_id and job.title:
+        # Supported metadata API; never rename an existing owner session or edit a DB.
+        try:
+            named = server.request("thread/name/set", {"threadId": thread_id, "name": job.title})
+            server.expect(named, time.monotonic() + HANDSHAKE_SECONDS, "thread/name/set")
+        except AgentError:
+            pass  # Older servers keep the real owner's input as their title fallback.
+    text = job.text
     start: Dict[str, Any] = {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
     start["input"].extend({"type": "localImage", "path": str(path)} for path in job.images)
     if job.schema:
@@ -346,6 +355,7 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
     if not isinstance(turn_id, str):
         raise AgentError("Codex 没有给出这一轮的编号。可以先把这个代理的 mode 改成 exec")
     server._active_turn = (thread_id, turn_id)
+    control.native_turn(turn_id, "started")
 
     def steer(more: str) -> bool:
         answer = server.ask_from_elsewhere("turn/steer", {
@@ -450,6 +460,8 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
             if params.get("turnId") in (None, turn_id):
                 control.spend(codex_tokens(usage.get("last")))
         if method == "turn/completed":
+            if (params.get("turn") or {}).get("id") in (None, turn_id):
+                control.native_turn(turn_id, "ended")
             done = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             if done.get("id") not in (None, turn_id):
                 continue

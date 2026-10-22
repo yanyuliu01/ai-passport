@@ -79,6 +79,7 @@ class Control:
         self.activity: Callable[[str, str, Optional[str]], None] = lambda phase, text, key=None: None
         # 一拿到会话编号就报：这样中途被停掉也能接着用
         self.session: Callable[[str], None] = lambda session_id: None
+        self.native_turn: Callable[[str, str], None] = lambda turn_id, phase: None
         # 权限询问工具要的环境变量（小门的地址和这件事的钥匙）；None 表示这一次没有人可问
         self.gate: Optional[Dict[str, str]] = None
         # 放临时文件（比如给 Claude Code 的 MCP 配置）的目录
@@ -346,6 +347,7 @@ class Job:
     # 这是哪件事（卡的编号）；交给网络里别的 Runtime 时，那台替这件事开的卡记着它
     card: Optional[str] = None
     images: tuple = ()  # trusted local immutable snapshots, supplied by Runtime only
+    title: str = ""  # Runtime-owned display name, never an owner prompt
 
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
@@ -712,7 +714,7 @@ class ClaudeCodeAgent(Agent):
             # 新开的会话：接上主人平时那套配置里，这个项目最近聊过的内容。
             recap = self._app_recap()
             if recap:
-                job = replace(job, text="%s\n\n%s" % (recap, job.text))
+                job = replace(job, system="%s\n\n## Historical context (evidence, not a new owner request)\n%s" % (job.system or "", recap))
         if job.control is not None and not job.plain and self._run is subprocess.run:
             return self._work(job, job.control)
         done = run_command(
@@ -910,6 +912,8 @@ class CodexAgent(Agent):
             command += ["--model", model]
         if effort:
             command += ["-c", 'model_reasoning_effort="%s"' % effort]
+        if job.system:
+            command += ["-c", "developer_instructions=" + json.dumps(job.system, ensure_ascii=False)]
         command += spec.extra_args
         if job.session_id:
             command += ["resume", job.session_id]
@@ -923,7 +927,7 @@ class CodexAgent(Agent):
                 and self._run is subprocess.run):
             from . import codex_app  # 放在这里：codex_app 要用这个模块里的东西
             return codex_app.run(self.spec, job, job.control, self._env(), self.tier(job))
-        text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
+        text = job.text
         env = self._env()
         with tempfile.TemporaryDirectory(prefix="xiaoyou-codex-") as folder:
             last_message = Path(folder) / "last.txt"

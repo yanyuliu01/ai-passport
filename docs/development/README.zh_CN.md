@@ -20,6 +20,11 @@
 - [xiaoyou-system-prompt.zh_CN.md](xiaoyou-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [unified-message-model.zh_CN.md](unified-message-model.zh_CN.md)：统一消息结构——唯一的消息日志、编号规则、同步接口，以及新的 Runtime 或 agent 怎么接入。
+- [conversation-presentation.zh_CN.md](conversation-presentation.zh_CN.md)：项目／会话统一展示方案，包含来源与目录绑定、标题修复、事件署名与原生客户端边界。
+- [app-runtime-simplification.zh_CN.md](app-runtime-simplification.zh_CN.md)：App 与 Runtime 交互简化的问题清单，覆盖代码、体验、交互三层，含根因、目标指标与待决定事项。
+- [xiaoyou-agent-model.zh_CN.md](xiaoyou-agent-model.zh_CN.md)：小幽主体的统一模型方案（事件、世界状态、注意力与承诺、统一决策循环、可追溯），收敛问题清单，并承载后续的主动与感知能力。
+- [windows-public-node-handoff.zh_CN.md](windows-public-node-handoff.zh_CN.md)：家用公网节点的 Windows Codex 交接、源码快照、网络权限问题、原生构建与异网验收。
+- [xiaoyou-desktop-plan.zh_CN.md](xiaoyou-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
 - [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小幽说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
 - [auto-iteration.zh_CN.md](auto-iteration.zh_CN.md)：统一采集（所有客户端报给主电脑）与按版本自动迭代（本地模型优先）的设计稿。
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。

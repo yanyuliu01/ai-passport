@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Bundle only Runtime code/dependencies, never a real config, state or CLI home."""
+
+import json
+import hashlib
+import platform
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DESKTOP = Path(__file__).resolve().parents[1]
+ROOT = DESKTOP.parents[1]
+
+
+def main():
+    import PyInstaller  # Fail before creating output if the build dependency is absent.
+    import PIL
+
+    with tempfile.TemporaryDirectory(prefix="xiaoyou-runtime-build-") as folder:
+        subprocess.run([
+            sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
+            "--name", "xiaoyou-runtime", "--paths", str(ROOT / "runtime"),
+            "--collect-submodules", "xiaoyou_runtime", "--collect-submodules", "PIL",
+            "--distpath", str(DESKTOP / "runtime-dist"), "--workpath", folder + "/work",
+            "--specpath", folder, str(DESKTOP / "tools/runtime_entry.py"),
+        ], check=True)
+    sys.path.insert(0, str(ROOT / "runtime"))
+    from xiaoyou_runtime import __version__
+    manifest = {"platform": sys.platform, "architecture": platform.machine(),
+                "runtime_version": __version__, "python": platform.python_version(),
+                "pyinstaller": PyInstaller.__version__, "pillow": PIL.__version__}
+    digest = hashlib.sha256()
+    package = ROOT / "runtime/xiaoyou_runtime"
+    for path in sorted(package.rglob("*.py")):
+        digest.update(path.relative_to(package).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    manifest["source_sha256"] = digest.hexdigest()
+    (DESKTOP / "runtime-dist/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps(manifest))
+
+
+if __name__ == "__main__":
+    main()

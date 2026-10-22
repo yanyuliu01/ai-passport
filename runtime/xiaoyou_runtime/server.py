@@ -387,6 +387,33 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "app", "file"]:
                 self._app_file(query)
                 return
+            if len(parts) == 4 and parts[:2] == ["v1", "tasks"] and parts[3] == "activity":
+                try:
+                    self._send(200, service.task_audit(parts[2], query.get("before", [None])[0]))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
+            if parts == ["v1", "conversations"]:
+                self._send(200, service.conversations())
+                return
+            if parts == ["v1", "directory"]:
+                try:
+                    self._send(200, service.directory_page(query.get('cursor', [None])[0], query.get('q', [''])[0]))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
+            if len(parts) == 4 and parts[:2] == ['v1', 'directory'] and parts[3] == 'history':
+                try:
+                    self._send(200, service.directory_history(parts[2], query.get('cursor', [None])[0]))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
+            if len(parts) == 4 and parts[:3] == ['v1', 'directory', 'operations']:
+                try:
+                    self._send(200, service.directory_operation(parts[3], query.get('authority', [''])[0]))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
             if parts == ["v1", "agents"]:
                 self._send(200, {"default": config.default_agent, "agents": service.agents()})
                 return
@@ -438,7 +465,8 @@ def make_server(config: Config, service: Service,
                 try:
                     body = service.sync(query.get("conversation", ["default"])[0], after,
                                         query.get("epoch", [None])[0], asked[0], seen,
-                                        query.get("states", [""])[0].split(","))
+                                        query.get("states", [""])[0].split(","),
+                                        all_conversations=query.get("all_conversations", [""])[0] == "1")
                 except RequestError as error:
                     self._fail(400, str(error))
                     return
@@ -505,6 +533,7 @@ def make_server(config: Config, service: Service,
                     query.get("card", [None])[0],
                     query.get("pin", [""])[0] in ("1", "true"),
                     query.get("effort", [None])[0], query.get("model", [None])[0],
+                    reply_scope=query.get("reply_scope", [None])[0],
                 )
             except ConflictError as error:
                 self._fail(409, str(error))
@@ -606,6 +635,21 @@ def make_server(config: Config, service: Service,
                     except (ValueError, TypeError) as error:
                         self._fail(400, str(error))
                     return
+                if parts == ["v1", "conversations"]:
+                    self._send(200, service.conversation_create(body))
+                    return
+                if len(parts) == 4 and parts[:2] == ['v1', 'directory'] and parts[3] == 'open':
+                    self._send(200, service.directory_open(parts[2]))
+                    return
+                if len(parts) == 4 and parts[:2] == ['v1', 'directory'] and parts[3] == 'metadata':
+                    self._send(200, service.directory_metadata(parts[2]))
+                    return
+                if len(parts) == 3 and parts[:2] == ["v1", "directory"]:
+                    self._send(200, service.directory_edit(parts[2], body))
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "rename":
+                    self._send(200, service.conversation_rename(parts[2], body.get("title")))
+                    return
                 if parts == ["v1", "messages"]:
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")
@@ -614,7 +658,7 @@ def make_server(config: Config, service: Service,
                         body.get("client_id"), body.get("agent"), body.get("hop", 0),
                         body.get("card"), body.get("pin") is True,
                         body.get("effort"), body.get("model"),
-                        image_ids=body.get("image_ids"),
+                        image_ids=body.get("image_ids"), reply_scope=body.get("reply_scope"),
                     )
                     self._send(202, message)
                     return

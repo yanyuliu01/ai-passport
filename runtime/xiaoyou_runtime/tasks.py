@@ -60,6 +60,8 @@ class Task:
     # 但会话不归 Runtime 管，不记进 store：电脑那边照常观察它，主人也能回电脑上接着聊
     cwd: Optional[str] = None
     borrowed_session: Optional[str] = None
+    title: str = ""
+    relaying_supplement: bool = False
     artifact_error: str = ""
     full_reply_saved: bool = False
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -108,7 +110,7 @@ class Tasks:
         return True
 
     def amend(self, card: str, mode: str, text: str, effort: Optional[str] = None,
-              model: Optional[str] = None) -> Optional[str]:
+              model: Optional[str] = None, before_queue: Optional[Callable[[], None]] = None) -> Optional[str]:
         """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；排着的补充已经
         有 MAX_PENDING 条、这条没记上时返回 full；没在做返回 None。
 
@@ -129,6 +131,8 @@ class Tasks:
                 if len(task.after) >= MAX_PENDING:
                     # 排着的补充满了：明说没记上，不能回“after”让人以为记下了。
                     return "full"
+                if before_queue is not None:
+                    before_queue()
                 task.after.append(text)
                 return "after"
             control = task.control
@@ -213,7 +217,7 @@ class Tasks:
                     ) % task.artifact_dir
                     system = (system or "") + instruction
                 outcome = task.agent.run(Job(
-                    text=text, session_id=session, conversation=task.conversation,
+                    text=text, session_id=session, conversation=task.conversation, title=task.title,
                     system=system, schema=task.schema, hop=task.hop, control=control,
                     effort=task.effort, model=task.model, cwd=task.cwd, card=task.card, images=task.images,
                 ))
@@ -238,6 +242,7 @@ class Tasks:
                     continue
                 if error is None and task.after:
                     text = after_note(task.after.popleft())
+                    task.relaying_supplement = True
                     continue
                 # 和“还在不在做”的判断在同一把锁里：之后再来的补充会另起一轮，不会丢。
                 self._active.pop(task.card, None)

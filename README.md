@@ -170,6 +170,8 @@ Engineering and contribution guides define the rules; archives and references pr
 | [Xiaoyou harness review](docs/assets/xiaoyou-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
 | [Development](docs/development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
 | [App / Runtime / firmware reliability](docs/development/cross-stack-reliability.md) | Mandatory regression, 3-second first-response, connection recovery, and multi-end consistency contracts |
+| [Xiaoyou desktop client plan](docs/development/xiaoyou-desktop-plan.md) | Mac/Windows owner-test delivery target before Friday, shared conversations, encrypted self-hosted transport, dependencies and acceptance |
+| [Xiaoyou desktop implementation](companion/desktop/README.md) | Current client increment, native builds, encrypted relay, test commands and remaining acceptance |
 | [Agent gateway proposal](docs/development/agent-gateway.md) | App-controlled CLI installation, capability adapters, audit, lifecycle and rollback design |
 | [Auto-iteration pipeline](docs/development/auto-iteration.md) | Plugin-based loop that finds app usage problems, patches them with a local model, gates, publishes and rolls back |
 | [Product principles](docs/product-principles.md) | Draft v0.1: what Xiaoyou is, what it does not do, and the numbered principles version plans must check against |
