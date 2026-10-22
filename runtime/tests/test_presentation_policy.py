@@ -13,7 +13,7 @@ FIXTURE = Path(__file__).resolve().parents[2] / 'tests/fixtures/presentation-v1.
 
 class PolicyTests(unittest.TestCase):
     def test_shared_golden_contract_and_no_input_mutation(self):
-        for case in json.loads(FIXTURE.read_text())['cases']:
+        for case in json.loads(FIXTURE.read_text(encoding='utf-8'))['cases']:
             with self.subTest(case=case['name']):
                 before = copy.deepcopy(case['input'])
                 actual = presentation.message(case['input'])
@@ -23,7 +23,7 @@ class PolicyTests(unittest.TestCase):
                 self.assertEqual(case['rendered'], [''.join(r['text'] for r in b['runs']) for b in actual['presentation']['blocks'] if b['complete']])
 
     def test_replica_has_same_identity_order_and_input_revision(self):
-        raw = json.loads(FIXTURE.read_text())['cases'][0]['input']
+        raw = json.loads(FIXTURE.read_text(encoding='utf-8'))['cases'][0]['input']
         peer = dict(raw, id='a' * 12 + '.' + raw['id'], reply_to='a' * 12 + '.' + raw['reply_to'],
                     mesh_origin='a' * 32, rev=900, seq=901, task='c999')
         self.assertEqual(presentation.message(raw)['presentation'], presentation.message(peer)['presentation'])

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -120,7 +121,7 @@ class DesktopTests(unittest.TestCase):
         self.append(path, [self.message("user", "original request"),
                            self.cevent("task_started")])
         db_path = self.root / ".codex/state_5.sqlite"
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:
             db.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, title TEXT)")
             db.execute("INSERT INTO threads VALUES (?, ?, ?)",
                        ("s-1", "Sidebar task name with more than twenty-four characters", "old prompt"))
@@ -131,7 +132,7 @@ class DesktopTests(unittest.TestCase):
         self.assertNotEqual(card["title"], "old prompt")
         original_stat = path.stat()
         before = self.cards.changed("phone", include_desktop=True)["seq"]
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:
             db.execute("UPDATE threads SET name=? WHERE id=?", ("改名后的任务", "s-1"))
         self.sync.poll()
         changed = self.cards.changed("phone", before, include_desktop=True)
@@ -142,7 +143,7 @@ class DesktopTests(unittest.TestCase):
         self.append(path, [self.message("user", "a later follow-up")])
         self.sync.poll()
         self.assertEqual(self.cards.get(card["id"])["title"], "改名后的任务")
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:
             db.execute("UPDATE threads SET name=NULL WHERE id=?", ("s-1",))
         self.sync.poll()
         fallback = self.cards.get(card["id"])
