@@ -421,11 +421,14 @@ startup second:
 ## 8. Lessons from Raft and DS-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.
+**Correction (2026-10-24):** the "Raft" the owner meant is [Raft](https://raft.build/), a platform where people and AI
+agents work as one team, not the etcd-io/raft consensus library. 8.1 borrows from etcd-io/raft and stays
+valid for what it covers, keeping data consistent across computers; what we take from raft.build is in 8.4.
 This section has been corrected after [Codex's review](runtime-refactor-review.md): the conditions the
 borrowing had left out are added, and statements such as "the epoch plays the role of the term" and
 "a timeout allows a safe handover" are removed.
 
-### 8.1 Raft (following the design of etcd-io/raft)
+### 8.1 etcd-io/raft (data consistency across computers)
 
 Not using Raft's leader election and quorum is an optional architectural decision: the first version
 relies on "single writer per origin + an explicit responder" for safety and does not promise
@@ -480,3 +483,20 @@ revoked offline device reconnecting; an unrelated offline node not blocking the 
 conversation's catch-up; interleaved snapshot and deltas; an approval still pending while its
 notification is read; switching between LAN and remote routes. Each reports real evidence; anything
 not implemented or lacking a device or environment is marked NOT RUN.
+
+### 8.4 Raft (raft.build): coordination and capabilities
+
+Raft's agents are visible teammates in shared channels who hand work to each other. We keep one voice
+to the owner (P1); only what strengthens Xiaoyou's own coordination is taken now (decided by the owner
+on 10-24). Collaboration between helpers and multi-agent rooms are deferred until there is a need;
+today the helpers are Claude Code and Codex.
+
+| Raft | Taken now | Step |
+| --- | --- | --- |
+| Managed MCP: registered once, connections kept by Raft and never seen by agents, per-agent grants, one injected proxy, versioned calls | Yes: a capability library per computer, see [helper capabilities](helper-capabilities.md) | Capabilities phase 1-3 |
+| Skills stay with the runtime and are discovered and shown | Yes, plus optional per-helper skill directories | Capabilities phase 1, 3 |
+| A task has one owner; "assign" and "I started" are separate; writes carry an expected revision | Xiaoyou assigns; a task shows as running only once the helper has actually started; task writes keep rejecting stale revisions | R6 (`Executor`) |
+| A durable inbox; wake-ups carry no content; a batch is acknowledged by the next pull; repeats are expected | Wake rules read from the event log; a wake is idempotent and never carries the decision itself | R6 (wake rules) |
+| The runtime reports `online / thinking / working / error / offline`; the newest report wins | Helper status is reported, not inferred, and ordered by the time it happened | R6 |
+| An agent cannot create agents or widen its own permissions; it prepares a card for a human | Xiaoyou may propose adding a helper or a capability; the owner confirms | Capabilities phase 3 |
+| Agents talk to each other, review each other, split work in parallel in shared rooms | Deferred | — |
