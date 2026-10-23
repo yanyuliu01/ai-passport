@@ -92,6 +92,22 @@ World.subscribe(after_seq) -> event stream               # used by the agent loo
 
 Mesh preserves original identity and revision; each receiver assigns a separate local `seq` for replay. Forwarding does not mint a new identity. Peer commands have their own stable identity and target authority; replicas do not execute them. Sender-provided `actor` and `trust` are not authorization: adapters derive effective privileges from the authenticated source. Persist dedupe records across restarts and log compaction for the supported retry window; expired identities require explicit reconciliation, never silent execution as a new request.
 
+**Three generations and positions that must not be mixed** (review correction, see
+[runtime-refactor-review](runtime-refactor-review.md) section 3):
+
+- `log_epoch` (the existing protocol field `epoch`): the generation of one origin's log history,
+  used only to decide whether a cursor can continue.
+- `owner_generation`: the responder grant generation of one conversation, managed by the
+  coordination authority and used only to reject stale executors (see 3.1).
+- `accepted_seq` / `applied_seq`: the durable acceptance position and the projection-applied
+  position within one origin and one log generation. Local durable acceptance is not Raft's
+  majority commit.
+
+Progress across origins is tracked per `(origin, log_epoch, seq)`; the sequence numbers of two
+computers are never compared to decide which is newer. An ordinary restart does not reset durable
+identities or generations. The names separate concepts; existing compatible fields need not be
+renamed now.
+
 ### 1.3 Rules per source
 
 - **Owner messages:** `accept` first, then queue into the conversation; the receipt only says
@@ -159,7 +175,7 @@ GET /v1/sync?cursor=<cursor>&wait=<seconds>
   -> { epoch, cursor, more, snapshot?, events[] }
 ```
 
-- **An empty or invalid cursor gets a snapshot, not a replay of history.** The snapshot holds the
+- **A gap is filled from retained deltas first; only an invalid cursor or missing deltas get a snapshot, and an empty cursor gets a snapshot directly, never a replay of history.** The snapshot holds the
   current state only: the latest N messages per conversation, all unfinished tasks, pending
   approvals, quota and Xiaoyou's state; deltas follow from the snapshot boundary. The target is to show the active conversation within
   1 second of authenticated transport readiness, subject to measurement, without catching up
@@ -174,7 +190,7 @@ GET /v1/sync?cursor=<cursor>&wait=<seconds>
 - **Long polling:** `wait` returns as soon as anything changes; switching to SSE or WebSocket later
   only changes the transport, not the event format.
 
-**Snapshot boundaries and bounds:** bind every cursor and callback to Runtime identity, epoch, authorized scope and connection generation. Freeze a snapshot at sequence S; paginate it with a stable snapshot token, retain deltas after S, and switch to live delivery only after the scoped snapshot is applied. Expired tokens or missing retained deltas explicitly restart reconciliation. Ignore callbacks from obsolete connections; tombstones prevent deleted items from returning.
+**Snapshot boundaries and bounds:** bind every cursor and callback to Runtime identity, epoch, authorized scope and connection generation. Freeze a snapshot at sequence S; paginate it with a stable snapshot token, retain deltas after S, and switch to live delivery only after the scoped snapshot is applied. Deltas after S are kept only within a bounded retention window; a slow client past the window takes a new snapshot instead of the log being kept forever for every client. Expired tokens or missing retained deltas explicitly restart reconciliation. Ignore callbacks from obsolete connections; tombstones prevent deleted items from returning.
 
 The 50-message limit is per conversation, not an unbounded all-conversation response. Load the active conversation, relevant tasks and pending approvals first; page the remaining authorized state with visible loading status. Use item counts plus explicit byte/work limits and continuation tokens. Oversized content references remain fetchable; excerpts cannot silently replace authoritative text. On scope switches, reconcile that scope before treating it as current. Test large histories, snapshot/delta races, source switches, failed local commits and expired cursors. The 1-second target concerns current visible state; broader recovery and propagation must also meet the shared 3-second contract.
 
@@ -233,6 +249,24 @@ Wake rules (subscribe to World events; deterministic, cheap)
   conversations never block each other.
 - **Which computer does the work:** chosen at `dispatch` from where the helper is, folder
   reachability, quota and who is online; a computer the owner names wins.
+- **Conversation responder (first version):** each conversation is bound to one durable, explicit
+  responder; the first binding goes through a designated authority rather than each node guessing.
+  A network timeout only shows unreachability and does not prove the responder stopped, so the
+  responder is **never changed automatically on timeout**. While the responder is unreachable the
+  request keeps its original id and shows as queued / responder unreachable, distinguishing local
+  pending from authoritatively accepted, and never claims to have started; old tasks are not moved,
+  they are queried by operation id and marked unknown if they cannot be reconciled. A manual
+  "take over" must meet the same isolation conditions. Automatic takeover waits until the
+  coordination authority, granting, write isolation, invalidation of model results, isolation of
+  external tools, coordinator failure and clock rules are written down and pass fault tests (review
+  section 2); R4 implements granting and write isolation and R6 connects the model and execution
+  paths, so switching never comes before rejection.
+- **Deterministic core:** state reduction is "previous state + saved events -> new state / pending
+  intents". Clocks, random identities, model replies, network results and tool results are explicit
+  inputs, saved when recovery needs them. Replay **never calls a model, runs a tool, sends a
+  notification or regenerates a decision**; an outer layer drives model requests and tool runs, and
+  their results return to the state machine as events. The projection and `applied_seq` are saved
+  together (review section 4).
 - **Self-inspection:** version, deployment, online state and running tasks are read from `World`;
   no helper is dispatched to find them (M1, M2).
 
@@ -347,63 +381,62 @@ startup second:
 ## 8. Lessons from Raft and DS-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.
-The tables list only what lands in this design, and what we deliberately do not take.
+This section has been corrected after [Codex's review](runtime-refactor-review.md): the conditions the
+borrowing had left out are added, and statements such as "the epoch plays the role of the term" and
+"a timeout allows a safe handover" are removed.
 
 ### 8.1 Raft (following the design of etcd-io/raft)
 
-Raft solves "several machines agree on one log". Xiaoyou needs no leader election or quorum: each
-record already has a single writer, its origin. What is worth learning is how cleanly it handles
-**the parts that are hard to communicate**.
+Not using Raft's leader election and quorum is an optional architectural decision: the first version
+relies on "single writer per origin + an explicit responder" for safety and does not promise
+automatic availability when a responder is lost. This choice is **not** justified by "a home has only
+two or three computers, so a quorum means nothing"; single-writer safety rests on the generations of
+section 1.2 and the responder rules of 3.1.
 
 | What Raft does | How we use it | Step |
 | --- | --- | --- |
-| The core algorithm is a deterministic state machine; the application owns network and disk. Inputs are messages or clock ticks; outputs are "entries to persist + messages to send + new state" (the Ready loop) | `Loop.step` and `Intake` become pure logic as well: given the current state and one event, they return events to persist, actions to run and replies to deliver; an outer layer does the I/O. Time is injected as an input. Differential tests can then replay in a fixed order instead of depending on thread timing (the root of the unstable concurrent R2 runs) | R2 wrap-up, R3, R6 |
-| Persist before sending; committed and applied are tracked separately | Already "store before acting". Add two explicit cursors: `accepted_seq` (durably accepted) and `applied_seq` (advanced into state); recovery replays from after `applied_seq` | R3 |
-| Replication carries the previous entry's index/term as a consistency check; a mismatch backs off or switches to a snapshot (InstallSnapshot) | Sync between computers, and between clients and the Runtime, carries "previous origin sequence + epoch" on every batch; a mismatch is a gap and gets a snapshot instead of a replay from zero. The epoch plays the role of the term | R4, mesh |
-| Snapshots + log compaction; a node far behind receives a snapshot | Same as section 2, snapshot + delta; the snapshot is pinned at sequence S and deltas after S are kept until the client catches up | R4 |
-| Flow control: a per-message size limit and a cap on in-flight messages; a lagging follower is probed first and pipelined once it catches up | Sync pages have both a count and a size limit; a lagging client is served in snapshot mode and switches to delta mode once caught up; one in-flight long poll per connection | R4 |
-| A proposal is not guaranteed to commit; the client retries with the same request | The decided dedupe by request id; client retries must carry the original id | R2 (exists) |
-| Read-only requests first confirm that the node is still authoritative (ReadIndex / lease) | When Xiaoyou answers about current state she reads the record's origin; a replica is labelled with its freshness and stale data is confirmed with the origin (M1) | R3, R6 |
+| The core is a deterministic state machine; the application owns network and disk. Inputs are messages or clock ticks; outputs are "what to persist + what to send + new state" (the Ready loop) | State reduction is "previous state + saved events -> new state / pending intents". Clocks, random identities, model replies, network and tool results are explicit, saved inputs. Replay never calls a model, runs a tool or sends a notification (see 3.1) | R3, R6 |
+| Persist before sending; committed and applied are separate | `accepted_seq` (local durable acceptance) and `applied_seq` (projection applied) are tracked separately; the projection and `applied_seq` are saved together so a restart applies from the right place. Local durable acceptance is not a majority commit | R3 |
+| Replication carries the previous position as a consistency check; a mismatch backs off or switches to a snapshot | Every sync batch carries the previous `(origin, log_epoch, seq)`; a gap is **first filled from retained deltas**, and only an invalid cursor or missing deltas get a snapshot. `log_epoch` only marks the log history generation; it is **not** the term and is never used to reject stale executors | R4, mesh |
+| Snapshots + log compaction | A snapshot is pinned at S; deltas after S are kept within a **bounded retention window**, and a slow client past it takes a new snapshot instead of the log being kept forever | R3.2, R4 |
+| Flow control: size and in-flight limits; probe a lagging follower, pipeline once caught up | Pages limit both count and size; a lagging client is served in snapshot mode and switches to deltas once caught up; one in-flight long poll per connection | R4 |
+| A proposal is not guaranteed to commit; the client retries with the same request | The decided dedupe by request identity; retries carry the original id | R2 (exists) |
+| Read-only requests confirm authority before answering (ReadIndex / lease) | Answers about current state read the origin's latest state; a replica is labelled with its freshness and stale data is confirmed with the origin (M1) | R3, R6 |
 
-**Not taken:** leader election, quorum, membership changes, linearizable reads and writes. A home has
-two or three computers, so a quorum means nothing, and chat does not need linearizability; a single
-writer per origin is enough.
+**Not taken:** leader election, quorum, joint-consensus membership changes, linearizable reads and
+writes.
 
 ### 8.2 DS-Bot-App (multi-end communication)
 
-It is "one host at the centre, with phone and desktop clients connecting to it", which matches our
-"each record is owned by its origin, the phone holds no authoritative state". What is worth learning
-is how effortless yet conservative it makes **pairing, identity and disconnection**.
-
-| What DS-Bot-App does | How we use it | Step |
+| What DS-Bot-App does | How we use it (with review corrections) | Step |
 | --- | --- | --- |
-| QR pairing: the code carries the host's public-key fingerprint as the trust anchor; self-signed certificate with fingerprint pinning, TLS verification never disabled, no plaintext fallback; the host approves once and later reconnects need no approval | Matches the existing encrypted relay; extend it to every route: every route checks the same identity fingerprint, and plaintext direct connections go away | R4 / automatic connection |
-| A changed host identity requires re-pairing and a new key is never accepted silently; certificate renewal keeps the private key, so renewal needs no re-pairing; a corrupted private key makes the host refuse to start rather than quietly generate a new identity | Adopt as rules: a changed Runtime identity means "pair again" (one of the three prompts); renewal never bothers the user; a corrupted identity file is an error, never an automatic new identity | R4 |
-| The composer shows "waiting for an answer", "host running" and "network connection" as separate states | Matches our vocabulary: connection state and what Xiaoyou is doing are shown separately, never one "online" flag | R5, UI |
-| Notifications: the host keeps the latest 500 notification records and the phone sees the latest 100; read state is per device and stored on the host; the background link starts from the current notification cursor, never replays old notifications, and a backlog shows only the latest 3; tapping a notification first checks the host identity | Notifications get their own cursor, separate from the sync cursor; read state lives in the Runtime (fixes S2); old notifications are not replayed after reconnecting; opening one first checks which Runtime it came from | R4, R5 (delivery rules) |
-| Android background delivery uses a foreground service polling about every 10 seconds and backing off to 60 seconds without network; cloud push is optional | Background notifications do not depend on third-party push; backoff is bounded | R4 |
-| A lost receipt means refreshing state, never assuming it did not run; requests carry device-scoped ids; after a disconnect the client queries the original task and never automatically redoes a non-repeatable operation | Matches `operation_id` / `unknown` in section 1.5; the App's offline queue resends with the original id and queries first when a result is unknown | R2, R3 |
-| After a session switches segments, scheduled tasks stay bound to the original session and reminders are forwarded to the current segment, without copying or rebuilding the task | Commitments and watches stay bound to the conversation that created them; when due they are delivered where the owner currently is, without copying the commitment | R6 |
-| Safe by default: the phone entry is off by default, moving to a new host requires re-authorization, and plugin sources are pinned to a commit with SHA-256 | When preinstalling dsh and pi (decided), pin versions and verify them; a new computer joining the mesh is approved on an existing device | Preinstall plan |
+| QR pairing: the code carries the host's public-key fingerprint; self-signed certificate with fingerprint pinning, TLS verification never disabled, no plaintext fallback; the host approves once and later reconnects are automatic | Every route verifies **the same host identity**, with the verification method suited to each transport; the host identity and route certificates are distinct | R4 |
+| A changed host identity requires re-pairing; renewal keeps the private key; a corrupted key makes the host refuse to start | A changed host identity means re-pairing; **certificate renewal or a changed tunnel entry is not a new host identity** and does not bother the user; a corrupted identity file is an error, never an automatic new identity | R4 |
+| "Waiting for an answer", "host running" and "network connection" are shown separately | Connection state and what Xiaoyou is doing are shown separately | R5, UI |
+| Notifications: the host keeps the latest 500 and the phone sees 100; read state per device on the host; old notifications are not replayed after reconnecting | Notifications have their own cursor; read state lives in the Runtime (S2); old notifications are not shown again, but **approvals, failures and to-dos still pending stay in the status view and notification centre — read is not handled**; opening one first checks which Runtime it came from | R4, R5 |
+| Android background delivery polls from a foreground service with bounded backoff | Bounded backoff is fine, but the system does not guarantee background execution; **background notification delay never counts as foreground sync or first-response latency** | R4 |
+| A lost receipt means refreshing state; after a disconnect the client queries the original task and never redoes a non-repeatable operation | As in section 1.5 | R2, R3 |
+| After a session switches segments, scheduled tasks stay bound to it and reminders go to the current segment | See 8.3 item 5 | R6 |
+| Safe by default; install sources pinned to a commit with SHA-256 | See 8.3 item 6 | Preinstall plan |
 
-**Not taken:** asking the user to switch off and re-pair when an address changes (our mesh distributes
-routes automatically); depending on third-party cloud push; having no relay, so that nothing works
-when the host computer is off (we have the encrypted relay and several computers).
+**Not taken:** asking the user to re-pair when an address changes; depending on third-party cloud push;
+having no relay, so that nothing works when the host is off.
 
-### 8.3 Additions: six gaps the original design did not cover
+### 8.3 Additions the original design did not cover (with review corrections)
 
-The two tables above mostly confirm the original design. The six items below are real gaps, in
-order of importance.
+| # | Content | Step |
+| --- | --- | --- |
+| 1 | **Conversation responder.** The first version uses a **fixed responder with no automatic takeover**; the rules are in 3.1. The earlier wording "whoever accepts the first message responds; on heartbeat timeout another computer takes over and increments the token" is **withdrawn**: when two computers lose contact, each raising the token from 7 to 8 does not disqualify either. Preconditions for automatic takeover (review section 2): a defined token issuer (a durable coordination authority or a protocol with safety guarantees, never each node incrementing on its own); atomic, idempotent grants; stale tokens rejected **on the authoritative write path and at the real execution boundary**, checked before committing a decision, dispatching an action and publishing a reply without a race window; model results that span a handover kept only for audit; external tools without token support stopped from further dispatch by the old executor, with started actions reconciled; defined behaviour when the coordinator is lost or restarts; and, if leases are used, monotonic clocks, drift, sleep and expiry rules. The coordination scheme is not chosen yet; this design names no new server and does not introduce Raft | R4 implements binding, granting and write isolation; R6 adds checks on the model and execution paths; automatic takeover is enabled only after these conditions pass fault tests |
+| 2 | **Deterministic simulation tests.** Replay with controlled clocks, network delivery and fault positions (drops, duplicates, reordering, partitions, crashes); fixed seeds are only an aid, and failing seeds are kept with the needed event traces. Real threads, disk, HTTP and cross-end integration tests remain; simulation never replaces concurrency or device validation | From R3; sync and mesh in R4 must be covered |
+| 3 | **A new node catches up before working.** It catches up on **one conversation's required state at an explicit cut point** (messages, to-dos, commitments, permissions, required execution bindings) and then continues with the deltas after the cut; it does not wait for every node's full history, and progress is tracked per origin. Catching up is necessary but not sufficient: it still needs a responder grant and confirmed execution capability | R4 |
+| 4 | **Membership changes.** A designated identity / permission authority applies them serially; they take effect when that authority has durably applied them and the needed execution boundaries enforce them, without waiting for every offline device to confirm. A node returning from offline updates its permission version before handling commands; revoking a device means every boundary that accepts its commands rejects the stale grant; without the needed permission freshness, sensitive operations are refused. The permission authority is not chosen yet and is an open design condition of R4; "one change at a time" does not replace a concrete consistency scheme | R4 (open condition) |
+| 5 | **Segments for long conversations.** Conversation, task and commitment identities stay stable; context takes the current segment + summaries of earlier segments + relevant retrieval, with summaries stating their coverage and traceable to the original text; results of tasks from an earlier segment reference the original task and are delivered to the current segment without copying it. This replaces the "last 6 turns, last 5 cards" cut-off | R6 (`ContextBuilder`) |
+| 6 | **Smaller rules:** (1) addresses are labelled by reach (LAN, private network, public entry) and checked for identity and connection health; a private address may serve clients on the same LAN but is never treated as reachable from anywhere, nor dropped altogether; link-local addresses must match the interface and network scope; (2) automatic discovery never overwrites manually configured routes; when a manual route is unreachable, an authorized policy may switch to another verified route while keeping the original configuration and its failure state; (3) after an action with side effects, invalidate the old snapshot of **the affected resources** and re-read before anything depending on them, without invalidating unrelated caches; a failed re-read leaves the state unknown and never repeats the action automatically; (4) preinstalling dsh and pi pins versions, verifies sources and supports offline packages and rollback, following the preinstall plan rather than being mixed into the Runtime projection work | (1)(2) R4; (3) R6 (`Executor`); (4) preinstall plan |
 
-| # | Content | Learned from | Step |
-| --- | --- | --- | --- |
-| 1 | **Conversation responder lease + fencing token.** Within a lease period each conversation is answered by exactly one computer (whoever accepts the conversation's first message becomes its first responder). The responder renews by heartbeat; once it has been offline past the lease, new messages go to another computer, while work in progress is not moved and is queried or marked unknown as in section 1.5. Every change of responder increments a token; writes carry the token and stale tokens are rejected, so an old responder waking from sleep cannot answer with outdated context. This is what makes "the phone connects only to Xiaoyou" hold; otherwise one message may be answered by both computers or by neither | Raft's leader lease and term | R4 (automatic connection) defines the rule and lease; R6 (agent loop) checks the token at the entry of `Loop.step` |
-| 2 | **Deterministic simulation tests.** Sync, the mesh and request recovery are tested with a controllable fake clock and fake network (drops, reordering, duplicates, disconnects, a computer crashing and restarting), replayed from a fixed seed instead of real threads and waits. A failure reproduces from the same seed | etcd-raft's deterministic testing approach | Required for all new logic from R3; sync and mesh in R4 must be covered |
-| 3 | **A new computer catches up before working.** A computer joining the mesh first only syncs and takes no conversations (learner state); only after reaching the other nodes' committed position and loading the context it needs may it become a conversation's responder or accept handed-over tasks | Raft's learner nodes | R4 |
-| 4 | **One membership change at a time.** Adding a computer, revoking a phone or rotating an identity key happens one at a time, and the next starts only after the previous takes effect; taking effect means applied, not merely committed. A device returning from offline syncs the membership list before accepting remote commands | Raft's membership change rules | R4, implemented with the membership registry of the desktop plan |
-| 5 | **Segments for long conversations.** The main chat is split into segments: all history is kept, while the model's context takes the current segment + summaries of earlier segments + relevant retrieval. Commitments, watches and dispatched tasks stay bound to their segment and, when due, are delivered to the segment the owner is in now, without copying. This replaces the current "last 6 turns, last 5 cards" cut-off | DS-Bot-App's segments | R6 (`ContextBuilder`) |
-| 6 | **Smaller rules:** (1) routes the owner configured by hand (such as Funnel or a public address) take precedence and automatic route management never overwrites them; (2) local-only and link-local addresses are never offered to the phone as external routes; (3) preinstalling dsh and pi supports offline packages and rollback on failure, not only pinned versions and checksums; (4) after a helper performs an action with side effects, earlier reads are invalid and must be refreshed before the next step | DS-Bot-App's configuration precedence, address filtering, transactional install and re-read after action | (1)(2) R4; (3) the preinstall plan; (4) R6 (`Executor`) |
-
-All six borrow ideas only and bring in neither Raft's elections nor quorum: the responder is fixed by a
-rule (whoever accepts the first message), and the lease exists only for a safe handover when the
-responder is offline.
+**Required fault cases** (review section 7): two computers cut off from each other but both able to
+call models; a stale model result returning during a responder change; an old computer waking from
+sleep; a coordinator crash; takeover racing a dispatch; one request retried through two entries; a
+revoked offline device reconnecting; an unrelated offline node not blocking the current
+conversation's catch-up; interleaved snapshot and deltas; an approval still pending while its
+notification is read; switching between LAN and remote routes. Each reports real evidence; anything
+not implemented or lacking a device or environment is marked NOT RUN.
