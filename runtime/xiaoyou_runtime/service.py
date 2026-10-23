@@ -969,14 +969,16 @@ class Service:
                 for card in self._xiaoyou.cards.recent(_name(conversation, "conversation"), 50,
                                                      include_desktop=True)]
 
-    def cancel(self, card_id: str) -> Optional[Dict[str, Any]]:
-        """取消一件事。没有这张卡返回 None；它已经不在做了就原样返回。"""
+    def cancel(self, card_id: str, actor: str = "client", reason: str = "",
+               announce: bool = True) -> Optional[Dict[str, Any]]:
+        """取消一件事。没有这张卡返回 None；它已经不在做了就原样返回。
+        actor / reason 记在卡上：谁停的、为什么（见 Xiaoyou.cancel）。"""
         observed = self._xiaoyou.cards.get(card_id)
         if observed is None:
             return None
         if observed.get("monitoring_only"):
             raise RequestError("这是电脑端同步的会话，请在电脑端停止任务")
-        self._xiaoyou.cancel(card_id)
+        self._xiaoyou.cancel(card_id, actor=actor, reason=reason, announce=announce)
         return self._xiaoyou.cards.get(card_id)
 
     def _card_changed(self, card: Dict[str, Any]) -> None:

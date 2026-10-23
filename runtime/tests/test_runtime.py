@@ -3527,6 +3527,38 @@ class ServiceTests(TempDirCase):
         self.assertEqual(self.service.cancel(message["card"])["state"], "cancelled")
         self.assertIsNone(self.service.cancel("c9"))
 
+    def test_a_cancelled_thing_records_who_stopped_it_and_says_so_once(self):
+        self.codex.gate.clear()
+        message = self.finish(self.service.submit("one slow", agent="codex"))
+        card = self.service.cancel(message["card"], actor="app", reason="不要了")
+        self.assertEqual((card["state"], card["cancelled_by"], card["cancel_reason"]), ("cancelled", "app", "不要了"))
+        said = [entry for entry in card["entries"] if entry["kind"] == "summary"]
+        self.assertEqual(len(said), 1)
+        self.assertIn("停了（你在手机上停的）", said[0]["text"])
+        self.assertEqual(said[0]["scope"], "main")
+        # She knows on her next turn: the stop is in her own record of the conversation.
+        turns = self.store.transcript.turns("default")
+        self.assertTrue(any("被停了" in (turn.get("text") or "") for turn in turns))
+        # Cancelling again neither changes who stopped it nor says it twice.
+        again = self.service.cancel(message["card"], actor="desktop")
+        self.assertEqual(again["cancelled_by"], "app")
+        self.assertEqual(len([entry for entry in again["entries"] if entry["kind"] == "summary"]), 1)
+
+    def test_the_cancel_endpoint_names_the_end_that_asked(self):
+        from xiaoyou_runtime.server import _cancel_actor
+        self.assertEqual(_cancel_actor({"actor": "desktop"}, "Dalvik/2.1.0"), "desktop")
+        self.assertEqual(_cancel_actor({}, "Dalvik/2.1.0 (Linux; U; Android 14)"), "app")
+        self.assertEqual(_cancel_actor(None, "node"), "desktop")
+        self.assertEqual(_cancel_actor({"actor": "anyone"}, "curl/8"), "client")
+
+    def test_her_own_cancel_is_recorded_but_not_announced_twice(self):
+        self.codex.gate.clear()
+        message = self.finish(self.service.submit("another slow", agent="codex"))
+        self.assertTrue(self.xiaoyou.cancel(message["card"], actor="xiaoyou", reason="主人说不要了", announce=False))
+        card = self.xiaoyou.cards.get(message["card"])
+        self.assertEqual((card["cancelled_by"], card["cancel_reason"]), ("xiaoyou", "主人说不要了"))
+        self.assertFalse([entry for entry in card["entries"] if entry["kind"] == "summary"])
+
     def test_another_runtime_waits_for_the_end_of_the_thing(self):
         self.codex.gate.clear()
         message = self.service.submit("check slow", agent="codex", hop=1)

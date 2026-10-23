@@ -87,6 +87,20 @@ MAX_HISTORY_BODY_BYTES = 1024 * 1024
 MAX_WAIT_SECONDS = 60.0
 
 
+def _cancel_actor(body: Any, agent: str) -> str:
+    """停一件事的是哪一端：请求里写明的为准；没写时按 User-Agent 猜（Android 的 App、电脑客户端），
+    猜不出就记 client。"""
+    given = body.get("actor") if isinstance(body, dict) else None
+    if given in ("app", "desktop"):
+        return given
+    agent = agent.lower()
+    if "dalvik" in agent or "android" in agent:
+        return "app"
+    if "electron" in agent or "node" in agent or "undici" in agent:
+        return "desktop"
+    return "client"
+
+
 def make_server(config: Config, service: Service,
                 firmware: Optional[FirmwareStore] = None,
                 artifacts: Optional[ArtifactStore] = None) -> ThreadingHTTPServer:
@@ -691,7 +705,8 @@ def make_server(config: Config, service: Service,
                         self._send(200, {"id": parts[2], "decision": body["decision"]})
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "cancel":
-                    card = service.cancel(parts[2])
+                    card = service.cancel(parts[2], actor=_cancel_actor(body, self.headers.get("User-Agent", "")),
+                                          reason=body.get("reason", "") if isinstance(body, dict) else "")
                     if card is None:
                         self._fail(404, "没有这件事")
                     else:

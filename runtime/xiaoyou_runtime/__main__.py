@@ -253,7 +253,7 @@ def main(argv=None) -> int:
                             print("（这里没法问你，当作不行）", file=sys.stderr)
                         xiaoyou.approvals.answer(approval["id"], "allow" if allowed else "deny", by="computer")
             except KeyboardInterrupt:
-                xiaoyou.cancel(turn.card)
+                xiaoyou.cancel(turn.card, actor="cli", reason="Ctrl+C")
                 xiaoyou.close()
                 print("取消了", file=sys.stderr)
                 return 1

@@ -1140,7 +1140,7 @@ class Xiaoyou:
             extra = {} if quiet else {"brief": turn.brief, "mood": turn.mood}
             exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
         elif kind == "cancel":
-            self.cancel(target["id"])
+            self.cancel(target["id"], actor="xiaoyou", reason=text, announce=False)
             exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main")
             turn = shape(reply, brief, mood, self._config.brief_max_chars, lead.name, target["id"])
         elif kind == "amend":
@@ -1804,21 +1804,43 @@ class Xiaoyou:
                            result_ready=True, summary_partial="")
         self._workspace.closed(card, state, turn.brief, turn.reply, turn.mood)
 
-    def cancel(self, card_id: str) -> bool:
-        """取消一件正在做的事；它不在做时返回 False。"""
+    def cancel(self, card_id: str, actor: str = "unknown", reason: str = "",
+               announce: bool = True) -> bool:
+        """取消一件正在做的事；它不在做时返回 False。
+
+        actor 是谁停的（app、desktop、client、cli、xiaoyou、mesh:<那台>），reason 是原因，
+        都记在卡上，查得到是谁、为什么停的。announce 为 True 时在原对话里说一句、并记进
+        她的对话记录，她下一轮就知道这件事停了；她自己在这一轮决定停的（actor 是 xiaoyou）
+        已经回过话，不再多说一句。"""
         card = self._cards.get(card_id)
         if card is None or card["state"] not in ACTIVE:
             return False
+        reason = " ".join(str(reason or "").split())[:200]
         if card.get("mesh_origin"):
-            # 别的 Runtime 的事：叫那台停，状态等它报回来。
-            return bool(self.mesh is not None and self.mesh.cancel(card_id))
+            # 别的 Runtime 的事：叫那台停，状态和那句话都由那台记、再同步回来。
+            return bool(self.mesh is not None
+                        and self.mesh.cancel(card_id, actor=actor, reason=reason, announce=announce))
         self._record.task(card_id, state="cancelled", brief="取消了", mood="idle",
-                           approval=None, queued=False)
+                           approval=None, queued=False, cancelled_by=actor, cancel_reason=reason)
         self._tasks.cancel(card_id)
         self._approvals.drop(card_id)
         if card["agent"]:
             self._workspace.cancelled(card)
+        if announce:
+            self._announce_cancel(card, actor)
         return True
+
+    def _announce_cancel(self, card: Dict[str, Any], actor: str) -> None:
+        """一件事被停了：在它所在的对话里说一句，并记进她的对话记录。"""
+        where = {"app": "你在手机上停的", "desktop": "你在电脑客户端上停的", "cli": "在命令行里停的"}
+        by = where.get(actor) or ("从 %s 那边停的" % actor[5:] if actor.startswith("mesh:") else "")
+        title = card.get("title") or card["id"]
+        say = "「%s」停了%s。" % (title, "（%s）" % by if by else "")
+        turn_id = "%s-cancel-%d" % (card["id"], int(time.time() * 1000))
+        self._record.reply(card["id"], say=say, turn_id=turn_id, scope="main", kind="summary")
+        self._store.transcript.add(
+            card["conversation"], turn_id, "（后台的事「%s」被停了）" % title, say,
+            card.get("agent") or "xiaoyou", [], reply_ref=turn_id + ":reply")
 
     def settle(self, card_id: str, timeout: float) -> Optional[Dict[str, Any]]:
         """等一件事结束，最多等 timeout 秒。"""

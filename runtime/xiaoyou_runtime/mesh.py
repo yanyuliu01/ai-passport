@@ -775,13 +775,14 @@ class Mesh:
                                          "message_id": uuid.uuid4().hex})
         return True
 
-    def cancel(self, card_id: str) -> bool:
+    def cancel(self, card_id: str, actor: str = "unknown", reason: str = "", announce: bool = True) -> bool:
         card = self._cards.get(card_id)
         if card is None or not card.get("mesh_origin"):
             return False
         if self._reachable(card["mesh_origin"]):
             return False
-        self.command(card["mesh_origin"], "cancel", {"card": card.get("mesh_id")})
+        self.command(card["mesh_origin"], "cancel", {"card": card.get("mesh_id"), "by": actor,
+                                                     "reason": reason, "announce": announce})
         return True
 
     def _forward_approval(self, item: Dict[str, Any], decision: str) -> bool:
@@ -810,7 +811,11 @@ class Mesh:
                 extra = self._do_message(data, args)
             elif kind == "cancel":
                 card = args.get("card")
-                if not isinstance(card, str) or self._service.cancel(card) is None:
+                by = args.get("by") if isinstance(args.get("by"), str) else ""
+                actor = "mesh:%s" % self._peer_name(origin) + ("/%s" % by if by else "")
+                if not isinstance(card, str) or self._service.cancel(
+                        card, actor=actor, reason=str(args.get("reason") or ""),
+                        announce=args.get("announce") is not False) is None:
                     raise MeshError("这台没有这件事")
             elif kind == "directory":
                 extra = self._service.directory_edit(args.get('uid'), {k: args[k] for k in ('fields', 'revision') if k in args})

@@ -202,6 +202,8 @@ class MeshTests(TempDirCase):
         b.service.cancel(b.card_from(a, card["id"])["id"])
         self.assertTrue(until(lambda: a.xiaoyou.cards.get(card["id"])["state"] == "cancelled"))
         self.assertTrue(until(lambda: b.card_from(a, card["id"])["state"] == "cancelled"))
+        # The origin records which computer (and which end there) stopped it.
+        self.assertEqual(a.xiaoyou.cards.get(card["id"])["cancelled_by"], "mesh:Windows/client")
 
     def test_xiaoyou_hands_work_to_a_helper_on_another_runtime(self):
         a = self.node("Mac", agents=[Scripted("claude"), Scripted("codex", speaks=False)])
