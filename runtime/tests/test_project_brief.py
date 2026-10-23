@@ -192,6 +192,16 @@ class LatestClaudeSessionTests(TempDirCase):
 
 
 class RecapTextTests(unittest.TestCase):
+    def test_generated_recaps_do_not_quote_other_recaps(self):
+        legacy = "（主人最近（刚才）在这个项目上聊过下面这些，当时用的不是这套会话——）\n主人：old context"
+        generated = pb.recap_text({"when": 1, "turns": [{"role": "user", "text": legacy},
+            {"role": "user", "text": "new request"}]}, now=2)
+        self.assertNotIn("old context", generated)
+        self.assertIn("new request", generated)
+        self.assertTrue(pb._is_injected(generated))
+        self.assertTrue(pb._is_injected(legacy))
+        self.assertFalse(pb._is_injected("主人最近在忙什么？"))
+
     def test_formats_turns_with_a_timestamp_and_instruction(self):
         now = time.time()
         session = {"when": now, "turns": [{"role": "user", "text": "我们聊到一半"},

@@ -9,6 +9,8 @@ Credential scrubbing covers recognizable forms, not arbitrary private prose.
 import re
 import unicodedata
 
+from .project_brief import is_recap
+
 MAX_MESSAGE_CHARS = 4000
 TEXT_BLOCK_TYPES = frozenset({"text", "input_text", "output_text"})
 
@@ -17,7 +19,7 @@ _CONTEXT_NAMES = (
     r"skills_instructions|app-context|user_instructions|system-reminder|"
     r"permissions(?:[_:-][\w:-]+)?|codex_apps_client_time_context|"
     r"codex_apps_open_page_instructions|send_user_message_question_reply|xiaoyou-history-context|"
-    r"task-notification|agent-notification"
+    r"task-notification|agent-notification|xiaoyou-recap"
 )
 _CONTEXT_TOKEN = re.compile(
     r"<\s*(?P<close>/?)\s*(?P<name>" + _CONTEXT_NAMES + r")\b[^>]*(?:>|$)",
@@ -126,6 +128,8 @@ def visible_text(text: str) -> str:
     """
     if not isinstance(text, str):
         return ""
+    if is_recap(text) and not text.lstrip().startswith("<xiaoyou-recap>"):
+        return ""  # Legacy generated recap had no closing delimiter.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = _ANSI.sub("", text).replace("\t", "    ")
     text = "".join(char for char in text if char == "\n" or

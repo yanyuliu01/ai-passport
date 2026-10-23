@@ -206,6 +206,17 @@ class IntakeTests(TempDirCase):
         self.assertTrue(all(e["provenance"]["source"] == "helper" for e in activity))
         self.assertTrue(all(e["provenance"]["actor"] == "codex" for e in activity))
 
+    def test_observed_sessions_cannot_write_the_main_chat(self):
+        writer = self.xiaoyou.intake.writer("desktop", actor="observer")
+        with self.assertRaises(ValueError):
+            writer.observed_open("default", "wrong", "unknown", "codex")
+        card = writer.observed_open("__desktop__", "session", "unknown", "codex")
+        self.assertTrue(card["monitoring_only"])
+        writer.observed(card["id"], entries=[{"id": "d1", "role": "you", "text": "observed", "at": 1}])
+        self.assertEqual(self.xiaoyou.cards.recent("default"), [])
+        restored = type(self.xiaoyou.cards)(self.store.state_dir / "cards.json").get(card["id"])
+        self.assertEqual(restored["entries"][0]["provenance"]["source"], "desktop")
+        self.assertEqual(restored["changed_by"]["source"], "desktop")
 
     def test_unknown_sources_are_refused(self):
         with self.assertRaises(ValueError):

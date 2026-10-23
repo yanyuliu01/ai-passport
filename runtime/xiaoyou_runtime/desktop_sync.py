@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from .cards import Cards
 from .approvals import Approvals
 from .desktop_approvals import DesktopApprovals
-from .record import Record
+from .intake import Intake
 from .desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 from .desktop_titles import DesktopTitles
 from .task_titles import select_title
@@ -122,7 +122,7 @@ class DesktopSync:
         self.read_owned = read_owned
         self.cards, self.state_dir, self.clock, self.owned = cards, Path(state_dir), clock, owned
         # 观察到的会话经记录中心写（record.py）；self.cards 只用来读。
-        self.record = Record(cards)
+        self.writer = Intake.for_cards(cards).writer("desktop", actor="desktop-observer")
         self.roots = [("codex", (codex_dir or home / ".codex") / "sessions"),
                       ("claude", (claude_dir or home / ".claude") / "projects")]
         self.titles = DesktopTitles(self.roots[0][1].parent, self.roots[1][1].parent)
@@ -478,7 +478,7 @@ class DesktopSync:
             if session.card and session.session_id in self.owned():
                 card = self.cards.get(session.card)
                 if card and card["state"] in ("working", "waiting", "unknown"):
-                    self.record.observed(session.card, state="cancelled", desktop_status="interrupted",
+                    self.writer.observed(session.card, state="cancelled", desktop_status="interrupted",
                                       brief="此会话现由 Runtime 管理", stale=False)
             return
         if self.projects and str(Path(session.cwd).expanduser().resolve()) not in self.projects:
@@ -509,7 +509,7 @@ class DesktopSync:
         if existing and major == session.published_major and now - session.published_at < MINOR_SECONDS:
             return
         if existing is None:
-            card = self.record.observed_open(CONVERSATION, title.title, "unknown", session.agent,
+            card = self.writer.observed_open(CONVERSATION, title.title, "unknown", session.agent,
                                    title_source=title.source)
             session.card = card["id"]
         label = LABELS[status]
@@ -528,7 +528,7 @@ class DesktopSync:
             fields.update(entries=[dict(entry) for entry in session.entries],
                           content_scope="recent", content_truncated=session.content_truncated)
         from .conversation_directory import home_scope
-        self.record.observed(session.card, state=STATES[status], source="desktop", project=project,
+        self.writer.observed(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, desktop_cwd=session.cwd,
                           native_scope=home_scope(next(root.parent for kind, root in self.roots if kind == session.agent)),
                           monitoring_only=True, desktop_status=status,
@@ -603,7 +603,7 @@ class DesktopSync:
             fields = self._title(identity[0], identity[1], card.get("project", ""),
                                  card.get("entries", [])).fields()
             if any(card.get(key) != value for key, value in fields.items()):
-                self.record.observed(card["id"], **fields)
+                self.writer.observed(card["id"], **fields)
         for key, session in self.sessions.items():
             if key not in retained and session.card:
                 card = self.cards.get(session.card)

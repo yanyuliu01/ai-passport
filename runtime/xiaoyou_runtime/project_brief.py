@@ -76,10 +76,17 @@ def _flatten_text(content: Any) -> str:
     return ""
 
 
+def is_recap(text: str) -> bool:
+    """Recognize our generated context, including the legacy untagged header."""
+    head = text.lstrip()
+    return head.startswith("<xiaoyou-recap>") or (
+        head.startswith("（主人最近（") and "当时用的不是这套会话" in head[:200])
+
+
 def _is_injected(text: str) -> bool:
     """这段文字是不是工具自己塞进去的背景信息（AGENTS.md、环境说明……），不是真人说的话。"""
     head = text.lstrip().lower()
-    return head.startswith(INJECTED_PREFIXES)
+    return head.startswith(INJECTED_PREFIXES) or is_recap(text)
 
 
 def _clip(text: str, limit: int = MAX_TEXT_CHARS) -> str:
@@ -178,9 +185,11 @@ def recap_text(session: Dict[str, Any], now: Optional[float] = None) -> str:
         "接着它的话往下做，不要重新打招呼或者复述这些内容）" % _when(session["when"], now)
     ]
     for turn in session["turns"]:
+        if _is_injected(turn["text"]):
+            continue
         who = "主人" if turn["role"] == "user" else "回答"
         lines.append("%s：%s" % (who, _clip(turn["text"], RECAP_TEXT_CHARS)))
-    return "\n".join(lines)
+    return "<xiaoyou-recap>\n" + "\n".join(lines) + "\n</xiaoyou-recap>"
 
 
 def _codex_session(path: Path, repo: str, limit: int) -> Tuple[Optional[str], List[Dict[str, str]]]:

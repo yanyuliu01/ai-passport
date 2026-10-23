@@ -18,7 +18,7 @@ class _ReadOnly:
 
 class Discovery:
     def __init__(self, config, record, origin, owned=lambda: set(), bound_titles=lambda: {}):
-        self.config, self.record, self.origin = config, record, origin
+        self.config, self.writer, self.origin = config, record, origin
         self.owned, self.bound_titles = owned, bound_titles
         self.stop = threading.Event()
         self.seen = {}
@@ -108,13 +108,13 @@ class Discovery:
                 stale=stale, observed_at=observed, updated_at=signature[1]/1e9,
                 source_revision=signature[1], coverage='native-public-text', metadata_revision=0,
                 task_ids=[], native_sources=[], available=True, internal=(source.session_id in owned or source.originator == 'xiaoyou-runtime') and key not in titles))
-        previous = self.record._cards.directory.source_snapshot()
+        previous = self.writer.cards.directory.source_snapshot()
         for path in set(self.identities) - found:
             old = previous.get(self.identities[path])
             if old and old.get('available', True):
                 batch.append(dict(old, available=False, stale=True, state='unknown'))
         if batch:
-            self.record.directory_sources(batch, self.origin)
+            self.writer.directory_sources(batch, self.origin)
         self.refresh_native_names(dict.fromkeys((a,Path(p)) for a,p in homes))
         self.status = {'phase': 'discovering' if len(candidates)>32 else 'ready',
                        'indexed_files': len(self.seen), 'pending_files': max(0,len(candidates)-32),
@@ -123,7 +123,7 @@ class Discovery:
     def refresh_native_names(self, homes):
         from .desktop_titles import DesktopTitles
         from .task_titles import canonical_title
-        sources = self.record._cards.directory.source_snapshot()
+        sources = self.writer.cards.directory.source_snapshot()
         for agent,home in homes:
             if agent != 'codex':
                 continue  # Claude renames append to a transcript and are read above.
@@ -153,7 +153,7 @@ class Discovery:
                     if title.title and (title.title!=row['original_title'] or row.get('title_source')!='upstream'):
                         changed.append(dict(row,title=title.title,original_title=title.title,title_source='upstream'))
             if changed:
-                self.record.directory_sources(changed,self.origin)
+                self.writer.directory_sources(changed,self.origin)
 
     def run(self):
         while not self.stop.is_set():

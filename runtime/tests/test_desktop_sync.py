@@ -214,8 +214,8 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(any('task-notification' in e['text'] for e in current['entries']))
 
     def test_old_technical_fallback_is_repaired_without_changing_status_or_history(self):
-        card = self.sync.record.observed_open('__desktop__', 'codex workdir abcdef', 'unknown', 'codex', title_source='fallback')
-        card = self.sync.record.observed(card['id'], source='desktop', monitoring_only=True,
+        card = self.sync.writer.observed_open('__desktop__', 'codex workdir abcdef', 'unknown', 'codex', title_source='fallback')
+        card = self.sync.writer.observed(card['id'], source='desktop', monitoring_only=True,
             session_id='old-session', project='workdir', observed_at=self.now - 864000,
             stale=True, desktop_cwd='/project/workdir')
         reloaded = Cards(self.state / 'cards.json')
@@ -361,6 +361,20 @@ class DesktopTests(unittest.TestCase):
              "message": {"content": "sidechain"}}])
         self.sync.poll()
         self.assertEqual([card["session_id"] for card in self.observed()], ["yes"])
+
+    def test_recap_context_is_not_imported_as_a_human_message(self):
+        from xiaoyou_runtime.project_brief import recap_text
+        recap = recap_text({"when": self.now, "turns": [{"role": "user", "text": "private recap"}]}, now=self.now)
+        path = self.codex()
+        self.append(path, [self.message("user", recap), self.message("user", "real request")])
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertEqual([e["text"] for e in card["entries"]], ["real request"])
+        self.assertEqual(card["changed_by"]["source"], "desktop")
+        self.assertEqual(self.cards.recent("default"), [])
+        seq = self.cards.seq
+        self.sync.poll()
+        self.assertEqual(self.cards.seq, seq)
 
     def test_global_phone_feed_does_not_enter_model_context(self):
         path = self.codex()
