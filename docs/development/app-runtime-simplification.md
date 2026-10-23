@@ -122,7 +122,7 @@ The owner asked in the main chat to test the new Runtime. The screenshot and the
 
 Conclusion (owner agreed, 2026-10-22): the hidden nudge is unsound in itself (guessing by regex
 after the fact, injecting a hidden message into the session, an extra serial call, speaking first
-and patching later), so it is removed entirely; see phase 0 in section 11 of the
+and patching later), so it is removed entirely; see step 1 in section 6 of the
 [complete plan](xiaoyou-agent-model.md).
 
 Direction: remove the hidden "said it would act but called no tool" nudge and let
@@ -176,8 +176,8 @@ forces them to agree.
   mesh, plus the reason.
 - **An explicit current focus:** the conversation remembers "the task we are talking about" and
   uses it to resolve "this" instead of guessing from the last 5 cards each turn.
-- **Deduplicate repeated requests:** when the owner repeats the same words shortly after, attach
-  them to the turn already in progress instead of opening a new task.
+- **Deduplicate repeated requests:** now by request ID; identical text with a different ID is a
+  new message, and repeat sends are avoided by always showing true state (complete plan section 8).
 
 ## 9. Connections and multiple computers (10-22 App chat and Windows records)
 
@@ -198,8 +198,8 @@ unstable.
 | N8 | Desktop session observation has chain side effects: around 21:47 on 10-22, nine Codex sessions appeared at once (c359-c367, session ids starting `01a163dd`), opening with recap preambles ("the owner recently talked about this elsewhere...") nested 4-5 levels deep, plus other sessions' opening prompts (c365 carries the first prompt of this Claude Code session yet is labelled codex). `project_brief.recap_text` takes the latest session as recap material without excluding sessions that start with a recap, so it nests deeper each time; who started this batch is not yet known (unverified) | `project_brief.py`; c359-c368 in `cards.json` | R1 R3 |
 | N9 | In the synced Windows session record every message carries the same time, 22:53 (import time), losing the original order and times | `state/mesh/history/Windows-a620ba/codex-01a1641a...md` | R4 |
 
-The interaction design is in section 3.3, "pair once, then forget it", of the
-[complete plan](xiaoyou-agent-model.md).
+The interaction design is in sections 1 (automatic connection after first pairing) and 3
+(several computers still do the work once) of the [complete plan](xiaoyou-agent-model.md).
 
 Direction: the user sees computers, not addresses; the App probes routes, switches by health and
 retires dead routes automatically, and new routes arrive through the mesh without another scan;
@@ -238,7 +238,7 @@ an auxiliary failure never poses as a disconnect; recap material never quotes re
 
 ## 11. Suggested order
 
-> Overall execution follows the phases in section 11 of the
+> Overall execution follows the implementation order in section 6 of the
 > [complete plan](xiaoyou-agent-model.md); the order below applies to this list alone.
 
 1. Low-risk cleanup: remove feed and old-version compatibility (C3, part of S4), unify the send
