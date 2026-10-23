@@ -28,6 +28,10 @@
   POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
+  GET  /v1/devices                      配对过的设备（不含凭据）和权限权威
+  POST /v1/devices                      {"name","kind"} 配对一台设备，回一次性凭据 dev.<编号>.<密钥>
+  POST /v1/devices/<编号>/revoke        撤销一台设备的凭据
+  POST /v1/mesh/members/<编号>/remove   把一台电脑移出小幽网络
   GET  /v1/conversations/<名字>/owner   这段对话归哪台电脑负责（小幽网络里）
   POST /v1/conversations/<名字>/owner   {"to": "<电脑名字或编号>"} 两台都在线、对话空闲时移交
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
@@ -56,7 +60,8 @@
   GET  /v1/app/packs                    资源包清单 {"packs":[{"name","files":[{"path","sha256","size","download_url"}]}]}
   GET  /v1/app/file?sha256=             资源包里的一个文件（ETag 是校验值，支持 Range 续传）
 
-除 /healthz 外都要带 Authorization: Bearer <令牌>。
+除 /healthz 外都要带 Authorization: Bearer <令牌>：旧的共享令牌，或者这台设备自己的凭据
+（dev.<编号>.<密钥>）。GET /v1/info?nonce=<随机数> 回 host.proof，见 identity.host_proof。
 """
 
 import gzip
@@ -151,9 +156,19 @@ def make_server(config: Config, service: Service,
             self._send(status, {"error": message})
 
         def _authorized(self) -> bool:
-            given = self.headers.get("Authorization", "").encode("utf-8")
-            if hmac.compare_digest(given, expected):
+            """旧的共享令牌（过渡期照常可用），或者一台设备自己的凭据（devices.py，撤销后不认）。"""
+            header = self.headers.get("Authorization", "")
+            self.device = None
+            devices = getattr(service, "devices", None)
+            if hmac.compare_digest(header.encode("utf-8"), expected):
+                self.key_hash = service.credential_hash(config.token, legacy=True) if devices is not None else None
                 return True
+            if header.startswith("Bearer dev.") and devices is not None:
+                device = devices.verify(header[len("Bearer "):])
+                if device is not None:
+                    self.device = device
+                    self.key_hash = service.credential_hash(header[len("Bearer "):], legacy=False)
+                    return True
             self._fail(401, "令牌不对或者没带令牌")
             return False
 
@@ -462,8 +477,11 @@ def make_server(config: Config, service: Service,
                 mesh = getattr(service, "mesh", None)
                 self._send(200, mesh.status() if mesh is not None else {"peers": [], "enabled": False})
                 return
+            if parts == ["v1", "devices"]:
+                self._send(200, {"devices": service.devices.list(), "authority": service.authority()})
+                return
             if parts == ["v1", "info"]:
-                info = service.info()
+                info = service.info(query.get("nonce", [None])[0], getattr(self, "key_hash", None))
                 info.update(name=config.name, version=__version__)
                 info["capabilities"] = list(info.get("capabilities", [])) + ["events_v1"]
                 info["events"] = event_types.describe()
@@ -701,9 +719,26 @@ def make_server(config: Config, service: Service,
                     except OSError:
                         self._fail(503, "审核记录未能写入，请刷新核实状态")
                     return
+                if parts == ["v1", "devices"]:
+                    body = body if isinstance(body, dict) else {}
+                    result = service.device_add(body.get("name"), body.get("kind", "phone"))
+                    self._send(409 if result.get("status") == "refused" else 200, result)
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "devices"] and parts[3] == "revoke":
+                    result = service.device_revoke(parts[2])
+                    self._send(409 if result.get("status") == "refused" else 200, result)
+                    return
+                if len(parts) == 5 and parts[:3] == ["v1", "mesh", "members"] and parts[4] == "remove":
+                    result = service.member_remove(parts[3])
+                    self._send(409 if result.get("status") == "refused" else 200, result)
+                    return
                 if len(parts) == 3 and parts[:2] == ["v1", "approvals"]:
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")
+                    problem = service.permission_problem()  # 回答授权是敏感操作（设计第 6 节）
+                    if problem:
+                        self._fail(409, problem)
+                        return
                     answered = service.approve(parts[2], body.get("decision"))
                     if answered is None:
                         self._fail(404, "没有这个授权（那件事可能已经结束了）")

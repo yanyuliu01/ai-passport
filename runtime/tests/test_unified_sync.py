@@ -383,7 +383,7 @@ class HttpTests(TempDirCase):
         self.assertEqual(self.call("GET", "/v1/sync", token=None)[0], 401)
         status, info = self.call("GET", "/v1/info")
         self.assertEqual(status, 200)
-        self.assertEqual(sorted(info), ["capabilities", "epoch", "events", "iterate", "name", "presentation_policy", "protocol", "runtime_id",
+        self.assertEqual(sorted(info), ["capabilities", "epoch", "events", "host", "iterate", "name", "presentation_policy", "protocol", "runtime_id",
                                         "subject_id", "version"])
         self.assertEqual(1, info['presentation_policy']['version'])
         self.assertIn('presentation_v1', info['capabilities'])

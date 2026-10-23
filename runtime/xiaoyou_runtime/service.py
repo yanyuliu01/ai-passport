@@ -32,7 +32,8 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Union
 from .agents import AgentError
 from .cards import ACTIVE
 from .config import EFFORT_LEVELS
-from .identity import CAPABILITIES, PROTOCOL, runtime_id, subject_id
+from .identity import CAPABILITIES, PROTOCOL, fingerprint, host_proof, runtime_id, subject_id
+from .devices import Devices, KINDS as DEVICE_KINDS, hash_secret, new_credential
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from . import operations
 from .reports import ReportError, Reports
@@ -152,6 +153,8 @@ class Service:
         self.runtime_id = runtime_id(store.state_dir)
         # 小幽这个主体的编号（统一主体的预留）：和电脑无关，跟着 state 目录走。
         self.subject_id = subject_id(store.state_dir)
+        # 每台设备自己的凭据、移出的电脑（devices.py）；名单以权限权威（Mac）为准。
+        self.devices = Devices(store.state_dir / "devices.json")
         xiaoyou.cards.set_origin(self.runtime_id)
         # 不在这台电脑上的会话报进来的进展（POST /v1/reports）
         self._reports = Reports(xiaoyou.cards)
@@ -921,12 +924,122 @@ class Service:
         except (ValueError, TypeError):
             raise RequestError("before 应为事件序号")
 
-    def info(self) -> Dict[str, Any]:
-        """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。"""
-        capabilities = list(CAPABILITIES) + ["quick_review"] + (["mesh"] if self.mesh is not None else [])
-        return {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
-                "protocol": PROTOCOL, "capabilities": capabilities,
-                "presentation_policy": presentation.policy()}
+    def info(self, nonce: Any = None, key_hash: Optional[str] = None) -> Dict[str, Any]:
+        """这台 Runtime 是谁、记录是哪一份、会说哪一版同步协议。
+
+        nonce：客户端带来的随机数；key_hash 是它用的凭据的哈希（server.py 按请求算）。带了就
+        回 host_proof，客户端在任何线路上都能核对连到的是持有它凭据的 Runtime（设计第 6 节）。"""
+        capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof"] \
+            + (["mesh"] if self.mesh is not None else [])
+        result = {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
+                  "protocol": PROTOCOL, "capabilities": capabilities,
+                  "presentation_policy": presentation.policy(),
+                  "host": {"id": self.runtime_id, "fingerprint": fingerprint(self.runtime_id)}}
+        if self.mesh is not None:
+            result["routes"] = self.mesh.routes(list(self.mesh._config.mesh_advertise))
+        if isinstance(nonce, str) and 16 <= len(nonce) <= 128 and key_hash:
+            result["host"]["proof"] = host_proof(key_hash, self.runtime_id, nonce)
+        return result
+
+    # ---- 设备和权限（devices.py，设计第 6 节） ----
+
+    def authority(self) -> str:
+        """权限权威。不在网络里、或者网络里还没人配置 mesh.home 时就是这台自己。"""
+        found = self.mesh.authority() if self.mesh is not None else None
+        return found or self.runtime_id
+
+    def permission_problem(self) -> Optional[str]:
+        """敏感操作前：拿不到最新的设备名单（权威不在线）就不做。"""
+        authority = self.authority()
+        if authority == self.runtime_id or self.mesh.online(authority):
+            return None
+        name = next((peer["name"] for peer in self.mesh.status()["peers"] if peer["runtime_id"] == authority), "") \
+            or authority[:6]
+        return "「%s」不在线，拿不到最新的设备名单，现在不能做这件事" % name
+
+    def device_add(self, name: Any, kind: Any = "phone") -> Dict[str, Any]:
+        """配对一台设备：凭据在这里生成、只给这一次；名单由权威记下。"""
+        name = _name(name, "name") if name is not None else "设备"
+        if kind not in DEVICE_KINDS:
+            raise RequestError("kind 应该是 %s 之一" % "、".join(DEVICE_KINDS))
+        problem = self.permission_problem()
+        if problem:
+            return {"status": "refused", "reason": problem}
+        device_id, credential, secret_hash = new_credential()
+        args = {"id": device_id, "name": name, "kind": kind, "hash": secret_hash}
+        result = self.permission_command("device_add", args) if self.authority() == self.runtime_id \
+            else self._ask_authority("device_add", args)
+        return dict(result, credential=credential) if result.get("status") != "refused" else result
+
+    def device_revoke(self, device_id: Any) -> Dict[str, Any]:
+        problem = self.permission_problem()
+        if problem:
+            return {"status": "refused", "reason": problem}
+        args = {"id": _name(device_id, "device")}
+        if self.authority() != self.runtime_id:
+            return self._ask_authority("device_revoke", args)
+        return self.permission_command("device_revoke", args)
+
+    def member_remove(self, runtime: Any) -> Dict[str, Any]:
+        problem = self.permission_problem()
+        if problem:
+            return {"status": "refused", "reason": problem}
+        if self.mesh is None:
+            raise RequestError("这台不在小幽网络里")
+        target = self.mesh.peer_id(runtime)
+        if target is None or target == self.runtime_id:
+            raise RequestError("不认识电脑 %s" % runtime)
+        args = {"runtime": target}
+        if self.authority() != self.runtime_id:
+            return self._ask_authority("member_remove", args)
+        return self.permission_command("member_remove", args)
+
+    def _ask_authority(self, kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        authority = self.authority()
+        problem = self.mesh._reachable(authority)
+        if problem:
+            return {"status": "refused", "reason": problem}
+        self.mesh.command(authority, kind, args)
+        return {"status": "queued", "authority": authority}
+
+    def permission_command(self, kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """在权威上执行（本机调用，或者别的电脑发来的指令）。"""
+        if self.authority() != self.runtime_id:
+            raise RequestError("这台不是权限权威")
+        if kind == "device_add":
+            try:
+                device = self.devices.add(str(args.get("id")), str(args.get("name") or ""),
+                                          str(args.get("kind") or "device"), str(args.get("hash")))
+            except ValueError as error:
+                raise RequestError(str(error))
+            self._publish_device(device)
+            return {"status": "applied", "device": self.devices.view(device)}
+        if kind == "device_revoke":
+            device = self.devices.revoke(str(args.get("id")))
+            if device is None:
+                raise RequestError("没有这台设备")
+            self._publish_device(device)
+            return {"status": "applied", "device": self.devices.view(device)}
+        if kind == "member_remove":
+            runtime = str(args.get("runtime"))
+            if runtime == self.runtime_id:
+                raise RequestError("不能移出权威自己")
+            try:
+                item = self.devices.remove_member(runtime)
+            except ValueError as error:
+                raise RequestError(str(error))
+            if self.mesh is not None:
+                self.mesh.publish_permission("member", runtime, {"at": item["at"], "name": item["name"]})
+            return {"status": "applied", "removed": runtime}
+        raise RequestError("不认识的权限操作 %s" % kind)
+
+    def _publish_device(self, device: Dict[str, Any]) -> None:
+        if self.mesh is not None:
+            self.mesh.publish_permission("device", device["id"], self.devices.record(device["id"]))
+
+    def credential_hash(self, token: str, legacy: bool) -> Optional[str]:
+        """这次请求用的凭据的哈希（host_proof 的钥匙）：设备凭据，或者旧的共享令牌。"""
+        return hash_secret(token) if legacy else self.devices.key_hash(token)
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
              wait: float = 0.0, usage: Any = None, states: Any = (), all_conversations: bool = False) -> Dict[str, Any]:
@@ -1308,6 +1421,9 @@ class Service:
         conversation = _name(conversation, "conversation")
         if self.mesh is None:
             raise RequestError("这台不在小幽网络里，没有别的电脑可以交")
+        problem = self.permission_problem()
+        if problem:
+            return {"status": "refused", "reason": problem}
         target = self.mesh.peer_id(to)
         if target is None:
             raise RequestError("不认识电脑 %s" % to)

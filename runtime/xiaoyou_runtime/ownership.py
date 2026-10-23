@@ -76,3 +76,10 @@ def handed_away(author: str, conversation: str, records: Iterable[Dict[str, Any]
 
 def conversations(records: Iterable[Dict[str, Any]]) -> List[str]:
     return sorted({item["conversation"] for item in records if valid(item)})
+
+
+def authority(records: Iterable[Dict[str, Any]]) -> Optional[str]:
+    """权限权威：写主对话第 1 代绑定的那台（配置了 mesh.home 的）。主对话之后移交给谁都不变。"""
+    claims = sorted(item["by"] for item in records if valid(item) and item["conversation"] == MAIN
+                    and item["generation"] == 1 and item["owner"] == item["by"])
+    return claims[0] if claims else None

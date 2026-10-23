@@ -22,6 +22,7 @@ from . import (__version__, agents as agent_module, app_release, firmware_cli, r
                workspace as workspace_module)
 from .agents import AgentError
 from .config import ConfigError, load
+from .identity import IdentityError
 from .desktop_sync import DesktopSync
 from . import desktop_handoff, model_gateway
 from .iterate import cli as iterate_cli
@@ -280,7 +281,11 @@ def main(argv=None) -> int:
         if problem:
             print("注意：代理 %s 还用不了，交给它的事会失败：%s" % (agent.name, problem),
                   file=sys.stderr)
-    service = Service(xiaoyou, store, recognizer)
+    try:
+        service = Service(xiaoyou, store, recognizer)
+    except IdentityError as error:
+        print("身份文件有问题：%s" % error, file=sys.stderr)
+        return 2
     # 小幽网络：配置里有 mesh.secret 就加入（同一个主人的几台 Runtime 互相同步，见 mesh.py）。
     mesh = Mesh(config, service, xiaoyou) if config.mesh_secret else None
     try:

@@ -1643,6 +1643,17 @@ and at least one address of another member:
   `POST /v1/conversations/<name>/owner` (`{"to": "<runtime name>"}`; only while
   both runtimes are online and the conversation is idle).
 
+Devices and permissions: the runtime with `home` is also the permission
+authority. Each device can have its own credential: `POST /v1/devices`
+(`{"name","kind"}`) returns a one-time credential `dev.<id>.<secret>` to use
+instead of the shared token; `POST /v1/devices/<id>/revoke` revokes it, and
+`POST /v1/mesh/members/<id>/remove` removes a computer from the mesh. Answering
+approvals, adding or removing devices and computers, and handing off an owner
+are refused while the authority is offline. `GET /v1/info?nonce=<random>`
+returns `host.proof` (an HMAC keyed by the hash of the credential used), so a
+client can check on any route that it reached a Runtime holding its credential.
+The old shared token keeps working during the transition.
+
 The exchange endpoint `POST /v1/mesh/exchange` takes the mesh secret, not the
 phone token; `GET /v1/mesh` (phone token) lists the members and when each was
 last reached. Members long-poll each other, so a change usually arrives within

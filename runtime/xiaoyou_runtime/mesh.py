@@ -52,11 +52,35 @@ OFFLINE_SECONDS = 300
 COMMAND_SECONDS = 600
 RETRY_SECONDS = (2, 5, 10, 30, 60)
 LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000, "share": 2000,
-          "events": 3000, "lease": 20, "owner": 2000}
+          "events": 3000, "lease": 20, "owner": 2000, "device": 500, "member": 100}
 # 自动迭代的租约（iterate/lease.py）：持有者多久不续就算放手。
 LEASE_MAX_SECONDS = 6 * 3600
 ID = re.compile(r"^[0-9a-f]{32}$")
 REVERSE_KINDS = {value: key for key, value in KINDS.items()}
+
+
+def scope_of(url: str) -> str:
+    """地址能从哪里连到：loopback 本机、lan 局域网、private 私网（Tailscale）、public 公开入口。"""
+    import ipaddress
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    if host in ("localhost",) or host.endswith(".localhost"):
+        return "loopback"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if host.endswith(".local"):
+            return "lan"
+        if host.endswith(".ts.net") and urlparse(url).scheme == "http":
+            return "private"  # Tailscale 网内的名字（Funnel 公开入口是 https）
+        return "public"
+    if address.is_loopback:
+        return "loopback"
+    if address.version == 4 and address in ipaddress.ip_network("100.64.0.0/10"):
+        return "private"
+    if address.is_private or address.is_link_local:
+        return "lan"
+    return "public"
 
 
 class MeshError(Exception):
@@ -268,6 +292,7 @@ class Mesh:
         self._watching: Dict[str, threading.Thread] = {}  # 正在看着结果的指令
         self._relays: Dict[str, str] = {}  # 这台转交出去的话 → 交给的那台
         self._owner_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None  # 对话 → 绑定（ownership.py）
+        self._manual = {url.rstrip("/") for url in config.mesh_peers}  # 配置里手写的地址
         self._load()
         for url in config.mesh_peers:
             if not any(url in peer.urls for peer in self._peers.values()):
@@ -338,11 +363,18 @@ class Mesh:
         """给手机和命令行看的：网络里有谁、多久前联系上的。"""
         now = self._clock()
         with self._lock:
-            peers = [dict(peer.view(), online=self._online(peer, now), error=peer.error)
+            peers = [dict(peer.view(), online=self._online(peer, now), error=peer.error,
+                          routes=self.routes(peer.urls))
                      for peer in self._peers.values() if ID.match(peer.runtime_id)]
             seeds = [peer.urls[0] for peer in self._peers.values() if not ID.match(peer.runtime_id)]
         return {"runtime_id": self.runtime_id, "subject_id": self.subject_id, "name": self.name,
-                "urls": list(self._config.mesh_advertise), "peers": peers, "unresolved": seeds}
+                "urls": list(self._config.mesh_advertise), "routes": self.routes(self._config.mesh_advertise),
+                "peers": peers, "unresolved": seeds, "authority": self.authority(),
+                "removed": sorted(self._service.devices.removed_members())}
+
+    def routes(self, urls: List[str]) -> List[Dict[str, Any]]:
+        """地址连同它能从哪里连到、是不是手写的。"""
+        return [{"url": url, "scope": scope_of(url), "manual": url in self._manual} for url in urls]
 
     def authorized(self, header: str) -> bool:
         return hmac.compare_digest(header.encode("utf-8"), ("Bearer " + self._secret).encode("utf-8"))
@@ -357,7 +389,11 @@ class Mesh:
         回给它：这台是谁、这台的游标、它还没有的记录、这台知道的别的 Runtime。"""
         if not isinstance(body, dict):
             raise MeshError("请求体应该是一个对象")
-        caller = self._learn(body.get("from"), direct=True)
+        raw = body.get("from")
+        if isinstance(raw, dict) and isinstance(raw.get("runtime_id"), str) \
+                and self._service.devices.removed(raw["runtime_id"]):
+            raise MeshError("这台电脑已经被移出小幽网络")
+        caller = self._learn(raw, direct=True)
         if caller is None:
             raise MeshError("from 不对")
         if caller.runtime_id == self.runtime_id:
@@ -403,6 +439,10 @@ class Mesh:
         runtime_id = raw["runtime_id"]
         if runtime_id == self.runtime_id:
             return Peer(runtime_id)
+        if self._service.devices.removed(runtime_id):
+            with self._lock:
+                self._peers.pop(runtime_id, None)  # 移出的电脑：不再认、不再连
+            return None
         now = self._clock()
         with self._lock:
             peer = self._peers.get(runtime_id)
@@ -415,7 +455,9 @@ class Mesh:
             urls = [url.rstrip("/") for url in raw.get("urls", []) if isinstance(url, str)
                     and url.startswith(("http://", "https://"))][:8] if isinstance(raw.get("urls"), list) else None
             if urls is not None and (direct or not peer.urls):
-                peer.urls = urls
+                # 配置里手写的地址不被自动发现的覆盖，排在最前面（设计第 6 节）。
+                manual = [url for url in peer.urls if url in self._manual]
+                peer.urls = manual + [url for url in urls if url not in manual]
             if isinstance(raw.get("agents"), list):
                 peer.agents = [{"name": str(item.get("name"))[:24], "description": str(item.get("description") or "")[:200],
                                 "type": str(item.get("type") or ""), "speaks": item.get("speaks") is True}
@@ -497,7 +539,8 @@ class Mesh:
         stored, _ = self._replicas.position(self.runtime_id)
         if stored == mine:
             records += [record for record in self._replicas.since(self.runtime_id, after)
-                        if record["k"] in ("share", "events", "lease", "owner") and record["oseq"] <= seq]
+                        if record["k"] in ("share", "events", "lease", "owner", "device", "member")
+                        and record["oseq"] <= seq]
         if not records:
             # 序号涨了但都不是这台自己的记录（比如别人的副本）：没东西给，游标落后一点也无妨。
             return None
@@ -585,6 +628,12 @@ class Mesh:
             try:
                 if kind == "owner":
                     pass  # 存下就算数：负责人按记录现推（owner_of）
+                elif kind in ("device", "member"):
+                    if origin == self.authority():  # 设备名单、移出的电脑只认权威写的
+                        if kind == "device":
+                            self._service.devices.merge(data)
+                        else:
+                            self._service.devices.merge_removed(record["id"], data)
                 elif kind == "message":
                     task = self._message(origin, epoch, data)
                     if task:
@@ -839,6 +888,8 @@ class Mesh:
                 extra = self._service.directory_metadata(args.get('uid'))
             elif kind == 'directory_history':
                 extra = {'history': self._service.directory_history(args.get('uid'), args.get('cursor'))}
+            elif kind in ("device_add", "device_revoke", "member_remove"):
+                extra = self._service.permission_command(kind, args)
             elif kind == "handoff":
                 extra = self._service.handoff(args.get("conversation"), args.get("to"))
                 if extra.get("status") != "applied":
@@ -1039,6 +1090,20 @@ class Mesh:
             peer = self._peers.get(runtime)
             return runtime == self.runtime_id or (peer is not None and self._online(peer, self._clock()))
 
+    def authority(self) -> Optional[str]:
+        """权限权威（ownership.authority）；还没有人配置 mesh.home 时 None。"""
+        return ownership.authority(self._bindings(ownership.MAIN))
+
+    def publish_permission(self, kind: str, item_id: str, data: Dict[str, Any]) -> None:
+        """权威记下的设备、移出的电脑：作为这台的记录随网络同步。"""
+        with self._lock:
+            oseq = self._writer.sequence()
+            self._replicas.store(self.runtime_id, self._cards.epoch,
+                                 [{"k": kind, "id": item_id, "oseq": oseq, "data": data}], oseq)
+            if kind == "member":
+                self._peers.pop(item_id, None)
+            self._changed.notify_all()
+
     def _fenced(self, origin: str, kind: str, data: Dict[str, Any], oseq: int) -> bool:
         """origin 把这段对话交出去以后又写的回复、新事：不收（替别的电脑执行的派活不算）。"""
         conversation = data.get("conversation")
@@ -1226,9 +1291,12 @@ class Mesh:
         if caller is None or caller.runtime_id == self.runtime_id:
             raise MeshError("对方不是网络里的 Runtime（或者连到了自己）")
         with self._lock:
-            # 种子地址认出是谁了：后面用真的编号。
+            # 种子地址认出是谁了：后面用真的编号；手写的地址并过去，排在前面。
             if caller.runtime_id != key:
-                self._peers.pop(key, None)
+                seed = self._peers.pop(key, None)
+                if seed is not None:
+                    manual = [url for url in seed.urls if url in self._manual]
+                    caller.urls = manual + [url for url in caller.urls if url not in manual]
             caller.cursors = reply.get("cursors") if isinstance(reply.get("cursors"), dict) else None
         self._learn_peers(reply.get("peers"))
         self._take(reply.get("origins"), caller.runtime_id)
