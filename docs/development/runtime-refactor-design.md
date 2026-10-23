@@ -2,7 +2,9 @@
 
 # Runtime three-layer refactor design
 
-Status: design approved, 2026-10-23. Implemented in steps R1-R8 of section 4; not started yet.
+Status: design approved; implementation contracts clarified on 2026-10-23. R1 (`2bf81bf`) and R2
+(`1896e6d`-`0688c71`) are committed, see section 7; R3-R8 are not implemented. This is source state,
+not deployment.
 
 This document maps the [Xiaoyou complete plan](xiaoyou-agent-model.md) onto the Runtime code in
 three layers: the **intake layer** (how things come in and how they are stored), the **reply layer**
@@ -20,7 +22,7 @@ adapters ---> Intake.accept(event) ---> event log ---> current state (projection
                                               |      +--- 3. Agent loop ---+
                                               |      | wake -> decide ->   |
                                               |      | record decision ->  |
-                                              |      | speak -> act        |
+                                              |      | apply/queue -> speak |
                                               |      +---------+-----------+
                                               |                | results are events
                                               v                v
@@ -30,12 +32,14 @@ adapters ---> Intake.accept(event) ---> event log ---> current state (projection
                                    +---------------------------+
 ```
 
+The design borrows parts of Raft and DS-Bot-App; see section 8.
+
 Three rules hold throughout:
 
 1. **Only Intake writes the event log.** Other modules read the current state and change it only
    by submitting events.
 2. **Store before acting.** Every input, decision and result is persisted as an event before
-   anything follows from it; after a restart the log is replayed and accepted work is not redone.
+   anything follows from it. Replay rebuilds state without executing effects; recovery resumes pending work and reconciles uncertain outcomes under section 1.5.
 3. **Clients see one projection.** Messages, tasks, conversations, quota, approvals and what
    Xiaoyou is doing all arrive through `/v1/sync`.
 
@@ -66,7 +70,7 @@ Intake.accept(event) -- dedupe, validate, write the log, advance the current sta
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Globally unique: client requests use their request id (`client_id`), everything else `runtime_id` + local sequence; resubmitting the same `id` returns the same result (decided: dedupe by id only) |
+| `id` | Stable event identity: client requests retain `client_id`, internal events use the origin Runtime and its sequence; identity is scoped as described below; an identical retry returns the original acceptance (dedupe by identity only) |
 | `seq` | Local log sequence, monotonic; the sync cursor uses it |
 | `at` | Original time it happened (N9) |
 | `source` | `owner` / `helper` / `desktop` / `mesh` / `timer` / `system` |
@@ -84,6 +88,10 @@ World.get(kind, id) / World.list(kind, **filter)        # read-only
 World.subscribe(after_seq) -> event stream               # used by the agent loop and the reply layer
 ```
 
+**Identity and authorization:** client request identity is `(origin_runtime_id, authenticated_client_id, client_id)`; the receiving authority fixes the origin on first acceptance, and retries retain it. Internal events use `(origin_runtime_id, origin_seq)`. A retry with the same identity must match its original kind, conversation, target and normalized payload; otherwise return an explicit conflict (HTTP 409), without executing it or returning another conversation's content. Payload comparison validates reuse; it is not content-based deduplication. Authenticate and check scope before returning an existing result.
+
+Mesh preserves original identity and revision; each receiver assigns a separate local `seq` for replay. Forwarding does not mint a new identity. Peer commands have their own stable identity and target authority; replicas do not execute them. Sender-provided `actor` and `trust` are not authorization: adapters derive effective privileges from the authenticated source. Persist dedupe records across restarts and log compaction for the supported retry window; expired identities require explicit reconciliation, never silent execution as a new request.
+
 ### 1.3 Rules per source
 
 - **Owner messages:** `accept` first, then queue into the conversation; the receipt only says
@@ -91,7 +99,7 @@ World.subscribe(after_seq) -> event stream               # used by the agent loo
 - **Helpers:** progress only updates the task's progress fields and never writes the main chat;
   every ending emits `task_ended` (done / failed / cancelled) for the agent loop to finish (A1).
 - **Desktop sessions:** written only into their own observed session, never into the main chat,
-  never waking Xiaoyou; re-observing a session emits nothing new; recap material never quotes
+  never waking Xiaoyou; re-observing the same session revision emits nothing new; recap material never quotes
   recap material (N8, N11).
 - **Other computers:** each record is changed only by its origin; commands from a peer (cancel,
   confirm, hand over) enter the same `accept` with `actor=mesh:<node>`.
@@ -108,6 +116,23 @@ World.subscribe(after_seq) -> event stream               # used by the agent loo
 | `mesh._apply_current` dispatching to messages / tasks / approvals / commands | `MeshAdapter`; commands go through `accept(kind=action, actor=mesh:...)` |
 | `transcript.json` (Xiaoyou's own conversation record) | No longer written; the agent loop assembles context from the log on demand |
 | `Service.cancel`, `Xiaoyou.cancel`, the `__main__` interrupt, mesh cancel commands | One `action:cancel` event with `actor` = `app` / `cli` / `mesh:...` / `xiaoyou` |
+
+### 1.5 Durable acceptance and recovery
+
+`Accepted` means the input and pending intent are durably committed, not merely queued in memory. Intake serializes validation, identity allocation and durable append; projections and notifications advance only after that commit. If the append succeeds but the response is lost, a retry returns the same acceptance. Replay is deterministic and has no external side effects. Subscribers resume from durable cursors and tolerate redelivery. Before R3, specify the log's commit boundary, partial-tail recovery, schema versioning and retention/checkpoint rules; a JSONL append alone is not a durability guarantee.
+
+Each executable decision has a stable `operation_id`, linked to its trigger and persisted before execution. Record `pending`, `running`, `succeeded`, `failed`, `cancelled`, or `unknown` and the external execution identity where available. Only one executor may claim an operation; a restart or expired claim does not prove the external action stopped.
+
+| Failure boundary | Required recovery |
+| --- | --- |
+| Before durable acceptance | No accepted receipt; retry with the same identity |
+| Accepted, before execution starts | Resume the pending intent once |
+| External action may have started, result not committed | Query by execution identity or retry with the same provider-supported idempotency key; if neither is possible, mark `unknown` and reconcile before repeating |
+| Result committed, delivery interrupted | Replay the stored result; do not re-execute |
+
+A cancellation request is distinct from confirmed cancellation. Completion racing cancellation follows an explicit terminal-state transition table; late progress cannot resurrect terminal work. A confirmed terminal event wakes the originating conversation once logically, using a durable trigger/operation identity so replay cannot duplicate the announcement. Interrupting speech does not undo an accepted action: persist the interrupted reply state and explicitly cancel or retain the operation.
+
+R3 must test every boundary with injected crashes, duplicate delivery and concurrent claims. Rebuild all promised state from the retained log/checkpoint, including pending intents and dedupe records. Validate old-data import and rollback compatibility before stopping legacy writes; deleting snapshots in tests must never delete the only copy of history.
 
 ## 2. Reply layer
 
@@ -136,17 +161,22 @@ GET /v1/sync?cursor=<cursor>&wait=<seconds>
 
 - **An empty or invalid cursor gets a snapshot, not a replay of history.** The snapshot holds the
   current state only: the latest N messages per conversation, all unfinished tasks, pending
-  approvals, quota and Xiaoyou's state; deltas follow from the current cursor. A computer switch or
-  restart becomes usable in well under a second instead of catching up 415 pages (N10). Older
+  approvals, quota and Xiaoyou's state; deltas follow from the snapshot boundary. The target is to show the active conversation within
+  1 second of authenticated transport readiness, subject to measurement, without catching up
+  415 pages (N10). Older
   history is paged on demand (`GET /v1/conversations/{id}/history`).
 - **Pages are sized by count**, no longer 48 KB; oversized items (long replies, attachments) carry a
   summary and a reference.
-- **Clients persist their cursor** and resume after a restart.
+- **Clients persist applied state and its cursor atomically** and resume after a restart; storing the cursor alone can lose unapplied events.
 - **Replies in progress** are `assistant_message` events with `status=streaming`, each replacing the
   whole text; once `final`, no older fragment may overwrite it. Clients no longer run a separate
   wait loop or stream per message (C1, C9).
 - **Long polling:** `wait` returns as soon as anything changes; switching to SSE or WebSocket later
   only changes the transport, not the event format.
+
+**Snapshot boundaries and bounds:** bind every cursor and callback to Runtime identity, epoch, authorized scope and connection generation. Freeze a snapshot at sequence S; paginate it with a stable snapshot token, retain deltas after S, and switch to live delivery only after the scoped snapshot is applied. Expired tokens or missing retained deltas explicitly restart reconciliation. Ignore callbacks from obsolete connections; tombstones prevent deleted items from returning.
+
+The 50-message limit is per conversation, not an unbounded all-conversation response. Load the active conversation, relevant tasks and pending approvals first; page the remaining authorized state with visible loading status. Use item counts plus explicit byte/work limits and continuation tokens. Oversized content references remain fetchable; excerpts cannot silently replace authoritative text. On scope switches, reconcile that scope before treating it as current. Test large histories, snapshot/delta races, source switches, failed local commits and expired cursors. The 1-second target concerns current visible state; broader recovery and propagation must also meet the shared 3-second contract.
 
 **Sending:**
 
@@ -186,9 +216,10 @@ Wake rules (subscribe to World events; deterministic, cheap)
                              2. Decide: one call, exactly one action
                                 reply / dispatch / amend / cancel / watch / promise / remember / stay_silent
                              3. Record the decision: accept(action event) (store before acting)
-                             4. Speak: one streamed call, read-only tools, only about what happened
-                             5. Act: dispatch a helper (pick the computer), amend, cancel...;
-                                results return to layer 1 as events
+                             4. Apply a bounded local action, or durably queue long work;
+                                persist its actual outcome or acceptance state
+                             5. Speak: one streamed call, read-only tools, grounded in that state;
+                                long-work results return later as events
 ```
 
 - **Replies and proactivity are the same `step`** with different triggers. A new proactive ability
@@ -212,9 +243,13 @@ Loop.step(conversation, trigger: Event) -> None
 ContextBuilder.build(conversation, trigger) -> Context
 Decider.decide(context) -> Action            # decide first; on timeout use the fallback in decide-then-speak
 Speaker.speak(context, action_result) -> streamed assistant_message events
-Executor.apply(action) -> events             # dispatch / amend / cancel / watch / promise / remember
+Executor.apply(action, operation_id) -> ActionResult  # persisted local outcome or queue acceptance
 HelperPort.run(job, control) -> progress and result events  # Claude Code, Codex, DeepSeek, remote nodes
 ```
+
+`ActionResult` distinguishes completed local work, queued work, confirmed remote start, failure and unknown outcome. Queue acceptance permits "queued", not "started" or "finished". Slow external calls run in workers and never block the first reply. A later terminal event produces a separate completion turn; "one turn speaks once" does not suppress that result. Reply-only actions need no external execution.
+
+Before enabling the two-model-call path, allocate one end-to-end 3,000 ms budget across queueing, context, decision, bounded application, generation, transport and client rendering. Measure the first meaningful complete bubble, not the HTTP receipt, first token or canned acknowledgement. Test real models and installed clients using the shared sample/fault matrix. Slow decisions or read tools share the same deadline; delayed/unavailable feedback is a recovery result, not a latency pass. Keep the supported path until the candidate passes; deleting the fallback is gated on evidence, not a planned date.
 
 ### 3.3 Mapping to existing code
 
@@ -222,7 +257,7 @@ HelperPort.run(job, control) -> progress and result events  # Claude Code, Codex
 | --- | --- |
 | `Xiaoyou.hear`, `routing.decide` (named agent, router, default) | `Loop.step`; a named agent becomes a constraint in the context for `Decider` |
 | `_converse` / `_converse_with`: tool talk, the JSON fallback, re-asking | Two stages, `Decider` + `Speaker`; the JSON fallback and re-asking are removed |
-| `_converse_decided`, `decision.py` (`decide_first`, off by default) | Becomes the only path (once time to first text is measured and passes) |
+| `_converse_decided`, `decision.py` (`decide_first`, off by default) | Becomes the only path (once end-to-end time to the first meaningful complete bubble is measured and passes) |
 | `_plan`, `_apply_conversation`, `_assign`, `_resume`, `_launch`, `_continue_desktop` | `Executor.apply` |
 | `_finished`, `_relay`, `_close`, `cancel` | `task_ended` event + wake rule + `Speaker` |
 | `lane_prompt`, `BACKGROUND_TURNS = 6`, `RECENT_FINISHED_CARDS = 5` | `ContextBuilder` (focus + commitments + relevance) |
@@ -239,15 +274,17 @@ and reversible. The steps map to the four steps in section 6 of the complete pla
 | Step | Content | Acceptance | Plan step |
 | --- | --- | --- | --- |
 | R1 | Add `actor` and `cause` to events (backward compatible); cancellation emits `task_ended` and Xiaoyou says one line in the originating chat | Cancels from every source record their initiator; she always says one line | Words match actions (the earlier a and b) |
-| R2 | Introduce `Intake`, first as a wrapper around `Record`; move write sites to `accept` one by one (HTTP, then helpers, then desktop sessions, then other computers) | The log matches the pre-change log record by record (differential tests); desktop sessions no longer reach the main chat | One state |
-| R3 | Introduce the `World` projection; `messages.json` and `cards.json` become rebuildable snapshots; stop writing `transcript.json` | Deleting the snapshots and restarting restores the full state; accepted work is not redone | One state |
-| R4 | Sync becomes snapshot + delta with paging by count; clients persist their cursor | After a computer switch or restart the latest state shows within 1 second; task results no longer wait ten minutes (N10) | Automatic connection |
+| R2 | Introduce `Intake`, first as a wrapper around `Record`; move write sites to `accept` one by one (HTTP, then helpers, then desktop sessions, then other computers) | Unchanged paths pass differential tests; desktop isolation has separate corrected expectations; all write sites pass the Intake boundary check | One state |
+| R3 | Introduce the `World` projection; `messages.json` and `cards.json` become rebuildable snapshots; stop writing `transcript.json` | Snapshot rebuild and crash-boundary tests pass; pending work resumes, uncertain effects are reconciled, completed work is not repeated | One state |
+| R4 | Sync becomes snapshot + delta with paging by count; clients persist their cursor | From authenticated transport readiness, the active conversation shows current state within 1 second; task results no longer wait ten minutes (N10) | Automatic connection |
 | R5 | Replies become `assistant_message` events; the projection completes formatting runs | A new client shows streamed replies and formatting from `/v1/sync` alone (N13) | One state |
-| R6 | Agent loop: measure and default to decide, then speak; remove the JSON fallback and re-asking; wake rules replace Pulse; `ContextBuilder` | First response within 3 seconds; one request, one reply; "this" resolves | Words match actions |
+| R6 | Agent loop: measure and default to decide, then speak; remove the JSON fallback and re-asking; wake rules replace Pulse; `ContextBuilder` | First meaningful complete bubble within 3 seconds; no duplicate reply per trigger; "this" resolves | Words match actions |
 | R7 | Move files into the layers: `events/`, `world/`, `delivery/`, `loop/`, `helpers/`, `api/`; remove import cycles | Move only, all tests pass | Modular cleanup (decided to follow the contracts) |
 | R8 | After clients switch, remove `/v1/feed`, per-message wait and stream, and old compatibility | No callers of old endpoints; minimum versions enforced | Converge the interface |
 
-R1 can start now; R2-R5 are the core; R6 needs real-model measurements; R7 follows once behaviour
+R2 separates wrapper migration from intentional behavior corrections. Keep differential baselines for unchanged paths; test desktop isolation against explicit new expectations. Use controlled scheduling for exact-log comparisons and separate stress tests for concurrency. Do not discard `seq`/`rev` merely to pass: validate monotonicity, causal ordering, identity and terminal-state invariants even where independent interleavings are allowed. The current `Writer` wrapper is transitional, not the final `accept` event contract; finish source coverage, durable identity and event validation before R3 depends on it.
+
+R1's cancellation subset is committed; common event metadata remains part of R2. R2-R5 are the core; R6 needs real-model measurements; R7 follows once behaviour
 is stable; R8 waits for the App and desktop client to migrate.
 
 ## 5. Compatibility and risks
@@ -261,11 +298,82 @@ is stable; R8 waits for the App and desktop client to migrate.
   no events lost in between; validate with cursor + epoch.
 - **Decide, then speak latency:** one more model call may exceed 3 seconds; measure first and use
   the documented fallback if it misses.
-- **The Runtime running during the change:** no step requires a restart to roll back; deploying
-  (restarting) is the owner's call.
+- **The Runtime running during the change:** source-only steps leave the running process untouched. After a persisted-format migration,
+  rollback needs a compatible binary/data path; checking out older code is insufficient. Deploying
+  (restarting) follows the owner's authorization.
 
 ## 6. Decided (2026-10-23)
 
 - The snapshot carries the latest 50 messages per conversation.
 - R4 keeps long polling for now; a push stream waits until the event format is stable.
 - R7 uses the six directory names above: `events/`, `world/`, `delivery/`, `loop/`, `helpers/`, `api/`.
+
+## 7. Implementation handoff (2026-10-23)
+
+R2 is done (2026-10-23; written by Codex, split, checked and committed by Claude Code). Not pushed;
+the running Runtime was not restarted.
+
+| Commit | Content |
+| --- | --- |
+| `1896e6d` | Intake shell and provenance; the differential log test `test_intake` with its golden `intake_golden.json` (produced by the pre-change code) |
+| `1b45f23` | HTTP / Service writes go through Intake |
+| `ef4d532` | Helper, Xiaoyou and timer writes go through Intake |
+| `cb8d1e4` | Desktop observation may only write observed sessions; recap context is tagged and filtered on import (N8, N11) |
+| `0688c71` | Writes from other computers go through Intake; a boundary test forbids writing Record directly |
+
+- Each commit ran the full Runtime suite on its own; the last ran 696 tests, and the full gate
+  (including the firmware build) passed. The differential test passed 12 times under four-way
+  concurrency.
+- The differential test controls only the ordering of helper wrap-up, summary and metadata inside
+  the test, and keeps every sequence and revision assertion.
+- The transitional Writer is not yet the durable event API of R3; `Accepted`, `operation_id` and
+  `applied_seq` come with R3.
+- Next: R3 (the `World` projection, rebuildable snapshots, crash-boundary tests), making `Intake` /
+  `Loop.step` deterministic and replayable as in section 8.
+- Build / device / real-model latency, reconnection and multi-end acceptance: NOT RUN. Not deployed.
+
+## 8. Lessons from Raft and DS-Bot-App
+
+The owner asked to learn from the design logic of two open-source projects without copying them.
+The tables list only what lands in this design, and what we deliberately do not take.
+
+### 8.1 Raft (following the design of etcd-io/raft)
+
+Raft solves "several machines agree on one log". Xiaoyou needs no leader election or quorum: each
+record already has a single writer, its origin. What is worth learning is how cleanly it handles
+**the parts that are hard to communicate**.
+
+| What Raft does | How we use it | Step |
+| --- | --- | --- |
+| The core algorithm is a deterministic state machine; the application owns network and disk. Inputs are messages or clock ticks; outputs are "entries to persist + messages to send + new state" (the Ready loop) | `Loop.step` and `Intake` become pure logic as well: given the current state and one event, they return events to persist, actions to run and replies to deliver; an outer layer does the I/O. Time is injected as an input. Differential tests can then replay in a fixed order instead of depending on thread timing (the root of the unstable concurrent R2 runs) | R2 wrap-up, R3, R6 |
+| Persist before sending; committed and applied are tracked separately | Already "store before acting". Add two explicit cursors: `accepted_seq` (durably accepted) and `applied_seq` (advanced into state); recovery replays from after `applied_seq` | R3 |
+| Replication carries the previous entry's index/term as a consistency check; a mismatch backs off or switches to a snapshot (InstallSnapshot) | Sync between computers, and between clients and the Runtime, carries "previous origin sequence + epoch" on every batch; a mismatch is a gap and gets a snapshot instead of a replay from zero. The epoch plays the role of the term | R4, mesh |
+| Snapshots + log compaction; a node far behind receives a snapshot | Same as section 2, snapshot + delta; the snapshot is pinned at sequence S and deltas after S are kept until the client catches up | R4 |
+| Flow control: a per-message size limit and a cap on in-flight messages; a lagging follower is probed first and pipelined once it catches up | Sync pages have both a count and a size limit; a lagging client is served in snapshot mode and switches to delta mode once caught up; one in-flight long poll per connection | R4 |
+| A proposal is not guaranteed to commit; the client retries with the same request | The decided dedupe by request id; client retries must carry the original id | R2 (exists) |
+| Read-only requests first confirm that the node is still authoritative (ReadIndex / lease) | When Xiaoyou answers about current state she reads the record's origin; a replica is labelled with its freshness and stale data is confirmed with the origin (M1) | R3, R6 |
+
+**Not taken:** leader election, quorum, membership changes, linearizable reads and writes. A home has
+two or three computers, so a quorum means nothing, and chat does not need linearizability; a single
+writer per origin is enough.
+
+### 8.2 DS-Bot-App (multi-end communication)
+
+It is "one host at the centre, with phone and desktop clients connecting to it", which matches our
+"each record is owned by its origin, the phone holds no authoritative state". What is worth learning
+is how effortless yet conservative it makes **pairing, identity and disconnection**.
+
+| What DS-Bot-App does | How we use it | Step |
+| --- | --- | --- |
+| QR pairing: the code carries the host's public-key fingerprint as the trust anchor; self-signed certificate with fingerprint pinning, TLS verification never disabled, no plaintext fallback; the host approves once and later reconnects need no approval | Matches the existing encrypted relay; extend it to every route: every route checks the same identity fingerprint, and plaintext direct connections go away | R4 / automatic connection |
+| A changed host identity requires re-pairing and a new key is never accepted silently; certificate renewal keeps the private key, so renewal needs no re-pairing; a corrupted private key makes the host refuse to start rather than quietly generate a new identity | Adopt as rules: a changed Runtime identity means "pair again" (one of the three prompts); renewal never bothers the user; a corrupted identity file is an error, never an automatic new identity | R4 |
+| The composer shows "waiting for an answer", "host running" and "network connection" as separate states | Matches our vocabulary: connection state and what Xiaoyou is doing are shown separately, never one "online" flag | R5, UI |
+| Notifications: the host keeps the latest 500 notification records and the phone sees the latest 100; read state is per device and stored on the host; the background link starts from the current notification cursor, never replays old notifications, and a backlog shows only the latest 3; tapping a notification first checks the host identity | Notifications get their own cursor, separate from the sync cursor; read state lives in the Runtime (fixes S2); old notifications are not replayed after reconnecting; opening one first checks which Runtime it came from | R4, R5 (delivery rules) |
+| Android background delivery uses a foreground service polling about every 10 seconds and backing off to 60 seconds without network; cloud push is optional | Background notifications do not depend on third-party push; backoff is bounded | R4 |
+| A lost receipt means refreshing state, never assuming it did not run; requests carry device-scoped ids; after a disconnect the client queries the original task and never automatically redoes a non-repeatable operation | Matches `operation_id` / `unknown` in section 1.5; the App's offline queue resends with the original id and queries first when a result is unknown | R2, R3 |
+| After a session switches segments, scheduled tasks stay bound to the original session and reminders are forwarded to the current segment, without copying or rebuilding the task | Commitments and watches stay bound to the conversation that created them; when due they are delivered where the owner currently is, without copying the commitment | R6 |
+| Safe by default: the phone entry is off by default, moving to a new host requires re-authorization, and plugin sources are pinned to a commit with SHA-256 | When preinstalling dsh and pi (decided), pin versions and verify them; a new computer joining the mesh is approved on an existing device | Preinstall plan |
+
+**Not taken:** asking the user to switch off and re-pair when an address changes (our mesh distributes
+routes automatically); depending on third-party cloud push; having no relay, so that nothing works
+when the host computer is off (we have the encrypted relay and several computers).
