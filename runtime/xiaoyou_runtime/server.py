@@ -28,6 +28,8 @@
   POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
+  GET  /v1/conversations/<名字>/owner   这段对话归哪台电脑负责（小幽网络里）
+  POST /v1/conversations/<名字>/owner   {"to": "<电脑名字或编号>"} 两台都在线、对话空闲时移交
   POST /v1/conversations/<名字>/history {"turns":[{"id","text","reply","at"?}]} 带来别处的对话
 
 设备固件（这台电脑上留着每一版；手机 App 取走镜像，经蓝牙写进设备）：
@@ -410,6 +412,12 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "conversations"]:
                 self._send(200, service.conversations())
                 return
+            if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "owner":
+                try:
+                    self._send(200, service.owner(parts[2]))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
             if parts == ["v1", "directory"]:
                 try:
                     self._send(200, service.directory_page(query.get('cursor', [None])[0], query.get('q', [''])[0]))
@@ -731,6 +739,11 @@ def make_server(config: Config, service: Service,
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "reset":
                     self._send(200, {"reset": service.reset(parts[2])})
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "owner":
+                    to = body.get("to") if isinstance(body, dict) else None
+                    result = service.handoff(parts[2], to)
+                    self._send(409 if result.get("status") == "refused" else 200, result)
                     return
             except ConflictError as error:
                 self._fail(409, str(error))

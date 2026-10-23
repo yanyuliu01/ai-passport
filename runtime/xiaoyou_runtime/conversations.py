@@ -42,7 +42,9 @@ class ConversationCatalog:
                 return self.get(name)
             now = time.time()
             item = {'id': name, 'title': '新旁聊', 'kind': 'side', 'created_at': now,
-                    'updated_at': now, 'revision': 1, 'title_source': 'pending', 'metadata_at': now, 'origin': self.origin}
+                    'updated_at': now, 'revision': 1, 'title_source': 'pending', 'metadata_at': now, 'origin': self.origin,
+                    # 创建它的那台：这段旁聊的第 0 代负责人（ownership.py），改名、同步都不改。
+                    **({'owner': self.origin} if self.origin else {})}
             if context:
                 item['context'] = copy.deepcopy(context)
             self._save(name, item)
@@ -97,6 +99,9 @@ class ConversationCatalog:
             item = {'id': name, 'kind': 'side', 'title': title, 'origin': origin, 'metadata_at': at,
                     'created_at': at, 'updated_at': at,
                     'revision': (old or {}).get('revision', 0) + 1, 'title_source': data.get('title_source', 'upstream')}
+            owner = (old or {}).get('owner') or data.get('owner')
+            if isinstance(owner, str) and re.fullmatch(r'[0-9a-f]{32}', owner):
+                item['owner'] = owner  # 先记下的为准：后来改名的那台不会变成负责人
             context = data.get('context')
             if isinstance(context, dict):
                 item['context'] = {key: context[key] for key in ('id', 'conversation', 'author', 'source') if key in context}

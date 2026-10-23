@@ -1635,6 +1635,13 @@ and at least one address of another member:
   When omitted it is derived from `server.host`; a runtime that only listens on
   `127.0.0.1` advertises nothing and still takes part by connecting out, pushing
   its records and pulling the others' (useful in a cloud sandbox or behind NAT).
+- `home` (`true` / `false`, default `false`): the main conversation belongs to
+  this runtime. Set `true` on exactly one runtime in the mesh. Once it owns the
+  conversation, the others forward main-conversation messages to it and, while
+  it is unreachable, queue them instead of answering; a side conversation
+  belongs to the runtime that created it. Inspect or hand off with `GET` /
+  `POST /v1/conversations/<name>/owner` (`{"to": "<runtime name>"}`; only while
+  both runtimes are online and the conversation is idle).
 
 The exchange endpoint `POST /v1/mesh/exchange` takes the mesh secret, not the
 phone token; `GET /v1/mesh` (phone token) lists the members and when each was

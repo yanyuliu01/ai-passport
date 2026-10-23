@@ -37,6 +37,7 @@ from .agents import Agent, AgentError, Job, Outcome
 from .config import AgentSpec
 from .message_log import DESKTOP_CONVERSATION, KINDS, MAX_ACTIVITIES
 from .mesh_share import Shares
+from . import ownership
 
 PROTOCOL = 1
 SHORT = 12
@@ -51,7 +52,7 @@ OFFLINE_SECONDS = 300
 COMMAND_SECONDS = 600
 RETRY_SECONDS = (2, 5, 10, 30, 60)
 LIMITS = {"task": 300, "message": 5000, "approval": 300, "command": 1000, "result": 2000, "share": 2000,
-          "events": 3000, "lease": 20}
+          "events": 3000, "lease": 20, "owner": 2000}
 # 自动迭代的租约（iterate/lease.py）：持有者多久不续就算放手。
 LEASE_MAX_SECONDS = 6 * 3600
 ID = re.compile(r"^[0-9a-f]{32}$")
@@ -266,6 +267,7 @@ class Mesh:
         self._outbox: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._watching: Dict[str, threading.Thread] = {}  # 正在看着结果的指令
         self._relays: Dict[str, str] = {}  # 这台转交出去的话 → 交给的那台
+        self._owner_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None  # 对话 → 绑定（ownership.py）
         self._load()
         for url in config.mesh_peers:
             if not any(url in peer.urls for peer in self._peers.values()):
@@ -495,7 +497,7 @@ class Mesh:
         stored, _ = self._replicas.position(self.runtime_id)
         if stored == mine:
             records += [record for record in self._replicas.since(self.runtime_id, after)
-                        if record["k"] in ("share", "events", "lease") and record["oseq"] <= seq]
+                        if record["k"] in ("share", "events", "lease", "owner") and record["oseq"] <= seq]
         if not records:
             # 序号涨了但都不是这台自己的记录（比如别人的副本）：没东西给，游标落后一点也无妨。
             return None
@@ -567,13 +569,23 @@ class Mesh:
 
     def _apply_current(self, origin: str, epoch: str, records: List[Dict[str, Any]]) -> None:
         touched: Dict[str, None] = {}
+        owners = any(record["k"] == "owner" for record in records)
+        if owners:
+            with self._lock:
+                self._owner_cache = None  # 先认新绑定，再按它判断同一批里的回复
         for record in records:
             kind = record["k"]
             data = self._replicas.get(origin, kind, record["id"])
             if data is None:
                 continue
+            if kind in ("message", "task") and self._fenced(origin, kind, data, record["oseq"]):
+                sys.stderr.write("「%s」已经不负责这段对话，丢掉它之后写的 %s/%s\n"
+                                 % (self._peer_name(origin), kind, record["id"]))
+                continue
             try:
-                if kind == "message":
+                if kind == "owner":
+                    pass  # 存下就算数：负责人按记录现推（owner_of）
+                elif kind == "message":
                     task = self._message(origin, epoch, data)
                     if task:
                         touched[task] = None
@@ -596,6 +608,8 @@ class Mesh:
             stored = self._replicas.get(origin, "task", task_id)
             if stored is not None:
                 self._task(origin, epoch, stored)
+        if owners:
+            self._service.retry_parked()  # 负责人变了：在等它的话再看一次
 
     def _peer_name(self, origin: str) -> str:
         with self._lock:
@@ -760,8 +774,10 @@ class Mesh:
             self._relays[message["id"]] = target
         self.command(target, "message", {
             "conversation": message["conversation"], "text": message["text"], "card": message.get("relay_card"),
-            "pin": True, "agent": message.get("asked"), "effort": message.get("effort"), "reply_scope": message.get("reply_scope"),
-            "model": message.get("model"), "message_id": message["id"]})
+            # 按负责人转的是对话里的一句，不是在某件事里面说的
+            "pin": not message.get("routed"), "agent": message.get("asked"), "effort": message.get("effort"), "reply_scope": message.get("reply_scope"),
+            "model": message.get("model"), "message_id": message["id"],
+            **({"routed_generation": message.get("owner_generation", 0)} if message.get("routed") else {})})
         return None
 
     def amend(self, card: Dict[str, Any], text: str, continue_desktop: bool = False) -> bool:
@@ -823,6 +839,10 @@ class Mesh:
                 extra = self._service.directory_metadata(args.get('uid'))
             elif kind == 'directory_history':
                 extra = {'history': self._service.directory_history(args.get('uid'), args.get('cursor'))}
+            elif kind == "handoff":
+                extra = self._service.handoff(args.get("conversation"), args.get("to"))
+                if extra.get("status") != "applied":
+                    raise MeshError(extra.get("reason") or "没交成")
             elif kind == "approve":
                 answered = self._service.approve(str(args.get("approval")), args.get("decision"))
                 if answered is None:
@@ -861,6 +881,9 @@ class Mesh:
         if isinstance(delegated, dict) and delegated.get("runtime") == data.get("from"):
             mesh["delegated_from"] = {key: str(value)[:64] for key, value in delegated.items()
                                       if key in ("runtime", "card", "name")}
+        routed = args.get("routed_generation")
+        if isinstance(routed, int) and not isinstance(routed, bool):
+            mesh["routed_generation"] = routed  # 别的电脑按负责人转过来的：这里不再随便转回去
         hop = args.get("hop", 0)
         snapshot = self._service.submit(
             args.get("text"), args.get("conversation") or "default", client_id=message_id,
@@ -935,6 +958,107 @@ class Mesh:
             self._replicas.store(self.runtime_id, self._cards.epoch,
                                  [{"k": "share", "id": key, "oseq": oseq, "data": data}], oseq)
             self._changed.notify_all()
+
+    # ---- 对话负责人（ownership.py） ----
+
+    def _bindings(self, conversation: str) -> List[Dict[str, Any]]:
+        """网络里各台写的这段对话的绑定（by 是写它的那台）。按对话缓存：每条同步来的记录都要查。"""
+        with self._lock:
+            cache = self._owner_cache
+        if cache is None:
+            cache = {}
+            for origin in self._replicas.origins():
+                for item in self._replicas.find(origin, "owner", lambda data: True):
+                    if isinstance(item.get("conversation"), str):
+                        cache.setdefault(item["conversation"], []).append(dict(item, by=origin))
+            with self._lock:
+                self._owner_cache = cache
+        return [dict(item) for item in cache.get(conversation, [])]
+
+    def owner_of(self, conversation: str) -> Dict[str, Any]:
+        """这段对话现在归谁：{"owner", "generation", "conflict", "by", "name", "online"}。"""
+        main = ownership.resolve(ownership.MAIN, self._bindings(ownership.MAIN))
+        if conversation == ownership.MAIN:
+            view = main
+        else:
+            item = self._cards.conversations.get(conversation) or {}
+            view = ownership.resolve(conversation, self._bindings(conversation),
+                                     creator=item.get("owner"), main_owner=main["owner"])
+        owner = view["owner"]
+        with self._lock:
+            peer = self._peers.get(owner) if owner else None
+            online = owner == self.runtime_id or (peer is not None and self._online(peer, self._clock()))
+        name = self.name if owner == self.runtime_id else (peer.name if peer is not None else "")
+        return dict(view, name=name or (owner or "")[:6], online=bool(owner) and online)
+
+    def _publish_owner(self, conversation: str, owner: str, generation: int) -> Dict[str, Any]:
+        """写一代绑定（只有现在的负责人调用）。返回写下的那条。"""
+        with self._lock:
+            oseq = self._writer.sequence()
+            data = dict(ownership.binding(conversation, owner, generation, self.runtime_id), oseq=oseq,
+                        at=self._clock())
+            data.pop("by")  # 写它的是谁由产地决定，不由内容自称
+            self._replicas.store(self.runtime_id, self._cards.epoch,
+                                 [{"k": "owner", "id": "%s:%d" % (conversation, generation), "oseq": oseq,
+                                   "data": data}], oseq)
+            self._owner_cache = None
+            self._changed.notify_all()
+        return data
+
+    def claim_home(self) -> None:
+        """配置了 mesh.home：主对话还没有负责人时，写下第 1 代归这台。"""
+        if getattr(self._config, "mesh_home", False) and \
+                ownership.resolve(ownership.MAIN, self._bindings(ownership.MAIN))["owner"] is None:
+            self._publish_owner(ownership.MAIN, self.runtime_id, 1)
+
+    def peer_id(self, name_or_id: Any) -> Optional[str]:
+        if not isinstance(name_or_id, str) or not name_or_id:
+            return None
+        if name_or_id in (self.runtime_id, self.name):
+            return self.runtime_id
+        with self._lock:
+            for key, peer in self._peers.items():
+                if ID.match(key) and name_or_id in (key, peer.name):
+                    return key
+        return None
+
+    def hand_off(self, conversation: str, target: str, generation: int) -> Dict[str, Any]:
+        """Service 已经在锁里确认这台是负责人、这段对话空闲：写下一代给 target。"""
+        return self._publish_owner(conversation, target, generation + 1)
+
+    def request_handoff(self, owner: str, conversation: str, target: str) -> Optional[str]:
+        """不是负责人：请负责人移交。送不出去时返回原因。"""
+        problem = self._reachable(owner)
+        if problem:
+            return problem
+        self.command(owner, "handoff", {"conversation": conversation, "to": target})
+        return None
+
+    def online(self, runtime: str) -> bool:
+        with self._lock:
+            peer = self._peers.get(runtime)
+            return runtime == self.runtime_id or (peer is not None and self._online(peer, self._clock()))
+
+    def _fenced(self, origin: str, kind: str, data: Dict[str, Any], oseq: int) -> bool:
+        """origin 把这段对话交出去以后又写的回复、新事：不收（替别的电脑执行的派活不算）。"""
+        conversation = data.get("conversation")
+        if not isinstance(conversation, str) or conversation == DESKTOP_CONVERSATION:
+            return False
+        if kind == "task" and data.get("delegated_from"):
+            return False
+        if kind == "message":
+            author = data.get("author") if isinstance(data.get("author"), dict) else {}
+            if author.get("kind") == "owner":
+                return False  # 主人说的话照收，只拦小幽替这段对话做的决定
+            task = self._replicas.get(origin, "task", data.get("task")) if isinstance(data.get("task"), str) else None
+            if task is not None and task.get("delegated_from"):
+                return False
+        bindings = self._bindings(conversation)
+        if not any(item["by"] == origin for item in bindings):
+            return False
+        current = self.owner_of(conversation)["owner"]
+        gave = ownership.handed_away(origin, conversation, bindings, current)
+        return gave is not None and oseq > gave
 
     # ---- 使用事件和自动迭代的租约（见 docs/development/auto-iteration 的"无中心"） ----
 
@@ -1016,6 +1140,7 @@ class Mesh:
     # ---- 连出去 ----
 
     def start(self) -> None:
+        self.claim_home()
         for relay in self._service.relayed():
             with self._lock:
                 self._relays[relay["id"]] = relay["relay_to"]
@@ -1107,6 +1232,7 @@ class Mesh:
             caller.cursors = reply.get("cursors") if isinstance(reply.get("cursors"), dict) else None
         self._learn_peers(reply.get("peers"))
         self._take(reply.get("origins"), caller.runtime_id)
+        self._service.retry_parked()  # 联系上了：排着等它的话可以交过去了
         return bool(push) or bool(reply.get("origins"))
 
     def _pull_loop(self, key: str) -> None:
@@ -1169,9 +1295,14 @@ class Mesh:
                 entries = card["entries"]
                 self._writer.replica_task(card["id"], {"mesh_origin": card["mesh_origin"], "stale": True}, entries)
         for message_id, target in relays:
-            self._finish_relay(message_id, False, "「%s」一直没回应，这句话可能没做" % self._peer_name(target))
+            # 已经交过去了、那台却没了音讯：做没做不知道（unknown），不在这里重做。
+            with self._lock:
+                self._relays.pop(message_id, None)
+            self._service.relay_done(message_id, False, "「%s」一直没回应，这句话可能没做"
+                                     % self._peer_name(target), unknown=True)
         self._refresh_agents()
         self.shares.scan(now)
+        self._service.retry_parked()
 
 
 class MeshAgent(Agent):

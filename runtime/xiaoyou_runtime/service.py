@@ -171,6 +171,8 @@ class Service:
         self._busy: Dict[str, threading.Thread] = {}
         # 已经被一个工作线程领走的消息：同一句话重复排进队也只处理一次。
         self._claimed: set = set()
+        # 在等负责的电脑（连不上，或者还没同步到它的绑定）的话：联系上、绑定变了时再排一次。
+        self._parked: Dict[str, str] = {}  # 消息编号 → 对话
         self._slots = threading.Semaphore(MAX_BUSY_CONVERSATIONS)
         self._closed = False
         # 卡的编号 → 等这件事结束才算处理完的消息（别的 Runtime 转过来的）。
@@ -490,6 +492,9 @@ class Service:
                                    relay_name=relay.get("origin_name") or "")
                 if mesh.get("delegated_from"):
                     message["delegated_from"] = dict(mesh["delegated_from"])
+                routed = mesh.get("routed_generation")
+                if isinstance(routed, int) and not isinstance(routed, bool):
+                    message["routed_generation"] = routed  # 按负责人转来的（_route 不再转回去）
                 self._messages[message["id"]] = message
                 if client_id is not None:
                     self._dedupe[dedupe_key(conversation, client_id)] = {
@@ -1074,11 +1079,15 @@ class Service:
     def relayed(self) -> List[Dict[str, Any]]:
         """转交给别的 Runtime、还在等那台结果的话（mesh.py 启动时接上它们）。"""
         with self._changed:
+            # 按负责人转、还排着没交出去的不算（它们在等联系上，不在等结果）。
             return [self._snapshot(message) for message in self._messages.values()
-                    if message.get("relay_to") and message["status"] not in FINISHED]
+                    if message.get("relay_to") and message["status"] not in FINISHED
+                    and not (message.get("routed") and message["status"] == "queued")]
 
-    def relay_done(self, message_id: str, ok: bool, text: str, card: Optional[str] = None) -> None:
-        """转交给别的 Runtime 的话有了结果（mesh.py 调用）：ok 时 text 是那台的回答，否则是原因。"""
+    def relay_done(self, message_id: str, ok: bool, text: str, card: Optional[str] = None,
+                   unknown: bool = False) -> None:
+        """转交给别的 Runtime 的话有了结果（mesh.py 调用）：ok 时 text 是那台的回答，否则是原因。
+        unknown：交过去了但那台没了音讯，做没做不知道。"""
         with self._changed:
             message = self._messages.get(message_id)
             if message is None or message["status"] in FINISHED:
@@ -1089,7 +1098,8 @@ class Service:
         if ok:
             self._update(message_id, status="done", reply=text, brief=text[:120], mood="idle", **fields)
         else:
-            self._update(message_id, status="failed", error=text or "那台没说明原因", mood="oops", **fields)
+            self._update(message_id, status="failed", error=text or "那台没说明原因", mood="oops",
+                         **(dict(fields, operation_state="unknown") if unknown else fields))
 
     def _snapshot(self, message: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = dict(message)
@@ -1247,6 +1257,96 @@ class Service:
                     sys.stderr.write("这条线上的一件事出错了：%s: %s\n" % (
                         type(error).__name__, error))
 
+    # ---- 对话负责人（ownership.py，设计第 6 节） ----
+
+    def _route(self, message: Dict[str, Any]) -> bool:
+        """调用时拿着锁、刚要领取：这台不是负责人就把这句话改成转给负责人。返回能不能接着处理。
+
+        只管主人直接说的话（hop 为 0、不是在某件事里面补充）：替别的电脑执行的派活、进行中
+        的事留在执行它的那台。检查和领取在同一把锁里，移交（handoff）也要这把锁，中间没有窗口。"""
+        if self.mesh is None or message.get("hop", 0) or message.get("pin") \
+                or (message.get("relay_to") and not message.get("routed")):
+            return True
+        view = self.mesh.owner_of(message["conversation"])
+        owner = view["owner"]
+        if owner is None or owner == self.runtime_id:
+            message.pop("relay_to", None)
+            message.pop("routed", None)
+            return True
+        sent = message.get("routed_generation")
+        if isinstance(sent, int) and view["generation"] <= sent:
+            # 转来的一方认为这台是负责人，这台却还没收到那代绑定：等它同步过来，不转回去。
+            self._parked[message["id"]] = message["conversation"]
+            return False
+        message.update(relay_to=owner, routed=True, owner_generation=view["generation"],
+                       relay_name=view["name"])
+        return True
+
+    def _routed(self, message_id: str) -> bool:
+        with self._changed:
+            return bool(self._messages.get(message_id, {}).get("routed"))
+
+    def retry_parked(self) -> None:
+        """在等负责人的话：再排一次（还是连不上就又停下）。"""
+        with self._changed:
+            if self._closed or not self._parked:
+                return
+            parked, self._parked = self._parked, {}
+            for message_id, conversation in parked.items():
+                if self._messages.get(message_id, {}).get("operation_state") == "pending":
+                    self._line_up(conversation, message_id)
+
+    def owner(self, conversation: Any) -> Dict[str, Any]:
+        conversation = _name(conversation, "conversation")
+        if self.mesh is None:
+            return {"conversation": conversation, "owner": self.runtime_id, "generation": 0,
+                    "name": "", "online": True, "conflict": False}
+        return dict(self.mesh.owner_of(conversation), conversation=conversation)
+
+    def handoff(self, conversation: Any, to: Any) -> Dict[str, Any]:
+        """把一段对话交给另一台（两台都在线、这段对话空闲时）。返回 {"status", ...}。"""
+        conversation = _name(conversation, "conversation")
+        if self.mesh is None:
+            raise RequestError("这台不在小幽网络里，没有别的电脑可以交")
+        target = self.mesh.peer_id(to)
+        if target is None:
+            raise RequestError("不认识电脑 %s" % to)
+        with self._changed:
+            view = self.mesh.owner_of(conversation)
+            owner = view["owner"]
+            if owner is None:
+                raise RequestError("这段对话还没有负责的电脑")
+            if owner == target:
+                return {"status": "applied", "owner": target, "generation": view["generation"]}
+            if owner != self.runtime_id:
+                problem = None
+            else:
+                if not self.mesh.online(target):
+                    return {"status": "refused", "reason": "「%s」现在不在线" % to}
+                busy = self._busy_reason(conversation)
+                if busy:
+                    return {"status": "refused", "reason": busy}
+                written = self.mesh.hand_off(conversation, target, view["generation"])
+                return {"status": "applied", "owner": target, "generation": written["generation"]}
+        # 不是负责人：请负责人来交（锁外发指令）。
+        problem = self.mesh.request_handoff(owner, conversation, target)
+        if problem:
+            return {"status": "refused", "reason": problem}
+        return {"status": "queued", "owner": owner}
+
+    def _busy_reason(self, conversation: str) -> Optional[str]:
+        """调用时拿着锁：这段对话现在能不能交出去。"""
+        if self._lanes.get(conversation) or conversation in self._busy:
+            return "这段对话还有话在处理，等处理完再交"
+        if any(self._messages.get(item, {}).get("conversation") == conversation for item in self._claimed) \
+                or conversation in self._parked.values():
+            return "这段对话还有话在处理，等处理完再交"
+        active = [card for card in self._xiaoyou.cards.recent(conversation, 10 ** 6)
+                  if card["state"] in ACTIVE and not card.get("mesh_origin") and not card.get("monitoring_only")]
+        if active:
+            return "这段对话里还有事在做（%s），做完再交" % active[0]["title"]
+        return None
+
     def _handle(self, message_id: str) -> None:
         with self._changed:
             message = self._messages.get(message_id)
@@ -1254,6 +1354,9 @@ class Service:
             if (message is None or message["operation_state"] != "pending"
                     or message_id in self._claimed):
                 return
+            self._parked.pop(message_id, None)
+            if not self._route(message):
+                return  # 在等负责人的绑定同步过来：先停着
             self._claimed.add(message_id)
         try:
             self._process(message_id)
@@ -1299,6 +1402,15 @@ class Service:
                              finished_at=time.time())
                 return
             text = text[:MAX_TEXT_CHARS]
+        if relay_to and self._routed(message_id):
+            problem = self.mesh._reachable(relay_to) if self.mesh is not None else "这台不在小幽网络里"
+            if problem:
+                # 负责的电脑连不上：不替它答，保留原编号排队，它回来再交过去（设计第 6 节）。
+                with self._changed:
+                    name = (self.mesh.owner_of(conversation)["name"] if self.mesh is not None else "") or "负责的电脑"
+                    self._parked[message_id] = conversation
+                self._update(message_id, text=text, stage="排队中：负责的电脑「%s」连不上" % name, mood="busy")
+                return
         try:
             self.metadata.first_message(conversation, text)
         except (OSError, ValueError) as error:

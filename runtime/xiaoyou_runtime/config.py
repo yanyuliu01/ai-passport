@@ -150,6 +150,8 @@ class Config:
     mesh_peers: List[str] = field(default_factory=list)
     # 告诉别的 Runtime 从哪里连这一台；空的时候按 server.host 推一个，只监听本机时为空（只出不进）。
     mesh_advertise: List[str] = field(default_factory=list)
+    # 主对话归这台负责（ownership.py）：网络里只有一台写 true（主人定为 Mac）。
+    mesh_home: bool = False
     # 网络里共享的环境变量名（值在 ~/.config/xiaoyou/shared/<名字>）和文件夹（名字 → 这台的路径）。
     mesh_share_env: List[str] = field(default_factory=list)
     mesh_share_folders: Dict[str, Path] = field(default_factory=dict)
@@ -635,6 +637,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
     )
     mesh_secret, mesh_peers, mesh_advertise = _mesh(raw, env, base, host, port)
     mesh_share_env, mesh_share_folders = _mesh_share(raw, base)
+    mesh_home = _expect(_expect(raw.get("mesh", {}), dict, "mesh").get("home", False), bool, "mesh.home")
     # desktop_sync 可以只写 true，也可以写成 {"enabled", "projects", "codex_dir", "claude_dir"}。
     desktop = raw.get("desktop_sync", {})
     desktop = {"enabled": desktop} if isinstance(desktop, bool) else _expect(desktop, dict, "desktop_sync")
@@ -876,6 +879,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         mesh_secret=mesh_secret,
         mesh_peers=mesh_peers,
         mesh_advertise=mesh_advertise,
+        mesh_home=mesh_home,
         mesh_share_env=mesh_share_env,
         mesh_share_folders=mesh_share_folders,
         desktop_sync=desktop_sync,
