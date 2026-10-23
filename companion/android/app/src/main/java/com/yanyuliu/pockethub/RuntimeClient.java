@@ -135,9 +135,6 @@ final class RuntimeClient {
 
     // ---- 同一台 Runtime 的几个地址（局域网、Funnel……）按 runtime_id 认成一台 ----
 
-    private static final Map<String, java.util.Set<String>> CAPABILITIES =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
     /** 这个地址上的 Runtime 是谁（/v1/info 的 runtime_id）；还没问到或旧版 Runtime 是空串。 */
     static String runtimeId(Context context, String url) {
         return prefs(context).getString("rid:" + url, "");
@@ -195,24 +192,19 @@ final class RuntimeClient {
         try { identify(context, target); } catch (IOException | RuntimeException ignored) { }
     }
 
-    /** 问这个地址上的 Runtime 是谁、会什么；旧版 Runtime 没有 /v1/info，当作什么新能力都没有。 */
+    /** 问这个地址上的 Runtime 是谁、会什么（/v1/info）。 */
     private static java.util.Set<String> identify(Context context, Target target) throws IOException {
         java.util.Set<String> abilities = new java.util.HashSet<>();
-        try {
-            Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info",
-                    target.token, null, null, 10, true));
-            if (info != null) {
-                for (Object item : Json.list(info, "capabilities")) if (item instanceof String) abilities.add((String) item);
-                String id = Json.string(info, "runtime_id");
-                if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
-                // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
-                String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
-                prefs(context).edit().putString("sid:" + target.url, subject).apply();
-            }
-        } catch (IOException error) {
-            if (!String.valueOf(error.getMessage()).contains(" 404")) throw error;
+        Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info",
+                target.token, null, null, 10, true));
+        if (info != null) {
+            for (Object item : Json.list(info, "capabilities")) if (item instanceof String) abilities.add((String) item);
+            String id = Json.string(info, "runtime_id");
+            if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
+            // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
+            String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
+            prefs(context).edit().putString("sid:" + target.url, subject).apply();
         }
-        CAPABILITIES.put(target.url, abilities);
         return abilities;
     }
 
@@ -277,14 +269,7 @@ final class RuntimeClient {
                     final Target shared = target;
                     QUICK.execute(() -> shareHistory(app, shared));
                 }
-                // 0.8.0 的 /v1/sync 还不带用量：那一版继续用 feed，首页的额度才不会停在旧数上。
-                if (abilities.contains("sync") && abilities.contains("sync_usage")) {
-                    more = fetchSync(target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
-                } else {
-                    more = false;
-                    store.catchingUp(false);
-                    fetchFeed(target, FEED_WAIT_SECONDS, true);
-                }
+                more = fetchSync(target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
                 failures = 0;
                 complained = null;
             } catch (IOException | RuntimeException error) {
@@ -294,8 +279,7 @@ final class RuntimeClient {
                     continue;  // 是换 Runtime 时自己断开的
                 }
                 String detail = String.valueOf(error.getMessage());
-                boolean old = detail.contains(" 404");
-                if (failures == 0 && !old) {
+                if (failures == 0) {
                     // 经中继连着时偶尔断一次是常事：先悄悄重连一次，连续失败才算离线。
                     failures++;
                     pause(2);
@@ -315,10 +299,9 @@ final class RuntimeClient {
                 store.runtimeConnected(false);
                 if (!detail.equals(complained)) {
                     complained = detail;
-                    store.log(old ? target.name + " 上的 Runtime 是旧版，没有卡和授权"
-                            : "没取到 " + target.name + " 上的卡：" + detail);
+                    store.log("没取到 " + target.name + " 上的卡：" + detail);
                 }
-                pause(old ? 60 : Math.min(30, 2 << Math.min(failures++, 4)));
+                pause(Math.min(30, 2 << Math.min(failures++, 4)));
             }
         }
     }
@@ -328,46 +311,6 @@ final class RuntimeClient {
             Thread.sleep(seconds * 1000L);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
-        }
-    }
-
-    /** 取一次“之后变过的卡”并交给中枢；没有变化时最多等 wait 秒。 */
-    private static void fetchFeed(Target target, int wait, boolean interruptible)
-            throws IOException {
-        HubStore store = HubStore.get();
-        long after = store.feedSeq();
-        long epoch = store.cardsEpoch();
-        // 带上手里那份用量的编号：用量变了 Runtime 也会提前返回（0.6.0 起；旧版不认识这个
-        // 参数，照常等卡的变化）。
-        long usageRev = store.usageRev();
-        String body = requestText("GET", target.url + "/v1/feed?after=" + after + "&wait=" + wait
-                        + (usageRev >= 0 ? "&usage=" + usageRev : ""),
-                target.token, null, null, wait + 15, interruptible);
-        Map<String, Object> feed = Json.parseObject(body);
-        if (feed == null) {
-            throw new IOException("Runtime 返回的内容看不懂");
-        }
-        // 核对和写入在同一把锁里，见 fetchSync。
-        synchronized (store) {
-            if (store.cardsEpoch() != epoch) {
-                return;  // 等的时候换了 Runtime：这是上一台的回答
-            }
-            long seq = (long) Json.number(feed, "seq");
-            if (seq < after) {
-                // Runtime 的序号比手里的小：它换了一份记录。手里的不算数了，从头再取。
-                store.resetCards();
-                return;
-            }
-            List<Card> cards = new ArrayList<>();
-            for (Object item : Json.list(feed, "cards")) {
-                Card card = Card.from(Json.object(item));
-                if (card != null) {
-                    cards.add(card);
-                }
-            }
-            store.applyFeed(seq, cards, null);
-            store.setUsage(Usage.from(feed.get("usage")), epoch);
-            store.runtimeConnected(true);
         }
     }
 
@@ -989,14 +932,6 @@ final class RuntimeClient {
                         String filed = message.get("card");
                         store.chatAnswered(key[0], brief == null ? "" : brief, reply == null ? "" : reply,
                                 message.get("mood"), filed);
-                        if (filed != null) {
-                            // Final text is already visible; refresh task details independently.
-                            QUICK.execute(() -> {
-                                if (store.cardsEpoch() != epoch) return;
-                                try { fetchFeed(target, 0, false); }
-                                catch (IOException | RuntimeException ignored) { }
-                            });
-                        }
                         if (!pin && reply != null && !reply.isEmpty()) {
                             // 这一轮记在聊天记录里，带给别的电脑时从那里算（HubStore.recentTurns）；
                             // 这台本来就有，不用再带。
@@ -1104,16 +1039,11 @@ final class RuntimeClient {
     private static final int FIRMWARE_MAX_BYTES = 8 * 1024 * 1024;
 
     /** 电脑上发布的 App 更新（一层的对象；没有时 available 是 false）。 */
-    /** 电脑上发布的资源包（语音模型等）；旧版 Runtime 没有这个接口时是空的。 */
+    /** 电脑上发布的资源包（语音模型等）。 */
     static List<AppPacks.Pack> appPacks(Target target) throws IOException {
-        try {
-            Map<String, Object> raw = Json.parseObject(requestText("GET", target.url + "/v1/app/packs",
-                    target.token, null, null, 15));
-            return raw == null ? new ArrayList<>() : AppPacks.parse(raw);
-        } catch (IOException error) {
-            if (String.valueOf(error.getMessage()).contains(" 404")) return new ArrayList<>();
-            throw error;
-        }
+        Map<String, Object> raw = Json.parseObject(requestText("GET", target.url + "/v1/app/packs",
+                target.token, null, null, 15));
+        return raw == null ? new ArrayList<>() : AppPacks.parse(raw);
     }
 
     static Map<String, String> appRelease(Target target) throws IOException {

@@ -355,10 +355,6 @@ public final class HubStore {
 
     // ---- Runtime 上的卡和授权 ----
 
-    public synchronized long feedSeq() {
-        return feedSeq;
-    }
-
     public synchronized long cardsEpoch() {
         return cardsEpoch;
     }
