@@ -746,35 +746,12 @@ final class RuntimeClient {
 
     static final String VOICE_PLACEHOLDER = "（语音）";
 
-    /** 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。 */
-    static void send(Context context, String text) {
-        submit(context, text, null, null, false, null);
-    }
-
-    /** 在一件事里面说一句话（card 是它的编号）：这句话一定归到它，不混进主对话。 */
-    static void send(Context context, String text, String card) {
-        submit(context, text, null, card, true, null);
-    }
-
     /**
-     * 发一句话，并说明这件事让帮手用哪一档做（low、medium、high）。card 为 null 是对小幽
-     * 说的，否则是在那件事里面说的。
+     * 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。card 为 null 是对小幽说的，
+     * 否则是在那件事里面说的；effort 是让帮手用哪一档做（low、medium、high），agent 是点名的帮手。
      */
-    static void send(Context context, String text, String card, String effort) {
-        submit(context, text, null, card, card != null, effort);
-    }
-
     static void send(Context context, String text, String card, String effort, String agent) {
         submit(context, text, null, card, card != null, effort, agent);
-    }
-
-    /**
-     * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
-     * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
-     * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
-     */
-    static void sendImage(Context context, String text, List<Attachment> images) {
-        submit(context, text.isEmpty() ? "请看看这张图片" : text, null, null, false, null, null, null, images);
     }
 
     interface UploadProgress {
@@ -797,6 +774,11 @@ final class RuntimeClient {
         return result;
     }
 
+    /**
+     * 发一段录音（16 位单声道 WAV）。Runtime 先识别成文字，再像打字一样回答。
+     * card 是说这句话时设备屏幕上的那件事（没有就是 null）：这句话是对它说的。pin 表示是在
+     * 设备第三屏选中那件任务时说的：一定归到它，不混进对话。
+     */
     static void sendVoice(Context context, byte[] wav, String card, boolean pin) {
         submit(context, VOICE_PLACEHOLDER, wav, card, pin, null);
     }

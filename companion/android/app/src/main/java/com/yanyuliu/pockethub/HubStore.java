@@ -263,7 +263,6 @@ public final class HubStore {
     synchronized void messageScope(String id, String conversation, boolean mainScope) {
         history.scope(id, conversation, mainScope); saveHistory();
     }
-    synchronized List<ChatHistory.Message> pendingMessages(String card) { return history.pending(card); }
     synchronized String retryMessage(String id) { return history.retry(id); }
     private long sequence;
     private Turn turn = new Turn("idle", "", "", "", "", "idle");
@@ -726,10 +725,6 @@ public final class HubStore {
         notifyChanged();
     }
 
-    public void chatAsked(String text) {
-        chatAsked(text, "local-" + java.util.UUID.randomUUID(), null);
-    }
-
     public void chatAsked(String text, String clientId, String card) {
         synchronized (this) {
             ++pending;
@@ -772,21 +767,15 @@ public final class HubStore {
         notifyChanged();
     }
 
-    /**
-     * 小幽这句回复已经生成出来的部分（整段，不是增量）。空串或 null 表示收回。
-     * 没在等回复、卡已经到了、或者内容没变时不通知。
-     */
-    public void chatStreaming(String text) {
-        chatStreaming(null, text);
-    }
-
     public void chatPresentation(String key, String json) {
         synchronized (this) { history.presentation(key, Presentation.restore(json)); }
     }
 
     /**
-     * 同上，key 是这句话在聊天记录里的编号（RuntimeClient 自己记着）。回话途中主人又说了一句时，
-     * 好几句可能同时在等回复：各写各的气泡；首页那一句只跟最新的那句。
+     * 小幽这句回复已经生成出来的部分（整段，不是增量）。空串或 null 表示收回。
+     * 没在等回复、卡已经到了、或者内容没变时不通知。key 是这句话在聊天记录里的编号
+     * （RuntimeClient 自己记着）：回话途中主人又说了一句时，好几句可能同时在等回复，
+     * 各写各的气泡；首页那一句只跟最新的那句。
      */
     public void chatStreaming(String key, String text) {
         synchronized (this) {
@@ -854,11 +843,7 @@ public final class HubStore {
         notifyChanged();
     }
 
-    /** 语音识别出了我刚才说的话：把聊天记录里的占位换成原话。 */
-    public void chatHeard(String placeholder, String heard) {
-        chatHeard(null, placeholder, heard);
-    }
-
+    /** 语音识别出了我刚才说的话：把聊天记录里 key 那一句的占位换成原话。 */
     public void chatHeard(String key, String placeholder, String heard) {
         synchronized (this) {
             if (pending > 0) {
@@ -870,17 +855,10 @@ public final class HubStore {
         notifyChanged();
     }
 
-    /** 小幽答完了：brief 给小屏幕，reply 是完整回复，mood 是她此刻的表情。 */
-    public void chatAnswered(String brief, String reply, String mood) {
-        chatAnswered(brief, reply, mood, null);
-    }
-
-    /** 同上；card 是这句话归到的那张卡（旧版 Runtime 没有，为 null）。 */
-    public void chatAnswered(String brief, String reply, String mood, String card) {
-        chatAnswered(null, brief, reply, mood, card);
-    }
-
-    /** 同上；key 是这句话在聊天记录里的编号（同时有几句在等时各结各的）。 */
+    /**
+     * 小幽答完了：brief 给小屏幕，reply 是完整回复，mood 是她此刻的表情；card 是这句话归到的那张卡。
+     * key 是这句话在聊天记录里的编号（同时有几句在等时各结各的）。
+     */
     public void chatAnswered(String key, String brief, String reply, String mood, String card) {
         synchronized (this) {
             String target = key == null ? messageKey : key;

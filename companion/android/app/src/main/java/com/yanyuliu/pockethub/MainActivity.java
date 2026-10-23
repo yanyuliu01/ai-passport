@@ -216,14 +216,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private final Set<String> chatReceipts = new HashSet<>();
     private final Map<String, TextView> chatStatus = new HashMap<>();
     private String taskKey = null;
-    /** 任务页三段各自的状态（见 refreshTasks）。 */
-    private String taskShown = null, taskExtrasKey = "";
-    private LinearLayout taskHead, taskThread, taskExtras, taskPending;
-    private ReplyMarker taskMarker;
-    private List<String> taskThreadIds = new ArrayList<>(), taskThreadLooks = new ArrayList<>();
-    private List<String> taskPendingIds = new ArrayList<>(), taskPendingLooks = new ArrayList<>();
-    private final List<View> taskThreadRows = new ArrayList<>(), taskPendingRows = new ArrayList<>();
-    private final Map<String, TextView> taskWords = new HashMap<>(), taskStatus = new HashMap<>();
     private String agentKey = null;
     private String mineKey = null;
     private TextView firmwareStatus;
@@ -1653,11 +1645,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Motion.enter(scroll, direction > 0 ? Motion.FORWARD : direction < 0 ? Motion.BACK : Motion.SAME);
     }
 
-    /** 电脑上那一轮还在跑（或在等电脑上的确认）：这时从手机插话会和电脑上抢同一个会话。 */
-    private static boolean desktopBusy(Card card) {
-        return !card.stale && (card.desktopStatus.equals("running") || card.desktopStatus.equals("waiting"));
-    }
-
     /** 这位帮手在 Runtime 上的名字（帮手页按角色显示，发消息要用 Runtime 的代理名）；没有就是 null。 */
     private String agentName(String role) {
         if (role == null) return null;
@@ -2389,142 +2376,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String key = opened.id + ":" + opened.seq + ":" + HubStore.get().runtimeConnected() + ":" + progressAge(opened);
         if (key.equals(taskKey)) return false;
         taskKey = key; taskPane.removeAllViews(); fillWorkDetail(taskPane, opened, HubStore.get().runtimeConnected()); return true;
-    }
-
-    private void fillTaskHead(LinearLayout head, Card opened, boolean connected) {
-        String owner = AppPresentation.owner(opened);
-        String state = DsState.state(opened, connected);
-        String word = AppPresentation.stateWord(opened, connected);
-        LinearLayout steps = column(); steps.setPadding(dp(16), dp(4), dp(16), dp(4));
-        steps.setBackground(surface(Color.WHITE, Color.WHITE, 18));
-        String latest = opened.progress.isEmpty() ? "" : opened.progress.get(opened.progress.size() - 1);
-        if (opened.monitoringOnly) {
-            steps.addView(step(owner, AppPresentation.name(owner) + " · 电脑上的会话", latest,
-                    word.isEmpty() ? AppPresentation.stateLabel(opened, connected) : word, !word.isEmpty(), false,
-                    view -> openAgent(owner)));
-        } else {
-            boolean ended = !opened.outstanding();
-            steps.addView(step("ds", "小幽 拆分需求", null, "✓", false, true, null));
-            steps.addView(step(owner, AppPresentation.name(owner) + " 处理", ended ? opened.brief : latest,
-                    word.isEmpty() ? AppPresentation.stateLabel(opened, connected) : word, !word.isEmpty(), true,
-                    view -> openAgent(owner)));
-            steps.addView(step("ds", "小幽 告诉你结果", null, state.equals("done") ? "✓" : "", false, false, null));
-        }
-        head.addView(steps);
-        addActivity(head, opened);
-        if (opened.monitoringOnly) {
-            TextView notice = text(opened.source.equals("external")
-                    ? "这是从别处（" + (opened.project.isEmpty() ? "外部" : opened.project) + "）报上来的会话，只能在这里查看，请在它原来的地方继续。"
-                    : "在这里说的话先给" + companionName() + "：解释、总结它自己答。要电脑上的会话接着干活，就说“让 "
-                    + AppPresentation.name(owner) + " 接着做…”"
-                    + (desktopBusy(opened) ? "（电脑上这一轮还在跑，要等它停下才接得上）。" : "，回复也会出现在电脑上。"), 12, false);
-            notice.setTextColor(HINT); notice.setPadding(dp(4), dp(12), dp(4), 0); head.addView(notice);
-            if (!CardViews.titleNotice(opened).isEmpty()) head.addView(text(CardViews.titleNotice(opened), 12, false));
-            head.addView(text(CardViews.contentNotice(opened), 12, false));
-        }
-        View gap = new View(this); head.addView(gap, new LinearLayout.LayoutParams(-1, dp(12)));
-    }
-
-    /** 这件事的对话：每条一行，按编号比较；没写进对话的附件放在后面一段。 */
-    private boolean refreshTaskThread(Card opened, boolean fresh) {
-        List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
-        for (int index = 0; index < opened.entries.size(); index++) {
-            Card.Entry entry = opened.entries.get(index);
-            ids.add(entry.id.isEmpty() ? "#" + index : entry.id);
-            looks.add(entry.role + entry.author + entry.kind + entry.text.length() + ":" + entry.text.hashCode() + ":" + entry.attachments.size() + ":" + (entry.presentation == null ? "legacy" : entry.presentation.supported + ":" + entry.presentation.value("input_revision")));
-        }
-        ChatPlan plan = ChatPlan.of(opened.id, taskThreadIds, taskThreadLooks, opened.id, ids, looks);
-        boolean changed = !plan.unchanged(ids.size());
-        Set<String> rendered = new HashSet<>();
-        if (plan.rebuild) {
-            taskThread.removeAllViews(); taskThreadRows.clear();
-            for (Card.Entry entry : opened.entries) {
-                LinearLayout row = column(); rendered.addAll(addBubble(row, opened, entry));
-                taskThreadRows.add(row); taskThread.addView(row);
-            }
-        } else {
-            for (int at : plan.replace) {
-                LinearLayout row = column(); addBubble(row, opened, opened.entries.get(at));
-                taskThread.removeViewAt(at); taskThread.addView(row, at); taskThreadRows.set(at, row);
-            }
-            for (int index = plan.appendFrom; index < opened.entries.size(); index++) {
-                LinearLayout row = column(); addBubble(row, opened, opened.entries.get(index));
-                taskThreadRows.add(row); taskThread.addView(row);
-                if (!fresh && tab == TAB_TASKS) Motion.appear(row);
-            }
-            for (Card.Entry entry : opened.entries) for (Attachment item : entry.attachments) rendered.add(item.id);
-        }
-        taskThreadIds = ids; taskThreadLooks = looks;
-        StringBuilder extras = new StringBuilder();
-        for (Attachment item : opened.attachments) if (!rendered.contains(item.id)) extras.append(item.id).append('|');
-        if (!extras.toString().equals(taskExtrasKey) || fresh) {
-            taskExtrasKey = extras.toString(); taskExtras.removeAllViews(); changed = true;
-            for (Attachment item : opened.attachments) if (!rendered.contains(item.id)) taskExtras.addView(attachmentView(item));
-        }
-        return changed;
-    }
-
-    /** 还在发送、还在回复中的话：流式时只改字，末尾的标记说在想还是在写。 */
-    private boolean refreshTaskPending(List<ChatHistory.Message> pending, boolean fresh) {
-        List<String> ids = new ArrayList<>(), looks = new ArrayList<>();
-        for (ChatHistory.Message message : pending) {
-            ids.add(rowKey(message));
-            looks.add((hasBubble(message) ? "B" : "-") + message.status.equals("failed"));
-        }
-        ChatPlan plan = ChatPlan.of("", taskPendingIds, taskPendingLooks, "", ids, looks);
-        boolean changed = !plan.unchanged(ids.size());
-        if (plan.rebuild) {
-            taskPending.removeAllViews(); taskPendingRows.clear(); taskWords.clear(); taskStatus.clear();
-            for (ChatHistory.Message message : pending) {
-                View row = taskPendingRow(message); taskPendingRows.add(row); taskPending.addView(row);
-                if (!fresh && tab == TAB_TASKS && !taskPendingIds.contains(rowKey(message))) Motion.appear(row);
-            }
-        } else {
-            for (int at : plan.replace) {
-                LinearLayout row = taskPendingRow(pending.get(at));
-                taskPending.removeViewAt(at); taskPending.addView(row, at); taskPendingRows.set(at, row);
-                if (tab == TAB_TASKS && taskPendingLooks.get(at).charAt(0) == '-' && looks.get(at).charAt(0) == 'B')
-                    Motion.pop(row.getChildAt(0), false, 0);
-            }
-            for (int index = plan.appendFrom; index < pending.size(); index++) {
-                View row = taskPendingRow(pending.get(index)); taskPendingRows.add(row); taskPending.addView(row);
-                if (tab == TAB_TASKS) Motion.appear(row);
-            }
-        }
-        taskPendingIds = ids; taskPendingLooks = looks;
-        for (ChatHistory.Message message : pending) {
-            TextView words = taskWords.get(rowKey(message));
-            String shown = message.role.equals("you") ? message.text : String.join("\n---\n", shownBubbles(message));
-            if (words != null && !shown.equals(words.getTag())) {
-                words.setTag(shown);
-                words.setText(message.role.equals("you") ? shown
-                        : Markdown.render(String.join("\n\n", Markdown.messages(shown)), dp(16)));
-                changed = true;
-            }
-            changed |= showStatus(taskStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
-        }
-        ChatHistory.Message last = pending.isEmpty() ? null : pending.get(pending.size() - 1);
-        String state = last == null ? ReplyMarker.HIDDEN
-                : last.role.equals("you") ? (last.status.equals("sending") ? ReplyMarker.TYPING : ReplyMarker.HIDDEN)
-                : last.status.equals("thinking") || last.status.equals("streaming") ? ReplyMarker.TYPING : ReplyMarker.HIDDEN;
-        if (!state.equals(taskMarker.state())) { taskMarker.state(state); changed = true; }
-        return changed;
-    }
-
-    private LinearLayout taskPendingRow(ChatHistory.Message message) {
-        LinearLayout row = column();
-        boolean mine = message.role.equals("you");
-        if (hasBubble(message)) {
-            LinearLayout bubble = bubbleShell(mine);
-            TextView words = bubbleWords(mine, ""); words.setTextIsSelectable(true);
-            bubble.addView(words); taskWords.put(rowKey(message), words);
-            row.addView(bubble, bubbleParams(mine));
-        }
-        TextView caption = statusCaption(mine); taskStatus.put(rowKey(message), caption);
-        row.addView(caption, captionParams(mine));
-        if (mine && message.status.equals("failed")) row.addView(button("重试发送",
-                view -> RuntimeClient.retry(this, message.id, message.text, message.card)));
-        return row;
     }
 
     /** 任务里的一步：谁、做什么、最近一步进展，右边一个状态。点了去这位帮手。 */
@@ -3402,27 +3253,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
         new Sheet(this, activityTitle(event), false).message(event.text).show();
     }
 
-    private void addActivity(LinearLayout parent, Card card) {
-        if (card.activity.isEmpty() && card.progress.isEmpty()) return;
-        LinearLayout panel = column(); panel.setPadding(dp(12), dp(10), dp(12), dp(10));
-        panel.addView(text("执行记录", 14, true));
-        TextView note = text("记录公开进展和操作结果；从升级后开始采集，保留最近 2000 条。", 11, false);
-        note.setTextColor(HINT); panel.addView(note);
-        if (card.activity.isEmpty()) {
-            for (String line : card.progress) panel.addView(text(line, 12, false));
-            panel.addView(text("这项任务暂无完整记录；旧任务或旧版电脑服务只能显示最近进展。", 11, false));
-        } else {
-            int start = Math.max(0, card.activity.size() - 6);
-            for (int index = start; index < card.activity.size(); index++) {
-                Card.Entry event = card.activity.get(index);
-                panel.addView(groupRow(null, activityTitle(event), CardViews.oneLine(event.text, 100), "›", HINT,
-                        view -> activityDetail(event), true));
-            }
-            panel.addView(button("查看全部 " + card.activity.size() + " 条记录", view -> showActivity(card, 0)));
-        }
-        parent.addView(panel);
-    }
-
     private void showActivity(Card card, int page) {
         int start = page * 50, end = Math.min(card.activity.size(), start + 50);
         Sheet sheet = new Sheet(this, "执行记录 · 第 " + (page + 1) + " 页（新到旧）", false);
@@ -3867,15 +3697,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.setMargins(0, dp(5), 0, dp(5));
         button.setLayoutParams(params);
-        return button;
-    }
-
-    /** 只放一个符号的方形按钮：不留内边距，符号在 44×44 里正中。 */
-    private Button iconButton(String glyph, String label, View.OnClickListener action) {
-        Button button = button(glyph, action);
-        button.setTextSize(20); button.setPadding(0, 0, 0, 0);
-        button.setContentDescription(label);
-        button.setLayoutParams(new LinearLayout.LayoutParams(dp(44), dp(44)));
         return button;
     }
 
