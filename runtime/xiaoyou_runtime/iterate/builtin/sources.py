@@ -15,6 +15,7 @@ from ..objects import Signal
 from ..events import EventStore, flat
 from ..releases import phase, timeline
 from ..store import read_json
+from ... import world
 
 MAX_TEXT = 200
 # 0.21 及以前的 App 把每条弹出提示都记成 error。读起来像失败的才算错误，其余当普通提示。
@@ -107,10 +108,7 @@ def _classify(ctx: Any, text: str, before: str) -> Tuple[str, float, str]:
 
 
 def _cards(ctx: Any) -> List[Dict[str, Any]]:
-    data = read_json(Path(ctx.state_dir) / "cards.json", {})
-    cards = data.get("cards", []) if isinstance(data, dict) else []
-    if isinstance(cards, dict):
-        cards = list(cards.values())
+    cards = world.current(Path(ctx.state_dir) / "cards.json")  # 快照 + 之后的任务日志
     return [card for card in cards if isinstance(card, dict)]
 
 

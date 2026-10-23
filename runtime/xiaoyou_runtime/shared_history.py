@@ -21,6 +21,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from xiaoyou_runtime import world
 from xiaoyou_runtime.desktop_content import visible_text
 from xiaoyou_runtime.desktop_sync import Cursor, DesktopSync, STATES, STALE_SECONDS
 
@@ -157,8 +158,7 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
     config = _json(config_path)
     config = config if isinstance(config, dict) else {}
     state = _path(config.get("state_dir", "state"), config_path.parent)
-    raw = _json(state / "cards.json")
-    cards = raw.get("cards", []) if isinstance(raw, dict) else []
+    cards = world.current(state / "cards.json")  # 快照 + 之后的任务日志
     tasks, owned, covered, covered_ids = {}, set(), set(), set()
     sessions = _json(state / "sessions.json")
     if isinstance(sessions, dict):

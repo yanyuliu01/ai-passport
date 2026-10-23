@@ -378,6 +378,12 @@ startup second:
 | R3.3 | The same for Service requests (`messages.json`); `operation_id` with `pending` / `running` / `succeeded` / `failed` / `cancelled` / `unknown`, recovered at startup as in section 1.5 |
 | R3.4 | Stopping writes to `transcript.json` moves to R6, where `ContextBuilder` assembles context from the log |
 
+**R3 progress:**
+
+- R3.1 is committed (`abab81f`).
+- R3.2: journal records carry an increasing number `n`, and the `cards.json` snapshot records the last one it includes (`"journal"`). Startup reads the snapshot and replays only the later records. The snapshot is rewritten in full only every 64 records; before writing it the in-memory cards are reconciled into the journal (`sync`), and the journal is compacted once the snapshot is durable (file and directory fsync). Files written by R3.1 (a snapshot without `"journal"`) take `cards.json` as the authority and are upgraded on the first start. Out-of-process readers (shared history, desktop handoff, iterate signals) read "snapshot + journal" through `world.current()`. The crash test records both files around every append (including half-written lines) and every full replacement, and checks that replay yields only the state before or after that step.
+- Compaction keeps no records before the snapshot; the bounded retention window for slow clients comes with sync in R4.
+
 ## 8. Lessons from Raft and DS-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.

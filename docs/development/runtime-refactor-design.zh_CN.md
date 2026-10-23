@@ -299,6 +299,12 @@ R2 已完成（2026-10-23，Codex 写、Claude Code 拆分核对后提交），�
 | R3.3 | Service 请求（`messages.json`）同样处理；`operation_id` 与 `pending` / `running` / `succeeded` / `failed` / `cancelled` / `unknown` 状态，启动时按第 1.5 节恢复 |
 | R3.4 | `transcript.json` 停写推迟到 R6，由 `ContextBuilder` 从日志组装上下文时一并替换 |
 
+**R3 进度：**
+
+- R3.1 已提交（`abab81f`）。
+- R3.2：日志记录带递增编号 `n`，快照 `cards.json` 记着包含到哪一条（`"journal"`）；启动时读快照、只重放之后的记录；每 64 条才整份重写快照，写快照前先把内存里的卡和日志对齐（`sync`），快照写稳（文件和目录 fsync）后压缩日志。R3.1 写的文件（快照没有 `"journal"`）以 `cards.json` 为准，第一次启动就升级。进程外的读者（共享历史、桌面交接、迭代信号）改用 `world.current()` 读“快照 + 日志”。崩溃测试记下每次追加（含写了一半的行）和每次整份替换前后两个文件的样子，逐个检查重放结果只能是那一步之前或之后的状态。
+- 压缩时快照之后的记录一条不剩；给慢客户端的有界保留窗口在 R4 和同步一起做。
+
 ## 8. 借鉴：Raft 与 DS-Bot-App
 
 主人要求参考两个开源项目的设计逻辑，但不照搬。本节已按 [Codex 的评审](runtime-refactor-review.zh_CN.md)修正：补上借鉴时遗漏的成立条件，删掉“epoch 相当于 term”“超时即可安全交接”等说法。

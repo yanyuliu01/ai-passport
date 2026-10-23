@@ -334,7 +334,7 @@ class SequenceReservationTests(TempDirCase):
         import xiaoyou_runtime.cards as cards_module
         cards = cards_module.Cards(self.folder / "cards.json")
         on_disk = json.loads((self.folder / "cards.json").read_text(encoding="utf-8"))["seq"]
-        with _mock.patch.object(cards_module, "_write", side_effect=OSError("disk full")):
+        with _mock.patch.object(cards_module.world, "durable_write", side_effect=OSError("disk full")):
             for _ in range(cards_module.SEQ_BLOCK + 5):
                 cards.bump()  # 写不下去也不抛给取号的人
         self.assertLessEqual(cards._reserved, on_disk)

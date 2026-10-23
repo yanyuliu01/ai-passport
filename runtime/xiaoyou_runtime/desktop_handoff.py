@@ -9,6 +9,7 @@ import time
 import tempfile
 from pathlib import Path
 
+from . import world
 from .agents import AgentError
 
 PROVIDER_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
@@ -170,8 +171,8 @@ def run_cli(config, args):
     # cleanup and mark an in-flight task interrupted in the running Runtime.
     try:
         sessions = json.loads((config.state_dir / "sessions.json").read_text(encoding="utf-8"))
-        cards = json.loads((config.state_dir / "cards.json").read_text(encoding="utf-8"))
-        if not isinstance(sessions, dict) or not isinstance(cards, dict):
+        cards = {"cards": world.current(config.state_dir / "cards.json")}  # 快照 + 之后的任务日志
+        if not isinstance(sessions, dict):
             raise ValueError("invalid state")
     except (OSError, ValueError):
         print("无法读取任务会话记录", file=sys.stderr)

@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
+from xiaoyou_runtime import world  # noqa: E402
 from xiaoyou_runtime.intake import Intake, Writer, WRITES  # noqa: E402
 from xiaoyou_runtime.service import Service  # noqa: E402
 
@@ -126,7 +127,13 @@ class IntakeTests(TempDirCase):
     def snapshot(self):
         state = self.store.state_dir
         log = [json.loads(line) for line in (state / "cards.log.jsonl").read_text().splitlines() if line.strip()]
+        # cards.json 是定期快照（R3.2）：先看快照 + 日志重放出来的，再写一份快照对拍。
+        live = world.current(state / "cards.json")
+        with self.xiaoyou.cards._changed:
+            self.xiaoyou.cards._save()
         cards = json.loads((state / "cards.json").read_text())
+        self.assertEqual(live, cards["cards"])
+        cards.pop("journal")
         tokens = {}
         return {"log": normalize(log, tokens), "cards": normalize(cards, tokens)}
 

@@ -12,7 +12,8 @@
 序号和这份记录的编号（epoch）都落盘：Runtime 重启后序号接着往上走；记录文件丢了、坏了
 或者换了一份时 epoch 会变，客户端看到 epoch 变了就从头同步。
 
-卡落盘在 state/cards.json，只留最近的若干张。Runtime 重启时还在做的事没法接着做，
+卡的每次变化先按差量追加进 state/cards.tasks.jsonl，state/cards.json 是定期快照
+（world.py），只留最近的若干张。Runtime 重启时还在做的事没法接着做，
 启动时把它们标成没做完。
 """
 
@@ -28,7 +29,8 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 from .task_audit import TaskAudit
 from .conversations import ConversationCatalog
 from .message_log import MessageLog
-from .world import JOURNAL_SUFFIX, TaskJournal
+from . import world
+from .world import TaskJournal
 from .store import _write
 from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
@@ -82,19 +84,27 @@ class Cards:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             raw = {}  # 丢了只是看不到旧卡，不值得为它拒绝启动
-        if isinstance(raw, dict):
-            for card in raw.get("cards", []):
-                if isinstance(card, dict) and isinstance(card.get("id"), str):
-                    self._cards[card["id"]] = self._clean(card)
-            if isinstance(raw.get("next"), int) and not isinstance(raw.get("next"), bool):
-                self._next = max(1, raw["next"])
-            saved_seq = raw.get("seq")
-            self._seq = max([card["seq"] for card in self._cards.values()]
-                            + [saved_seq if isinstance(saved_seq, int)
-                               and not isinstance(saved_seq, bool) else 0, 0])
-            if isinstance(raw.get("epoch"), str):
-                self._epoch = raw["epoch"]
+        raw = raw if isinstance(raw, dict) else {}
+        # cards.json 是定期快照：再重放它之后的任务日志，才是崩溃（或停掉）前的样子（world.py）。
+        records = world.read(world.journal_of(self._path))
+        replayed, applied, highest = world.replay(raw, records)
+        for card in replayed.values():
+            self._cards[card["id"]] = self._clean(card)
+        if isinstance(raw.get("next"), int) and not isinstance(raw.get("next"), bool):
+            self._next = max(1, raw["next"])
+        self._next = max(self._next, highest + 1)
+        saved_seq = raw.get("seq")
+        self._seq = max([card["seq"] for card in self._cards.values()]
+                        + [record["seq"] for record in records
+                           if isinstance(record.get("seq"), int) and not isinstance(record.get("seq"), bool)]
+                        + [saved_seq if isinstance(saved_seq, int)
+                           and not isinstance(saved_seq, bool) else 0, 0])
+        if isinstance(raw.get("epoch"), str):
+            self._epoch = raw["epoch"]
         self._reserved = self._seq
+        # 差量都相对 replayed 算；之后写快照前都先 sync，快照和日志编号总对得上。
+        self._journal = TaskJournal(world.journal_of(self._path), replayed, applied,
+                                    self._cards, self._seq)
         fresh_epoch = not self._epoch
         if fresh_epoch:
             # 旧版本写的文件没有 epoch：第一次补上。客户端原来手里的序号仍然有效（序号没变），
@@ -133,12 +143,9 @@ class Cards:
             card.update(state="failed", brief=RESTART_NOTE, mood="oops", approval=None,
                         queued=False, updated_at=time.time(), finished_at=time.time(),
                         seq=self._seq)
-        migrated = self._adopt_log()
-        if interrupted or fresh_epoch or migrated:
-            self._save()
-        # 任务的每次变化按差量追加进 cards.tasks.jsonl（world.py）：从它能重建出现在的卡。
-        self._journal = TaskJournal(self._path.with_name(self._path.stem + JOURNAL_SUFFIX),
-                                    self._cards, self._seq)
+        self._adopt_log()
+        # 启动时的改动（重启标记、补进日志、清理）由 _save 先 sync 进日志，再写快照、压缩日志。
+        self._save()
 
     def _adopt_log(self) -> bool:
         """启动时：卡上的副本以日志为准；日志里还没有的（旧版本的卡）补进日志。"""
@@ -284,13 +291,17 @@ class Cards:
         return copy
 
     def _save(self) -> None:
+        """写一份快照（连同它包含到哪条任务日志），落稳后压缩日志。"""
         reserved = self._reserved
         if self._seq >= reserved:
             reserved = self._seq + SEQ_BLOCK
-        _write(self._path, {"next": self._next, "seq": reserved, "epoch": self._epoch,
-                            "cards": list(self._cards.values())})
+        self._journal.sync(self._cards, self._seq)
+        journal = self._journal.n
+        world.durable_write(self._path, {"next": self._next, "seq": reserved, "epoch": self._epoch,
+                                         "journal": journal, "cards": list(self._cards.values())})
         # 写成功了才算占下：写失败时下一次变化还会再试。
         self._reserved = reserved
+        self._journal.compact(journal)
 
     def set_origin(self, runtime_id: str) -> None:
         """本机产生的消息记录都写上这台 Runtime 的编号（见 MessageLog.set_origin）。"""
@@ -474,9 +485,10 @@ class Cards:
         self._seq += 1
         card["seq"] = self._seq
         card["updated_at"] = time.time()
-        self._journal.record(card)  # 先记进任务日志，再写快照
+        self._journal.record(card)  # 记进任务日志就算落盘了；快照攒够了才重写
         self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
-        self._save()
+        if self._journal.pending >= world.SNAPSHOT_EVERY or self._seq >= self._reserved:
+            self._save()
         self._changed.notify_all()
         return self._copy(card)
 

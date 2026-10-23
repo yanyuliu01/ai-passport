@@ -5,16 +5,24 @@
 （差量）；卡被清掉时记一条 removed。rebuild() 是纯函数：同样的日志永远重建出同样的状态，
 测试可以用固定种子随机操作、在任意位置截断日志来模拟崩溃。
 
-现在（R3.1）cards.json 仍是启动时的权威：TaskJournal 启动时先重放日志，再和 cards.json
-对齐（缺的补一条差量），所以两边总是一致的。R3.2 才把启动改成“快照 + 重放”。
+R3.2 起 cards.json 只是定期快照：每条日志记录有递增的编号 n，快照里记着它已经包含到哪一条
+（"journal": n）。启动时读快照、只重放 n 之后的记录（replay），就是崩溃前的样子；快照每攒
+SNAPSHOT_EVERY 条才整份重写一次，写稳（fsync）之后把已经包含进去的记录从日志里压缩掉。
+别的进程要读现在的卡，用 current()，不要直接读 cards.json（它可能落后几十条）。
+
+崩溃落在任何一步都恢复得出来：日志写了快照没写——重放补上；快照写了一半——那是临时文件，
+原来的快照还在，日志也还在；快照写了没压缩——编号不大于快照的记录跳过；压缩写了一半——
+同样是临时文件。R3.1 写的快照没有 "journal"：那时 cards.json 是权威，不重放，日志按先后编号。
 """
 
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 JOURNAL_SUFFIX = ".tasks.jsonl"
+# 攒这么多条日志才整份重写一次快照（cards.json 有几百 KB，不能每次变化都重写）。
+SNAPSHOT_EVERY = 64
 
 
 def _plain(value: Any) -> Any:
@@ -108,15 +116,89 @@ def read(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
-class TaskJournal:
-    """cards.tasks.jsonl 的写入方。调用方（Cards）拿着自己的锁调用。"""
+def _number(record: Dict[str, Any], index: int) -> Optional[int]:
+    n = record.get("n", index)  # R3.1 写的记录没有 n：按在文件里的先后编号
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
 
-    def __init__(self, path: Path, cards: Dict[str, Dict[str, Any]], seq: int):
+
+def journal_of(snapshot_path: Path) -> Path:
+    snapshot_path = Path(snapshot_path)
+    return snapshot_path.with_name(snapshot_path.stem + JOURNAL_SUFFIX)
+
+
+def replay(snapshot: Any, records: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], int, int]:
+    """快照 + 它之后的日志 → (现在的卡, 日志编号到了哪, 见过的最大卡号)。纯函数。"""
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    cards = snapshot.get("cards") if isinstance(snapshot.get("cards"), list) else []
+    state = {card["id"]: _plain(card) for card in cards
+             if isinstance(card, dict) and isinstance(card.get("id"), str)}
+    applied = snapshot.get("journal")
+    legacy = not isinstance(applied, int) or isinstance(applied, bool)
+    applied = 0 if legacy else applied
+    last, highest = applied, 0
+    for index, record in enumerate(records, 1):
+        n = _number(record, index)
+        if n is None:
+            continue
+        if n > applied and not legacy:
+            apply(state, record)
+        last = max(last, n)
+        card_id = record.get("id")
+        if isinstance(card_id, str) and card_id[1:].isdigit():
+            highest = max(highest, int(card_id[1:]))
+    return state, last, highest
+
+
+def current(snapshot_path: Path) -> List[Dict[str, Any]]:
+    """只读：现在的卡（快照 + 重放）。给不在 Runtime 进程里的读者用；不改任何文件。"""
+    try:
+        raw = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    state, _last, _highest = replay(raw, read(journal_of(snapshot_path)))
+    return list(state.values())
+
+
+def durable_write(path: Path, data: Any) -> None:
+    """写稳再换：临时文件 fsync 后替换，再 fsync 目录。压缩日志之前快照必须已经落稳。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    text = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False) + "\n"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(str(temporary), str(path))
+    try:
+        folder = os.open(str(path.parent), os.O_RDONLY)
+    except OSError:
+        return  # 有的系统不能打开目录（Windows）：替换本身已经是原子的
+    try:
+        os.fsync(folder)
+    except OSError:
+        pass
+    finally:
+        os.close(folder)
+
+
+class TaskJournal:
+    """cards.tasks.jsonl 的写入方。调用方（Cards）拿着自己的锁调用。
+
+    base 是快照加重放得到的状态、n 是重放到的编号：日志里的差量都相对它算。"""
+
+    def __init__(self, path: Path, base: Dict[str, Dict[str, Any]], n: int,
+                 cards: Dict[str, Dict[str, Any]], seq: int):
         self._path = Path(path)
-        self._last = rebuild(read(self._path))
-        # 和 cards.json 对齐：启动时改过的卡（重启标记、补进日志）、崩溃时没记上的变化，
-        # 都在这里补一条，之后日志重建出来的就是现在的样子。
-        for card_id, card in cards.items():
+        self._last = _plain(base)
+        self.n = n
+        self.pending = 0  # 快照之后又记了几条
+        self.sync(cards, seq)
+
+    def sync(self, cards: Dict[str, Dict[str, Any]], seq: int) -> None:
+        """让日志的状态等于 cards：没经 record 记上的改动（启动时的重启标记、清理）补一条差量，
+        已经不在的卡记 removed。写快照之前调用，快照就和日志编号对得上。"""
+        for card in cards.values():
             self.record(card, seq)
         for card_id in [key for key in self._last if key not in cards]:
             self.remove(card_id, seq)
@@ -135,10 +217,21 @@ class TaskJournal:
         self._append(entry)
         apply(self._last, entry)
 
+    def compact(self, applied: int) -> None:
+        """快照已经落稳、包含到 applied：日志只留它之后的记录（一般是一条不剩）。"""
+        kept = [record for index, record in enumerate(read(self._path), 1)
+                if (_number(record, index) or 0) > applied]
+        durable_write(self._path, "".join(json.dumps(record, ensure_ascii=False) + "\n"
+                                          for record in kept))
+        self.pending = len(kept)
+
     def _append(self, entry: Dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        entry = dict(entry, n=self.n + 1)
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         with open(self._path, "a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
+        self.n += 1
+        self.pending += 1
