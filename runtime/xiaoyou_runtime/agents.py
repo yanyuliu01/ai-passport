@@ -648,7 +648,8 @@ class ClaudeCodeAgent(Agent):
         self._run = run
 
     def command(self, job: Job, stream: bool = False,
-                mcp_config: Optional[Path] = None) -> List[str]:
+                mcp_config: Optional[Path] = None, plugin_dir: Optional[Path] = None,
+                prompt_tool: bool = True) -> List[str]:
         spec = self.spec
         command = list(spec.command)
         if stream:
@@ -666,8 +667,12 @@ class ClaudeCodeAgent(Agent):
             command += ["--permission-mode", spec.permission_mode]
             if mcp_config is not None:
                 # 不加 --strict-mcp-config：使用者自己登记的 MCP 照常可用。
-                command += ["--permission-prompt-tool", self.PROMPT_TOOL,
-                            "--mcp-config", str(mcp_config)]
+                if prompt_tool:
+                    command += ["--permission-prompt-tool", self.PROMPT_TOOL]
+                command += ["--mcp-config", str(mcp_config)]
+            if plugin_dir is not None:
+                # 这个帮手的 skill，拼成一个临时插件（helper_extras.claude_plugin）。
+                command += ["--plugin-dir", str(plugin_dir)]
             for folder in spec.add_dirs:
                 command += ["--add-dir", str(folder)]
             if spec.allowed_tools:
@@ -717,12 +722,15 @@ class ClaudeCodeAgent(Agent):
                 job = replace(job, system="%s\n\n## Historical context (evidence, not a new owner request)\n%s" % (job.system or "", recap))
         if job.control is not None and not job.plain and self._run is subprocess.run:
             return self._work(job, job.control)
-        done = run_command(
-            self.command(job), job.text, workdir(self.spec, job),
-            job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Claude Code",
-            env=self._env(),
-            run=self._run, control=job.control,
-        )
+        with tempfile.TemporaryDirectory(prefix="xiaoyou-claude-") as folder:
+            config_file, plugin_dir = (None, None) if job.plain else self._extras(Path(folder), None)
+            done = run_command(
+                self.command(job, mcp_config=config_file, plugin_dir=plugin_dir, prompt_tool=False),
+                job.text, workdir(self.spec, job),
+                job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "Claude Code",
+                env=self._env(),
+                run=self._run, control=job.control,
+            )
         payload: Any = None
         try:
             payload = json.loads(done.stdout) if done.stdout.strip() else None
@@ -732,25 +740,36 @@ class ClaudeCodeAgent(Agent):
 
     @staticmethod
     def mcp_config(gate: Dict[str, str]) -> Dict[str, Any]:
-        """给 Claude Code 的 MCP 配置：怎么启动权限询问工具。"""
-        package_parent = str(Path(__file__).resolve().parent.parent)
-        return {"mcpServers": {"xiaoyou": {
-            "command": sys.executable,
-            "args": ["-m", "xiaoyou_runtime.permission_mcp"],
-            "env": dict(gate, PYTHONPATH=package_parent),
-        }}}
+        """给 Claude Code 的 MCP 配置：能力网关入口（权限询问工具 approve 加上能力库工具）。"""
+        from .helper_extras import SERVER, xiaoyou_server
+        return {"mcpServers": {SERVER: xiaoyou_server(gate, approve=True)}}
 
-    def _work(self, job: Job, control: Control) -> Outcome:
-        """做事：读事件流，报进展，需要确认的操作交给主人。"""
+    def _extras(self, folder: Path, gate: Optional[Dict[str, str]],
+                skills: Optional[Path] = None) -> Tuple[Optional[Path], Optional[Path]]:
+        """这一次要带的 MCP 配置文件（放在 folder）和 skill 插件目录（拼在 skills，默认也是 folder）；
+        都没有就是 (None, None)。"""
+        from . import helper_extras
         config_file: Optional[Path] = None
-        if control.gate is not None:
-            folder = control.scratch if control.scratch is not None else Path(tempfile.gettempdir())
+        if gate is not None:
             folder.mkdir(parents=True, exist_ok=True)
             handle, name = tempfile.mkstemp(prefix="mcp-", suffix=".json", dir=str(folder))
             # mkstemp 建的文件只有自己能读写：里面有这件事的钥匙。
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                json.dump(self.mcp_config(control.gate), stream)
+                json.dump(self.mcp_config(gate), stream)
             config_file = Path(name)
+        try:
+            plugin_dir = helper_extras.claude_plugin(self.spec, skills or folder)
+        except OSError as error:
+            raise AgentError("准备 %s 的 skill 时出错：%s" % (self.name, error))
+        return config_file, plugin_dir
+
+    def _work(self, job: Job, control: Control) -> Outcome:
+        """做事：读事件流，报进展，需要确认的操作交给主人。"""
+        folder = control.scratch if control.scratch is not None else Path(tempfile.gettempdir())
+        folder.mkdir(parents=True, exist_ok=True)
+        # 钥匙文件直接放在 state 里（mkstemp 只给自己读写）；skill 插件另拼一个临时目录。
+        scratch = Path(tempfile.mkdtemp(prefix="claude-skills-", dir=str(folder))) if self.spec.skills else None
+        config_file, plugin_dir = self._extras(folder, control.gate, scratch)
         final: Dict[str, Any] = {}
 
         def on_line(line: str) -> None:
@@ -807,7 +826,8 @@ class ClaudeCodeAgent(Agent):
 
         try:
             done = stream_command(
-                self.command(job, stream=True, mcp_config=config_file), job.text,
+                self.command(job, stream=True, mcp_config=config_file, plugin_dir=plugin_dir,
+                             prompt_tool=control.gate is not None), job.text,
                 workdir(self.spec, job), job.timeout or self.spec.timeout_seconds, "Claude Code",
                 self._env(), control, on_line, self.spec.idle_seconds,
                 self.spec.idle_command_seconds,
@@ -818,6 +838,8 @@ class ClaudeCodeAgent(Agent):
                     config_file.unlink()
                 except OSError:
                     pass
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
         return self.parse(done.returncode, final or None, done.stderr)
 
     def parse(self, returncode: int, payload: Any, detail: str) -> Outcome:
@@ -851,7 +873,8 @@ class ClaudeCodeAgent(Agent):
         return None
 
     def check(self) -> Optional[str]:
-        problem = self._command_problem()
+        from .helper_extras import missing_skill
+        problem = self._command_problem() or missing_skill(self.spec)
         if problem is None:
             try:
                 self._file_env()
@@ -902,8 +925,11 @@ class CodexAgent(Agent):
         return env
 
     def command(self, job: Job, last_message: Path) -> List[str]:
+        from . import helper_extras
         spec = self.spec
-        command = list(spec.command)
+        # 能力网关入口（有这一轮的钥匙时）：-c 是 codex 的全局参数，写在子命令前面。
+        gate = job.control.gate if job.control is not None and not job.plain else None
+        command = list(spec.command) + helper_extras.codex_overrides(gate)
         command += ["exec", "--json", "--skip-git-repo-check", "-o", str(last_message)]
         if spec.sandbox:
             command += ["--sandbox", spec.sandbox]
@@ -1088,7 +1114,9 @@ class DshAgent(Agent):
     def _patch_file(self, folder: Path, model: Optional[str], plain: bool) -> Optional[Path]:
         # 只说话这条线求的是几秒内答完：关掉思考，不然 DeepSeek 默认的 reasoningEffort
         # 是 high，光思考就能花上十几二十秒，跟这条线的用途对不上。
-        if not model and not plain:
+        from .helper_extras import dsh_skill_patch
+        skills = [] if plain else dsh_skill_patch(self.spec)
+        if not model and not plain and not skills:
             return None
         folder.mkdir(parents=True, exist_ok=True)
         handle, name = tempfile.mkstemp(prefix="dsh-patch-", suffix=".yml", dir=str(folder))
@@ -1104,6 +1132,7 @@ class DshAgent(Agent):
         if plain:
             for plugin in self.NO_TOOLS_PLUGINS:
                 lines += ["- id: %s" % plugin, "  disabled: true"]
+        lines += skills
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write("\n".join(lines) + "\n")
         return Path(name)
@@ -1190,7 +1219,8 @@ class DshAgent(Agent):
                        fields_from_text(said) if speaking else None)
 
     def check(self) -> Optional[str]:
-        problem = self._command_problem()
+        from .helper_extras import missing_skill
+        problem = self._command_problem() or missing_skill(self.spec)
         if problem is None:
             try:
                 self._env()
@@ -1237,6 +1267,73 @@ class CommandAgent(Agent):
 
     def check(self) -> Optional[str]:
         return self._command_problem()
+
+
+class PiAgent(Agent):
+    """驱动 pi 命令行（pi-coding-agent）。
+
+    一次一条：`pi -p`，这一段话从标准输入送进去，最后的回复写到标准输出。会话编号由这里
+    生成，用 --session-id 打开或新建，下次带同一个编号接着聊。用 Key 的模型从 env_files 里
+    读（服务商自己的环境变量，比如 OPENAI_API_KEY）；订阅登录的在 pi 里 /login 过就行。
+
+    pi 没有沙箱和审批：能用哪些工具，用 extra_args 里的 --tools 限定。
+    """
+
+    def __init__(self, spec: AgentSpec, run=subprocess.run):
+        super().__init__(spec)
+        self._run = run
+
+    def _env(self) -> Optional[Dict[str, str]]:
+        if not self.spec.env and not self.spec.env_files and not self._parent_session():
+            return None
+        env = self._inherited_env()
+        env.update(self.spec.env)
+        env.update(self._file_env())
+        return env
+
+    def command(self, job: Job, session_id: str) -> List[str]:
+        spec = self.spec
+        command = list(spec.command) + ["-p", "--session-id", session_id]
+        model, effort = self.tier(job)
+        if model:
+            command += ["--model", model]
+        if effort:
+            command += ["--thinking", effort]
+        if job.system:
+            command += ["--append-system-prompt", job.system]
+        if job.plain:
+            # 只说话：一个工具也不给，也不带 skill。
+            command += ["--no-tools", "--no-skills"]
+        else:
+            for skill in spec.skills:
+                command += ["--skill", str(skill)]
+        return command + spec.extra_args
+
+    def run(self, job: Job) -> Outcome:
+        session_id = job.session_id or str(uuid.uuid4())
+        text = job.text
+        if job.schema:
+            text += ("\n\n请只输出一个 JSON 对象，不要代码围栏或额外说明。按以下 JSON Schema "
+                    "填写字段；reply 是对主人说的话。\n" + json.dumps(job.schema, ensure_ascii=False))
+        done = run_command(self.command(job, session_id), text, workdir(self.spec, job),
+                           job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "pi",
+                           env=self._env(), run=self._run, control=job.control)
+        output = done.stdout.strip()
+        if done.returncode != 0 or not output:
+            detail = (done.stderr.strip().splitlines() or ["没有输出"])[-1]
+            raise AgentError("pi 没有给出结果（退出码 %d）：%s" % (done.returncode, clip(detail, 200)))
+        output = output[:MAX_OUTPUT_CHARS]
+        return Outcome(output, session_id, fields_from_text(output) if job.system is not None else None)
+
+    def check(self) -> Optional[str]:
+        from .helper_extras import missing_skill
+        problem = self._command_problem() or missing_skill(self.spec)
+        if problem is None:
+            try:
+                self._file_env()
+            except AgentError as error:
+                return str(error)
+        return problem
 
 
 class RemoteAgent(Agent):
@@ -1309,6 +1406,7 @@ def create(spec: AgentSpec) -> Agent:
         "claude_code": create_claude_agent,
         "codex": CodexAgent,
         "dsh": DshAgent,
+        "pi": PiAgent,
         "command": CommandAgent,
         "remote": RemoteAgent,
         "echo": EchoAgent,

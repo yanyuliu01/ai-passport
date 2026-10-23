@@ -84,7 +84,9 @@ class AppServer:
         self._spec = spec
         self._control = control
         self._name = spec.name
-        command = list(spec.command) + ["app-server"] + list(spec.extra_args)
+        from .helper_extras import codex_overrides
+        # 能力网关入口（-c 覆盖，带着这一轮的钥匙）。共用服务（下面的 proxy）不是这里启动的，带不上。
+        command = list(spec.command) + codex_overrides(control.gate) + ["app-server"] + list(spec.extra_args)
         if spec.app_server_socket is not None:
             command = list(spec.command) + ["app-server", "proxy", "--sock",
                                             str(spec.app_server_socket)] + list(spec.extra_args)

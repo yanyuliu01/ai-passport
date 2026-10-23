@@ -569,6 +569,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | `claude_code` | 非交互地运行 Claude Code 命令行，用这台机器上已经登录的账号。 | `command`（默认 `["claude"]`）、`workdir`（默认 `workdir`）、`config_dir`、`model`、`permission_mode`（默认 `manual`）、`allowed_tools`、`add_dirs`（默认 `["~"]`）、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts`（见[档位](#档位模型和努力程度)） |
 | `codex` | 运行 Codex 命令行。默认用它的 app-server 模式（`codex app-server`）：需要确认的操作会来问主人，做的过程中可以追加一句话。`mode` 设成 `exec` 时用 `codex exec`（接着聊用 `codex exec resume`）：一次性跑完，不会来问。 | `command`（默认 `["codex"]`）、`workdir`、`config_dir`、`mode`（默认 `app_server`）、`approval_policy`（默认 `on-request`）、`sandbox`（默认 `read-only`）、`model`、`extra_args`、`models`、`effort`、`efforts` |
 | `dsh` | 运行 DeepSeek Harness 命令行（`dsh`），见下面的 [DeepSeek Harness](#deepseek-harnessdsh)。 | `command`（默认 `["dsh"]`）、`workdir`、`config_dir`、`sandbox`（默认 `workspace-write`）、`stream`（默认 `true`）、`model`、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts` |
+| `pi` | 每一轮运行一次 pi 编程助手（`pi -p`），会话编号由 Runtime 记着，下一轮接着聊。用 API 的模型，Key 放在 `env` / `env_files` 里，变量名用服务商自己的（比如 `OPENAI_API_KEY`）；订阅登录在 pi 里用 `/login`。pi 没有沙箱和审批：用 `extra_args` 里的 `--tools` 限定它能用的工具。 | `command`（默认 `["pi"]`）、`workdir`、`model`（`服务商/编号`）、`extra_args`、`env`、`env_files`、`skills`、`models`、`effort`、`efforts`（pi 的 `--thinking` 档位） |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
 | `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
@@ -770,6 +771,24 @@ Runtime 把每个文件复制到 `state_dir/artifacts/`，计算 SHA-256 并分�
 缓存归属同时包含来源 Runtime、附件 ID 和哈希。这一版不包含手机附件上传、任意外部
 URL 获取、App 内置 PDF 阅读或通用蓝牙文件传输。只观察电脑端会话记录，也不会自动
 导入电脑会话附件。
+
+### 能力：MCP 服务和 skill
+
+MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `grants` 另有写明，这台电脑上的帮手都能用；帮手拿不到服务的 Key。每一轮 Runtime 给帮手注入一个 MCP 服务——能力网关：它列出这个帮手被授权的工具，调用经过 Runtime，每次都核对授权。Claude Code、Codex、dsh 会注入；pi 暂时不注入（它只有全局的 `pi mcp add`）。见[帮手的能力](../docs/development/helper-capabilities.zh_CN.md)。
+
+```json
+"capabilities": {
+  "mcp_servers": {
+    "notion": {"name": "Notion", "url": "https://mcp.notion.com/mcp", "headers": ["Authorization"]},
+    "files": {"name": "笔记", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/notes"]}
+  },
+  "grants": {"codex": {"notion": false}, "claude": {"files": {"tools": ["read_file"]}}}
+}
+```
+
+`headers` 和 `env` 只写名字。值（“连接”）放在 `state/capability-secrets/<编号>.json`，比如 `{"headers": {"Authorization": "Bearer ..."}}`，只有本机账号能读（`chmod 600`）。缺连接的服务会作为“用不了”告诉帮手，而不是直接消失。
+
+`claude_code`、`dsh`、`pi` 帮手的 `skills` 写 skill 目录（每个里面有 `SKILL.md`）：Claude Code 拼成临时插件载入（`--plugin-dir`），dsh 经它的 `skill-filesystem` 插件，pi 用 `--skill`。Codex 还没有按次指定的办法，写了会报错。
 
 ### 档位：模型和努力程度
 

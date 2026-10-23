@@ -305,9 +305,15 @@ class Gate:
         self._lock = threading.Lock()
         self._keys: Dict[str, Dict[str, str]] = {}  # 钥匙 → 它对哪件事、哪个帮手有效
         self._server: Optional[ThreadingHTTPServer] = None
+        # 能力库（capabilities.Library）：有了它，能力网关入口 能经这里列出、调用帮手被授权的工具。
+        self.capabilities: Any = None
+
+    def offers(self, agent: str) -> bool:
+        """能力库里有没有这个帮手可能用到的服务。"""
+        return self.capabilities is not None and self.capabilities.offers(agent)
 
     def open(self, card: str, conversation: str, agent: str) -> Dict[str, str]:
-        """为一件事开一把钥匙；返回权限询问工具需要的环境变量。"""
+        """为一件事开一把钥匙；返回能力网关入口（权限询问、能力库工具）需要的环境变量。"""
         with self._lock:
             if self._server is None:
                 self._server = self._start()
@@ -354,9 +360,51 @@ class Gate:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def do_GET(self) -> None:
+                self.close_connection = True
+                holder = gate._holder(self.headers.get("X-Xiaoyou-Key", ""))
+                if self.path != "/mcp/tools" or holder is None:
+                    self._send(403, {"error": "钥匙不对"})
+                    return
+                if gate.capabilities is None:
+                    self._send(200, {"tools": [], "unavailable": []})
+                    return
+                self._send(200, gate.capabilities.tools(holder["agent"]))
+
+            def _capability_call(self, holder: Dict[str, str]) -> None:
+                from .capabilities import CapabilityError
+                try:
+                    length = int(self.headers.get("Content-Length", ""))
+                    if not 0 < length <= MAX_GATE_BODY_BYTES:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+                    fields = ("server", "tool", "config_version", "grant_version")
+                    if not isinstance(body, dict) or not all(isinstance(body.get(key), str) for key in fields)                             or not isinstance(body.get("arguments", {}), dict):
+                        raise ValueError
+                except (ValueError, UnicodeDecodeError):
+                    self._send(400, {"error": "请求看不懂"})
+                    return
+                if gate.capabilities is None:
+                    self._send(200, {"content": [{"type": "text", "text": "这台电脑没有能力库"}], "isError": True})
+                    return
+                try:
+                    result = gate.capabilities.call(holder["agent"], body["server"], body["tool"],
+                                                    body.get("arguments", {}), body["config_version"],
+                                                    body["grant_version"])
+                except Exception as error:  # 授权变了、服务出错：如实交给帮手
+                    reason = str(error) if isinstance(error, CapabilityError) else "调用失败：%s" % error
+                    result = {"content": [{"type": "text", "text": reason[:2000]}], "isError": True}
+                try:
+                    self._send(200, result)
+                except OSError:
+                    pass
+
             def do_POST(self) -> None:
                 self.close_connection = True
                 holder = gate._holder(self.headers.get("X-Xiaoyou-Key", ""))
+                if holder is not None and self.path == "/mcp/call":
+                    self._capability_call(holder)
+                    return
                 if self.path != "/approve" or holder is None:
                     self._send(403, {"error": "钥匙不对"})
                     return

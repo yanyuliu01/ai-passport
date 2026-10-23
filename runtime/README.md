@@ -705,6 +705,7 @@ Keys by type:
 | `claude_code` | Runs the Claude Code command line non-interactively, with the login already present on this machine. | `command` (default `["claude"]`), `workdir` (default `workdir`), `config_dir`, `model`, `permission_mode` (default `manual`), `allowed_tools`, `add_dirs` (default `["~"]`), `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` (see [Tiers](#tiers-model-and-effort)) |
 | `codex` | Runs the Codex command line. By default in its app-server mode (`codex app-server`): an operation that needs confirmation is put to the owner, and a sentence can be added while it works. With `mode` set to `exec` it uses `codex exec` (and `codex exec resume` to continue): one run to the end, and it never asks. | `command` (default `["codex"]`), `workdir`, `config_dir`, `mode` (default `app_server`), `approval_policy` (default `on-request`), `sandbox` (default `read-only`), `model`, `extra_args`, `models`, `effort`, `efforts` |
 | `dsh` | Runs the DeepSeek Harness command line (`dsh`); see [DeepSeek Harness](#deepseek-harness-dsh) below. | `command` (default `["dsh"]`), `workdir`, `config_dir`, `sandbox` (default `workspace-write`), `stream` (default `true`), `model`, `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` |
+| `pi` | Runs the pi coding agent once per turn (`pi -p`), with a session id Runtime keeps so the next turn continues. Keys for API models go in `env` / `env_files` under the provider's own variable (for example `OPENAI_API_KEY`); a subscription is logged in inside pi with `/login`. pi has no sandbox or approvals: limit its tools with `--tools` in `extra_args`. | `command` (default `["pi"]`), `workdir`, `model` (`provider/id`), `extra_args`, `env`, `env_files`, `skills`, `models`, `effort`, `efforts` (pi's `--thinking` levels) |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
 | `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
@@ -975,6 +976,34 @@ the originating Runtime, attachment ID, and hash. This first version does not
 upload phone attachments, fetch arbitrary external URLs, render PDF documents
 inside the App, or transfer general files over Bluetooth. Desktop transcript
 observation by itself does not import desktop attachments.
+
+### Capabilities: MCP servers and skills
+
+MCP servers are registered once per computer in `capabilities`, not per helper. Every helper on the
+computer can use them unless `grants` says otherwise; the helper never receives the server's keys.
+Each turn Runtime injects one MCP server, the capability gateway, which lists the tools the helper is granted
+and forwards calls through Runtime, where the grant is checked on every call. Claude Code, Codex and
+dsh get it; pi does not yet (it only has global `pi mcp add`). See
+[helper capabilities](../docs/development/helper-capabilities.md).
+
+```json
+"capabilities": {
+  "mcp_servers": {
+    "notion": {"name": "Notion", "url": "https://mcp.notion.com/mcp", "headers": ["Authorization"]},
+    "files": {"name": "Notes", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/notes"]}
+  },
+  "grants": {"codex": {"notion": false}, "claude": {"files": {"tools": ["read_file"]}}}
+}
+```
+
+`headers` and `env` list only names. Their values (the "connection") go in
+`state/capability-secrets/<id>.json`, for example `{"headers": {"Authorization": "Bearer ..."}}`,
+readable by this account only (`chmod 600`). A server whose connection is missing is reported to the
+helper as unavailable instead of disappearing.
+
+`skills` on a `claude_code`, `dsh` or `pi` helper lists skill directories (each with a `SKILL.md`):
+Claude Code loads them as a temporary plugin (`--plugin-dir`), dsh through its `skill-filesystem`
+plugin, pi with `--skill`. Codex has no per-run way yet, so `skills` is refused there.
 
 ### Tiers: model and effort
 

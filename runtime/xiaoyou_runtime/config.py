@@ -86,6 +86,9 @@ class AgentSpec:
     # remote：另一台小幽 Runtime
     url: Optional[str] = None
     token: Optional[str] = None
+    # 这个帮手的 skill 目录（放着 SKILL.md），按各 harness 认的方式带上（helper_extras.py）。
+    # MCP 不在这里配：在能力库里登记，由能力网关入口 按授权给帮手（helper-capabilities 文档）
+    skills: List[Path] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,8 @@ class Config:
     models: Any = None
     # 自动迭代（iterate/）：原样保留配置，由 iterate.settings 解释。
     iterate: Dict[str, Any] = field(default_factory=dict)
+    # 能力库（capabilities.Settings）：这台电脑登记的 MCP 服务和授权；None 是没有
+    capabilities: Any = None
 
     def agent(self, name: str) -> Optional[AgentSpec]:
         for spec in self.agents:
@@ -173,7 +178,7 @@ class Config:
         return None
 
 
-AGENT_TYPES = ("claude_code", "codex", "dsh", "command", "remote", "echo")
+AGENT_TYPES = ("claude_code", "codex", "dsh", "pi", "command", "remote", "echo")
 # 这些类型默认直接以小幽的身份回话；其余的默认只干活。
 SPEAKS_BY_DEFAULT = ("claude_code", "dsh", "remote", "echo")
 ROUTER_TYPES = ("mention", "command")
@@ -188,6 +193,8 @@ EFFORTS_BY_TYPE = {
     "claude_code": ("low", "medium", "high", "xhigh", "max"),
     "codex": ("minimal", "low", "medium", "high", "xhigh"),
     "dsh": ("off", "low", "high", "max"),
+    # pi 的 --thinking
+    "pi": ("off", "minimal", "low", "medium", "high", "xhigh", "max"),
 }
 DEFAULT_EFFORTS = ["low", "medium", "high"]
 DEFAULT_EFFORT = "medium"
@@ -257,6 +264,25 @@ def _env_files(value: Any, env: Dict[str, str], base: Path, where: str) -> Dict[
     return {key: _path(item.strip(), base) for key, item in value.items()}
 
 
+def _extras(raw: Dict[str, Any], kind: str, base: Path, where: str) -> Dict[str, Any]:
+    """这个帮手的 skill 目录（见 helper_extras.py）。哪个 harness 带不上就报错，不悄悄丢掉。"""
+    from . import helper_extras
+    if "mcp_servers" in raw:
+        raise ConfigError("%s.mcp_servers 不再按帮手配置：MCP 服务登记在 capabilities.mcp_servers，"
+                          "再用 capabilities.grants 决定哪些帮手能用" % where)
+    skills_raw = _strings(raw.get("skills", []), where + ".skills")
+    if skills_raw and kind not in helper_extras.SKILL_TYPES:
+        reason = ("Codex 还没有按次指定 skill 的办法" if kind == "codex"
+                  else "%s 类型没有 skill" % kind)
+        raise ConfigError("%s.skills 不行：%s" % (where, reason))
+    if len(skills_raw) > helper_extras.MAX_SKILLS:
+        raise ConfigError("%s.skills 最多 %d 个" % (where, helper_extras.MAX_SKILLS))
+    skills = [_path(item, base) for item in skills_raw]
+    if len({folder.name for folder in skills}) != len(skills):
+        raise ConfigError("%s.skills 里有同名的目录：每个 skill 的目录名要不一样" % where)
+    return dict(skills=skills)
+
+
 def _path(value: str, base: Path) -> Path:
     path = Path(os.path.expanduser(value))
     return path if path.is_absolute() else (base / path).resolve()
@@ -322,6 +348,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
         timeout_seconds=_timeout(
             raw.get("timeout_seconds", default_timeout), where + ".timeout_seconds"
         ),
+        **_extras(raw, kind, base, where),
     )
     if kind in ("echo", "remote"):
         for key in ("effort", "efforts", "models"):
@@ -346,7 +373,7 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             raise ConfigError("%s 是另一台小幽，本来就以小幽的身份回话；不要把 speaks 设成 false" % where)
         return AgentSpec(url=url.rstrip("/"), token=token, **common)
 
-    default_command = {"claude_code": ["claude"], "codex": ["codex"], "dsh": ["dsh"]}.get(kind, [])
+    default_command = {"claude_code": ["claude"], "codex": ["codex"], "dsh": ["dsh"], "pi": ["pi"]}.get(kind, [])
     command = _strings(raw.get("command", default_command), where + ".command")
     if not command:
         raise ConfigError("%s.command 不能为空" % where)
@@ -412,6 +439,18 @@ def _agent(name: str, raw: Any, base: Path, default_timeout: int,
             **_tiers(raw, kind, where, shared["model"], shared["extra_args"], True),
             **common, **shared,
         )
+
+    if kind == "pi":
+        for key in ("permission_mode", "allowed_tools", "add_dirs", "sandbox", "config_dir"):
+            if key in raw:
+                raise ConfigError(
+                    "%s 是 pi 类型：没有 %s 这一项。pi 没有沙箱和审批，能用哪些工具用 extra_args 里的 "
+                    "--tools 限定" % (where, key))
+        extra_env = _env(raw.get("env", {}), where + ".env")
+        env_files = _env_files(raw.get("env_files", {}), extra_env, base, where + ".env_files")
+        return AgentSpec(env=extra_env, env_files=env_files,
+                         **_tiers(raw, kind, where, shared["model"], shared["extra_args"], True),
+                         **common, **shared)
 
     config_dir = _optional_string(raw.get("config_dir"), where + ".config_dir")
     config_dir = env.get("XIAOYOU_CLAUDE_CONFIG_DIR") or config_dir
@@ -822,6 +861,11 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         models = model_gateway.parse(raw.get("models"), base, env)
     except model_gateway.GatewayConfigError as error:
         raise ConfigError(str(error))
+    from . import capabilities as capabilities_module
+    try:
+        capabilities = capabilities_module.parse(raw.get("capabilities"), [spec.name for spec in agents])
+    except capabilities_module.CapabilityError as error:
+        raise ConfigError(str(error))
     iterate = _expect(raw.get("iterate", {}), dict, "iterate")
     try:
         iterate_settings.parse(iterate, base)  # 只检查；用的时候由 iterate 自己再读
@@ -888,4 +932,5 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         desktop_claude_dir=_path(desktop_claude_dir, base) if desktop_claude_dir else None,
         models=models,
         iterate=iterate,
+        capabilities=capabilities,
     )

@@ -25,6 +25,7 @@ import os
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -69,7 +70,18 @@ class AcpServer:
     def __init__(self, spec: AgentSpec, control: Control, env: Optional[Dict[str, str]]):
         self._spec = spec
         self._control = control
-        command = list(spec.command) + ["--profile", "acp"] + list(spec.extra_args)
+        command = list(spec.command) + ["--profile", "acp"]
+        # 这个帮手自己的 skill 目录：--patch 是 dsh 自己的参数，写在 --profile 后面。
+        from .helper_extras import dsh_skill_patch
+        self._patch: Optional[Path] = None
+        lines = dsh_skill_patch(spec)
+        if lines:
+            handle, name = tempfile.mkstemp(prefix="dsh-skills-", suffix=".yml")
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(lines) + "\n")
+            self._patch = Path(name)
+            command += ["--patch", name]
+        command += list(spec.extra_args)
         command[0] = shutil.which(command[0]) or command[0]
         extra: Dict[str, Any] = {}
         if env is not None:
@@ -181,6 +193,11 @@ class AcpServer:
         except subprocess.TimeoutExpired:
             pass
         self._control.attach(None)
+        if self._patch is not None:
+            try:
+                self._patch.unlink()
+            except OSError:
+                pass
         self._stderr_reader.join(timeout=2)
         for pipe in (self._process.stdout, self._process.stderr):
             try:
@@ -244,6 +261,7 @@ def _set_tier(server: AcpServer, session_id: str, deadline: float, tier: Any) ->
 
 def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
          watch: Watchdog, tier: Any = (None, None)) -> Outcome:
+    from .helper_extras import acp_servers
     deadline = time.monotonic() + HANDSHAKE_SECONDS
     handshake(server, deadline)
     cwd = str(spec.workdir) if spec.workdir else os.getcwd()
@@ -254,10 +272,10 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
         except AgentError:
             # 接不上这个会话编号（比如上一次是别的壳留下的）：当作新对话开始，
             # 不要因为接不上旧对话就让这一轮直接失败。
-            opened = server.request("session/new", {"cwd": cwd, "mcpServers": []})
+            opened = server.request("session/new", {"cwd": cwd, "mcpServers": acp_servers(control.gate)})
             began = server.expect(opened, deadline, "session/new")
     else:
-        opened = server.request("session/new", {"cwd": cwd, "mcpServers": []})
+        opened = server.request("session/new", {"cwd": cwd, "mcpServers": acp_servers(control.gate)})
         began = server.expect(opened, deadline, "session/new")
     session_id = began.get("sessionId") if isinstance(began.get("sessionId"), str) else job.session_id
     if not isinstance(session_id, str):

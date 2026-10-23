@@ -758,6 +758,11 @@ class Xiaoyou:
         self.artifacts = ArtifactStore(config)
         self._approvals = Approvals(self._approval_changed, self.intake.writer("system", actor="approvals").sequence)
         self._gate = Gate(self._approvals)
+        settings = getattr(config, "capabilities", None)
+        if settings is not None and settings.servers:
+            from .capabilities import Library
+            # 能力库：能力网关入口 经小门列出、调用帮手被授权的工具；连接只在这台电脑上。
+            self._gate.capabilities = Library(settings, config.state_dir / "capability-secrets")
         self._tasks = Tasks(store, self._finished, config.max_parallel, self._begun,
                             self._prepare, self._release)
         # 只会干活的帮手做完后，转述要回到那个对话自己的线上排队；没有人排队（命令行里
@@ -810,6 +815,8 @@ class Xiaoyou:
         self._pulse.close()
         self._tasks.close()
         self._gate.close()
+        if self._gate.capabilities is not None:
+            self._gate.capabilities.close()
         self._workspace.close()
 
     def _available(self, hop: int) -> List[Agent]:
@@ -1626,8 +1633,9 @@ class Xiaoyou:
         control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
         # 这一轮开始：记下额度现在剩多少（太久没问过就先问一次），做完好算花了多少。
         self._runs[control] = self._usage.begin(name, task.model)
-        if task.agent.type == "claude_code":
-            # Claude Code 的询问由另一个进程（权限询问工具）送进来，要一把钥匙。
+        if task.agent.type == "claude_code" or (
+                task.agent.type in ("codex", "dsh") and self._gate.offers(task.agent.name)):
+            # 能力网关入口 由另一个进程送进来（Claude Code 的询问、能力库工具），要一把钥匙。
             control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
 
         def ask(tool: str, detail: str, task: Task = task) -> bool:

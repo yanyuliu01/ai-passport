@@ -25,6 +25,7 @@
 - [xiaoyou-agent-model.zh_CN.md](xiaoyou-agent-model.zh_CN.md)：小幽完整方案：简洁原则、五个页面与统一词汇、配一次就不用管的连接、主体模型（事件、世界状态、注意力与承诺、统一决策循环）、8 个接口、模块划分与分阶段实施。
 - [code-cleanup-plan.zh_CN.md](code-cleanup-plan.zh_CN.md)：第一阶段代码清理：先对齐本地与远端，再分批删除暗中追问、App 里没人用的代码和旧版 Runtime 兼容，每批单独验证。
 - [runtime-refactor-design.zh_CN.md](runtime-refactor-design.zh_CN.md)：Runtime 三层重构设计（状态接收、回复消息、agent loop）：目标结构、接口、和现有代码的对应、迁移顺序 R1～R8。
+- [helper-capabilities.zh_CN.md](helper-capabilities.zh_CN.md)：帮手能用哪些 MCP 和 skill，由小幽按电脑统一管（参考 Raft 的托管 MCP）：能力库、连接、授权、注入的代理和分阶段。
 - [runtime-refactor-review.zh_CN.md](runtime-refactor-review.zh_CN.md)：给 CC 的评审交接，修正 Raft/DS-Bot-App 借鉴中的协调、重放与连接前提。
 - [windows-public-node-handoff.zh_CN.md](windows-public-node-handoff.zh_CN.md)：家用公网节点的 Windows Codex 交接、源码快照、网络权限问题、原生构建与异网验收。
 - [xiaoyou-desktop-plan.zh_CN.md](xiaoyou-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
