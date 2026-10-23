@@ -105,8 +105,9 @@ connection management (N1-N7, U1, U2, V7).
   too old (update). Other failed requests leave connection state alone and are reported where
   that feature is.
 - **Sending works while disconnected.** Messages queue on the phone and go out once connected.
-- **The pairing code lives in the desktop client's settings;** after the scan the owner confirms
-  once on the computer.
+- **An "add phone" entry lives in the desktop client's settings:** opening it creates a one-time
+  pairing code (security as in the desktop plan: single use, two-minute expiry); after the scan the
+  owner confirms once on the computer. No agent is needed to generate it.
 - **The device follows the same rules:** pair once, reconnect automatically, show nothing when
   fine, prompt once when it drops.
 
@@ -246,7 +247,7 @@ can all be followed along the cause chain (A4).
 | --- | --- | --- |
 | **Runtime node** (one per computer) | Record hub, world state, Xiaoyou's loop, running helpers locally | Hold authoritative records of other nodes (copies only) |
 | **Xiaoyou mesh** | Several Runtimes share one agent: sync records, hand work to each other, distribute routes | Need per-computer setup by the owner |
-| **Desktop client** | The five screens; supervises the local Runtime (start at login, crash recovery); permanent pairing code | Hold permissions beyond the Runtime token (as in the desktop plan) |
+| **Desktop client** | The five screens; supervises the local Runtime (start at login, crash recovery); permanent "add phone" entry | Hold permissions beyond the Runtime token (as in the desktop plan) |
 | **Phone App** | The five screens; route selection; offline queue; Bluetooth bridge to the device | Keep any authoritative state |
 | **Device** | Four screens, push to talk; nearby events | Change its protocol |
 | **Relay** | Forward ciphertext and help discovery | Store plaintext or grant membership |

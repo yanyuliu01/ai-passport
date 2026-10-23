@@ -2,6 +2,8 @@
 
 # Conversation presentation across clients
 
+> **Partly superseded by the [Xiaoyou complete plan](xiaoyou-agent-model.md); the complete plan prevails.**
+
 Status: consolidated proposal, 2026-10-21. This replaces the earlier incremental
 UI proposals, including task cards in the main chat. It records the owner's
 accepted direction and the remaining native-client integration requirements.

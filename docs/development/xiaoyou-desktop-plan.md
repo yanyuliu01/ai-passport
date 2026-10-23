@@ -2,6 +2,8 @@
 
 # Xiaoyou desktop clients and shared conversation plan
 
+> **Partly superseded by the [Xiaoyou complete plan](xiaoyou-agent-model.md); the complete plan prevails.**
+
 Status: implementation in progress, 2026-10-21. Delivery target: **2026-10-22 at
 22:00 Asia/Shanghai**, before Friday, for owner-test installers. This is a
 compressed target with the dependencies below, not a claim that clients,
