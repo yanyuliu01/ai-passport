@@ -224,6 +224,19 @@ class IntakeTests(TempDirCase):
 
 
 class IntakeBoundaryTests(unittest.TestCase):
+    def test_production_cannot_bypass_intake(self):
+        offenders = []
+        for path in sorted((ROOT / "xiaoyou_runtime").rglob("*.py")):
+            if path.name in ("intake.py", "record.py"):
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ImportFrom) and node.module == "record":
+                    offenders.append((path.name, node.lineno, "Record import"))
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    base = ast.unparse(node.func.value).split(".")[-1]
+                    if node.func.attr in WRITES and base in ("record", "_record"):
+                        offenders.append((path.name, node.lineno, "direct Record write"))
+        self.assertEqual(offenders, [])
 
     def test_every_record_mutator_is_wrapped(self):
         from xiaoyou_runtime.record import Record

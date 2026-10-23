@@ -250,7 +250,7 @@ class Mesh:
         self.subject_id = subject_for(self._secret)
         self.runtime_id = service.runtime_id
         self.name = config.name
-        self._record = xiaoyou.record
+        self._writer = xiaoyou.intake.writer("mesh", actor="mesh")
         self._cards = xiaoyou.cards
         folder = Path(config.state_dir) / "mesh"
         self._replicas = Replicas(folder)
@@ -645,7 +645,7 @@ class Mesh:
         record.pop("relay_to", None)
         for key in ("seq", "rev"):
             record.pop(key, None)
-        self._record.replica_message(record)
+        self._writer.by(actor="mesh:" + origin, cause=data["id"]).replica_message(record)
         self._remember_turn(origin, data)
         if (data.get("author") or {}).get("kind") == "owner":
             for item in self._replicas.since(origin, 0):
@@ -703,7 +703,7 @@ class Mesh:
         fields.update(mesh_origin=origin, mesh_epoch=epoch, mesh_id=data["id"],
                       origin_name=self._peer_name(origin),
                       approval=local_id(origin, approval) if isinstance(approval, str) and approval else None)
-        card = self._record.replica_task(alias, fields, entries)
+        card = self._writer.by(actor="mesh:" + origin, cause=data["id"]).replica_task(alias, fields, entries)
         if alias is None:
             with self._lock:
                 self._aliases[key] = card["id"]
@@ -725,7 +725,7 @@ class Mesh:
 
     def _post(self, kind: str, item_id: str, data: Dict[str, Any]) -> None:
         with self._lock:
-            oseq = self._record.sequence()
+            oseq = self._writer.sequence()
             self._outbox[(kind, item_id)] = {"k": kind, "id": item_id, "oseq": oseq, "data": data}
             self._save()
             self._changed.notify_all()
@@ -931,7 +931,7 @@ class Mesh:
     def publish_share(self, key: str, data: Dict[str, Any]) -> None:
         """这台共享的一样东西变了（mesh_share.py）：取一个序号，记下，等着交给别人。"""
         with self._lock:
-            oseq = self._record.sequence()
+            oseq = self._writer.sequence()
             self._replicas.store(self.runtime_id, self._cards.epoch,
                                  [{"k": "share", "id": key, "oseq": oseq, "data": data}], oseq)
             self._changed.notify_all()
@@ -948,7 +948,7 @@ class Mesh:
         if not events:
             return
         with self._lock:
-            oseq = self._record.sequence()
+            oseq = self._writer.sequence()
             self._replicas.store(self.runtime_id, self._cards.epoch,
                                  [{"k": "events", "id": uuid.uuid4().hex, "oseq": oseq,
                                    "data": {"events": events}}], oseq)
@@ -983,7 +983,7 @@ class Mesh:
                         return {"granted": False, "holder": other["holder"], "holder_name": other.get("name", ""),
                                 "stage": other.get("stage", ""), "until": other["until"]}
                 data = {"name": self.name, "stage": stage, "applied_at": applied, "until": now + seconds}
-            oseq = self._record.sequence()
+            oseq = self._writer.sequence()
             self._replicas.store(self.runtime_id, self._cards.epoch,
                                  [{"k": "lease", "id": "iterate", "oseq": oseq, "data": data}], oseq)
             self._changed.notify_all()
@@ -1167,7 +1167,7 @@ class Mesh:
             if card.get("mesh_origin") in offline and card["state"] in ("talking", "working", "waiting") \
                     and not card.get("stale"):
                 entries = card["entries"]
-                self._record.replica_task(card["id"], {"mesh_origin": card["mesh_origin"], "stale": True}, entries)
+                self._writer.replica_task(card["id"], {"mesh_origin": card["mesh_origin"], "stale": True}, entries)
         for message_id, target in relays:
             self._finish_relay(message_id, False, "「%s」一直没回应，这句话可能没做" % self._peer_name(target))
         self._refresh_agents()

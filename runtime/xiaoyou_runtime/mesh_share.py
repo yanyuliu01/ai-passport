@@ -182,26 +182,26 @@ class Shares:
             try:
                 item = json.loads(text)
                 if isinstance(item, dict):
-                    self._mesh._xiaoyou.record.conversation_replica(origin, item)
+                    self._mesh._xiaoyou.intake.writer("mesh", actor="mesh:" + origin, cause=key).conversation_replica(origin, item)
             except (ValueError, OSError):
                 pass
             return
         if kind == 'directory':
             try:
-                self._mesh._xiaoyou.record.directory_replica(origin, json.loads(text))
+                self._mesh._xiaoyou.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_replica(origin, json.loads(text))
             except (ValueError, OSError):
                 pass
             return
         if kind == 'directory_generated':
             try:
                 item = json.loads(text)
-                self._mesh._xiaoyou.record.directory_generated_replica(origin, item.get('uid'), item.get('metadata'))
+                self._mesh._xiaoyou.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_generated_replica(origin, item.get('uid'), item.get('metadata'))
             except (ValueError, OSError, TypeError, AttributeError):
                 pass
             return
         if kind == 'directory_source':
             try:
-                self._mesh._xiaoyou.record.directory_sources([json.loads(text)], origin)
+                self._mesh._xiaoyou.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_sources([json.loads(text)], origin)
             except (ValueError, OSError, TypeError, KeyError):
                 pass
             return
