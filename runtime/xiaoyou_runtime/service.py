@@ -59,6 +59,15 @@ MAX_BUSY_CONVERSATIONS = 4
 FEED_USAGE_SECONDS = 5.0
 # 一次 feed 最多带这么多字节的卡和消息，其余分几次给。
 FEED_BUDGET_BYTES = 48 * 1024
+# /v1/sync 的增量一页最多这么多样（同时受 FEED_BUDGET_BYTES 限）。
+SYNC_PAGE_ITEMS = 200
+# 游标之后变了的超过这么多样：落后太多，一页页追不如直接给一份快照（有界保留窗口）。
+SYNC_DELTA_WINDOW = 1000
+# 快照只给“现在”：所有事，每段对话最近这么多句话，每件事最近这么多条进展；更早的历史
+# 客户端自己缓存着，或者按需去翻（不再从头一页页追，见问题清单 N10）。
+SNAPSHOT_MESSAGES = 100
+SNAPSHOT_ACTIVITY = 20
+SNAPSHOT_BUDGET_BYTES = 128 * 1024
 FINISHED = ("done", "failed")
 RESTART_NOTE = "Runtime 重启了，这句话没处理完，可以再说一次"
 RESTART_VOICE_NOTE = "Runtime 重启了，这段录音没来得及识别，再说一次吧"
@@ -83,6 +92,50 @@ def _name(value: Any, what: str) -> str:
     if any(ch.isspace() or ch in "/\\" or ord(ch) < 0x20 for ch in value):
         raise RequestError("%s 不能包含空白或斜杠" % what)
     return value
+
+
+def _size(item: Dict[str, Any]) -> int:
+    return len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+
+
+def _page_items(items: List[Any]) -> Any:
+    """增量一页：按序号，最多 SYNC_PAGE_ITEMS 样、FEED_BUDGET_BYTES 字节（至少一样）。"""
+    size = 0
+    for index, (_, item) in enumerate(items):
+        size += _size(item)
+        if index > 0 and (index >= SYNC_PAGE_ITEMS or size > FEED_BUDGET_BYTES):
+            return items[:index], True
+    return items, False
+
+
+def _snapshot_items(tasks: List[Dict[str, Any]], messages: List[Dict[str, Any]]) -> Any:
+    """快照：从新到旧放事和话，每段对话最多 SNAPSHOT_MESSAGES 句、每件事最多
+    SNAPSHOT_ACTIVITY 条进展，放到 SNAPSHOT_BUDGET_BYTES 为止。还没结束、在等回答的事，
+    和放进来的话所属的事，总放进来（不然客户端认不出那句话在哪件事里）。
+    最后按序号排好。返回 (items, 有没有没放进来的)。"""
+    picked: List[Any] = []
+    size, counts, truncated = 0, {}, False
+    pool = [("task", item) for item in tasks] + [("message", item) for item in messages]
+    for kind, item in sorted(pool, key=lambda pair: pair[1]["seq"], reverse=True):
+        cost = _size(item)
+        if kind == "message":
+            activity = item.get("kind") == "activity"
+            key = ("activity", item.get("task")) if activity else ("chat", item.get("conversation"))
+            if counts.get(key, 0) >= (SNAPSHOT_ACTIVITY if activity else SNAPSHOT_MESSAGES):
+                truncated = True
+                continue
+        busy = kind == "task" and item.get("presentation", {}).get("group") in ("running", "waiting")
+        if size + cost > SNAPSHOT_BUDGET_BYTES and picked and not busy:
+            truncated = True
+            continue
+        if kind == "message":
+            counts[key] = counts.get(key, 0) + 1
+        size += cost
+        picked.append((kind, item))
+    have = {item["id"] for kind, item in picked if kind == "task"}
+    wanted = {item.get("task") for kind, item in picked if kind == "message"}
+    picked += [("task", item) for item in tasks if item["id"] in wanted - have]
+    return sorted(picked, key=lambda pair: pair[1]["seq"]), truncated
 
 
 class Service:
@@ -905,8 +958,8 @@ class Service:
         while True:
             seq, tasks, messages, floor = cards_store.sync_since(
                 None if all_conversations else conversation, after, unavailable="unavailable" in states)
-            if after > 0 and after < floor:
-                # 等的时候日志挤掉了游标之后的消息：改给全量快照。
+            if after > 0 and (after < floor or len(tasks) + len(messages) > SYNC_DELTA_WINDOW):
+                # 游标之后的增量已经不全（日志挤掉了），或者落后太多：改给快照。
                 after, reset = 0, True
                 continue
             # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
@@ -919,18 +972,22 @@ class Service:
                                     else min(remaining, FEED_USAGE_SECONDS))
         tasks = [presentation.task(item) for item in tasks]
         messages = [presentation.message(item, self.runtime_id) for item in messages]
-        items = sorted([("task", item) for item in tasks] + [("message", item) for item in messages],
-                       key=lambda pair: pair[1]["seq"])
-        more, size = False, 0
-        for index, (_, item) in enumerate(items):
-            size += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
-            if size > FEED_BUDGET_BYTES and index > 0:
-                items, seq, more = items[:index], items[index - 1][1]["seq"], True
-                break
+        if after == 0:
+            # 快照固定在 seq：同一把锁里取的，之后的变化客户端拿 seq 接着要增量。
+            items, truncated = _snapshot_items(tasks, messages)
+            more = False
+        else:
+            items, truncated = sorted([("task", item) for item in tasks] + [("message", item) for item in messages],
+                                      key=lambda pair: pair[1]["seq"]), False
+            items, more = _page_items(items)
+            if more:
+                seq = items[-1][1]["seq"]
         return {
             "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
             "epoch": cards_store.epoch,
             "seq": seq, "reset": reset, "more": more,
+            # 快照（after 为 0 或者被改成快照）：固定在 seq；truncated 说明更早的话没放进来。
+            **({"snapshot": {"seq": seq, "truncated": truncated}} if after == 0 else {}),
             "presentation_policy": presentation.policy(),
             "conversations": self.conversations()['conversations'],
             "messages": [item for kind, item in items if kind == "message"],

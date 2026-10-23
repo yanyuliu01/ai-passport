@@ -337,9 +337,9 @@ class UnifiedSyncTests(TempDirCase):
                                  turn_id="t%d" % index)
         self.assertGreater(xiaoyou.cards.log_floor, early)
         self.assertTrue(service.sync("default", early + 1)["reset"])
-        # 还在卡上的消息不会被挤掉。
+        # 还在卡上的消息不会被日志挤掉（快照只放最近的，见 test_sync_window.py）。
         on_cards = {entry["id"] for card in xiaoyou.cards.recent(None, 1000) for entry in card["entries"]}
-        self.assertTrue(on_cards <= set(self.all_messages(service)))
+        self.assertTrue(all(xiaoyou.cards._log.get(message_id) for message_id in on_cards))
 
     def test_a_half_written_last_line_loses_only_that_line(self):
         service, _, xiaoyou = self.start()

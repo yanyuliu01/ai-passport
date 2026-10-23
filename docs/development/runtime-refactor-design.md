@@ -386,6 +386,10 @@ startup second:
 - R3.3: Service messages also use "snapshot + journal" (`messages.json` as the periodic snapshot, `messages.jsonl` as the journal; old format 1 files are upgraded on the first start). `Journal` is extracted from the task journal and shared by both. Records written together (for example a message and its dedupe entry) go on one line, so a power cut never leaves half of them. A failed snapshot does not undo an acceptance already in the journal. Each message is an operation (`operations.py`): the `operation_id` is derived from the message id; it is `pending` when accepted, written as `running` before processing starts, and ends as `succeeded`, `failed` or `cancelled`. A finished operation never changes again, and a late change is dropped whole. Only a `pending` operation can be claimed, so a duplicate delivery runs once. On startup, per section 1.5: a `pending` text message runs once; a `running` one becomes `unknown` (the message still shows as unfinished); one whose reply is already on the card is recorded as `succeeded` from the stored result, without rerunning.
 - Not done yet: operation identity for tasks (helper runs) and checking by execution identity come with the agent loop in R5; `cancelled` exists only in the transition table, as messages have no cancel entry yet.
 
+**R4 progress:**
+
+- R4.1: a `/v1/sync` snapshot holds only the present and comes in one page (see the interface table in unified-message-model); increments are paged by count (200) and size (48 KB). When more than 1000 items changed after the cursor the client gets a snapshot; while the increments are complete it gets increments. Fixes N10: syncing from 0 against a copy of the 10-23 device Runtime records used to take 408 pages and now takes one page of about 128 KB in about 160 ms on the server, with the just-finished task result in it. Persistent client cursors belong to the App and were not changed; real latency over Funnel was not measured.
+
 ## 8. Lessons from Raft and DS-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.

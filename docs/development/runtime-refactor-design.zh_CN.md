@@ -307,6 +307,10 @@ R2 已完成（2026-10-23，Codex 写、Claude Code 拆分核对后提交），�
 - R3.3：Service 的消息记录同样走“快照 + 日志”（`messages.json` 定期快照，`messages.jsonl` 日志，旧的 format 1 文件第一次启动就升级）。`Journal` 从任务日志里抽出来两边共用；一次写下的几条（比如消息和它的去重项）写在同一行，断电时不会只剩一半。快照没写成不影响已经写进日志的“收下”。每句话是一个操作（`operations.py`）：`operation_id` 由消息编号定下，收下时 `pending`，开始处理前写成 `running`，结束是 `succeeded` / `failed` / `cancelled`；结束后不能再变，迟到的改动整次丢掉；只有 `pending` 能被领取，重复排队只处理一次。启动时按 1.5 节：`pending` 的打字消息接着做一次；`running` 的记 `unknown`（消息仍显示没做完）；回复已经在卡上的用存下的结果记 `succeeded`，不重做。
 - 还没做：任务（帮手执行）本身的操作身份和按执行身份核对，在 R5 和 agent loop 一起做；`cancelled` 现在只在状态表里，消息还没有取消入口。
 
+**R4 进度：**
+
+- R4.1：`/v1/sync` 的快照只给“现在”、一页给完（见 unified-message-model 的接口表），增量按条数（200）和大小（48 KB）分页；游标之后变了的超过 1000 样就改给快照，增量还全的先补增量。修 N10：用 10-23 真机 Runtime 记录的副本从 0 同步，以前要 408 页，现在一页约 128 KB，服务端约 160 ms，刚做完的任务结果就在这一页里。客户端持久游标属于 App，这次没改；经 Funnel 的实际时延未测。
+
 ## 8. 借鉴：Raft 与 DS-Bot-App
 
 主人要求参考两个开源项目的设计逻辑，但不照搬。本节已按 [Codex 的评审](runtime-refactor-review.zh_CN.md)修正：补上借鉴时遗漏的成立条件，删掉“epoch 相当于 term”“超时即可安全交接”等说法。

@@ -193,7 +193,7 @@ Runtime 0.12.0 的 `kind=activity` 是任务执行事件，不进入对话 `memb
 | --- | --- |
 | `GET /v1/info`（要令牌） | 返回 `subject_id`、`runtime_id`、`epoch`、`protocol`、`capabilities`、`name`、`version`。`/healthz` 不需要令牌，所以不放这些 |
 | `POST /v1/messages`（带 `client_id`） | 落盘后才回 `202`；同一对话同一 `client_id`：内容相同返回原消息，不同返回 `409`；写不下去 `503` |
-| `GET /v1/sync?conversation=&after=&epoch=&wait=` | 返回 `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`；`after=0` 是全量快照；`epoch` 不对、`after` 比现在的 `seq` 还大、或者早于 `floor` 时 `reset: true`，并从 0 给快照。事（`tasks`）是卡去掉 `entries`、换成成员编号 `members`。`approvals` 改成按序号的增量（见上）。快照和后续增量之间不能漏 |
+| `GET /v1/sync?conversation=&after=&epoch=&wait=` | 返回 `{runtime_id, epoch, seq, messages, tasks, approvals, removed, more, reset}`；`after=0` 是快照：固定在返回的 `seq`，一页给完，只放“现在”——所有还在做、在等回答的事，从新到旧每段对话最近 100 句、每件事最近 20 条进展，约 128 KB 为止，以及这些话所属的事；`snapshot: {seq, truncated}` 说明更早的有没有放进来（更早的历史客户端自己缓存，不从头追）。增量按序号分页，一页最多 200 样、48 KB，`more` 为真时拿返回的 `seq` 接着要。`epoch` 不对、`after` 比现在的 `seq` 还大、早于 `floor`（增量已经不全），或者之后变了的超过 1000 样（落后太多）时 `reset: true`，并给快照。事（`tasks`）是卡去掉 `entries`、换成成员编号 `members`。`approvals` 改成按序号的增量（见上）。快照和后续增量之间不能漏 |
 | `POST /v1/approvals/<编号>` | 回答授权，不变 |
 | `POST /v1/reports`（要令牌，新增） | 外部来源上报进展，见下一节 |
 
