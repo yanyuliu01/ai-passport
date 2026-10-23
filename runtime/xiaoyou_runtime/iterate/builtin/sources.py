@@ -14,8 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..objects import Signal
 from ..events import EventStore, flat
 from ..releases import phase, timeline
-from ..store import read_json
-from ... import world
+from ... import ledger, world
 
 MAX_TEXT = 200
 # 0.21 及以前的 App 把每条弹出提示都记成 error。读起来像失败的才算错误，其余当普通提示。
@@ -185,8 +184,7 @@ def card_failures(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Sign
 def reply_latency(ctx: Any, cursor: Optional[Dict[str, Any]]) -> Tuple[List[Signal], Dict[str, Any]]:
     after = _first_cursor(ctx, cursor)
     newest = after
-    data = read_json(Path(ctx.state_dir) / "messages.json", {})
-    messages = data.get("messages", []) if isinstance(data, dict) else []
+    messages = ledger.current(Path(ctx.state_dir) / "messages.json")["messages"]  # 快照 + 日志
     signals = []
     for message in messages if isinstance(messages, list) else []:
         created, first = message.get("created_at"), message.get("first_partial_at")

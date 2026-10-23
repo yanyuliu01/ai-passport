@@ -15,6 +15,7 @@ import test_runtime
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
 
 import xiaoyou_runtime.desktop_sync as desktop_sync
+import xiaoyou_runtime.ledger as ledger_module
 import xiaoyou_runtime.service as service_module
 from xiaoyou_runtime.service import ConflictError, RESTART_NOTE, Service, UnavailableError
 from xiaoyou_runtime.tasks import MAX_PENDING, Task, Tasks
@@ -30,7 +31,8 @@ class MessageLedgerTests(TempDirCase):
         return service, agent, xiaoyou, store
 
     def ledger(self, store):
-        return json.loads((store.state_dir / "messages.json").read_text(encoding="utf-8"))
+        """盘上的消息记录：快照 + 之后的日志（R3.3 起 messages.json 只是定期快照）。"""
+        return ledger_module.current(store.state_dir / "messages.json")
 
     def saved(self, store, message_id, status):
         """等到这句话的这个状态真的写到盘上（写盘在锁外，比内存里晚一点）。"""
@@ -47,6 +49,7 @@ class MessageLedgerTests(TempDirCase):
         """这一台“断电”了：之后它的线程再怎么跑，也写不进同一份记录。"""
         service._ledger.save = lambda *args: None
         xiaoyou.cards._save = lambda: None
+        xiaoyou.cards._journal._append = lambda entry: None  # 任务日志也写不进去了
 
     def test_an_accepted_message_is_on_disk_before_the_caller_hears_back(self):
         service, agent, _, store = self.start()
@@ -291,7 +294,7 @@ class FeedMessagesTests(TempDirCase):
         first = service.submit("一")
         service.get(first["id"], wait=5)
         ledger = xiaoyou._config.state_dir / "messages.json"
-        self.assertTrue(until(lambda: '"status": "done"' in ledger.read_text(encoding="utf-8")))
+        self.assertTrue(until(lambda: '"status": "done"' in json.dumps(ledger_module.current(ledger))))
         before = service.feed("default", 0, 0, messages=True)
         again, _, _ = self.start(self.folder)
         after = again.feed("default", before["seq"], 0, messages=True)

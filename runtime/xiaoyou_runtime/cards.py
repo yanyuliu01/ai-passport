@@ -30,7 +30,7 @@ from .task_audit import TaskAudit
 from .conversations import ConversationCatalog
 from .message_log import MessageLog
 from . import world
-from .world import TaskJournal
+from .world import Journal
 from .store import _write
 from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
@@ -103,7 +103,7 @@ class Cards:
             self._epoch = raw["epoch"]
         self._reserved = self._seq
         # 差量都相对 replayed 算；之后写快照前都先 sync，快照和日志编号总对得上。
-        self._journal = TaskJournal(world.journal_of(self._path), replayed, applied,
+        self._journal = Journal(world.journal_of(self._path), replayed, applied,
                                     self._cards, self._seq)
         fresh_epoch = not self._epoch
         if fresh_epoch:

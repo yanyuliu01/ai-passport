@@ -77,7 +77,7 @@ class Disk:
 
     def __init__(self, scenario, rng):
         self.scenario, self.rng, self.seen = scenario, rng, []
-        append, replace = world.TaskJournal._append, world.durable_write
+        append, replace = world.Journal._append, world.durable_write
         disk = self
 
         def appending(journal, entry):
@@ -93,7 +93,7 @@ class Disk:
             replace(path, data)
             disk.note()
 
-        self.patches = [mock.patch.object(world.TaskJournal, "_append", appending),
+        self.patches = [mock.patch.object(world.Journal, "_append", appending),
                         mock.patch.object(world, "durable_write", replacing)]
 
     @staticmethod
@@ -171,7 +171,7 @@ class WorldTests(unittest.TestCase):
         scenario = Scenario(self.folder, 0)
         card = scenario.cards.open("default", "长对话", "working", "codex")
         records = []
-        with mock.patch.object(world.TaskJournal, "compact", lambda journal, applied: None):
+        with mock.patch.object(world.Journal, "compact", lambda journal, applied: None):
             for index in range(60):  # 超过 MAX_ENTRIES：前面的条目会被挤掉
                 scenario.cards.update(card["id"], say="第 %d 句" % index)
             records = world.read(scenario.journal)

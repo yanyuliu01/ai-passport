@@ -30,10 +30,12 @@ def _plain(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False))
 
 
-def diff(seq: int, previous: Optional[Dict[str, Any]], card: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """card 相比 previous 变了什么；没变返回 None。previous 为 None 时记整张卡。"""
+def diff(seq: int, previous: Optional[Dict[str, Any]], card: Dict[str, Any],
+         key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """card 相比 previous 变了什么；没变返回 None。previous 为 None 时记整张卡（整条）。
+    key 是它在状态里的键，默认是它的 id（消息记录用带前缀的键，见 ledger.py）。"""
     card = _plain(card)
-    record: Dict[str, Any] = {"seq": seq, "id": card["id"]}
+    record: Dict[str, Any] = {"seq": seq, "id": card["id"] if key is None else key}
     if previous is None:
         record["card"] = card
         return record
@@ -66,7 +68,13 @@ _MISSING = object()
 
 
 def apply(state: Dict[str, Dict[str, Any]], record: Dict[str, Any]) -> None:
-    """把一条日志记录放进 state（就地改）。认不出的记录忽略。"""
+    """把一条日志记录放进 state（就地改）。认不出的记录忽略。batch 是一起写下的几条：
+    同在一行里，要么都在、要么都不在。"""
+    if isinstance(record.get("batch"), list):
+        for item in record["batch"]:
+            if isinstance(item, dict):
+                apply(state, item)
+        return
     card_id = record.get("id")
     if not isinstance(card_id, str):
         return
@@ -132,7 +140,13 @@ def replay(snapshot: Any, records: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict
     cards = snapshot.get("cards") if isinstance(snapshot.get("cards"), list) else []
     state = {card["id"]: _plain(card) for card in cards
              if isinstance(card, dict) and isinstance(card.get("id"), str)}
-    applied = snapshot.get("journal")
+    return replay_onto(state, snapshot.get("journal"), records)
+
+
+def replay_onto(state: Dict[str, Dict[str, Any]], applied: Any,
+                records: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], int, int]:
+    """在快照的状态上重放编号大于 applied 的记录（就地改 state）。applied 不是整数：
+    快照是 R3.2 之前写的、它就是权威，不重放，只数一数日志编号到了哪。"""
     legacy = not isinstance(applied, int) or isinstance(applied, bool)
     applied = 0 if legacy else applied
     last, highest = applied, 0
@@ -143,9 +157,10 @@ def replay(snapshot: Any, records: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict
         if n > applied and not legacy:
             apply(state, record)
         last = max(last, n)
-        card_id = record.get("id")
-        if isinstance(card_id, str) and card_id[1:].isdigit():
-            highest = max(highest, int(card_id[1:]))
+        for item in record.get("batch") if isinstance(record.get("batch"), list) else [record]:
+            card_id = item.get("id") if isinstance(item, dict) else None
+            if isinstance(card_id, str) and card_id[1:].isdigit():
+                highest = max(highest, int(card_id[1:]))
     return state, last, highest
 
 
@@ -182,8 +197,9 @@ def durable_write(path: Path, data: Any) -> None:
         os.close(folder)
 
 
-class TaskJournal:
-    """cards.tasks.jsonl 的写入方。调用方（Cards）拿着自己的锁调用。
+class Journal:
+    """只追加日志的写入方（任务日志 cards.tasks.jsonl、消息日志 messages.jsonl）。
+    调用方拿着自己的锁调用。
 
     base 是快照加重放得到的状态、n 是重放到的编号：日志里的差量都相对它算。"""
 
@@ -198,13 +214,19 @@ class TaskJournal:
     def sync(self, cards: Dict[str, Dict[str, Any]], seq: int) -> None:
         """让日志的状态等于 cards：没经 record 记上的改动（启动时的重启标记、清理）补一条差量，
         已经不在的卡记 removed。写快照之前调用，快照就和日志编号对得上。"""
-        for card in cards.values():
-            self.record(card, seq)
-        for card_id in [key for key in self._last if key not in cards]:
-            self.remove(card_id, seq)
+        entries = [entry for entry in (diff(seq, self._last.get(key), card, key)
+                                       for key, card in cards.items()) if entry is not None]
+        entries += [{"seq": seq, "id": key, "removed": True} for key in self._last if key not in cards]
+        if not entries:
+            return
+        # 一次对齐的几条写在同一行：断电时不会只剩一半（比如消息在、它的去重项不在）。
+        self._append(entries[0] if len(entries) == 1 else {"seq": seq, "batch": entries})
+        for entry in entries:
+            apply(self._last, entry)
 
-    def record(self, card: Dict[str, Any], seq: Optional[int] = None) -> None:
-        entry = diff(card.get("seq", 0) if seq is None else seq, self._last.get(card["id"]), card)
+    def record(self, card: Dict[str, Any], seq: Optional[int] = None, key: Optional[str] = None) -> None:
+        key = card["id"] if key is None else key
+        entry = diff(card.get("seq", 0) if seq is None else seq, self._last.get(key), card, key)
         if entry is None:
             return
         self._append(entry)
@@ -235,3 +257,4 @@ class TaskJournal:
             os.fsync(handle.fileno())
         self.n += 1
         self.pending += 1
+

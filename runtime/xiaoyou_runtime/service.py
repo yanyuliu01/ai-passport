@@ -11,8 +11,9 @@
 等到那件事结束才算处理完。
 
 收下的话先落盘（state/messages.json，见 ledger.py）才回“收到了”。Runtime 重启后：
-还没开始处理的打字消息接着排队做；已经在处理（或者是还没识别的录音）的，不知道做到
-哪一步了，不自动重做，标成没做完，并在对话里留一张卡说明，主人可以再说一次。
+还没开始处理的打字消息接着排队做（只做这一次）；已经在处理的，不知道做到哪一步了，
+不自动重做，操作记成 unknown、消息标成没做完；还没识别的录音（录音启动时已清掉）标成
+没做完。两种都在对话里留一张卡说明，主人可以再说一次。操作状态见 operations.py。
 
 每条消息变化时从卡那里取一个序号（和卡共用），feed 带上 messages=1 时，一个游标就能
 同时拿到变了的卡和变了的消息：另一台手机能看到这边刚说的话和正在生成的回复。
@@ -33,6 +34,7 @@ from .cards import ACTIVE
 from .config import EFFORT_LEVELS
 from .identity import CAPABILITIES, PROTOCOL, runtime_id, subject_id
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
+from . import operations
 from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
 from .store import Store
@@ -114,6 +116,8 @@ class Service:
         # 帮手的结果）。有工作线程在处理的对话记在 _busy 里。
         self._lanes: Dict[str, Deque[Union[str, Callable[[], None]]]] = {}
         self._busy: Dict[str, threading.Thread] = {}
+        # 已经被一个工作线程领走的消息：同一句话重复排进队也只处理一次。
+        self._claimed: set = set()
         self._slots = threading.Semaphore(MAX_BUSY_CONVERSATIONS)
         self._closed = False
         # 卡的编号 → 等这件事结束才算处理完的消息（别的 Runtime 转过来的）。
@@ -171,12 +175,12 @@ class Service:
         """Runtime 刚启动：上次收下但没处理完的话。"""
         requeue, unfinished = [], []
         for message in self._messages.values():
-            if message["status"] in FINISHED:
+            if message["status"] in FINISHED or message["operation_state"] in operations.TERMINAL:
                 continue
             if message.get("relay_to") and message["status"] == "running":
                 # 转交给别的 Runtime 的话：那台可能已经在做，结果到了 mesh.py 会接上。
                 continue
-            if message["status"] == "queued" and message["kind"] == "text":
+            if message["operation_state"] == "pending" and message["kind"] == "text":
                 requeue.append(message["id"])
             else:
                 unfinished.append(message["id"])
@@ -192,8 +196,9 @@ class Service:
                 # 回复已经记在卡上，只是消息记录没来得及写完：这句话其实接住了。
                 message = self._messages[message_id]
                 card_id, reply = answered[message_id]
-                message.update(status="done", reply=reply, card=card_id, stage=None,
-                               helper=None, partial="", finished_at=time.time())
+                # 结果已经提交、只是投递中断：用存下的结果，不重做。
+                message.update(status="done", operation_state="succeeded", reply=reply, card=card_id,
+                               stage=None, helper=None, partial="", finished_at=time.time())
                 self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 (requeue if message_id in requeue else unfinished).remove(message_id)
@@ -218,7 +223,10 @@ class Service:
                 writer.exchange(card["id"], said=said, say=note, brief=note, mood="oops",
                              turn_id=message_id, scope="main", kind="note")
                 card_id = card["id"]
-            message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
+            # 已经开始处理的：模型或工具可能已经动了，不知道到哪一步，记 unknown，核对后才能重做。
+            started = message["operation_state"] == "running"
+            message.update(status="failed", operation_state="unknown" if started else "failed",
+                           error=note, mood="oops", stage=None, helper=None,
                            card=card_id, partial="", finished_at=time.time())
             self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
             self._remember(message)
@@ -386,6 +394,9 @@ class Service:
                     "conversation": conversation,
                     "kind": kind,
                     "status": "queued",
+                    # 处理这句话这个操作：收下时就有身份，状态跟着 status 变（operations.py）
+                    "operation_id": operations.operation_id(message_id),
+                    "operation_state": "pending",
                     "text": text,
                     "attachments": attachments or [],
                     "reply": None,
@@ -1118,8 +1129,12 @@ class Service:
         captured = None
         with self._changed:
             message = self._messages.get(message_id)
-            if message is not None:
-                message.update(fields)
+            changes = operations.transition(message, fields) if message is not None else None
+            if changes is None and message is not None:
+                # 结束了又说在做（迟到的进展、重复投递）：不改，也不重新运行。
+                sys.stderr.write("消息 %s 已经结束，忽略改成 %s\n" % (message_id, fields.get("status")))
+            if message is not None and changes is not None:
+                message.update(changes)
                 self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 captured = self._capture()
@@ -1176,6 +1191,20 @@ class Service:
                         type(error).__name__, error))
 
     def _handle(self, message_id: str) -> None:
+        with self._changed:
+            message = self._messages.get(message_id)
+            # 只领还没开始的：同一句话排了两次、或者已经结束了，都不再处理。
+            if (message is None or message["operation_state"] != "pending"
+                    or message_id in self._claimed):
+                return
+            self._claimed.add(message_id)
+        try:
+            self._process(message_id)
+        finally:
+            with self._changed:
+                self._claimed.discard(message_id)
+
+    def _process(self, message_id: str) -> None:
         with self._changed:
             message = self._messages.get(message_id)
             if message is None:
