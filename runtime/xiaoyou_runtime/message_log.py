@@ -79,6 +79,7 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
         "source": source,
         "attachments": [dict(item) for item in entry.get("attachments", [])],
         "created_at": entry.get("at") or card.get("created_at") or 0,
+        **({"provenance": dict(entry["provenance"])} if entry.get("provenance") else {}),
     }
 
 
@@ -297,7 +298,7 @@ class MessageLog:
                     self._put(record, persist=current is None)
 
     def activity(self, card: Dict[str, Any], author: str, phase: str, text: str,
-                 event_id: str, at: float) -> bool:
+                 event_id: str, at: float, provenance: Optional[Dict[str, Any]] = None) -> bool:
         current = self._messages.get(event_id)
         if current is not None:
             if phase != "message" or current.get("text") == text:
@@ -308,7 +309,8 @@ class MessageLog:
                    "scope": "task", "author": {"kind": "agent", "name": author},
                    "kind": "activity", "phase": phase, "text": text, "partial": "",
                    "reply_to": None, "source": {"type": "runtime"}, "attachments": [],
-                   "created_at": at, "status": "final"})
+                   "created_at": at, "status": "final",
+                   **({"provenance": dict(provenance)} if provenance else {})})
         return True
 
     def request(self, message: Dict[str, Any]) -> None:
@@ -389,7 +391,7 @@ class MessageLog:
     @staticmethod
     def _request_record(message: Dict[str, Any], suffix: str) -> Dict[str, Any]:
         you = suffix == ":you"
-        extra = {key: message[key] for key in ("relay_to", "delegated_from") if message.get(key)}
+        extra = {key: message[key] for key in ("relay_to", "delegated_from", "provenance") if message.get(key)}
         return {
             **extra,
             "rev": 0, "id": message["id"] + suffix, "conversation": message["conversation"],

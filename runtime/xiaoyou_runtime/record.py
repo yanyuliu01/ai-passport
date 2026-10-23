@@ -35,6 +35,10 @@ class Record:
         self._cards = cards
         self._local = threading.local()
 
+    @property
+    def cards(self) -> Cards:
+        return self._cards
+
     def directory_edit(self, key, fields, origin, expected=None, affected=()):
         result = self._cards.directory.edit(key, fields, origin, expected)
         self._cards.catalog_seq = self.sequence()

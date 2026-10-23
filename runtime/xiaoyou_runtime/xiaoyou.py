@@ -35,6 +35,7 @@ from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, 
                      Outcome, clip, fields_from_text, span)
 from .approvals import STALL, Approvals, Gate
 from .artifacts import ArtifactError, ArtifactStore
+from .intake import Intake
 from .record import Record
 from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
@@ -751,6 +752,8 @@ class Xiaoyou:
         self._cards = Cards(config.state_dir / "cards.json")
         # 记录中心：这里写卡、说话、改状态都经过它（record.py）；_cards 只用来读。
         self._record = Record(self._cards)
+        # 写入的唯一入口：各来源拿自己的 Writer，每次写入都记上来源（intake.py）。
+        self.intake = Intake(self._record)
         # 给模型的对话记录：本机产生的每一轮，文字以消息日志为准（store.Transcript）。
         store.transcript.resolve_with(self._final_text)
         self.artifacts = ArtifactStore(config)

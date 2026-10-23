@@ -21,8 +21,9 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from .task_audit import TaskAudit
 from .conversations import ConversationCatalog
@@ -68,6 +69,8 @@ class Cards:
         self._reserved = 0  # 文件里记着的序号上限：重启后从它往后数
         self._epoch = ""
         self._listeners: List[Listener] = []
+        # 这个线程上正在写的东西是谁、从哪来、因为什么（Intake 设，见 intake.py）。
+        self._provenance = threading.local()
         self.audit = TaskAudit(self._path.with_name("audit"))
         self.catalog_seq = 0
         self._retained = {}
@@ -178,7 +181,8 @@ class Cards:
              "at": entry.get("at") if isinstance(entry.get("at"), (int, float)) else 0,
              **{key: entry.get(key, "") if isinstance(entry.get(key, ""), str) else ""
                 for key in ("id", "scope", "kind", "author")},
-             "attachments": clean_attachments(entry.get("attachments"))}
+             "attachments": clean_attachments(entry.get("attachments")),
+             **Cards._provenance_field(entry, "provenance")}
             for entry in card.get("entries", [])
             if isinstance(entry, dict) and entry.get("role") in ("you", "xiaoyou")
             and isinstance(entry.get("text"), str)
@@ -199,6 +203,8 @@ class Cards:
             if isinstance(card.get("finished_at"), (int, float))
             and not isinstance(card.get("finished_at"), bool) else None,
             "entries": entries,
+            **Cards._provenance_field(card, "changed_by"),
+            **{key: card[key] for key in ("cancelled_by", "cancel_reason") if isinstance(card.get(key), str)},
             "attachments": clean_attachments(card.get("attachments")),
             "brief": text("brief"),
             "mood": text("mood", "idle"),
@@ -236,6 +242,15 @@ class Cards:
             "supplements": [dict(item) for item in card.get("supplements", []) if isinstance(item, dict) and isinstance(item.get("text"), str)],
             **Cards._mesh_fields(card),
         }
+
+    @staticmethod
+    def _provenance_field(item, key):
+        value = item.get(key)
+        if not isinstance(value, dict):
+            return {}
+        kept = {name: text for name, text in value.items()
+                if name in ("source", "actor", "cause") and isinstance(text, str)}
+        return {key: kept} if kept else {}
 
     @staticmethod
     def _mesh_fields(card: Dict[str, Any]) -> Dict[str, Any]:
@@ -338,6 +353,9 @@ class Cards:
     def request_changed(self, message: Dict[str, Any], revise: bool = True) -> None:
         """修订号加一（revise）、取序号、写进日志、叫醒等待的人：一把锁里做完（见 record.py）。"""
         with self._changed:
+            provenance = self.current_provenance()
+            if provenance:
+                message["provenance"] = provenance
             if revise:
                 message["rev"] = message.get("rev", 0) + 1
             message["seq"] = self._issue()
@@ -349,7 +367,7 @@ class Cards:
             card = self._cards.get(card_id)
             if card is None or card.get("mesh_origin"):
                 return
-            if not self._log.activity(card, author, phase, text, event_id, time.time()):
+            if not self._log.activity(card, author, phase, text, event_id, time.time(), self.current_provenance()):
                 return
             event = self._log.get(event_id)
             if event:
@@ -443,6 +461,9 @@ class Cards:
 
     def _touch(self, card: Dict[str, Any]) -> Dict[str, Any]:
         """调用时已经拿着锁：记下这张卡变了（连同它的消息），落盘，叫醒在等的人。"""
+        provenance = self.current_provenance()
+        if provenance:
+            card["changed_by"] = provenance
         if not card.get("mesh_origin"):
             card["record_epoch"] = card.get("record_epoch") or self._epoch
             self._log.observe(card)
@@ -550,6 +571,7 @@ class Cards:
             if not name.title:
                 name = select_title()
             card = {
+                **({"changed_by": self.current_provenance()} if self.current_provenance() else {}),
                 "id": "c%d" % self._next, "conversation": conversation,
                 **name.fields(), "state": state, "agent": agent,
                 "created_at": now, "updated_at": now, "finished_at": None,
@@ -557,6 +579,7 @@ class Cards:
                 "progress": [], "started_at": None, "edits": 0, "approval": None,
                 "queued": False, "effort": None, "model": None, "model_asked": None,
                 "cost": None, "seq": 0, **self._mesh_fields(extra),
+                **({"monitoring_only": True} if extra.get("monitoring_only") is True else {}),
             }
             self._next += 1
             self._cards[card["id"]] = card
@@ -568,6 +591,21 @@ class Cards:
         with self._changed:
             card = self._cards.get(card_id)
             return self._copy(card) if card is not None else None
+
+    @contextmanager
+    def provenance(self, **fields: Any) -> Iterator[None]:
+        """这段时间里、这个线程上的写入都记上来源（source、actor、cause）；里层的覆盖外层的。"""
+        previous = getattr(self._provenance, "value", None)
+        merged = {key: value for key, value in fields.items() if value}
+        self._provenance.value = merged or None
+        try:
+            yield
+        finally:
+            self._provenance.value = previous
+
+    def current_provenance(self) -> Optional[Dict[str, Any]]:
+        value = getattr(self._provenance, "value", None)
+        return dict(value) if value else None
 
     def directory_changed(self, card_ids):
         snapshots = []
@@ -592,6 +630,8 @@ class Cards:
             if card is None:
                 return None
             now = time.time()
+            provenance = self.current_provenance()
+            first_new = len(card["entries"])
             if said is not None:
                 card["entries"].append({"role": "you", "text": said[:MAX_ENTRY_CHARS], "at": now,
                                         "id": turn_id + ":you" if turn_id else "", "scope": scope,
@@ -606,6 +646,10 @@ class Cards:
                 self._merge_attachments(card, incoming)
                 if say is not None:
                     card["entries"][-1]["attachments"] = incoming
+            if provenance:
+                for entry in card["entries"][first_new:]:
+                    entry.setdefault("provenance", provenance)
+                card["changed_by"] = provenance
             del card["entries"][:-MAX_ENTRIES]
             if fresh:
                 card["progress"] = []
