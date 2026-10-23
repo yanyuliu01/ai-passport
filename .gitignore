@@ -15,3 +15,6 @@ managed_components/
 # Backups that helpers leave next to the runtime sources on the owner computer
 runtime/**/*.bak-*
 runtime/backup-*/
+
+# macOS Finder metadata
+.DS_Store
