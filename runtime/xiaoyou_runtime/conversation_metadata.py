@@ -15,15 +15,15 @@ class ConversationMetadata:
         routes = {key:value for key,value in routes.items() if value}
         providers = {key:replace(value,timeout_seconds=min(value.timeout_seconds,8)) for key,value in settings.providers.items()}
         self.gateway = Gateway(replace(settings,routes=routes,providers=providers), config.state_dir)
-        self.record = record
+        self.writer = record
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='conversation-title')
         self.lock = threading.Lock()
         self.pending = set()
 
     def first_message(self, conversation, text):
-        catalog = self.record._cards.conversations
+        catalog = self.writer.cards.conversations
         before = catalog.get(conversation)
-        item = self.record.conversation_touch(conversation, text)
+        item = self.writer.conversation_touch(conversation, text)
         # Only explicit opt-in to this purpose enables inference. Do not silently use a
         # default paid route, make CLI sessions, or delay the owner's actual message.
         if conversation == 'default' or (before and before.get('title_source') != 'pending'):
@@ -43,7 +43,7 @@ class ConversationMetadata:
                     {'role': 'user', 'content': text[:2000]}],
                     lambda v: None if isinstance(v, dict) and isinstance(v.get('title'), str)
                     and 0 < len(v['title'].strip()) <= 80 else 'Invalid title', attempts=1, max_tokens=80)
-                self.record.conversation_rename(conversation, value['title'], item['revision'], 'gateway')
+                self.writer.conversation_rename(conversation, value['title'], item['revision'], 'gateway')
             except (GatewayError, OSError, ValueError):
                 pass  # The stable request-derived title remains usable.
             finally:
@@ -55,7 +55,7 @@ class ConversationMetadata:
         """Bounded background suggestion, shared by all clients; never an owner turn."""
         key, revision = row['uid'], row['metadata_revision']
         version = str(row.get('source_revision') or row.get('updated_at') or 0)
-        cached = self.record._cards.directory.generated_snapshot().get(key)
+        cached = self.writer.cards.directory.generated_snapshot().get(key)
         if cached and cached.get('input_version') == version and cached.get('base_revision') == revision:
             return dict(status='ready', metadata=cached)
         with self.lock:
@@ -93,7 +93,7 @@ class ConversationMetadata:
                              base_revision=revision, created_at=time.time(), origin=row["authority"])
                 latest = current()
                 if latest and str(latest.get('source_revision') or latest.get('updated_at') or 0) == version:
-                    self.record.directory_generated(key, value, revision)
+                    self.writer.directory_generated(key, value, revision)
             except (GatewayError, OSError, ValueError):
                 pass
             finally:

@@ -635,7 +635,7 @@ def make_server(config: Config, service: Service,
                     return
                 if parts == ["v1", "iterate", "report"]:
                     try:
-                        self._send(200, iterate_notify.deliver(service._xiaoyou.record, config.state_dir, body))
+                        self._send(200, iterate_notify.deliver(service._xiaoyou.intake.writer("system", actor="iterate"), config.state_dir, body))
                     except ValueError as error:
                         self._fail(400, str(error))
                     return

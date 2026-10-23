@@ -31,7 +31,7 @@ def plain(report: str) -> str:
     return text if len(text) <= MAX_TEXT else text[:MAX_TEXT] + "\n（完整内容在电脑上的 state/iterate/runs/ 里）"
 
 
-def deliver(record: Any, state_dir: Path, payload: Any) -> Dict[str, Any]:
+def deliver(writer: Any, state_dir: Path, payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("请求体应该是一个对象")
     run_id, title, text = payload.get("run_id"), payload.get("title"), payload.get("text")
@@ -49,12 +49,12 @@ def deliver(record: Any, state_dir: Path, payload: Any) -> Dict[str, Any]:
         card_id = posted.get(run_id)
         if card_id is None:
             # agent 写小幽自己：App 只把有人做过的事放进侧边栏的任务列表（AppPresentation.dispatched）。
-            card = record.task_open(CONVERSATION, title.strip()[:100], "failed" if failed else "done", AGENT)
+            card = writer.task_open(CONVERSATION, title.strip()[:100], "failed" if failed else "done", AGENT)
             card_id = card["id"]
             posted[run_id] = card_id
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(posted, ensure_ascii=False), encoding="utf-8")
-        record.task(card_id, agent=AGENT)
-        record.reply(card_id, plain(text), turn_id="iterate-" + run_id, kind="summary",
+        writer.task(card_id, agent=AGENT)
+        writer.reply(card_id, plain(text), turn_id="iterate-" + run_id, kind="summary",
                      brief=title.strip()[:120], mood="oops" if failed else "happy")
     return {"card": card_id}

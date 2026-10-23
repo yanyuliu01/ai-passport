@@ -86,6 +86,9 @@ def _name(value: Any, what: str) -> str:
 class Service:
     def __init__(self, xiaoyou: Xiaoyou, store: Store, stt: Optional[Stt] = None):
         self._xiaoyou = xiaoyou
+        self._owner_writer = xiaoyou.intake.writer("owner", actor="client")
+        self._system_writer = xiaoyou.intake.writer("system", actor="runtime")
+        self._reply_writer = xiaoyou.intake.writer("xiaoyou", actor="xiaoyou")
         self._store = store
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
@@ -121,7 +124,7 @@ class Service:
         xiaoyou.cards.subscribe(self._card_changed)
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
         if seq > xiaoyou.cards.seq:
-            xiaoyou.record.sequence(at_least=seq)
+            self._system_writer.sequence(at_least=seq)
         self.events = EventStore(store.state_dir, origin=self.runtime_id)
         self._review_startup_events: List[Dict[str, Any]] = []
         self._review_loading = True
@@ -130,13 +133,13 @@ class Service:
         # Recovered queued work may request a tool immediately. Restore its
         # durable policy and event sink before starting any recovery workers.
         from .conversation_metadata import ConversationMetadata
-        self.metadata = ConversationMetadata(xiaoyou._config, xiaoyou.record)
+        self.metadata = ConversationMetadata(xiaoyou._config, self._reply_writer)
         source_seq = max([int(v.get('source_revision', 0)) for v in xiaoyou.cards.directory.source_snapshot().values() if v.get('authority') == self.runtime_id] + [xiaoyou.cards.seq])
         if source_seq > xiaoyou.cards.seq:
-            xiaoyou.record.sequence(at_least=source_seq)
+            self._system_writer.sequence(at_least=source_seq)
         self._recover()
         from .directory_discovery import Discovery
-        self.discovery = Discovery(xiaoyou._config, xiaoyou.record, self.runtime_id, owned=store.session_ids,
+        self.discovery = Discovery(xiaoyou._config, xiaoyou.intake.writer("desktop", actor="discovery"), self.runtime_id, owned=store.session_ids,
             bound_titles=lambda: {r['uid']: r['original_title'] for r in self.directory()['entries'] if r['kind']=='native' and r.get('bound')})
         if xiaoyou._config.desktop_sync:
             self.discovery.start()
@@ -178,7 +181,7 @@ class Service:
             else:
                 unfinished.append(message["id"])
         cards = self._xiaoyou.cards
-        record = self._xiaoyou.record
+        writer = self._system_writer
         answered = {}  # 消息编号 → (卡, 小幽那句回复)：回复已经记在卡上的
         for card in cards.recent(None, 10 ** 6):
             for entry in card["entries"]:
@@ -191,7 +194,7 @@ class Service:
                 card_id, reply = answered[message_id]
                 message.update(status="done", reply=reply, card=card_id, stage=None,
                                helper=None, partial="", finished_at=time.time())
-                self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
+                self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 (requeue if message_id in requeue else unfinished).remove(message_id)
         for message_id in unfinished:
@@ -206,18 +209,18 @@ class Service:
                 card_id = existing["id"]
             elif existing is not None and message.get("pin"):
                 # 主人是在那件事里面说的：没做完的原因也记在那件事上。
-                record.exchange(existing["id"], said=said, say=note, turn_id=message_id,
+                writer.exchange(existing["id"], said=said, say=note, turn_id=message_id,
                              scope="task", kind="note")
                 card_id = existing["id"]
             else:
-                card = record.task_open(message["conversation"], message["text"] or "语音消息",
+                card = writer.task_open(message["conversation"], message["text"] or "语音消息",
                                   "failed")
-                record.exchange(card["id"], said=said, say=note, brief=note, mood="oops",
+                writer.exchange(card["id"], said=said, say=note, brief=note, mood="oops",
                              turn_id=message_id, scope="main", kind="note")
                 card_id = card["id"]
             message.update(status="failed", error=note, mood="oops", stage=None, helper=None,
                            card=card_id, partial="", finished_at=time.time())
-            self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
+            self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
             self._remember(message)
         if answered or unfinished or requeue:
             with self._changed:
@@ -456,7 +459,7 @@ class Service:
                                        % error)
             with self._changed:
                 if message_id in self._messages:
-                    self._xiaoyou.record.request_changed(message, revise=False)  # 序号、日志一起变
+                    self._owner_writer.by(cause=message["id"]).request_changed(message, revise=False)  # 序号、日志一起变
                     if not self._closed:
                         self._line_up(conversation, message_id)
                 snapshot = self._snapshot(message)
@@ -739,7 +742,7 @@ class Service:
         if row['kind'] == 'conversation' and row['conversation_id'] == 'default' and ('title' in body.get('fields', {}) or body.get('fields', {}).get('archived')):
             raise RequestError('The main chat keeps its fixed navigation entry')
         try:
-            result = self._xiaoyou.record.directory_edit(key, body.get('fields'), self.runtime_id, body.get('revision'),
+            result = self._owner_writer.directory_edit(key, body.get('fields'), self.runtime_id, body.get('revision'),
                                                        [row['task_id']] if row.get('task_id') and not row.get('retained_only') else [])
         except ValueError as error:
             raise RequestError(str(error))
@@ -822,7 +825,7 @@ class Service:
                 raise RequestError("来源消息已不在可读历史里")
             context = {key: original.get(key) for key in ("id", "conversation", "author", "source")}
             context["text"] = redact_credentials(original.get("text") or "")[:4000]
-        return self._xiaoyou.record.conversation_create(name, context)
+        return self._owner_writer.conversation_create(name, context)
 
     def conversation_rename(self, name, title):
         try:
@@ -833,7 +836,7 @@ class Service:
                 return self.directory_edit(uid('chat',name),{'fields':{'title':title}})
             # Keep legacy clients on the same shared owner alias. The catalog's
             # original manual rename also fences any late generated title.
-            self._xiaoyou.record.conversation_rename(name,title)
+            self._owner_writer.conversation_rename(name,title)
             from .conversation_directory import uid
             result = self.directory_edit(uid('chat',name),{'fields':{'title':title}})
             if result.get('status') != 'applied':
@@ -1117,7 +1120,7 @@ class Service:
             message = self._messages.get(message_id)
             if message is not None:
                 message.update(fields)
-                self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
+                self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 captured = self._capture()
             self._changed.notify_all()
@@ -1136,7 +1139,7 @@ class Service:
                 # 回复还在生成：到目前为止的那段，整段替换（不是追加），空串是收回。
                 if message["status"] == "running" and message["partial"] != text:
                     message["partial"] = text
-                    self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
+                    self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                     self._changed.notify_all()
                 return
             if len(message["events"]) < MAX_EVENTS:
@@ -1149,7 +1152,7 @@ class Service:
             if kind in ("handoff", "result"):
                 message["stage"] = text[:MAX_EVENT_CHARS]
                 message["helper"] = agent if kind == "handoff" else None
-            self._xiaoyou.record.request_changed(message)  # 修订号、序号、日志一起变
+            self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
             self._changed.notify_all()
 
     def _drain(self, conversation: str) -> None:
@@ -1234,7 +1237,7 @@ class Service:
                 self._update(message_id, stage="交给 %s 了" % name, mood="busy")
             return
         try:
-            with self._xiaoyou.record.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
+            with self._reply_writer.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
                 if message.get("attachments"):
                     turn = self._xiaoyou.hear_images(text, conversation, message_id,
                         message["attachments"], asked=asked, hop=hop)
@@ -1269,8 +1272,8 @@ class Service:
 
     def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
-        card = self._xiaoyou.record.task_open(conversation, text, "failed")
-        self._xiaoyou.record.exchange(card["id"], said=text, say=error, brief=error, mood="oops",
+        card = self._reply_writer.by(cause=message_id).task_open(conversation, text, "failed")
+        self._reply_writer.by(cause=message_id).exchange(card["id"], said=text, say=error, brief=error, mood="oops",
                                   turn_id=message_id, scope="task" if pin else "main")
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
