@@ -8,6 +8,7 @@ import json
 import sys
 import time
 import unittest
+from unittest import mock
 import uuid
 from pathlib import Path
 
@@ -184,6 +185,22 @@ class OwnershipMeshTests(TempDirCase):
         self.assertTrue(until(lambda: self.mac.get(sent["id"]).get("status") == "done", 20))
         self.assertTrue(any(text.endswith("在旁聊里说") for text in self.win.agent.texts))
         self.assertFalse(any(text.endswith("在旁聊里说") for text in self.mac.agent.texts))
+
+    def test_unknown_side_conversation_waits_for_its_creator_metadata(self):
+        with mock.patch.object(self.win.mesh.shares, 'scan', return_value=None):
+            side = self.win.xiaoyou.intake.writer('owner').conversation_create()
+            self.assertIsNone(self.mac.xiaoyou.cards.conversations.get(side['id']))
+            sent = self.mac.service.submit('wait for side owner', conversation=side['id'], client_id='side-gap')
+            self.assertTrue(until(lambda: sent['id'] in self.mac.service._parked))
+            self.assertEqual(self.mac.get(sent['id'])['operation_state'], 'pending')
+            self.assertEqual(self.mac.agent.texts, [])
+            self.assertIsNone(self.mac.xiaoyou.cards.conversations.get(side['id']))
+            self.mac.xiaoyou.intake.writer('mesh').conversation_replica(self.win.id, side)
+            self.mac.service.retry_parked()
+            self.assertTrue(until(lambda: self.mac.get(sent['id']).get('status') == 'done', 20))
+            self.assertEqual(self.mac.agent.texts, [])
+            self.assertTrue(any(text.endswith('wait for side owner') for text in self.win.agent.texts))
+            self.assertEqual(self.mac.xiaoyou.cards.conversations.get(side['id'])['owner'], self.win.id)
 
 
 if __name__ == "__main__":

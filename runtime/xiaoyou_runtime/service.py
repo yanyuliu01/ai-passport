@@ -1397,6 +1397,9 @@ class Service:
                 or (message.get("relay_to") and not message.get("routed")):
             return True
         view = self.mesh.owner_of(message["conversation"])
+        if view.get('unresolved'):
+            self._parked[message['id']] = message['conversation']
+            return False
         owner = view["owner"]
         if owner is None or owner == self.runtime_id:
             message.pop("relay_to", None)
@@ -1487,9 +1490,13 @@ class Service:
                     or message_id in self._claimed):
                 return
             self._parked.pop(message_id, None)
-            if not self._route(message):
-                return  # 在等负责人的绑定同步过来：先停着
-            self._claimed.add(message_id)
+            routed = self._route(message)
+            if routed:
+                self._claimed.add(message_id)
+        if not routed:
+            # 写“在等负责人”的说明时不占着 _changed；已经开始的并发重试不会被改回排队。
+            self._update(message_id, status='queued', stage='排队中：等待对话负责人同步', mood='busy')
+            return
         try:
             self._process(message_id)
         finally:

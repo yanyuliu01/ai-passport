@@ -1032,9 +1032,14 @@ class Mesh:
         if conversation == ownership.MAIN:
             view = main
         else:
-            item = self._cards.conversations.get(conversation) or {}
-            view = ownership.resolve(conversation, self._bindings(conversation),
-                                     creator=item.get("owner"), main_owner=main["owner"])
+            item = self._cards.conversations.get(conversation)
+            if item is None and conversation.startswith('side-') and main['owner'] is not None:
+                # 目录里没有它不等于没有负责人的旧对话：创建者的目录可能比第一句话晚到。
+                view = {'owner': None, 'generation': 0, 'conflict': False,
+                        'by': None, 'unresolved': True}
+            else:
+                view = ownership.resolve(conversation, self._bindings(conversation),
+                                         creator=(item or {}).get("owner"), main_owner=main["owner"])
         owner = view["owner"]
         with self._lock:
             peer = self._peers.get(owner) if owner else None
