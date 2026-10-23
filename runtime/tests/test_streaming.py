@@ -263,27 +263,20 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual(opener.requests[1][1]["messages"][-1]["content"][0]["content"], "c3 · 正在做")
         self.assertEqual((outcome.fields["card"], outcome.fields["action"]["type"]), ("c3", "none"))
 
-    def test_a_promise_without_a_tool_gets_one_quiet_reminder(self):
-        opener = FakeOpener(sse("我这就去把这几天的事拢一拢。"),
-                            tool_sse("说得对，现在补上。", "start_task", {"agent": "codex", "title": "回顾", "task": "整理这几天做的事"}),
-                            sse("交给 codex 了。"))
+    def test_a_promise_without_a_tool_is_spoken_once(self):
+        # 说了要去做却没调工具：不再暗中追问，只调用一次模型、只给出这一段话。
+        opener = FakeOpener(sse("我这就去把这几天的事拢一拢。"), sse("不该被问到的第二轮。"))
         tools = self.toolbox()
+        self.assertTrue(tools.promised("我这就去把这几天的事拢一拢。"))
         outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="这几天做了什么", system="S", plain=True,
                                  on_text=print, tools=tools), {"DEEPSEEK_API_KEY": "k"},
                                  "deepseek-v4-pro", lambda text: None, opener)
-        reminder = opener.requests[1][1]["messages"][-1]["content"]
-        self.assertIn("没调对应的工具", reminder)
-        self.assertEqual(outcome.fields["action"]["type"], "start")
-        # 补调了工具就到此为止：不再问一轮，也不把回应提醒的话给主人。
+        self.assertEqual(len(opener.requests), 1)
         self.assertEqual(outcome.text, "我这就去把这几天的事拢一拢。")
-        self.assertEqual(len(opener.requests), 2)
-        # 只提醒一次：说了不做第二次就照实给出去。
-        opener = FakeOpener(sse("我这就去看看。"), sse("我去看一眼。"))
-        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="看看", system="S", plain=True,
-                                 on_text=print, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
-                                 "deepseek-v4-pro", lambda text: None, opener)
-        self.assertEqual(len(opener.requests), 2)
         self.assertEqual(outcome.fields["action"], {"type": "none"})
+        saved = dsh_stream._load(dsh_stream.sessions_dir(dsh_spec(self.folder)), outcome.session_id)
+        owner_turns = [item["content"] for item in saved if item["role"] == "user" and isinstance(item["content"], str)]
+        self.assertEqual(owner_turns, ["这几天做了什么"])
 
     def test_tool_sessions_are_separate_and_keep_the_tool_calls(self):
         spec = dsh_spec(self.folder)
@@ -304,7 +297,7 @@ class ToolTalkTests(TempDirCase):
         self.assertIn("tool_result", kinds)
         self.assertEqual(saved[-1], {"role": "assistant", "content": "还在做。"})
 
-    def test_saying_she_will_remember_without_remembering_gets_a_reminder(self):
+    def test_saying_she_will_remember_without_remembering_is_counted(self):
         from xiaoyou_runtime.memory import OwnerMemory
         from xiaoyou_runtime.voice_tools import Toolbox
         memory = OwnerMemory(self.folder / "owner.md")
@@ -316,7 +309,7 @@ class ToolTalkTests(TempDirCase):
         tools.call("remember", {"note": "少说点"})
         self.assertFalse(tools.promised("记下了"))
         self.assertEqual(memory.notes()[-1][-3:], "少说点")
-        # 没有记忆功能时不拿这个提醒她。
+        # 没有记忆功能时不计这一笔。
         bare = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None)
         self.assertFalse(bare.promised("记下了"))
 

@@ -558,7 +558,8 @@ directly. Only preferences, rules and things she should keep doing go in, not a 
 oldest dropped first.
 
 - Saying "noted" or "I'll do it that way from now on" without calling `remember` gets the same quiet reminder
-  as promising work without a tool call.
+  as promising work without a tool call. (This hidden re-ask was removed on 2026-10-23 and is now only
+  counted; see batch 1 of the code cleanup plan.)
 - The paragraph asking her to spell out her reasoning (what is ambiguous, which readings she considered…) is
   gone, replaced by one line: act on your reading when confident, otherwise ask briefly. That paragraph was
   the main reason replies opened by restating what you said and listing options for you to pick.
@@ -576,6 +577,7 @@ without a tool call, never invent progress or results, never repeat what was alr
 - **Promising without acting**: tool-mode turns use their own sessions (`apt-`), not the JSON-era ones; the
   first one is seeded with the last 8 turns, and tool calls and results are kept in the session. A turn that
   calls no tool but says "on it" or "handed it to …" gets one quiet reminder to call the tool now or take it back.
+  (Removed on 2026-10-23: the turn now makes one model call and gives one reply; the case is only counted.)
 
 ## The companion acts through tools (0.15.0)
 

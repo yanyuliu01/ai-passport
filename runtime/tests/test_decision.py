@@ -164,7 +164,7 @@ class DecisionTests(TempDirCase):
             launch.assert_not_called()
         self.assertEqual(turn.reply, "这轮还没有安排检查。")
         history = dsh_stream._load(dsh_stream.sessions_dir(voice.spec), store.session("default", voice.name))
-        self.assertFalse(any(item.get("content") == dsh_stream.PROMISE_NUDGE for item in history))
+        self.assertFalse(any("Runtime 提醒" in str(item.get("content")) for item in history))
 
     def test_refusal_is_spoken_once_without_any_dispatch(self):
         opener = FakeOpener(selected("start_task", {"agent": "missing", "title": "x", "task": "y"}),

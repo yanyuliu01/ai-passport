@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text
 from .config import AgentSpec
-from .voice_tools import JOIN, PROMISE_NUDGE, TOOL_SESSION_PREFIX
+from .voice_tools import JOIN, TOOL_SESSION_PREFIX
 
 BASE_URL = "https://api.deepseek.com/anthropic"
 MAX_TOKENS = 8192
@@ -165,7 +165,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     first_text: List[Optional[float]] = [None]
     cut = [False]  # 主人插话，这一次被打断了
 
-    def ask(prefix: str, show: bool = True) -> Tuple[str, List[Dict[str, Any]], bool]:
+    def ask(prefix: str) -> Tuple[str, List[Dict[str, Any]], bool]:
         """问一轮。返回（这一轮写的文字，这一轮的工具调用，是不是停在要调工具）。
         prefix 是前几轮已经说过的话：交给 on_text 的是到目前为止的全文。"""
         body: Dict[str, Any] = {
@@ -242,8 +242,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                             said += delta["text"]
                             if first_text[0] is None:
                                 first_text[0] = time.monotonic() - began
-                            if show:  # 被提醒后的那一轮不边说边给主人看（多半会被丢掉）
-                                on_text((prefix + JOIN + said) if prefix else said)
+                            on_text((prefix + JOIN + said) if prefix else said)
                         elif delta.get("type") == "input_json_delta" and current is not None \
                                 and isinstance(delta.get("partial_json"), str):
                             current["json"] += delta["partial_json"]
@@ -277,24 +276,15 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         return said.strip(), calls, wants_tools and bool(calls)
 
     spoken: List[str] = []
-    nudged = False
-    nudged_at = 0  # 提醒她时已经说了几段：提醒之后她调了工具的话，之后说的不再给主人（她前面已经说过了）
     rounds = MAX_TOOL_ROUNDS if tools is not None else 1
     for round_index in range(rounds):
-        said, calls, wants_tools = ask(JOIN.join(spoken), show=not nudged)
+        said, calls, wants_tools = ask(JOIN.join(spoken))
         if said:
             spoken.append(said)
         if cut[0]:
             if tools is not None:
                 messages.append({"role": "assistant", "content": (said or "……") + "（被主人打断了）"})
             break
-        if tools is not None and not wants_tools and not nudged and round_index < rounds - 1 \
-                and tools.promised(JOIN.join(spoken)):
-            # 说了要去做却一个工具都没调：悄悄提醒一次，让她现在就调（或者改口）。
-            nudged, nudged_at = True, len(spoken)
-            messages.append({"role": "assistant", "content": said or "……"})
-            messages.append({"role": "user", "content": PROMISE_NUDGE})
-            continue
         if tools is None or not wants_tools:
             if tools is not None:
                 messages.append({"role": "assistant", "content": said or "（没有再说话）"})
@@ -319,12 +309,6 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             results.append(result)
         messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": results})
-        if nudged:
-            # 被提醒以后补调了工具：事情办了就够了。她回应提醒说的话、补完再说的一遍都不给主人
-            # （主人已经看到她前面那段），也不用再问一轮。
-            spoken = spoken[:nudged_at]
-            messages.append({"role": "assistant", "content": "（补上了）"})
-            break
         if acted is None and tools.action is not None and spoken:
             # 交出去了，交之前也已经跟主人说过：到此为止。再问一轮她多半把刚才的话换个说法再说
             # 一遍（“好，我让 X 去…”后面又跟一条“好嘞，已经让 X 去…”）。还没开口的才再问一轮。
