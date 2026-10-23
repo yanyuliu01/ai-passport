@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 from .task_audit import TaskAudit
 from .conversations import ConversationCatalog
 from .message_log import MessageLog
+from .world import JOURNAL_SUFFIX, TaskJournal
 from .store import _write
 from .artifacts import clean_attachments
 from .task_titles import MAX_REQUEST_TITLE_CHARS, canonical_title, select_title
@@ -135,6 +136,9 @@ class Cards:
         migrated = self._adopt_log()
         if interrupted or fresh_epoch or migrated:
             self._save()
+        # 任务的每次变化按差量追加进 cards.tasks.jsonl（world.py）：从它能重建出现在的卡。
+        self._journal = TaskJournal(self._path.with_name(self._path.stem + JOURNAL_SUFFIX),
+                                    self._cards, self._seq)
 
     def _adopt_log(self) -> bool:
         """启动时：卡上的副本以日志为准；日志里还没有的（旧版本的卡）补进日志。"""
@@ -470,6 +474,7 @@ class Cards:
         self._seq += 1
         card["seq"] = self._seq
         card["updated_at"] = time.time()
+        self._journal.record(card)  # 先记进任务日志，再写快照
         self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
         self._save()
         self._changed.notify_all()
@@ -557,6 +562,7 @@ class Cards:
             if card["state"] in ACTIVE or card["id"] in protected:
                 continue
             self._seal_card(card)
+            self._journal.remove(card["id"], self._seq)
             del self._cards[card["id"]]
             left -= 1
 

@@ -332,6 +332,18 @@ the running Runtime was not restarted.
   `Loop.step` deterministic and replayable as in section 8.
 - Build / device / real-model latency, reconnection and multi-end acceptance: NOT RUN. Not deployed.
 
+**R3 batches (decided 2026-10-23):** the unified log turned out to hold only messages and activity;
+task state itself (who works on it, state, execution records and so on) lives only in `cards.json`,
+which is rewritten whole on every change (about 750 KB). R3 therefore fills the log first and changes
+startup second:
+
+| Batch | Content |
+| --- | --- |
+| R3.1 | Every task change is appended as a delta to an append-only task journal `cards.tasks.jsonl` (card removals too); `world.py` rebuilds state with pure functions; seeded random operations plus truncation to simulate crashes prove "rebuilt from the journal = current state". `cards.json` stays authoritative at startup |
+| R3.2 | Startup becomes "snapshot + replay of the journal after it"; `cards.json` becomes a periodic snapshot instead of a full rewrite on every change; the journal is compacted after a snapshot is durable; crash-boundary tests (journal written but snapshot not, half-written snapshot and so on) |
+| R3.3 | The same for Service requests (`messages.json`); `operation_id` with `pending` / `running` / `succeeded` / `failed` / `cancelled` / `unknown`, recovered at startup as in section 1.5 |
+| R3.4 | Stopping writes to `transcript.json` moves to R6, where `ContextBuilder` assembles context from the log |
+
 ## 8. Lessons from Raft and DS-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.

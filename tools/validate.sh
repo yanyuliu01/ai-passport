@@ -173,6 +173,7 @@ run_static_checks() {
     run_app_host_tests "${test_dir}"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pocket_fonts.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_intake.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_world.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_conversation_presentation.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_presentation_policy.py
