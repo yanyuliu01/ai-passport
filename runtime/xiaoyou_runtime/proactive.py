@@ -166,7 +166,7 @@ class Pulse:
             return False
         xiaoyou = self._xiaoyou
         said = xiaoyou.chat_text(text)
-        xiaoyou.record.reply(card_id, say=said, turn_id=turn_id, scope="main", kind="note")
+        xiaoyou.intake.writer("timer", actor="xiaoyou", cause=turn_id).reply(card_id, say=said, turn_id=turn_id, scope="main", kind="note")
         xiaoyou.store.transcript.add(self._conversation, turn_id, "（没人开口，%s）" % event, said,
                                      xiaoyou.voice_name(), [xiaoyou.voice_name()])
         return True
@@ -186,7 +186,7 @@ class Pulse:
                                              "（%s）" % item["detail"] if item.get("detail") else "")
         text = self._ask(event, ["recall", "resolve", "track"], GATE_RULES)
         if text and not SILENT.match(text) and not text.startswith(("（不说", "(不说")):
-            card = self._xiaoyou.record.task_open(self._conversation, item["title"])
+            card = self._xiaoyou.intake.writer("timer", actor="xiaoyou").task_open(self._conversation, item["title"])
             self._say(card["id"], text, "%s-due-%d" % (item["id"], int(time.time())), "答应的事到点了")
 
     # ---- 整理记忆 ----

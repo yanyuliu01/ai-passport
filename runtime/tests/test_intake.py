@@ -194,6 +194,18 @@ class IntakeTests(TempDirCase):
             self.assertEqual(updated["changed_by"], {"source": "helper", "actor": "codex"})
         self.assertIsNone(cards.current_provenance())
 
+    def test_requests_and_helper_activity_carry_their_source(self):
+        self.play()
+        events = [json.loads(line) for line in
+                  (self.store.state_dir / "cards.log.jsonl").read_text().splitlines()]
+        first = events[0]
+        self.assertEqual(first["provenance"]["source"], "owner")
+        self.assertEqual(first["provenance"]["cause"] + ":you", first["id"])
+        activity = [e for e in events if e.get("kind") == "activity"]
+        self.assertTrue(activity)
+        self.assertTrue(all(e["provenance"]["source"] == "helper" for e in activity))
+        self.assertTrue(all(e["provenance"]["actor"] == "codex" for e in activity))
+
 
     def test_unknown_sources_are_refused(self):
         with self.assertRaises(ValueError):
