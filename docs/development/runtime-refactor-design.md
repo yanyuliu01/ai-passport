@@ -2,9 +2,9 @@
 
 # Runtime three-layer refactor design
 
-Status: design approved; implementation contracts clarified on 2026-10-23. R1 (`2bf81bf`) and R2
-(`1896e6d`-`0688c71`) are committed, see section 7; R3-R8 are not implemented. This is source state,
-not deployment.
+Status: design approved; implementation contracts clarified on 2026-10-23. R1-R4 and the Runtime
+part of R5 are committed, see section 7; R6-R8 are not implemented. This is source state, not
+deployment.
 
 This document maps the [Xiaoyou complete plan](xiaoyou-agent-model.md) onto the Runtime code in
 three layers: the **intake layer** (how things come in and how they are stored), the **reply layer**
@@ -203,7 +203,7 @@ POST /v1/actions  { id, type, target, reason } -> { id, accepted: true }
 
 They only acknowledge receipt. Processing state, replies and results all arrive through `/v1/sync`.
 
-**Display:** the projection supplies block boundaries, formatting runs (bold, lists, code) and
+**Display:** the projection supplies block boundaries, formatting runs (bold, italic, code, headings, links, lists, quotes) and
 authors; every end renders the projection and never parses Markdown itself (N13).
 
 ### 2.3 Mapping to existing code
@@ -411,6 +411,12 @@ startup second:
 - R4.1: a `/v1/sync` snapshot holds only the present and comes in one page (see the interface table in unified-message-model); increments are paged by count (200) and size (48 KB). When more than 1000 items changed after the cursor the client gets a snapshot; while the increments are complete it gets increments. Fixes N10: syncing from 0 against a copy of the 10-23 device Runtime records used to take 408 pages and now takes one page of about 128 KB in about 160 ms on the server, with the just-finished task result in it. Persistent client cursors belong to the App and were not changed; real latency over Funnel was not measured.
 - R4.2: implements section 6: bindings, fencing at the write path and on received records, queueing when the owner is unreachable, and manual handoff (`ownership.py`, `mesh.py`, `service.py`). The Mac's config needs `"mesh": {"home": true}` and a restart before it takes effect; until then nothing changes. Fault tests: a message waits while the owner is unreachable and is forwarded when it returns; after a handoff, replies the old owner still writes are rejected (that test fails with fencing turned off); no handoff while busy or while the target is offline; a forwarded message is not bounced back; a side conversation belongs to its creator. Not tested: devices, two computers really disconnected, forwarding latency over Funnel.
 - R4.3 (Runtime part): implements section 6: host identity (a damaged file refuses to start), `host_proof`, per-device credentials (`devices.py`: issue, sync, revoke), the permission authority and sensitive-operation checks, removing a computer, address scopes and manual routes (`identity.py`, `mesh.py`, `service.py`, `server.py`). New endpoints: `GET/POST /v1/devices`, `POST /v1/devices/<id>/revoke`, `POST /v1/mesh/members/<id>/remove`, `GET /v1/info?nonce=`. Tests cover: a damaged identity is not replaced; a proof holds only for the same credential; revocation is final; a device paired on Windows is recorded by the Mac and its secret never crosses the mesh; sensitive operations are refused while the Mac is offline; a removed computer can no longer exchange records; hand-written addresses stay first; a credential works over HTTP and gets 401 after revocation. Until the Mac sets `mesh.home`, every runtime is its own authority (as before). Not done: the App and desktop client switching to device credentials and checking `host_proof`; proving a specific computer needs the asymmetric keys of the client batch.
+
+- R4 review (Windows, 2026-10-23): the R3/R4 recovery paths were checked against section 1.5 with fault tests, and four gaps were fixed. An append interrupted mid-line is repaired before the next one, and a failed append is truncated back. Without a snapshot, a journal that starts at 1 is replayed (messages accepted before the first snapshot are kept); a journal that is only a suffix is not replayed, and the Runtime starts empty under a new epoch instead of refusing to start. Out-of-process readers re-check the snapshot after reading the journal, so compaction never pairs an old snapshot with a trimmed journal. A message's terminal state is visible only after it is durable. Also, a message that reaches a computer before the side conversation's creator metadata waits queued instead of being answered there.
+
+**R5 progress:**
+
+- R5 (Runtime part): Xiaoyou's replies were already log records that stream by whole-text replacement and never return from final to streaming; R5 makes this explicit in the projection and completes the formatting. `presentation.event` names the record with the event kinds of 1.2: `said` (the owner), `assistant_message` (a reply in the chat), `task_progress` (work inside a task) and `session_observed` (an observed desktop session). Runs now carry `italic`, `strike`, `code` (`inline` / `block`, with `language`), `heading` (level, also `bold`), `href` (only http, https and mailto) and `quote`; fence lines, `#` and the other markers are not part of the text. Every run keeps `text` and `bold`, so current clients show the words without markers and lose nothing. `presentation.plain` is the unstyled text for one-line places (home card, device screen, copying), and a task's `presentation.brief` / `presentation.progress` are its words without markers. `presentation_policy` lists `formatting` and `events`. The shared fixture `tests/fixtures/presentation-v1.json` gains a case with every format; `test_presentation_policy` checks that a client following only the `/v1/sync` cursor sees a formatted reply streaming and then final. Not done: the App and desktop client drawing the new styles and using `plain` instead of their own `Markdown.plain` (a separate client batch); operation identity for helper runs moves to R6 with the agent loop.
 
 ## 8. Lessons from Raft and DS-Bot-App
 

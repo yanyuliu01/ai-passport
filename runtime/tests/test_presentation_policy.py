@@ -4,7 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
-from test_runtime import TempDirCase, Scripted, make_xiaoyou
+from test_runtime import TempDirCase, Scripted, make_xiaoyou, until
 from xiaoyou_runtime import presentation
 from xiaoyou_runtime.service import Service
 
@@ -46,7 +46,8 @@ class PolicyTests(unittest.TestCase):
 class ProjectionIntegrationTests(TempDirCase):
     def setUp(self):
         super().setUp()
-        self.x, self.store = make_xiaoyou(self.folder, [Scripted('claude')])
+        self.agent = Scripted('claude')
+        self.x, self.store = make_xiaoyou(self.folder, [self.agent])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.x.close)
@@ -74,6 +75,38 @@ class ProjectionIntegrationTests(TempDirCase):
         self.assertNotIn('seq',live)  # A partial current-turn read cannot advance history.
         self.assertEqual([m for m in sync['messages'] if m['id'] in ('turn:you','turn:reply')],live['messages'])
         self.assertNotIn('presentation',self.x.cards.message('turn:reply'))
+
+    def test_a_new_client_follows_a_formatted_streamed_reply_from_sync_alone(self):
+        # R5 acceptance: no per-message wait or stream, no Markdown parsing on the client.
+        gate = self.agent.gate
+        gate.clear()
+        self.addCleanup(gate.set)
+        start = self.service.sync('default')
+        sent = self.service.submit('**稍等** slow')
+        self.assertTrue(until(lambda: self.service.get(sent['id'])['status'] == 'running'))
+        self.service._report(sent['id'], 'partial', None, '先说 **一半**\n---\n还在想 `x`')
+
+        def reply(after):
+            page = self.service.sync('default', after=after, epoch=start['epoch'], wait=5)
+            found = [m for m in page['messages'] if m['id'] == sent['id'] + ':reply']
+            return page, found[-1]['presentation'] if found else None
+
+        page, view = reply(start['seq'])
+        while view is None or view['status'] != 'streaming':
+            page, view = reply(page['seq'])
+        self.assertEqual(('assistant_message', False), (view['event'], view['complete']))
+        self.assertEqual([True, False], [b['complete'] for b in view['blocks']])
+        self.assertEqual([{'text': '先说 ', 'bold': False}, {'text': '一半', 'bold': True}], view['blocks'][0]['runs'])
+        self.assertEqual({'text': 'x', 'bold': False, 'code': 'inline'}, view['blocks'][1]['runs'][-1])
+        gate.set()
+        while view['status'] != 'final':
+            page, view = reply(page['seq'])
+        self.assertTrue(view['complete'])
+        self.assertEqual('re:稍等 slow', view['plain'])
+        owner = next(m['presentation'] for m in self.service.sync('default')['messages'] if m['id'] == sent['id'] + ':you')
+        self.assertEqual(('said', '**稍等** slow'), (owner['event'], owner['plain']))
+        task = next(t for t in self.service.sync('default')['tasks'] if t['presentation'].get('brief'))
+        self.assertNotIn('**', task['presentation']['brief'])
 
     def test_delta_projection_and_epoch_reset_do_not_change_block_identity(self):
         card=self.x.record.task_open('default','test')

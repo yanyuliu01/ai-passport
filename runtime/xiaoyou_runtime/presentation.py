@@ -18,9 +18,21 @@ LABELS = {
 }
 
 
+FORMATTING = ('bold', 'italic', 'strike', 'code', 'code_block', 'heading', 'link', 'quote', 'list')
+EVENTS = ('said', 'assistant_message', 'task_progress', 'session_observed')
+# One inline mark at a time, earliest first. Code spans keep their content literal.
+INLINE = re.compile(r'(?P<code>`+)(?P<code_text>.+?)(?P=code)'
+                    r'|\[(?P<link_text>[^\]\n]+)\]\((?P<href>(?:[^()\s]|\([^()\s]*\))+)\)'
+                    r'|\*\*(?P<bold>.+?)\*\*'
+                    r'|~~(?P<strike>.+?)~~'
+                    r'|(?<![*\w])\*(?![\s*])(?P<italic>.+?)(?<![\s*])\*(?![*\w])')
+
+
 def policy():
     return {'version': VERSION, 'capability': 'presentation_v1',
             'message_mode': 'complete-blocks',
+            # Every run still carries text and bold: older clients drop markers but lose no words.
+            'formatting': list(FORMATTING), 'events': list(EVENTS),
             'native_surfaces': {
                 name: {'status': 'incomplete', 'reason': 'native-rendering-not-verified',
                        'dimensions': ['message-boundaries', 'placement', 'status', 'continuation']}
@@ -78,34 +90,71 @@ def _parts(text, split):
     return parts
 
 
+def _run(text, style):
+    run = {'text': text, 'bold': bool(style.get('bold'))}
+    run.update((key, value) for key, value in style.items() if key != 'bold' and value)
+    return run
+
+
+def _inline(text, style):
+    """Markers become styles on runs; the markers themselves are never shown."""
+    runs, at = [], 0
+    for mark in INLINE.finditer(text):
+        if mark.start() > at:
+            runs.append(_run(text[at:mark.start()], style))
+        if mark.group('code'):
+            runs.append(_run(mark.group('code_text'), dict(style, code='inline')))
+        elif mark.group('href'):
+            # Only links a client can open safely; anything else stays plain text.
+            href = mark.group('href') if re.match(r'(?i)(https?://|mailto:)', mark.group('href')) else None
+            runs.extend(_inline(mark.group('link_text'), dict(style, href=href)))
+        else:
+            name = next(key for key in ('bold', 'strike', 'italic') if mark.group(key) is not None)
+            runs.extend(_inline(mark.group(name), dict(style, **{name: True})))
+        at = mark.end()
+    if at < len(text):
+        runs.append(_run(text[at:], style))
+    return runs
+
+
 def _runs(text, formatted):
     if not formatted:
         return [{'text': text, 'bold': False}]
-    runs, fence = [], None
-    for index, line in enumerate(text.split('\n')):
-        if index:
-            runs.append({'text': '\n', 'bold': False})
+    lines, fence, language = [], None, ''
+    for line in text.split('\n'):
         mark = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
-        code = fence is not None or mark is not None
         if mark:
             token, rest = mark.groups()
             if fence is None:
-                fence = (token[0], len(token))
-            elif token[0] == fence[0] and len(token) >= fence[1] and not rest.strip():
+                fence, language = (token[0], len(token)), rest.strip()
+                continue  # The fence line is markup, not content.
+            if token[0] == fence[0] and len(token) >= fence[1] and not rest.strip():
                 fence = None
-        if code:
-            runs.append({'text': line, 'bold': False})
+                continue
+        if fence is not None:
+            lines.append([_run(line, {'code': 'block', 'language': language})])
             continue
+        style = {}
+        quote = re.match(r'^ {0,3}>\s?', line)
+        if quote:
+            line, style['quote'] = line[quote.end():], True
+        heading = re.match(r'^ {0,3}(#{1,6})\s+', line)
+        if heading:
+            # Bold as well, so a client that only knows bold still sets it apart.
+            line = re.sub(r'\s+#+\s*$', '', line[heading.end():])
+            style.update(heading=len(heading.group(1)), bold=True)
         line = re.sub(r'^\s*[-*•·]\s+', '•  ', line)
-        at = 0
-        for bold in re.finditer(r'\*\*(.+?)\*\*', line):
-            if bold.start() > at:
-                runs.append({'text': line[at:bold.start()], 'bold': False})
-            runs.append({'text': bold.group(1), 'bold': True})
-            at = bold.end()
-        if at < len(line):
-            runs.append({'text': line[at:], 'bold': False})
+        lines.append(_inline(line, style) or [_run('', style)])
+    runs = []
+    for index, line in enumerate(lines):
+        if index:
+            runs.append({'text': '\n', 'bold': False})
+        runs.extend(run for run in line if run['text'])
     return runs
+
+
+def plain(runs):
+    return ''.join(run['text'] for run in runs)
 
 
 def message(record, runtime_id=''):
@@ -126,6 +175,11 @@ def message(record, runtime_id=''):
               for index, (part, closed) in enumerate(_parts(text, split))]
     for block in blocks:
         block['runs'] = _runs(block['text'], author['kind'] != 'owner' and record.get('kind') != 'activity')
+    # Event kinds of the refactor design (1.2): what this record is, not how it is drawn.
+    event = ('session_observed' if placement == 'source' else
+             'said' if author['kind'] == 'owner' else
+             'assistant_message' if placement == 'chat' else
+             'task_progress' if placement == 'work' else 'session_observed')
     # A source-owned revision fingerprint is independent of local mesh seq/rev.
     revision = {name: record.get(name) for name in
                 ('conversation', 'scope', 'author', 'kind', 'status', 'text', 'partial', 'attachments', 'input_origin')}
@@ -140,9 +194,11 @@ def message(record, runtime_id=''):
     result['presentation'] = {
         'version': VERSION, 'input_revision': digest, 'id': key, 'turn_id': turn,
         'conversation': record.get('conversation') or 'default', 'author': author,
-        'kind': record.get('kind') or 'reply', 'placement': placement,
+        'kind': record.get('kind') or 'reply', 'event': event, 'placement': placement,
         'status': status, 'status_label': LABELS.get(status, LABELS['unknown']),
         'complete': terminal, 'blocks': blocks,
+        # Unstyled text for one-line places (home card, device screen, copying).
+        'plain': '\n\n'.join(plain(block['runs']) for block in blocks),
         'order': [record.get('turn_at', record.get('created_at')) or 0, turn, 0 if author['kind'] == 'owner' else 1, key],
     }
     return result
@@ -160,6 +216,10 @@ def task(record):
                               'status_label': LABELS.get(state, LABELS['unknown']),
                               'group': 'waiting' if state == 'waiting' else 'running' if state in ('running','streaming','queued','accepted')
                               else 'uncertain' if state in ('unavailable','unknown') else 'history'}
+    for name in ('brief', 'progress'):
+        # Xiaoyou's own words on the card: the home card shows them without markers.
+        if isinstance(record.get(name), str) and record[name]:
+            result['presentation'][name] = plain(_runs(record[name], True))
     return result
 
 

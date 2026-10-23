@@ -2,7 +2,7 @@
 
 # Runtime 三层重构设计
 
-状态：设计已确认，2026-10-23 补齐实现契约。R1（`2bf81bf`）和 R2（`1896e6d`～`0688c71`）已提交，见第 7 节；R3～R8 未实现。这些是源码状态，不代表已部署。
+状态：设计已确认，2026-10-23 补齐实现契约。R1～R4 和 R5 的 Runtime 部分已提交，见第 7 节；R6～R8 未实现。这些是源码状态，不代表已部署。
 
 本文把[小幽完整方案](xiaoyou-agent-model.zh_CN.md)落到 Runtime 代码上，按三层写：**状态接收层**（东西怎么进来、存成什么）、**回复消息层**（回复怎么生成、怎么送到各端）、**agent loop**（小幽怎么决定、怎么做）。问题编号指[交互简化问题清单](app-runtime-simplification.zh_CN.md)。所有阶段都要满足[跨端可靠性规则](cross-stack-reliability.zh_CN.md)。
 
@@ -169,7 +169,7 @@ POST /v1/actions  { id, type, target, reason } → { id, accepted: true }
 
 只返回“已收到”。处理状态、回复、结果全部经 `/v1/sync` 到达。
 
-**显示**：投影给出块边界、格式片段（加粗、列表、代码）和作者，各端只按投影渲染，不自己解析 Markdown（N13）。
+**显示**：投影给出块边界、格式片段（加粗、斜体、代码、标题、链接、列表、引用）和作者，各端只按投影渲染，不自己解析 Markdown（N13）。
 
 ### 2.3 和现有代码的对应
 
@@ -332,6 +332,12 @@ R2 已完成（2026-10-23，Codex 写、Claude Code 拆分核对后提交），�
 - R4.1：`/v1/sync` 的快照只给“现在”、一页给完（见 unified-message-model 的接口表），增量按条数（200）和大小（48 KB）分页；游标之后变了的超过 1000 样就改给快照，增量还全的先补增量。修 N10：用 10-23 真机 Runtime 记录的副本从 0 同步，以前要 408 页，现在一页约 128 KB，服务端约 160 ms，刚做完的任务结果就在这一页里。客户端持久游标属于 App，这次没改；经 Funnel 的实际时延未测。
 - R4.2：按第 6 节的做法实现了绑定、写入点和收到记录时的隔离、连不上时排队、手动移交（`ownership.py`、`mesh.py`、`service.py`）。Mac 的配置里要加 `"mesh": {"home": true}`，重启后才生效；没配之前和以前一样。故障测试：负责人连不上时排队并在回来后交过去、移交后旧负责人硬写的回复被拒（关掉隔离时这条测试失败）、忙时和对方离线时不交、转来的话不转回去、旁聊归创建者。没测：真机、两台真实断网、Funnel 下的转交时延。
 - R4.3（Runtime 部分）：按第 6 节实现了主机身份（坏了拒绝启动）、`host_proof`、每台设备的凭据（`devices.py`，签发、同步、撤销）、权限权威和敏感操作检查、移出电脑、地址范围和手动线路（`identity.py`、`mesh.py`、`service.py`、`server.py`）。新接口：`GET/POST /v1/devices`、`POST /v1/devices/<编号>/revoke`、`POST /v1/mesh/members/<编号>/remove`，`GET /v1/info?nonce=`。测试覆盖：身份文件坏了不换、证明只对同一凭据成立、撤销是终态、在 Windows 配对由 Mac 记下且密钥不经网络、Mac 离线时敏感操作被拒、移出的电脑不能再交换记录、手写地址排在最前、HTTP 上凭据可用且撤销后 401。Mac 没配 `mesh.home` 之前，每台把自己当权威（和以前一样）。还没做：App 和电脑客户端改用设备凭据、核对 `host_proof`；逐台证明身份要等客户端那一批的非对称密钥。
+
+- R4 复核（Windows，2026-10-23）：按 1.5 节用故障测试核对了 R3/R4 的恢复路径，修了四处。追加写到一半断了，下一次写之前先修好；写失败的那次会截回去。没有快照时，从 1 开始的日志会重放（第一次快照之前收下的消息不丢）；只剩后半截的日志不重放，Runtime 以新的 epoch 从空状态启动，不拒绝启动。进程外的读者读完日志再核一遍快照，压缩时不会把旧快照配上截过的日志。消息的结束状态落盘之后才公开。另外，旁聊创建者的目录还没到时先到的消息排队等着，不在收到的那台回答。
+
+**R5 进展：**
+
+- R5（Runtime 部分）：小幽的回复本来就是日志里的记录，生成中整段替换、定稿后不再退回生成中；R5 把这件事在投影里写明，并补齐格式。`presentation.event` 用 1.2 节的事件名标出这条记录是什么：`said`（主人说的）、`assistant_message`（聊天里的回复）、`task_progress`（事里面的工作）、`session_observed`（观察到的电脑会话）。格式片段新增 `italic`、`strike`、`code`（`inline` / `block`，带 `language`）、`heading`（级别，同时 `bold`）、`href`（只给 http、https、mailto）和 `quote`；围栏行、`#` 这些记号不再算进文字。每个片段仍有 `text` 和 `bold`，现在的客户端显示出来就是去掉记号的字，不丢内容。`presentation.plain` 是给一行显示的地方（首页卡片、设备小屏、复制）用的纯文字，事的 `presentation.brief` / `presentation.progress` 是去掉记号的那句话。`presentation_policy` 列出 `formatting` 和 `events`。共用样例 `tests/fixtures/presentation-v1.json` 新增一条包含全部格式的样例；`test_presentation_policy` 验证只跟 `/v1/sync` 游标的客户端能看到带格式的回复从生成中到定稿。还没做：App 和电脑客户端画出新格式、改用 `plain` 代替自己的 `Markdown.plain`（客户端另一批）；帮手运行的操作身份跟 agent loop 一起放到 R6。
 
 ## 8. 借鉴：Raft 与 DS-Bot-App
 
