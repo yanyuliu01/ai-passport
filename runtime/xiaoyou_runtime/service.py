@@ -1306,20 +1306,36 @@ class Service:
 
     def _update(self, message_id: str, strict: bool = False, **fields: Any) -> None:
         """改一条消息并写下去。strict 时写不下去就把错误交给调用方。"""
-        captured = None
-        with self._changed:
-            message = self._messages.get(message_id)
-            changes = operations.transition(message, fields) if message is not None else None
-            if changes is None and message is not None:
-                # 结束了又说在做（迟到的进展、重复投递）：不改，也不重新运行。
-                sys.stderr.write("消息 %s 已经结束，忽略改成 %s\n" % (message_id, fields.get("status")))
-            if message is not None and changes is not None:
+        # 落盘的改动和收消息排成一队；但写盘不占着 _changed，轮询、取消这些读的人不会卡住。
+        with self._write_lock:
+            with self._changed:
+                message = self._messages.get(message_id)
+                changes = operations.transition(message, fields) if message is not None else None
+                if message is None or changes is None:
+                    if message is not None:
+                        sys.stderr.write("消息 %s 已经结束，忽略改成 %s\n" % (message_id, fields.get("status")))
+                    return
+                captured = self._capture()
+                candidate = captured[1][message_id]
+                candidate.update(changes)
+                if candidate.get('client_id') is not None:
+                    entry = captured[2].get(dedupe_key(candidate['conversation'], candidate['client_id']))
+                    if entry is not None and entry['id'] == message_id:
+                        entry.update(status=candidate['status'], card=candidate.get('card'))
+            try:
+                self._flush(captured, strict=True)
+            except OSError as error:
+                if strict:
+                    raise
+                sys.stderr.write("消息记录写不下去，保留上次已保存的状态：%s\n" % error)
+                return
+            with self._changed:
                 message.update(changes)
                 self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 captured = self._capture()
-            self._changed.notify_all()
-        if captured is not None:
+                self._changed.notify_all()
+            # 再把投影的新修订号写下去；操作状态和结果在上面公开之前已经落盘了。
             self._flush(captured, strict=strict)
 
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:

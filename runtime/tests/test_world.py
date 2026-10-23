@@ -242,6 +242,78 @@ class WorldTests(unittest.TestCase):
         self.assertIsInstance(saved["journal"], int)
         self.assertEqual(world.read(scenario.journal), [])
 
+    def test_appending_after_a_torn_tail_preserves_the_next_commit(self):
+        path = self.folder / "tail.jsonl"
+        first = {"id": "c1", "brief": "before"}
+        for tail in (b'{"n":2,"card":', b'{"text":"\xe4\xb8'):
+            with self.subTest(tail=tail):
+                path.write_bytes(b'')
+                journal = world.Journal(path, {}, 0, {"c1": first}, 1)
+                with path.open("ab") as stream:
+                    stream.write(tail)
+                records = world.read(path)
+                base = world.rebuild(records)
+                restarted = world.Journal(path, base, records[-1]["n"], base, 1)
+                restarted.record({"id": "c1", "brief": "after"}, 2)
+                self.assertEqual(world.rebuild(world.read(path))["c1"]["brief"], "after")
+                self.assertEqual([row["n"] for row in world.read(path)], [1, 2])
+
+    def test_a_complete_tail_without_newline_is_not_lost_on_append(self):
+        path = self.folder / "tail.jsonl"
+        first = {"id": "c1", "brief": "before"}
+        world.Journal(path, {}, 0, {"c1": first}, 1)
+        path.write_bytes(path.read_bytes().rstrip(b'\r\n'))
+        base = world.rebuild(world.read(path))
+        restarted = world.Journal(path, base, 1, base, 1)
+        restarted.record({"id": "c2", "brief": "after"}, 2)
+        self.assertEqual(set(world.rebuild(world.read(path))), {"c1", "c2"})
+
+    def test_a_failed_partial_append_can_be_retried_without_losing_data(self):
+        path = self.folder / 'retry.jsonl'
+        journal = world.Journal(path, {}, 0, {'c1': {'id': 'c1'}}, 1)
+        before = path.read_bytes()
+        write = world.os.write
+        calls = 0
+
+        def disk_full(fd, data):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return write(fd, data[:8])
+            raise OSError('disk full')
+
+        with mock.patch.object(world.os, 'write', side_effect=disk_full):
+            with self.assertRaises(OSError):
+                journal.record({'id': 'c2'}, 2)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(journal.n, 1)
+        journal.record({'id': 'c2'}, 2)
+        self.assertEqual(set(world.rebuild(world.read(path))), {'c1', 'c2'})
+
+    def test_missing_checkpoint_cannot_silently_replay_only_a_suffix(self):
+        state, last, highest = world.replay({}, [{'n': 65, 'id': 'c9', 'card': {'id': 'c9'}}])
+        self.assertEqual(state, {})
+        self.assertEqual((last, highest), (65, 9))
+
+    def test_readers_retry_when_compaction_changes_the_snapshot(self):
+        path = self.folder / "cards.json"
+        journal = world.journal_of(path)
+        world.durable_write(path, {"journal": 1, "cards": [{"id": "c1", "brief": "before"}]})
+        journal.write_text('', encoding='utf-8')
+        original = world.read
+        switched = False
+
+        def compact_during_read(target):
+            nonlocal switched
+            if not switched:
+                switched = True
+                world.durable_write(path, {"journal": 2, "cards": [{"id": "c1", "brief": "after"}]})
+                world.durable_write(journal, '')
+            return original(target)
+
+        with mock.patch.object(world, 'read', side_effect=compact_during_read):
+            self.assertEqual(world.current(path)[0]['brief'], 'after')
+
     def test_unknown_or_broken_records_are_ignored(self):
         state = world.rebuild([{"id": "c9", "set": {"state": "done"}}, {"no": "id"}, {"id": "c1", "removed": True}])
         self.assertEqual(state, {})

@@ -140,7 +140,7 @@ def replay(snapshot: Any, records: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict
     cards = snapshot.get("cards") if isinstance(snapshot.get("cards"), list) else []
     state = {card["id"]: _plain(card) for card in cards
              if isinstance(card, dict) and isinstance(card.get("id"), str)}
-    return replay_onto(state, snapshot.get("journal"), records)
+    return replay_onto(state, snapshot.get("journal", 0 if not snapshot else None), records)
 
 
 def replay_onto(state: Dict[str, Dict[str, Any]], applied: Any,
@@ -148,6 +148,10 @@ def replay_onto(state: Dict[str, Dict[str, Any]], applied: Any,
     """在快照的状态上重放编号大于 applied 的记录（就地改 state）。applied 不是整数：
     快照是 R3.2 之前写的、它就是权威，不重放，只数一数日志编号到了哪。"""
     legacy = not isinstance(applied, int) or isinstance(applied, bool)
+    if applied == 0 and not state and records and _number(records[0], 1) != 1:
+        # 没有快照、日志又不是从 1 开始：快照丢了，只剩后半截。不重放半截历史，
+        # 也不拒绝启动（丢了只是看不到旧卡）；epoch 会变，客户端从头同步。
+        legacy = True
     applied = 0 if legacy else applied
     last, highest = applied, 0
     for index, record in enumerate(records, 1):
@@ -164,13 +168,33 @@ def replay_onto(state: Dict[str, Dict[str, Any]], applied: Any,
     return state, last, highest
 
 
+def read_checkpoint(snapshot_path: Path, journal_path: Path) -> Tuple[Any, List[Dict[str, Any]]]:
+    """读一份前后一致的快照 + 日志；别的进程可能正在压缩日志。
+
+    写的一方先换快照、再截日志：读完日志再核一遍快照没变，旧快照就不会配上刚截过的日志。
+    一直在变就报一个可以重试的错。
+    """
+    def snapshot_bytes():
+        try:
+            return Path(snapshot_path).read_bytes()
+        except FileNotFoundError:
+            return b''
+
+    for _ in range(3):
+        before = snapshot_bytes()
+        records = read(journal_path)
+        if before == snapshot_bytes():
+            try:
+                return json.loads(before) if before else {}, records
+            except ValueError:
+                return {}, records
+    raise OSError("Checkpoint changed during read; retry")
+
+
 def current(snapshot_path: Path) -> List[Dict[str, Any]]:
     """只读：现在的卡（快照 + 重放）。给不在 Runtime 进程里的读者用；不改任何文件。"""
-    try:
-        raw = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        raw = {}
-    state, _last, _highest = replay(raw, read(journal_of(snapshot_path)))
+    raw, records = read_checkpoint(snapshot_path, journal_of(snapshot_path))
+    state, _last, _highest = replay(raw, records)
     return list(state.values())
 
 
@@ -209,7 +233,31 @@ class Journal:
         self._last = _plain(base)
         self.n = n
         self.pending = 0  # 快照之后又记了几条
+        self._failed = False
+        self._repair_tail()
         self.sync(cards, seq)
+
+    def _repair_tail(self) -> None:
+        """上次追加写到一半断了：只由写的一方在接着写之前修好（补换行或截掉残片）。"""
+        try:
+            with self._path.open('r+b') as handle:
+                data = handle.read()
+                if not data or data.endswith(b'\n'):
+                    return
+                boundary = data.rfind(b'\n') + 1
+                try:
+                    complete = isinstance(json.loads(data[boundary:]), dict)
+                except (ValueError, UnicodeError):
+                    complete = False
+                if complete:
+                    handle.seek(0, os.SEEK_END)
+                    handle.write(b'\n')
+                else:
+                    handle.truncate(boundary)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileNotFoundError:
+            pass
 
     def sync(self, cards: Dict[str, Dict[str, Any]], seq: int) -> None:
         """让日志的状态等于 cards：没经 record 记上的改动（启动时的重启标记、清理）补一条差量，
@@ -248,13 +296,30 @@ class Journal:
         self.pending = len(kept)
 
     def _append(self, entry: Dict[str, Any]) -> None:
+        if self._failed:
+            raise OSError("Journal append recovery failed; restart before writing")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         entry = dict(entry, n=self.n + 1)
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
-        with open(self._path, "a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
+        line = (json.dumps(entry, ensure_ascii=False) + "\n").encode('utf-8')
+        fd = os.open(str(self._path), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_BINARY', 0), 0o600)
+        start = os.fstat(fd).st_size
+        try:
+            remaining = memoryview(line)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("Journal write made no progress")
+                remaining = remaining[written:]
+            os.fsync(fd)
+        except OSError:
+            try:
+                os.ftruncate(fd, start)
+                os.fsync(fd)
+            except OSError:
+                self._failed = True
+            raise
+        finally:
+            os.close(fd)
         self.n += 1
         self.pending += 1
 

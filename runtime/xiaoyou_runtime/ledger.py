@@ -66,11 +66,11 @@ def _state(raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return state
 
 
-def _replayed(path: Path, raw: Any) -> Tuple[Dict[str, Dict[str, Any]], int, int]:
+def _replayed(path: Path, raw: Any, records=None) -> Tuple[Dict[str, Dict[str, Any]], int, int]:
     """(快照 + 日志重放出来的状态, 日志编号到了哪, 日志里见过的最大序号)"""
     raw = raw if isinstance(raw, dict) else {}
-    records = world.read(_journal(path))
-    state, last, _highest = world.replay_onto(_state(raw), raw.get("journal"), records)
+    records = world.read(_journal(path)) if records is None else records
+    state, last, _highest = world.replay_onto(_state(raw), raw.get("journal", 0 if not raw else None), records)
     seq = max([record["seq"] for record in records
                if isinstance(record.get("seq"), int) and not isinstance(record.get("seq"), bool)] + [0])
     return state, last, seq
@@ -79,11 +79,8 @@ def _replayed(path: Path, raw: Any) -> Tuple[Dict[str, Dict[str, Any]], int, int
 def current(path: Path) -> Dict[str, Any]:
     """只读：现在的消息记录（快照 + 日志），形状和 messages.json 一样。不改任何文件。"""
     path = Path(path)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        raw = {}
-    state, _last, seq = _replayed(path, raw)
+    raw, records = world.read_checkpoint(path, _journal(path))
+    state, _last, seq = _replayed(path, raw, records)
     saved = raw.get("seq") if isinstance(raw, dict) else 0
     return {"format": FORMAT, "seq": max(seq, saved if isinstance(saved, int) else 0),
             "messages": [item for key, item in state.items() if key.startswith("m:")],

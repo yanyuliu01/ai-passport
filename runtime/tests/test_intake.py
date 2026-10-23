@@ -98,7 +98,7 @@ class IntakeTests(TempDirCase):
         self.codex.gate.set()
         # 等被停的帮手线程自己收完尾（它会记一条 cancelled 的进展）。
         log = self.store.state_dir / "cards.log.jsonl"
-        self.assertTrue(until(lambda: '"phase": "cancelled"' in log.read_text()))
+        self.assertTrue(until(lambda: '"phase": "cancelled"' in log.read_text(encoding="utf-8")))
         self.assertTrue(until(lambda: not self.xiaoyou._tasks.active(slow["card"])))
         for card_id in (handed["card"], slow["card"]):
             self.assertTrue(until(lambda card_id=card_id: all(
@@ -126,12 +126,12 @@ class IntakeTests(TempDirCase):
 
     def snapshot(self):
         state = self.store.state_dir
-        log = [json.loads(line) for line in (state / "cards.log.jsonl").read_text().splitlines() if line.strip()]
+        log = [json.loads(line) for line in (state / "cards.log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
         # cards.json 是定期快照（R3.2）：先看快照 + 日志重放出来的，再写一份快照对拍。
         live = world.current(state / "cards.json")
         with self.xiaoyou.cards._changed:
             self.xiaoyou.cards._save()
-        cards = json.loads((state / "cards.json").read_text())
+        cards = json.loads((state / "cards.json").read_text(encoding="utf-8"))
         self.assertEqual(live, cards["cards"])
         cards.pop("journal")
         tokens = {}
@@ -142,7 +142,7 @@ class IntakeTests(TempDirCase):
         got = self.snapshot()
         if os.environ.get("INTAKE_GOLDEN_WRITE") == "1":
             GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
-        self.assertEqual(json.loads(GOLDEN.read_text()), got)
+        self.assertEqual(json.loads(GOLDEN.read_text(encoding="utf-8")), got)
 
     def test_a_writer_stamps_where_a_write_came_from(self):
         writer = self.xiaoyou.intake.writer("owner", actor="app")
@@ -157,7 +157,7 @@ class IntakeTests(TempDirCase):
         self.assertNotIn("changed_by", plain)
         self.assertEqual(writer.cards, self.xiaoyou.record.cards)
         # The log carries the same provenance on the messages.
-        log = (self.store.state_dir / "cards.log.jsonl").read_text()
+        log = (self.store.state_dir / "cards.log.jsonl").read_text(encoding="utf-8")
         self.assertIn('"provenance": {"actor": "app", "cause": "m9", "source": "owner"}',
                       json.dumps([json.loads(line) for line in log.splitlines()], sort_keys=True, ensure_ascii=False))
 
@@ -204,7 +204,7 @@ class IntakeTests(TempDirCase):
     def test_requests_and_helper_activity_carry_their_source(self):
         self.play()
         events = [json.loads(line) for line in
-                  (self.store.state_dir / "cards.log.jsonl").read_text().splitlines()]
+                  (self.store.state_dir / "cards.log.jsonl").read_text(encoding="utf-8").splitlines()]
         first = events[0]
         self.assertEqual(first["provenance"]["source"], "owner")
         self.assertEqual(first["provenance"]["cause"] + ":you", first["id"])

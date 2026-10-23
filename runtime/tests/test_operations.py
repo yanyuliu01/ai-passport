@@ -6,6 +6,7 @@
 import json
 import random
 import sys
+import threading
 import unittest
 from collections import OrderedDict
 from pathlib import Path
@@ -57,6 +58,18 @@ def on_disk(path):
 
 
 class LedgerJournalTests(TempDirCase):
+    def test_first_snapshot_failure_does_not_lose_an_accepted_message(self):
+        path = self.folder / 'messages.json'
+        ledger = Ledger(path)
+        messages = OrderedDict(m1={'id': 'm1', 'conversation': 'default', 'status': 'queued', 'events': []})
+        dedupe = OrderedDict({dedupe_key('default', 'retry'): {
+            'id': 'm1', 'conversation': 'default', 'client_id': 'retry', 'hash': 'same'}})
+        with mock.patch.object(ledger, 'snapshot', side_effect=OSError('disk unavailable')):
+            ledger.save(messages, dedupe, 1)
+        restored, identities, _ = Ledger(path).load()
+        self.assertIn('m1', restored)
+        self.assertIn(dedupe_key('default', 'retry'), identities)
+
     def setUp(self):
         super().setUp()
         patch = mock.patch.object(world, "SNAPSHOT_EVERY", 7)
@@ -233,6 +246,45 @@ class OperationServiceTests(TempDirCase):
         self.assertEqual((again["status"], again["operation_state"], again["rev"]),
                          ("done", "succeeded", done["rev"]))
         self.assertEqual(self.disk(store, done["id"])["operation_state"], "succeeded")
+
+    def test_terminal_state_is_not_visible_until_its_journal_commit(self):
+        service, agent, _, store = self.start()
+        agent.gate.clear()
+        sent = service.submit('finish slow')
+        self.assertTrue(until(lambda: sent['id'] in service._messages
+                              and service.get(sent['id'])['status'] == 'running'))
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        original = service._ledger.save
+
+        def pause_terminal(messages, dedupe, seq):
+            if messages[sent['id']]['operation_state'] == 'succeeded':
+                entered.set()
+                if not release.wait(5):
+                    raise OSError('test commit timed out')
+            return original(messages, dedupe, seq)
+
+        with mock.patch.object(service._ledger, 'save', side_effect=pause_terminal):
+            agent.gate.set()
+            self.assertTrue(entered.wait(5))
+            try:
+                self.assertEqual(service.get(sent['id'])['status'], 'running')
+                self.assertEqual(self.disk(store, sent['id'])['operation_state'], 'running')
+            finally:
+                release.set()
+            self.assertEqual(service.get(sent['id'], wait=5)['status'], 'done')
+
+    def test_failed_terminal_commit_keeps_the_last_durable_state(self):
+        service, agent, _, store = self.start()
+        agent.gate.clear()
+        sent = service.submit('keep running slow')
+        self.assertTrue(until(lambda: service.get(sent['id'])['status'] == 'running'))
+        with mock.patch.object(service._ledger, 'save', side_effect=OSError('disk full')):
+            service._update(sent['id'], status='done', reply='must not be announced')
+        self.assertEqual(service.get(sent['id'])['status'], 'running')
+        self.assertEqual(self.disk(store, sent['id'])['operation_state'], 'running')
+        agent.gate.set()
+        self.assertEqual(service.get(sent['id'], wait=5)['status'], 'done')
 
     def test_restart_continues_pending_once_and_marks_started_work_unknown(self):
         service, agent, first, store = self.start()
