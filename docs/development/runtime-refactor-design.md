@@ -377,3 +377,21 @@ is how effortless yet conservative it makes **pairing, identity and disconnectio
 **Not taken:** asking the user to switch off and re-pair when an address changes (our mesh distributes
 routes automatically); depending on third-party cloud push; having no relay, so that nothing works
 when the host computer is off (we have the encrypted relay and several computers).
+
+### 8.3 Additions: six gaps the original design did not cover
+
+The two tables above mostly confirm the original design. The six items below are real gaps, in
+order of importance.
+
+| # | Content | Learned from | Step |
+| --- | --- | --- | --- |
+| 1 | **Conversation responder lease + fencing token.** Within a lease period each conversation is answered by exactly one computer (whoever accepts the conversation's first message becomes its first responder). The responder renews by heartbeat; once it has been offline past the lease, new messages go to another computer, while work in progress is not moved and is queried or marked unknown as in section 1.5. Every change of responder increments a token; writes carry the token and stale tokens are rejected, so an old responder waking from sleep cannot answer with outdated context. This is what makes "the phone connects only to Xiaoyou" hold; otherwise one message may be answered by both computers or by neither | Raft's leader lease and term | R4 (automatic connection) defines the rule and lease; R6 (agent loop) checks the token at the entry of `Loop.step` |
+| 2 | **Deterministic simulation tests.** Sync, the mesh and request recovery are tested with a controllable fake clock and fake network (drops, reordering, duplicates, disconnects, a computer crashing and restarting), replayed from a fixed seed instead of real threads and waits. A failure reproduces from the same seed | etcd-raft's deterministic testing approach | Required for all new logic from R3; sync and mesh in R4 must be covered |
+| 3 | **A new computer catches up before working.** A computer joining the mesh first only syncs and takes no conversations (learner state); only after reaching the other nodes' committed position and loading the context it needs may it become a conversation's responder or accept handed-over tasks | Raft's learner nodes | R4 |
+| 4 | **One membership change at a time.** Adding a computer, revoking a phone or rotating an identity key happens one at a time, and the next starts only after the previous takes effect; taking effect means applied, not merely committed. A device returning from offline syncs the membership list before accepting remote commands | Raft's membership change rules | R4, implemented with the membership registry of the desktop plan |
+| 5 | **Segments for long conversations.** The main chat is split into segments: all history is kept, while the model's context takes the current segment + summaries of earlier segments + relevant retrieval. Commitments, watches and dispatched tasks stay bound to their segment and, when due, are delivered to the segment the owner is in now, without copying. This replaces the current "last 6 turns, last 5 cards" cut-off | DS-Bot-App's segments | R6 (`ContextBuilder`) |
+| 6 | **Smaller rules:** (1) routes the owner configured by hand (such as Funnel or a public address) take precedence and automatic route management never overwrites them; (2) local-only and link-local addresses are never offered to the phone as external routes; (3) preinstalling dsh and pi supports offline packages and rollback on failure, not only pinned versions and checksums; (4) after a helper performs an action with side effects, earlier reads are invalid and must be refreshed before the next step | DS-Bot-App's configuration precedence, address filtering, transactional install and re-read after action | (1)(2) R4; (3) the preinstall plan; (4) R6 (`Executor`) |
+
+All six borrow ideas only and bring in neither Raft's elections nor quorum: the responder is fixed by a
+rule (whoever accepts the first message), and the lease exists only for a safe handover when the
+responder is offline.
