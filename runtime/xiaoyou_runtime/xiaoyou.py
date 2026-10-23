@@ -771,6 +771,18 @@ class Xiaoyou:
         # 小幽网络（mesh.py）：别的 Runtime 的事在这里只有副本，补充、取消要交给那台。
         # 没加入网络时是 None。
         self.mesh: Optional[Any] = None
+        # 在界面上加的帮手（helpers.Registry，state/helpers.json）：和配置里的一起建起来。
+        # 记录坏了不挡启动：说一声，这台就先不能在界面上加帮手。
+        from . import helpers as helpers_module
+        from .agents import create as create_agent
+        self.helpers: Optional[Any] = None
+        try:
+            self.helpers = helpers_module.Registry(config.state_dir, config.base_dir,
+                                                   [agent.name for agent in agents])
+        except helpers_module.HelperError as error:
+            sys.stderr.write("界面上加的帮手读不出来：%s\n" % error)
+        for spec in self.helpers.specs() if self.helpers is not None else []:
+            self.add_agent(create_agent(spec))
 
     def set_remote_agents(self, agents: List[Agent]) -> None:
         """换上网络里别的 Runtime 的帮手（mesh.py 按谁在线随时更新）；本机的不动。"""
@@ -782,6 +794,26 @@ class Xiaoyou:
                 if agent.name not in self._agents:
                     self._agents[agent.name] = agent
                     self._order.append(agent.name)
+
+    def add_agent(self, agent: Agent) -> None:
+        """加一个本机帮手（helpers.Registry 记下的），立刻能派活。重名的不加。"""
+        with self._agents_lock:
+            if agent.name in self._agents:
+                raise ValueError("已经有叫 %s 的帮手了" % agent.name)
+            self._agents[agent.name] = agent
+            self._order.append(agent.name)
+
+    def remove_agent(self, name: str) -> bool:
+        """去掉一个本机帮手：已经在做的事做完为止，之后不再派给它。默认帮手不能去掉。"""
+        if name in (self._config.default_agent, self._config.voice_agent):
+            raise ValueError("%s 是默认帮手，不能去掉" % name)
+        with self._agents_lock:
+            agent = self._agents.get(name)
+            if agent is None or agent.type == "mesh":
+                return False
+            del self._agents[name]
+            self._order = [item for item in self._order if item != name]
+        return True
 
     @property
     def default_agent(self) -> str:

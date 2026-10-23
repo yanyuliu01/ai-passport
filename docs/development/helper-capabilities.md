@@ -77,3 +77,14 @@ Each turn gets its own key, revoked when the turn ends; the helper holds only th
 | 4 | pi injection (after checking); sharing capabilities between helpers if needed |
 
 The earlier approach, where each helper's configuration carried MCP commands and secrets that were passed to the harness as is, is withdrawn: secrets would reach the helper's process, and revocation could not take effect immediately. Per-helper skill directories (`skills`) stay.
+
+## 6. Adding helpers
+
+Desktop client Settings › Helpers › Add helper: pick a harness (pi, dsh, Codex, Claude Code), a model, then how to reach the model. Following Raft: helpers are added by people; a helper cannot add helpers or grant itself capabilities.
+
+- Endpoints: `GET /v1/helpers/options`, `POST /v1/helpers`, `POST /v1/helpers/<name>/remove` (see the [Runtime README](../../runtime/README.md)).
+- Added helpers are kept in `state/helpers.json`, validated by the same rules as helpers in `config.json`, usable at once and kept across restarts.
+- API key: written only to `state/helper-secrets/<name>.key` (readable by this account only); the helper reads it through the provider's own environment variable, and the key is never returned to clients. Codex supports only a subscription login for now, dsh only a key.
+- Subscription login: uses this harness's own login on this computer; the endpoint records the choice and does not log in on anyone's behalf.
+- Capability grants default to all for a new helper, as for the others.
+- Not done: syncing the helper list across computers (origin records, phase 2) and starting a login from the UI.

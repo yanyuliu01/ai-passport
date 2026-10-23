@@ -321,6 +321,47 @@ class Service:
             for agent in self._xiaoyou.agents()
         ]
 
+    def helper_options(self) -> Dict[str, Any]:
+        """添加帮手时能选什么：这台电脑装了哪些 harness、每种能怎么接入模型。"""
+        from . import helpers
+        added = self._xiaoyou.helpers.names() if self._xiaoyou.helpers is not None else []
+        return {"harnesses": helpers.options(), "added": added}
+
+    def helper_add(self, body: Any) -> Dict[str, Any]:
+        """加一个帮手（设置 › 帮手 › 添加帮手）：校验、记下、立刻能派活。Key 只写进本机文件。"""
+        from . import agents as agents_module
+        from .helpers import HelperError
+        registry = self._xiaoyou.helpers
+        if registry is None:
+            raise RequestError("这台 Runtime 没有开帮手登记")
+        if not isinstance(body, dict):
+            raise RequestError("请求体应为对象")
+        try:
+            spec = registry.add(body)
+        except HelperError as error:
+            raise RequestError(str(error))
+        agent = agents_module.create(spec)
+        try:
+            self._xiaoyou.add_agent(agent)
+        except ValueError as error:
+            registry.remove(spec.name)
+            raise RequestError(str(error))
+        # 启动检查（命令在不在、Key 读不读得到）不挡添加：如实回给界面，帮手照样登记。
+        return {"helper": registry.view(spec.name), "problem": agent.check()}
+
+    def helper_remove(self, name: Any) -> Dict[str, Any]:
+        from .helpers import HelperError
+        registry = self._xiaoyou.helpers
+        name = _name(name, "name")
+        if registry is None or name not in registry.names():
+            raise RequestError("没有在界面上加过叫 %s 的帮手" % name)
+        try:
+            self._xiaoyou.remove_agent(name)
+            registry.remove(name)
+        except (HelperError, ValueError) as error:
+            raise RequestError(str(error))
+        return {"removed": name}
+
     def usage(self, refresh: bool = False) -> Dict[str, Any]:
         """订阅额度和每个帮手的模型、档位。refresh 为 True 时现在就去问一次再答（慢）。"""
         if refresh:

@@ -73,3 +73,14 @@
 | 4 | pi 注入（核对后）；按需要再考虑帮手之间共享能力 |
 
 之前写的“每个帮手在配置里直接带 MCP 命令和密钥、原样传给 harness”的做法撤掉：密钥会进到帮手的进程里，收回也不能立刻生效。每个帮手的 skill 目录（`skills`）保留。
+
+## 6. 添加帮手
+
+电脑客户端 设置 › 帮手 › 添加帮手：选 harness（pi、dsh、Codex、Claude Code），选模型，再选接入方式。照 Raft 的规矩：帮手由人添加，帮手自己不能加帮手、不能给自己加能力。
+
+- 接口：`GET /v1/helpers/options`、`POST /v1/helpers`、`POST /v1/helpers/<名字>/remove`（见 [Runtime README](../../runtime/README.zh_CN.md)）。
+- 加的帮手记在 `state/helpers.json`，和 `config.json` 里的帮手用同一套校验，立刻能派活，重启后还在。
+- 填 Key：Key 只写进 `state/helper-secrets/<名字>.key`（只有本机账号能读），帮手按服务商自己的环境变量读，Key 不回给客户端。Codex 暂时只支持订阅登录，dsh 只支持 Key。
+- 订阅登录：用这台电脑上这个 harness 自己的登录；接口只记下方式，不替人登录。
+- 能力库的授权对新加的帮手默认全开，和其他帮手一样。
+- 还没做：多台电脑之间同步帮手列表（按产地记录，第 2 阶段）、在界面上发起登录。

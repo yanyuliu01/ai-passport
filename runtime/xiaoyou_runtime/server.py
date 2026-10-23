@@ -28,6 +28,10 @@
   POST /v1/cards/<编号>/cancel          取消一件事
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
+  GET  /v1/helpers/options              添加帮手时能选的 harness（装了没有、能怎么接入模型）
+  POST /v1/helpers                      {"name","harness","model","effort","access":"key"|"login","provider","key"}
+                                        加一个帮手，立刻能派活；Key 只写进本机文件，不回给客户端
+  POST /v1/helpers/<名字>/remove        去掉一个在界面上加的帮手
   GET  /v1/devices                      配对过的设备（不含凭据）和权限权威
   POST /v1/devices                      {"name","kind"} 配对一台设备，回一次性凭据 dev.<编号>.<密钥>
   POST /v1/devices/<编号>/revoke        撤销一台设备的凭据
@@ -477,6 +481,9 @@ def make_server(config: Config, service: Service,
                 mesh = getattr(service, "mesh", None)
                 self._send(200, mesh.status() if mesh is not None else {"peers": [], "enabled": False})
                 return
+            if parts == ["v1", "helpers", "options"]:
+                self._send(200, service.helper_options())
+                return
             if parts == ["v1", "devices"]:
                 self._send(200, {"devices": service.devices.list(), "authority": service.authority()})
                 return
@@ -718,6 +725,12 @@ def make_server(config: Config, service: Service,
                         self._fail(400, str(error))
                     except OSError:
                         self._fail(503, "审核记录未能写入，请刷新核实状态")
+                    return
+                if parts == ["v1", "helpers"]:
+                    self._send(201, service.helper_add(body))
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "remove":
+                    self._send(200, service.helper_remove(parts[2]))
                     return
                 if parts == ["v1", "devices"]:
                     body = body if isinstance(body, dict) else {}
