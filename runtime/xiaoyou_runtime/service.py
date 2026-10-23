@@ -65,7 +65,7 @@ SYNC_PAGE_ITEMS = 200
 SYNC_DELTA_WINDOW = 1000
 # 快照只给“现在”：所有事，每段对话最近这么多句话，每件事最近这么多条进展；更早的历史
 # 客户端自己缓存着，或者按需去翻（不再从头一页页追，见问题清单 N10）。
-SNAPSHOT_MESSAGES = 100
+SNAPSHOT_MESSAGES = 50
 SNAPSHOT_ACTIVITY = 20
 SNAPSHOT_BUDGET_BYTES = 128 * 1024
 FINISHED = ("done", "failed")
