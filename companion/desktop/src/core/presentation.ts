@@ -35,7 +35,7 @@ export function runtimeConversation(raw: unknown): Conversation | undefined {
     updatedAt: finite(row.updatedAt) ?? (finite(row.updated_at) || 0) * 1000,
     revision: finite(row.revision) || 0, metadataAt: finite(row.metadataAt) ?? (finite(row.metadata_at) || 0) * 1000,
     metadataRevision: finite(row.metadata_revision) ?? finite(row.metadataRevision) ?? 0, directoryId: String(row.directory_id || row.directoryId || ''), pinned: row.pinned === true, archived: row.archived === true,
-    origin: typeof row.origin === 'string' ? row.origin : '',
+    origin: typeof row.origin === 'string' ? row.origin : '', ...(row.title_source === 'pending' ? { pending: true } : {}),
     ...(row.context && typeof row.context === 'object' ? { context: row.context as Json } : {}) };
 }
 export function newerConversation(next: Conversation, old: Conversation): boolean {
@@ -71,8 +71,24 @@ export function mainMessages(messages: Message[], conversation: string): Message
     ? projection(message)!.placement === 'chat' : message.scope !== 'task' && message.kind !== 'activity'
     && !['desktop', 'external'].includes(message.source?.type || '')));
 }
+/** The only connection words the owner sees, shared with the phone: connected, cannot connect (retrying) or not paired. */
+export function connectionWord(paired: boolean, connected: boolean): string {
+  return !paired ? '需要配对' : connected ? '已连接' : '连不上，正在重试';
+}
+/** A side chat nobody has written in yet is not kept in the list, except the one open now. */
+export function listedSideChat(item: Conversation, open: string): boolean {
+  return item.id !== 'default' && !item.archived && (!item.pending || item.id === open);
+}
+/** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
+export const listedTask = (task: Json) => Boolean(task.agent) && !task.monitoring_only;
+export type WorkSection = 'waiting' | 'running' | 'ended';
+/** Three groups; a task whose state is unconfirmed has not ended, so it stays with the running ones. */
+export function workSection(task: Json): WorkSection {
+  if (activeTask(task)) return task.state === 'waiting' || (task.presentation as Json)?.group === 'waiting' ? 'waiting' : 'running';
+  return unverifiedTask(task) ? 'running' : 'ended';
+}
 export function taskLabel(state: string): string {
-  return ({ working: '进行中', talking: '正在回复', waiting: '等你决定', done: '已完成', failed: '未完成', cancelled: '已停止', unavailable: '连接中断', unknown: '状态待核实', turn_ended: '本轮已结束' } as Record<string, string>)[state] || '等待更新';
+  return ({ working: '进行中', talking: '正在回复', waiting: '等你确认', done: '已完成', failed: '未完成', cancelled: '已停止', unavailable: '连不上', unknown: '状态待确认', turn_ended: '本轮已结束' } as Record<string, string>)[state] || '等待更新';
 }
 
 /** One visible helper per product. Device routes and independent quota reports remain in details. */

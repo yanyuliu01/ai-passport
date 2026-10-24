@@ -100,7 +100,7 @@ public class AppPresentationTest {
         assertEquals(Arrays.asList(draft), helpers.get(0).dispatched);
         assertEquals(Arrays.asList(desktop), helpers.get(0).desktop);
         assertEquals(draft, helpers.get(0).current(true));
-        assertEquals("工作中", helpers.get(0).status(true));
+        assertEquals("在做", helpers.get(0).status(true));
         assertEquals("空闲", helpers.get(1).status(true));
         assertEquals("空闲", helpers.get(2).status(true));
     }
@@ -135,5 +135,17 @@ public class AppPresentationTest {
         assertNotEquals(AppPresentation.draftKey("one", null), AppPresentation.draftKey("one", "c1"));
         assertNotEquals(AppPresentation.draftKey("one", null, "ds"), AppPresentation.draftKey("one", null, "codex"));
         assertEquals(AppPresentation.draftKey("one", "c1", "ds"), AppPresentation.draftKey("one", "c1", "claude"));
+    }
+
+    @Test public void connectionHasThreeWordsAndEmptySideChatsAreNotListed() {
+        assertEquals("需要配对", AppPresentation.connection(false, false));
+        assertEquals("已连接", AppPresentation.connection(true, true));
+        assertEquals("连不上，正在重试", AppPresentation.connection(true, false));
+        java.util.Map<String, Object> empty = Json.parseObject("{\"id\":\"s1\",\"kind\":\"side\",\"title\":\"新旁聊\",\"title_source\":\"pending\"}");
+        assertFalse(AppPresentation.listedSideChat(empty, "default"));
+        assertTrue(AppPresentation.listedSideChat(empty, "s1"));
+        assertTrue(AppPresentation.listedSideChat(Json.parseObject("{\"id\":\"s2\",\"kind\":\"side\",\"title_source\":\"request\"}"), "default"));
+        assertFalse(AppPresentation.listedSideChat(Json.parseObject("{\"id\":\"s3\",\"kind\":\"side\",\"archived\":true}"), "s3"));
+        assertFalse(AppPresentation.listedSideChat(Json.parseObject("{\"id\":\"default\",\"kind\":\"main\"}"), "default"));
     }
 }

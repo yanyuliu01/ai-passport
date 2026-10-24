@@ -66,7 +66,7 @@ public class UsageEventsTest {
         assertEquals(40, UsageEvents.controlName(longLabel).length());
         assertEquals("connection", MainActivity.settingsName(0));
         assertEquals("notifications", MainActivity.settingsName(1));
-        assertEquals("preferences", MainActivity.settingsName(2));
+        assertEquals("developer", MainActivity.settingsName(2));
     }
 
     @Test public void fourQuickTapsOnOneSpotAreARageTap() {

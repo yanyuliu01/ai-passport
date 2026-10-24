@@ -55,7 +55,7 @@ try{
  await page.getByRole('button',{name:'继续确认 →',exact:true}).click();await page.getByRole('button',{name:'确认连接这个服务',exact:true}).click();await page.getByRole('button',{name:'进入小幽 →',exact:true}).click();
  await page.getByRole('heading',{name:'小幽在这里',exact:true}).waitFor();
  await page.screenshot({path:root+'/build/xiaoyou-phone-home.png'});
- await page.getByRole('button',{name:'继续主对话',exact:true}).click();
+ await page.locator('.composer').waitFor();
  await page.getByRole('heading',{name:'主对话',exact:true}).waitFor();await page.getByText('Codex',{exact:true}).first().waitFor();
  await page.screenshot({path:root+'/build/xiaoyou-shell-main.png'});
  if((await page.locator('.timeline').innerText()).includes('DO-NOT-SHOW'))throw new Error('Private session leaked into main chat');
@@ -64,9 +64,9 @@ try{
  await page.getByRole('button',{name:'Codex 的用量',exact:true}).first().click();await page.locator('.usage-modal').getByText('32%',{exact:true}).waitFor();
  await page.getByRole('button',{name:'关闭用量',exact:true}).click();
  await page.getByLabel('消息',{exact:true}).fill('主对话测试');await page.getByRole('button',{name:'发送',exact:true}).click();await page.getByText('隔离测试回应：主对话测试',{exact:true}).waitFor();
- await page.getByRole('button',{name:'工作记录',exact:false}).first().click();await page.getByRole('button',{name:'检查客户端连接状态',exact:false}).first().click();
+ await page.getByRole('button',{name:'在做的事',exact:false}).first().click();await page.getByRole('button',{name:'检查客户端连接状态',exact:false}).first().click();
  await page.getByText('读取测试状态',{exact:false}).waitFor();await page.screenshot({path:root+'/build/xiaoyou-shell-work.png'});
- await page.getByRole('button',{name:'查看原会话',exact:false}).click();await page.getByText('已记录的测试执行片段',{exact:true}).waitFor();if(await page.locator('textarea').count())throw new Error('Native transcript is editable');
+ await page.getByRole('button',{name:'原会话',exact:false}).click();await page.getByText('已记录的测试执行片段',{exact:true}).waitFor();if(await page.locator('textarea').count())throw new Error('Native transcript is editable');
  await page.getByRole('button',{name:'返回工作详情',exact:true}).click();
  await page.getByRole('button',{name:'补充要求',exact:true}).click();await page.locator('.task-target').waitFor();
  await page.getByLabel('消息',{exact:true}).fill('增加一条测试要求');await page.getByRole('button',{name:'发送',exact:true}).click();await wait(()=>posts.some(p=>p.card==='task-a'&&p.reply_scope==='main'));
@@ -77,12 +77,12 @@ try{
  await page.getByRole('button',{name:'添加照片或文件',exact:true}).click();await page.getByRole('menuitem',{name:'照片',exact:true}).waitFor();
  const plus=await page.getByRole('button',{name:'添加照片或文件',exact:true}).boundingBox(),send=await page.getByRole('button',{name:'发送',exact:true}).boundingBox();if(plus.x>=send.x)throw new Error('Attachment button is not before Send');
  await page.keyboard.press('Escape');
- await page.getByRole('button',{name:'允许这次操作',exact:true}).click();await wait(()=>decisions===1);await wait(()=>page.locator('.decision').count().then(n=>n===0));
+ await page.getByRole('button',{name:'允许这次',exact:true}).click();await wait(()=>decisions===1);await wait(()=>page.locator('.decision').count().then(n=>n===0));
  await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.setMinimumSize(600,500);w.setContentSize(760,780);});
  await page.getByRole('button',{name:'打开侧边栏',exact:true}).click();await page.locator('.sidebar-shade').waitFor();
  await page.getByRole('button',{name:'关闭侧边栏',exact:true}).click();
  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(1120,780));
- await page.getByRole('button',{name:'连接与设置',exact:true}).click();
+ await page.getByRole('button',{name:'设置',exact:true}).click();
  await page.getByRole('heading',{name:'让这台常开电脑承接通信',exact:true}).waitFor();
  const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const nodePort=probe.address().port;await new Promise(r=>probe.close(r));
  await page.getByLabel('节点监听端口',{exact:true}).fill(String(nodePort));

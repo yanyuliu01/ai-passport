@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
-import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation } from '../core/presentation.js';
+import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection } from '../core/presentation.js';
 import { allowedRPC } from '../core/peers.js';
 import type { Endpoint, Json, Message, SyncPage } from '../shared.js';
 const runtime = '1'.repeat(32), space = '2'.repeat(32);
@@ -173,6 +173,24 @@ test('shared presentation aliases and flags survive catalog updates independentl
   const parsed=runtimeConversation(raw)!;
   assert.equal(parsed.title,'owner alias');assert.equal(parsed.metadataRevision,7);
   assert.equal(parsed.directoryId,'chat-shared');assert.equal(parsed.pinned,true);assert.equal(parsed.archived,true);
+});
+test('five-entry lists: three connection words, no empty side chats, only handed-off work in three groups', () => {
+  assert.equal(connectionWord(false, false), '需要配对');
+  assert.equal(connectionWord(true, true), '已连接');
+  assert.equal(connectionWord(true, false), '连不上，正在重试');
+  const empty = runtimeConversation({ id: 'side-empty', title: '新旁聊', title_source: 'pending', created_at: 1 })!;
+  assert.equal(empty.pending, true);
+  assert.equal(listedSideChat(empty, 'default'), false);
+  assert.equal(listedSideChat(empty, 'side-empty'), true);
+  assert.equal(listedSideChat(runtimeConversation({ id: 'side-named', title: '图片上传', title_source: 'request', created_at: 1 })!, 'default'), true);
+  assert.equal(listedSideChat(runtimeConversation({ id: 'default', title: '', created_at: 1 })!, 'default'), false);
+  assert.equal(listedTask({ agent: 'codex', state: 'working' }), true);
+  assert.equal(listedTask({ agent: 'codex', state: 'working', monitoring_only: true }), false);
+  assert.equal(listedTask({ state: 'done' }), false);
+  assert.equal(workSection({ agent: 'codex', state: 'waiting' }), 'waiting');
+  assert.equal(workSection({ agent: 'codex', state: 'working' }), 'running');
+  assert.equal(workSection({ agent: 'codex', state: 'unknown' }), 'running');
+  assert.equal(workSection({ agent: 'codex', state: 'cancelled' }), 'ended');
 });
 test('metadata and native navigation RPC cannot carry execution input', () => {
   assert.equal(allowedRPC('POST','/v1/directory/native-id/metadata',{}),true);

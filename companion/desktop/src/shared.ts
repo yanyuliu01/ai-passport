@@ -87,7 +87,7 @@ export interface SpaceView {
   connections?: { runtime: string; name: string; local: boolean; connected: boolean; capabilities: string[] }[];
 }
 export interface Conversation { id: string; title: string; createdAt: number; updatedAt?: number; revision?: number;
-  metadataAt?: number; metadataRevision?: number; directoryId?: string; pinned?: boolean; archived?: boolean; origin?: string; context?: Json; unread?: boolean }
+  metadataAt?: number; metadataRevision?: number; directoryId?: string; pinned?: boolean; archived?: boolean; origin?: string; context?: Json; unread?: boolean; pending?: boolean }
 export interface HelperView {
   members?: HelperView[];
   id: string; runtime: string; device: string; name: string; label: string; type: string;

@@ -106,6 +106,10 @@ final class NavIconView extends View {
         } else if (icon.equals("device")) {
             canvas.drawRoundRect(new RectF(5, 3, 19, 21), 4, 4, paint);
             canvas.drawRoundRect(new RectF(8, 6, 16, 12), 1.5f, 1.5f, paint);
+        } else if (icon.equals("info")) {
+            canvas.drawCircle(12, 12, 9, paint);
+            canvas.drawLine(12, 11, 12, 16.5f, paint);
+            paint.setStyle(Paint.Style.FILL); canvas.drawCircle(12, 7.8f, 1.1f, paint);
         } else if (icon.equals("computer")) {
             canvas.drawRoundRect(new RectF(3.5f, 4.5f, 20.5f, 15.5f), 2, 2, paint);
             canvas.drawLine(2, 19, 22, 19, paint);

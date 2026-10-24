@@ -260,9 +260,10 @@ an auxiliary failure never poses as a disconnect; recap material never quotes re
 ## 12. Owner decisions needed
 
 - The minimum supported Runtime version (decides how much compatibility code can go).
-- Whether merging home and main chat (I2) conflicts with section 7 of
+- ~~Whether merging home and main chat (I2) conflicts with section 7 of
   [conversation presentation](conversation-presentation.md), which gives the phone home a voice
-  bar and generated content, and which one wins.
+  bar and generated content, and which one wins.~~ Decided 10-24: one entry and one conversation
+  in voice and text forms; see section 8 of the [complete plan](xiaoyou-agent-model.md).
 - Whether sync delivers unfinished messages often enough to replace the per-message event stream
   (the precondition for C1; measure first).
 - Whether the phone still needs to upload history (C10); remove it if not.

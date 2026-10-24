@@ -38,7 +38,7 @@ export function HelperPill({ helper, tasks, onUsage, onTask }: { helper: HelperV
   const task = helperTask(helper, tasks), waiting = task?.state === 'waiting';
   return <div className={'helper-pill ' + (waiting ? 'waiting' : task ? 'running' : '')}>
     <QuotaAvatar helper={helper} onClick={onUsage} />
-    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{waiting ? '等你决定' : task ? '进行中' : helper.connected ? '暂无工作' : '离线'}</small></button>
+    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{waiting ? '等你确认' : task ? '在做' : helper.connected ? '空闲' : '连不上'}</small></button>
   </div>;
 }
 export function elapsed(value: unknown): string {

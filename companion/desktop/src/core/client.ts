@@ -450,7 +450,7 @@ export class DesktopClient {
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);
-    return { version: '0.1.7', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
+    return { version: '0.1.8', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
       background: true, runtime: this.runtime, pairing: this.pairing };
   }
   refresh(): void {

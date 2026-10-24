@@ -20,7 +20,7 @@ export function HelperSettings({ space, helpers, disabled, onRun }: { space?: Sp
   useEffect(reload, [space?.id, helpers.length]);
   return <article className="settings-card vertical">
     {helpers.map(item => { const local = (item.members || [item]).find(member => member.runtime === managedRuntime && added.includes(member.name)); return <div className="helper-line" key={item.id}><Avatar type={item.type} size={26} /><span>{item.label}</span>
-      <small className={item.connected ? 'ok' : ''}>{item.connected ? item.model || '已就绪' : '离线'}</small>
+      <small className={item.connected ? 'ok' : ''}>{item.connected ? item.model || '已就绪' : '连不上'}</small>
       {local && <button disabled={disabled || !space} onClick={() => setPermissions(local.name)}>工具权限</button>}
       {local && <button disabled={disabled || !space} onClick={() => space && void onRun(async () => { await window.xiaoyou.removeHelper({ space: space.id, name: local.name }); reload(); })}>移除</button>}</div>; })}
     {!helpers.length && <p>还没有帮手</p>}

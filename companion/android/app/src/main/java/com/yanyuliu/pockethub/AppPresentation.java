@@ -171,7 +171,7 @@ final class AppPresentation {
         String status(boolean connected) {
             switch (mode(connected)) {
                 case "waiting": return "等你确认";
-                case "working": return "工作中";
+                case "working": return "在做";
                 case "desktop": return "电脑上在跑";
                 default: return "空闲";
             }
@@ -233,6 +233,21 @@ final class AppPresentation {
     static List<String> settledBubbles(String text, boolean done) {
         if (done || text == null) return bubbles(text);
         return bubbles(text.substring(0, Markdown.lastBreak(text)));
+    }
+
+    /**
+     * The only connection words the owner sees: connected, cannot connect (retrying on its own) or not paired.
+     * A failed helper request is reported where it happened, never here.
+     */
+    static String connection(boolean paired, boolean connected) {
+        return !paired ? "需要配对" : connected ? "已连接" : "连不上，正在重试";
+    }
+
+    /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
+    static boolean listedSideChat(Map<String, Object> item, String open) {
+        String id = Json.string(item, "id");
+        if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived")) return false;
+        return !Json.string(item, "title_source").equals("pending") || id.equals(open);
     }
 
     static String draftKey(String runtime, String task) {

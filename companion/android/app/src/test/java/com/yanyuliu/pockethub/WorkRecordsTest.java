@@ -58,4 +58,17 @@ public class WorkRecordsTest {
         assertEquals(WorkRecords.Group.HISTORY,WorkRecords.group(c,true,NOW));
         assertEquals("native-source",c.nativeSources.get(0));
     }
+
+    @Test public void workListShowsOnlyHandedOffWorkInThreeSections() {
+        Card observed = card("\"state\":\"working\",\"source\":\"desktop\",\"observed_at\":" + (NOW - 2));
+        assertFalse(WorkRecords.listed(observed));
+        Card chat = card("\"state\":\"done\"");
+        assertFalse(WorkRecords.listed(chat));
+        Card working = card("\"state\":\"working\",\"agent\":\"codex\"");
+        assertTrue(WorkRecords.listed(working));
+        assertEquals(WorkRecords.Section.RUNNING, WorkRecords.section(working, true, NOW));
+        assertEquals(WorkRecords.Section.RUNNING, WorkRecords.section(working, false, NOW));
+        assertEquals(WorkRecords.Section.WAITING, WorkRecords.section(card("\"state\":\"waiting\",\"agent\":\"codex\""), true, NOW));
+        assertEquals(WorkRecords.Section.ENDED, WorkRecords.section(card("\"state\":\"cancelled\",\"agent\":\"cc\""), true, NOW));
+    }
 }

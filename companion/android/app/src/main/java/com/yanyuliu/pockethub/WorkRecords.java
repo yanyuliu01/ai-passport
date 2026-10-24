@@ -27,6 +27,20 @@ final class WorkRecords {
         return card.active() ? Group.RUNNING : Group.HISTORY;
     }
 
+    /** The three groups 在做的事 shows; an unconfirmed task has not ended, so it stays with the running ones. */
+    enum Section { WAITING, RUNNING, ENDED }
+
+    /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
+    static boolean listed(Card card) { return AppPresentation.dispatched(card); }
+
+    static Section section(Card card, boolean connected, double now) {
+        switch (group(card, connected, now)) {
+            case WAITING: return Section.WAITING;
+            case HISTORY: return Section.ENDED;
+            default: return Section.RUNNING;
+        }
+    }
+
     static String title(Card card) {
         if (!card.title.isEmpty() && !card.titleSource.equals("fallback")) return card.title;
         return card.monitoringOnly ? "未命名 " + AppPresentation.name(AppPresentation.owner(card)) + " 会话" : "未命名工作";
@@ -48,7 +62,7 @@ final class WorkRecords {
     static String status(Card card, boolean connected, double now, ZoneId zone) {
         Group group = group(card, connected, now);
         if (group == Group.UNCERTAIN) {
-            String label = connected ? "状态待确认" : "连接中断，状态待确认";
+            String label = connected ? "状态待确认" : "连不上，状态待确认";
             double at = card.monitoringOnly ? card.observedAt : card.lastMeaningfulAt;
             return label + (valid(at) ? " · 上次记录 " + time(at, now, zone) : " · 尚无活动记录");
         }

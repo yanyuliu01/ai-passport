@@ -115,7 +115,7 @@ final class OnDeviceSpeech {
             // The models come from the speech resource pack (AppPacks), not from the APK, so
             // app updates do not carry them again. Files are read from disk: no AssetManager.
             if (!AppPacks.ready(context, AppPacks.SPEECH, AppPacks.SPEECH_FILES))
-                throw new IllegalStateException("手机语音模型还没下载，去「连接与设置 → App 更新」下载");
+                throw new IllegalStateException("手机语音模型还没下载，去「设置 › 手机语音模型」下载");
             java.io.File base = AppPacks.dir(context, AppPacks.SPEECH);
             try {
                 OnlineModelConfig previewModel = new OnlineModelConfig();

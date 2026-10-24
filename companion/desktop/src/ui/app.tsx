@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, PhoneConnection } from '../shared';
-import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue } from '../core/presentation';
+import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -10,9 +10,9 @@ import { Onboarding } from './onboarding';
 import './style.css';
 
 declare global { interface Window { xiaoyou: DesktopAPI } }
-const empty: ClientView = { version: '0.1.7', spaces: [], selectedSpace: '', background: true,
+const empty: ClientView = { version: '0.1.8', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
-type Page = 'home' | 'chat' | 'work' | 'settings' | 'native';
+type Page = 'chat' | 'work' | 'settings' | 'native';
 type TaskRef = { id: string; runtime: string };
 function App() {
   const [directoryOpen,setDirectoryOpen]=useState(false);
@@ -20,7 +20,7 @@ function App() {
   const [page, setPage] = useState<Page>('chat'), [sidebarOpen, setSidebarOpen] = useState(false);
   const [text, setText] = useState(''), [problem, setProblem] = useState(''), [working, setWorking] = useState(false), [sending, setSending] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskRef>(), [target, setTarget] = useState<TaskRef & { legacy: boolean }>();
-  const [historyLimit, setHistoryLimit] = useState(100), [completedOpen, setCompletedOpen] = useState(false), [unverifiedOpen, setUnverifiedOpen] = useState(false), [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const [historyLimit, setHistoryLimit] = useState(100), [completedOpen, setCompletedOpen] = useState(false), [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [usage, setUsage] = useState<string>(), [detail, setDetail] = useState<Json>(), [detailError, setDetailError] = useState(''), [allSteps, setAllSteps] = useState(false), [highlight, setHighlight] = useState('');
   const detailGeneration = useRef(0), selection = useRef('');
   const bottom = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
@@ -39,11 +39,12 @@ function App() {
     || messages.some(message => ['queued', 'streaming'].includes(message.status) && message.author?.kind !== 'owner');
   const waitingProblem = space?.pending.find(item => item.state === 'accepted' && item.error &&
     (target?.legacy ? item.payload.card === target.id && item.runtimeId === target.runtime : !item.payload.card || item.payload.reply_scope === 'main'))?.error;
-  const awaiting = tasks.filter(task => activeTask(task) && task.state === 'waiting'), running = tasks.filter(task => activeTask(task) && task.state !== 'waiting');
-  const unverified = tasks.filter(unverifiedTask).slice().reverse();
-  const completed = tasks.filter(task => !activeTask(task) && !unverifiedTask(task)).slice().reverse();
+  const work = tasks.filter(listedTask);
+  const awaiting = work.filter(task => workSection(task) === 'waiting'), running = work.filter(task => workSection(task) === 'running');
+  const completed = work.filter(task => workSection(task) === 'ended').slice().reverse();
+  const connection = space?.catchingUp ? '正在同步' : connectionWord(Boolean(space), Boolean(space?.connected));
   selection.current = space?.id + '/' + space?.selectedConversation;
-  const title = page === 'home' ? '首页' : page === 'chat' ? target?.legacy ? '任务续聊' : conversation?.id === 'default' ? '主对话' : conversation?.title || '主对话'
+  const title = page === 'chat' ? target?.legacy ? '任务续聊' : conversation?.id === 'default' ? '主对话' : conversation?.title || '主对话'
     : page === 'work' ? '在做的事' : page === 'native' ? '原会话记录' : '设置';
   const messageVersion = messages.filter(message => ['final', 'done', 'failed', 'cancelled'].includes(message.status)).map(message => message.id + ':' + message.rev).join('|');
   useEffect(() => {
@@ -59,7 +60,7 @@ function App() {
   useEffect(() => {
     let current = true; detailGeneration.current++; setDetail(undefined); setDetailError(''); setAllSteps(false);
     if (!space || !selectedTask || !['work', 'native'].includes(page)) return;
-    void window.xiaoyou.taskDetail({ space: space.id, ...selectedTask }).then(value => { if (current) setDetail(value); }).catch(() => { if (current) setDetailError('暂时无法读取进展。已有工作记录仍保留，可稍后重试。'); });
+    void window.xiaoyou.taskDetail({ space: space.id, ...selectedTask }).then(value => { if (current) setDetail(value); }).catch(() => { if (current) setDetailError('进展暂时读不到，稍后会自动重试。'); });
     return () => { current = false; };
   }, [space?.id, selectedTask?.id, selectedTask?.runtime, selected?.rev, selected?.seq, page]);
   useEffect(() => {
@@ -109,21 +110,19 @@ function App() {
   return <div className={'shell ' + (sidebarOpen ? 'sidebar-is-open' : '')}>
     {sidebarOpen && <button className="sidebar-shade" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)} />}
     <aside className="sidebar" aria-label="小幽导航">
-      <div className="identity"><Avatar size={42} /><div><strong>小幽</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{space?.connected ? '记录已连接' : '离线 · 保留本机记录'}</small></div></div>
+      <div className="identity"><Avatar size={42} /><div><strong>小幽</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</small></div></div>
       <button className={'nav ' + (page === 'chat' && conversation?.id === 'default' && !target?.legacy ? 'selected' : '')} onClick={() => void chooseConversation('default')}><Icon name="chat" /><span>主对话</span>{space?.conversations.find(item => item.id === 'default')?.unread && page !== 'chat' && <i className="unread-dot" />}</button>
-      <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length} 件等你</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
+      <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length}</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
       <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyou.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
-      <div className="side-conversations">{space?.conversations.filter(item => item.id !== 'default' && !item.archived).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{shortTime(item.updatedAt)}</small>}</button>)}
-        {!space?.conversations.some(item => item.id !== 'default') && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
+      <div className="side-conversations">{space?.conversations.filter(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{shortTime(item.updatedAt)}</small>}</button>)}
+        {!space?.conversations.some(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')) && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
       <div className="side-heading helpers-heading"><span>帮手</span></div>
-      <div className="side-helpers">{helpers.map(item => <div className="side-helper" key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => { const task = tasks.find(task => helperMatchesTask(item, task) && activeTask(task)); task ? openTask(task) : setUsage(item.id); }}><span>{item.label}</span><small>{tasks.some(task => helperMatchesTask(item, task) && activeTask(task)) ? tasks.some(task => helperMatchesTask(item, task) && task.state === 'waiting') ? '等你决定' : '进行中' : item.connected ? '暂无工作' : '离线'}</small></button></div>)}
+      <div className="side-helpers">{helpers.map(item => <div className="side-helper" key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => { const task = tasks.find(task => helperMatchesTask(item, task) && activeTask(task)); task ? openTask(task) : setUsage(item.id); }}><span>{item.label}</span><small>{tasks.some(task => helperMatchesTask(item, task) && activeTask(task)) ? tasks.some(task => helperMatchesTask(item, task) && task.state === 'waiting') ? '等你确认' : '在做' : item.connected ? '空闲' : '连不上'}</small></button></div>)}
         {!helpers.length && <p className="side-empty">尚无帮手数据</p>}</div>
       <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>设置</span></button><small>小幽桌面版 {view.version}</small></div>
     </aside>
-    <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')} title="服务连接与模型实际可用性分别验证"><i className={'dot ' + (space?.connected ? 'online' : '')} />{space?.catchingUp ? '正在同步记录' : space?.connected ? '记录已同步' : '离线记录'}</button>}</header>
-      {page !== 'home' && page !== 'chat' && <button className="return-home" onClick={() => go('chat')}><Icon name="chat" />返回主对话</button>}
+    <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')}><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</button>}</header>
       {problem && <div role="alert" className="alert"><span>{problem}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
-      {page === 'home' && <section className="home-page"><Avatar size={156} /><h2>小幽在这里</h2><p>不管在哪台设备，接着聊。</p><div className="home-helpers">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}</div><div className="home-actions"><button className="primary" onClick={() => void chooseConversation('default')}><Icon name="chat" />继续主对话</button><button onClick={() => go('settings')}><Icon name="phone" />连接手机</button></div><p className="home-connection-note">{space?.connected ? '电脑记录已连接 · 手机连接需单独验证' : '电脑连接恢复中 · 本机记录保留'}</p>{awaiting.length > 0 && <button className="quiet-button" onClick={() => go('work')}>{awaiting.length} 件事等你决定 <Icon name="next" /></button>}</section>}
       {page === 'chat' && <>
         <section className="companion-header"><Avatar size={64} /><div className="companion-intro"><div><strong>小幽</strong><span>换个地方，接着聊。</span></div><div className="helper-pills">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}{!helpers.length && <small>帮手信息暂未上报</small>}</div></div></section>
         <section className="timeline" aria-label="聊天记录" aria-live="polite">
@@ -146,25 +145,24 @@ function App() {
             <button className="icon-button" type="button" aria-label="语音输入" title="语音输入暂不可用" onClick={() => setProblem('当前桌面版本暂未接入语音输入，请先使用文字。')}><Icon name="mic" /></button>
             <div className="attachment-wrap"><button className="icon-button" type="button" aria-label="添加照片或文件" aria-expanded={attachmentsOpen} onClick={() => setAttachmentsOpen(value => !value)}><Icon name="plus" /></button>{attachmentsOpen && <div className="attachment-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送照片，可在手机 App 发送。'); }}><Icon name="image" />照片</button><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送文件。'); }}><Icon name="file" />文件</button></div>}</div>
             <button className="send" type="submit" aria-label="发送" disabled={!space || !text.trim() || sending}><Icon name="up" /></button>
-          </form><p className="compose-hint">{space?.connected ? 'Enter 发送 · Shift + Enter 换行' : '离线时消息先保存在本机，连接恢复后再发送'}</p></div>
+          </form><p className="compose-hint">{space?.connected ? 'Enter 发送 · Shift + Enter 换行' : '连不上，消息先存在本机，连上后自动发送'}</p></div>
       </>}
-      {page === 'work' && <section className="work-page"><div className="work-list"><h2>等你决定{awaiting.length ? ' · ' + awaiting.length : ''}</h2>{awaiting.length === 0 && <p className="quiet-empty">暂时没有需要确认的事</p>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
-        <h2>进行中{running.length ? ' · ' + running.length : ''}</h2>{running.length === 0 && <p className="quiet-empty">现在没有进行中的工作</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
-        {unverified.length > 0 && <><button className="completed-toggle" aria-expanded={unverifiedOpen} onClick={() => setUnverifiedOpen(value => !value)}><Icon name={unverifiedOpen ? 'down' : 'next'} />状态待确认 {unverified.length}</button>{unverifiedOpen && unverified.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</>}
-        <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已完成 / 已结束 {completed.length}</button>{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
-        <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一项工作')}</h2></div>
-          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{String(selected.progress || selected.brief || '暂无新的进展')}</p><small>{selected._staleEpoch ? '历史记录，状态待核实' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
+      {page === 'work' && <section className="work-page"><div className="work-list">{awaiting.length > 0 && <h2>等你确认</h2>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+        {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小幽会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+        {completed.length > 0 && <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已结束 {completed.length}</button>}{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
+        <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一件事')}</h2></div>
+          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{String(selected.progress || selected.brief || '暂无新的进展')}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
           {space?.approvals.filter(approval => approval._runtimeId === selected._runtimeId && (approval.card === selected.id || approval.task === selected.id || (selected.approval as Json | undefined)?.id === approval.id)).map(approval => <Decision key={String(approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyou.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
-          <div className="task-detail-actions"><button className="primary" disabled={working || Boolean(selected._staleEpoch) || Boolean(selected.monitoring_only)} onClick={() => void run(() => supplement(selected))}>{space?.connections?.find(item => item.runtime === selected._runtimeId)?.capabilities.includes('task_audit') ? '补充要求' : '继续任务'}</button>
+          <div className="task-detail-actions"><button className="primary" disabled={working || Boolean(selected._staleEpoch) || Boolean(selected.monitoring_only)} onClick={() => void run(() => supplement(selected))}>补充要求</button>
             {canOpenNative(selected, space) && <button disabled={working} onClick={() => space && void run(() => window.xiaoyou.openNative({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}>在 Codex 打开 <Icon name="external" /></button>}</div>
-          <div className="progress-heading"><h3>最近进展</h3><button className="quiet-button" onClick={() => setAllSteps(value => !value)}>{allSteps ? '收起' : '全部'}</button></div>
-          {detailError && <p className="quiet-empty">{detailError}</p>}{Boolean(detail?.cached) && <p className="quiet-empty">本机缓存，尚未核实最新状态</p>}
+          <div className="progress-heading"><h3>最近进展</h3><button className="quiet-button" onClick={() => setAllSteps(value => !value)}>{allSteps ? '收起' : '全部' + (progressCount(detail) ? ' ' + progressCount(detail) : '')}</button></div>
+          {detailError && <p className="quiet-empty">{detailError}</p>}{Boolean(detail?.cached) && <p className="quiet-empty">连不上，显示上次的记录</p>}
           <Progress detail={detail} all={allSteps} />
           {allSteps && detail?.more === true && <button className="quiet-button" onClick={() => space && selectedTask && void readAction(async () => { const generation = detailGeneration.current; const previous = await window.xiaoyou.taskDetail({ space: space.id, ...selectedTask, before: Number(detail.before) }); if (generation !== detailGeneration.current) return; setDetail(value => ({ ...previous, events: [...(previous.events as Json[] || []), ...(value?.events as Json[] || [])] })); })}>加载更早进展</button>}
-          <div className="task-meta"><span>{space?.connections?.find(item => item.runtime === selected._runtimeId)?.name || '来源设备'}</span><button className="quiet-button" onClick={() => void readAction(async () => { await chooseConversation(String(selected.conversation || 'default')); setHighlight(String(selected.origin_message || '')); })}>来源聊天 <Icon name="next" /></button><button className="quiet-button" onClick={() => go('native')}>查看原会话 <Icon name="next" /></button></div>
+          <div className="task-meta"><span>{space?.connections?.find(item => item.runtime === selected._runtimeId)?.name || '来源设备'}</span><button className="quiet-button" onClick={() => void readAction(async () => { await chooseConversation(String(selected.conversation || 'default')); setHighlight(String(selected.origin_message || '')); })}>来源聊天 <Icon name="next" /></button><button className="quiet-button" onClick={() => go('native')}>原会话 <Icon name="next" /></button></div>
           <details className="execution-info"><summary><Icon name="info" />执行信息</summary><dl><dt>执行者</dt><dd>{String(selected.worker_agent || selected.agent || '未记录')}</dd><dt>目录</dt><dd>{String(selected.worker_cwd || selected.project || '未记录')}</dd><dt>会话</dt><dd>{String(selected.worker_session || selected.session_id || '未记录')}</dd></dl></details>
-          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(() => window.xiaoyou.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}><Icon name="stop" />停止这项工作</button>}
-        </> : <div className="work-unselected">选一项工作，查看进展。</div>}</div></section>}
+          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(() => window.xiaoyou.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}><Icon name="stop" />停止</button>}
+        </> : <div className="work-unselected">选一件事，查看进展。</div>}</div></section>}
       {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小幽转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
         {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小幽')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
         {(!detail || !(detail.entries as Json[] | undefined)?.length) && <p className="quiet-empty">尚无可读取的原会话片段。</p>}{selected && !selected.monitoring_only && <button className="primary" onClick={() => void run(() => supplement(selected))}>补充要求</button>}</section>}
@@ -181,11 +179,15 @@ function Bubble({ message, task, onTask, onBranch, canBranch, highlight }: { mes
   return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{(issue || view && (!view.complete || ['failed', 'cancelled'].includes(view.status))) && <small role="status">{issue || view?.status_label}</small>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
 }
 function Decision({ approval, disabled, onDecision }: { approval: Json; disabled: boolean; onDecision(decision: 'allow' | 'deny'): void }) {
-  return <div className="decision"><strong>有件事需要你决定</strong><p>{String(approval.detail || approval.tool || '请查看操作内容')}</p>{approval.remote_actionable !== false && !approval._staleEpoch ? <div><button disabled={disabled} onClick={() => onDecision('deny')}>拒绝</button><button className="primary" disabled={disabled} onClick={() => onDecision('allow')}>允许这次操作</button></div> : <small>{approval._staleEpoch ? '正在核实最新状态' : '请在原电脑确认'}</small>}</div>;
+  return <div className="decision"><strong>等你确认</strong><p>{String(approval.detail || approval.tool || '请查看操作内容')}</p>{approval.remote_actionable !== false && !approval._staleEpoch ? <div><button disabled={disabled} onClick={() => onDecision('deny')}>拒绝</button><button className="primary" disabled={disabled} onClick={() => onDecision('allow')}>允许这次</button></div> : <small>{approval._staleEpoch ? '状态待确认' : '请在电脑上确认'}</small>}</div>;
 }
 function TaskRow({ task, selected, onClick }: { task: Json; selected: boolean; onClick(): void }) {
   const stale = activeTask(task) && task.state !== 'waiting' && Number(task.last_meaningful_at || task.updated_at) > 0 && Date.now() - Number(task.last_meaningful_at || task.updated_at) * 1000 > 300_000;
-  return <button className={'task-row ' + (selected ? 'selected' : '')} onClick={onClick}><Avatar type={String(task.worker_agent || task.agent)} size={31} /><span>{String(task.title || '一项工作')}</span>{unverifiedTask(task) ? <span title="状态待确认"><Icon name="clock" /></span> : task.state === 'waiting' ? <i className="waiting-dot" /> : stale ? <span className="stale-task" title={elapsed(task.last_meaningful_at || task.updated_at)}><Icon name="clock" /></span> : activeTask(task) ? <i className="task-spinner" /> : <Icon name="check" />}</button>;
+  return <button className={'task-row ' + (selected ? 'selected' : '')} onClick={onClick}><Avatar type={String(task.worker_agent || task.agent)} size={31} /><span>{String(task.title || '一件事')}</span>{unverifiedTask(task) ? <span title="状态待确认"><Icon name="clock" /></span> : task.state === 'waiting' ? <i className="waiting-dot" /> : stale ? <span className="stale-task" title={elapsed(task.last_meaningful_at || task.updated_at)}><Icon name="clock" /></span> : activeTask(task) ? <i className="task-spinner" /> : <Icon name="check" />}</button>;
+}
+function progressCount(detail?: Json): number {
+  const events = Array.isArray(detail?.events) ? detail.events as Json[] : [], entries = Array.isArray(detail?.entries) ? detail.entries as Json[] : [];
+  return events.length || entries.filter(entry => entry.kind !== 'user' && entry.role !== 'you').length;
 }
 function Progress({ detail, all }: { detail?: Json; all: boolean }) {
   const events = Array.isArray(detail?.events) ? detail.events as Json[] : [], entries = Array.isArray(detail?.entries) ? detail.entries as Json[] : [];
@@ -215,28 +217,26 @@ function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory
   // One-time pairing needs a reachable relay; without one, the developer options explain how to set it up.
   const canInvite = view.pairing.relayState === '加密通信入口已连接' && !(view.relayHost?.enabled && !view.relayHost.publicURL);
   return <section className="settings-page">
-    <div className="settings-group">手机</div>
+    <div className="settings-group">小幽</div>
     <article className="settings-card vertical">
       {view.pairing.invitation ? <PairingCode link={view.pairing.invitation} /> : <div><h3>添加手机</h3><p>手机小幽 › 设置 › 添加电脑，扫码后在这里确认。之后换网络也会自动连上。</p></div>}
       <button className="primary" disabled={disabled || !canInvite} onClick={() => void onRun(() => window.xiaoyou.invite())}>{view.pairing.invitation ? '换一个二维码' : '添加手机'}</button>
-      {!canInvite && <small>这台电脑还没有外网入口，先在下面的开发者选项里设置一次。</small>}
+      {!canInvite && <small>这台电脑还不能被手机找到，先在下面的开发者里设置一次通信入口。</small>}
     </article>
     {view.pairing.requests.map(request => <article className="decision" key={request.id}><h3>{request.name} 请求加入</h3><p>确认这是你正在配对的设备。</p><code>{request.fingerprint}</code><button disabled={disabled} className="primary" onClick={() => void onRun(() => window.xiaoyou.acceptJoin(request.id))}>确认</button></article>)}
-    <div className="settings-group">这台电脑</div>
-    <article className="settings-card"><div><h3>小幽在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
-    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(false))}>关闭</button></article>
+    <article className="settings-card vertical"><h3>添加电脑</h3>{space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '连不上'}</small></div>)}
+      <p>在已经有小幽的设备上生成邀请，粘贴到这里，这台电脑就加入同一个小幽。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
     <div className="settings-group">帮手</div>
     <HelperSettings space={space} helpers={space?.helpers || []} disabled={disabled} onRun={onRun} />
-    <div className="settings-group">其他电脑</div>
-    <article className="settings-card vertical">{space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '在线' : '连不上'}</small></div>)}
-      {!space?.connections?.some(item => !item.local) && <p>还没有别的电脑</p>}
-      {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}</article>
-    <details className="advanced" onToggle={event => { if ((event.target as HTMLDetailsElement).open && !phone) void checkPhone(); }}><summary>开发者选项</summary>
-      <p>通信入口、连接串、会话目录和旧的连接方式。正常使用不需要打开。</p>
+    <div className="settings-group">偏好</div>
+    <article className="settings-card"><div><h3>小幽在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
+    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(false))}>关闭</button></article>
+    <details className="advanced" onToggle={event => { if ((event.target as HTMLDetailsElement).open && !phone) void checkPhone(); }}><summary>开发者</summary>
+      <p>排查问题时用：通信入口、连接串、会话目录和旧的连接方式。正常使用不需要打开。</p>
       <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
+      {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}
       <RelayHostSettings view={view} disabled={disabled} onRun={onRun} />
       <article className="settings-card vertical"><h3>已有网络连接（兼容入口）</h3><p>{view.pairing.relayState} · 已配对 {view.pairing.joined} 台</p><button disabled={phoneBusy} onClick={() => void checkPhone()}>{phoneBusy ? '正在核对服务身份…' : '重新检测手机入口'}</button>{phone && <>{phone.routes.map(route => <div className="phone-route" key={route.url}><span>{route.kind === 'lan' ? '同一局域网' : '现有私有网络'}<small>{route.url}</small></span><button disabled={disabled} onClick={() => void onRun(async () => { await window.xiaoyou.copyPhoneConnection(route.url); setPhoneNotice('已复制含连接凭据的连接串，只发给自己的手机。'); })}>复制连接串</button></div>)}<p className="phone-note">{phone.note}</p></>}{phoneNotice && <p role="status">{phoneNotice}</p>}</article>
-      <article className="settings-card vertical"><h3>连接已有小幽</h3><p>在已有设备上生成邀请，再粘贴到这里。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
       <article className="settings-card vertical"><h3>通信入口</h3><p>入口只转发密文；手机和电脑都主动连接，不需要在同一网络，也不用 Tailscale。</p><label>WSS 入口地址<input placeholder="wss://你的通信入口" value={relayURL} onChange={event => setRelayURL(event.target.value)} /></label><label>入口访问密钥<input type="password" autoComplete="off" value={relayToken} onChange={event => setRelayToken(event.target.value)} /></label><div><button disabled={disabled || !relayURL.trim() || relayToken.length < 32} onClick={() => void onRun(async () => { await window.xiaoyou.setRelay({url: relayURL.trim(), token: relayToken}); setRelayToken(''); })}>保存并连接入口</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.importConfig())}>选择已有 Runtime 配置</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.configureRelay())}>导入通信入口</button></div></article>
     </details>
   </section>;

@@ -67,7 +67,7 @@ try{
  await page.getByRole('button',{name:'继续确认 →',exact:true}).click();
  await page.getByRole('button',{name:'确认连接这个服务',exact:true}).click();
  await page.getByRole('button',{name:'进入小幽 →',exact:true}).click();
- await page.getByRole('button',{name:'继续主对话',exact:true}).click();
+ await page.locator('.composer').waitFor();
  let reply=page.locator('[data-message-id="turn:reply"]');
  await until(()=>reply.locator('[data-block-id]').count().then(n=>n===1));
  assert.match(await reply.innerText(),/First message/);assert.doesNotMatch(await page.locator('.timeline').innerText(),/Unfinished/);
@@ -96,7 +96,7 @@ try{
  await until(()=>page.locator('[data-message-id="live:you"]').count().then(n=>n===1));
  assert.equal(await page.locator('.thinking').count(),1,'Owner synchronization must not clear the wait state');
  await app.close();[app,page]=await launch(env);
- await page.getByRole('button',{name:'继续主对话',exact:true}).click();
+ await page.locator('.composer').waitFor();
  await page.locator('.thinking').waitFor();
  disconnected=true;
  await until(()=>page.locator('.thinking').innerText().then(text=>/状态待确认/.test(text)));
@@ -107,11 +107,11 @@ try{
  await until(()=>page.locator('.thinking').count().then(n=>n===0));
  assert.equal(await page.locator('[data-message-id="live:you"]').count(),1);
  assert.equal(await page.locator('[data-message-id="live:reply"]').count(),1);
- await page.getByText('正在同步记录',{exact:true}).waitFor();
+ await page.getByText('正在同步',{exact:true}).waitFor();
  await page.screenshot({path:join(root,'build/reply-wait-window.png')});
  historyBlocked=false;
  await app.close();[app,page]=await launch(env);
- await page.getByRole('button',{name:'继续主对话',exact:true}).click();
+ await page.locator('.composer').waitFor();
  reply=page.locator('[data-message-id="turn:reply"]');
  await until(()=>reply.locator('[data-block-id]').count().then(n=>n===2));
  assert.equal(await page.locator('[data-message-id="turn:reply"]').count(),1);
