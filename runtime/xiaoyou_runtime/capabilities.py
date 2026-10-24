@@ -37,6 +37,7 @@ ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_SERVERS = 32
 MAX_TOOLS_PER_SERVER = 200
 MAX_TOOL_NAME = 64
+MAX_CATALOG_BYTES = 512 * 1024
 # 工具列表缓存多久；改了配置（版本变了）立刻作废。
 CATALOG_SECONDS = 300
 
@@ -68,10 +69,11 @@ class Server:
 class Grant:
     enabled: bool = True
     tools: Optional[List[str]] = None  # None：全部工具
+    revision: int = 0
 
     @property
     def version(self) -> str:
-        return digest({"enabled": self.enabled, "tools": self.tools})
+        return digest({"enabled": self.enabled, "tools": self.tools, "revision": self.revision})
 
 
 @dataclass(frozen=True)
@@ -181,11 +183,27 @@ class Library:
         self._connect = connect or mcp_client.connect
         self._lock = threading.Lock()
         self._sessions: Dict[str, Any] = {}
+        self._session_versions: Dict[str, str] = {}
         self._catalogs: Dict[str, Tuple[str, float, List[Dict[str, Any]]]] = {}
+        self._opening = {server: threading.Lock() for server in settings.servers}
+        self._closed = False
+        self.grants_for: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+
+    def grant(self, helper: str, server: str) -> Grant:
+        policy = self.grants_for(helper) if self.grants_for is not None else None
+        base = self.settings.grant(helper, server)
+        if policy is None:
+            return base
+        revision = policy["revision"]
+        overrides = policy["grants"]
+        if server in overrides:
+            value = overrides[server]
+            return Grant(enabled=value, revision=revision) if isinstance(value, bool) else Grant(tools=list(value["tools"]), revision=revision)
+        return Grant(base.enabled, base.tools, revision)
 
     def offers(self, helper: str) -> bool:
         """这个帮手有没有可能用到的服务（决定要不要给它注入能力网关入口）。"""
-        return any(server.enabled and self.settings.grant(helper, server.id).enabled
+        return any(server.enabled and self.grant(helper, server.id).enabled
                    for server in self.settings.servers.values())
 
     def connection(self, server: Server) -> Dict[str, Dict[str, str]]:
@@ -209,31 +227,60 @@ class Library:
         return {"env": {key: env[key] for key in server.env_names},
                 "headers": {key: headers[key] for key in server.header_names}}
 
+    def _version(self, server: Server) -> str:
+        if not server.env_names and not server.header_names:
+            return server.version
+        try:
+            stat = (self._secrets_dir / (server.id + ".json")).stat()
+            stamp = [stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino]
+        except OSError:
+            stamp = None
+        return digest([server.version, stamp])
+
     def _session(self, server: Server) -> Any:
-        with self._lock:
-            session = self._sessions.get(server.id)
-            if session is not None and session.version == server.version and session.alive():
-                return session
-        connection = self.connection(server)
-        session = self._connect(server, connection)
-        with self._lock:
-            old = self._sessions.pop(server.id, None)
-            self._sessions[server.id] = session
-        if old is not None:
-            old.close()
-        return session
+        # One connector per server; unrelated servers never wait on its I/O.
+        with self._opening[server.id]:
+            version = self._version(server)
+            with self._lock:
+                if self._closed:
+                    raise CapabilityError("能力库已关闭")
+                session = self._sessions.get(server.id)
+                if session is not None and self._session_versions.get(server.id) == version and session.alive():
+                    return session
+            session = self._connect(server, self.connection(server))
+            with self._lock:
+                if self._closed:
+                    session.close()
+                    raise CapabilityError("能力库已关闭")
+                old = self._sessions.get(server.id)
+                self._sessions[server.id] = session
+                self._session_versions[server.id] = version
+            if old is not None:
+                old.close()
+            return session
 
     def _catalog(self, server: Server) -> List[Dict[str, Any]]:
         with self._lock:
             cached = self._catalogs.get(server.id)
-        if cached and cached[0] == server.version and time.monotonic() - cached[1] < CATALOG_SECONDS:
+        version = self._version(server)
+        if cached and cached[0] == version and time.monotonic() - cached[1] < CATALOG_SECONDS:
             return cached[2]
         tools = self._session(server).list_tools()
         if len(tools) > MAX_TOOLS_PER_SERVER:
             raise CapabilityError("%s 有 %d 个工具，超过 %d 个，不登记" % (
                 server.name, len(tools), MAX_TOOLS_PER_SERVER))
+        names = set()
+        for tool in tools:
+            name = tool.get("name") if isinstance(tool, dict) else None
+            schema = tool.get("inputSchema", {"type": "object"}) if isinstance(tool, dict) else None
+            if not isinstance(name, str) or not name.strip() or name != name.strip() or len(name) > 128 \
+                    or name in names or not isinstance(schema, dict) or schema.get("type") != "object":
+                raise CapabilityError("%s 的工具目录格式不正确，未登记" % server.name)
+            names.add(name)
+        if len(json.dumps(tools, ensure_ascii=False).encode("utf-8")) > MAX_CATALOG_BYTES:
+            raise CapabilityError("%s 的工具目录超过 %d KB，未登记" % (server.name, MAX_CATALOG_BYTES // 1024))
         with self._lock:
-            self._catalogs[server.id] = (server.version, time.monotonic(), tools)
+            self._catalogs[server.id] = (version, time.monotonic(), tools)
         return tools
 
     def tools(self, helper: str) -> Dict[str, Any]:
@@ -242,7 +289,7 @@ class Library:
         unavailable: List[Dict[str, str]] = []
         taken: Dict[str, Any] = {}
         for server in self.settings.servers.values():
-            grant = self.settings.grant(helper, server.id)
+            grant = self.grant(helper, server.id)
             if not server.enabled or not grant.enabled:
                 continue
             try:
@@ -258,23 +305,28 @@ class Library:
                 tools.append({"name": name, "server": server.id, "tool": tool["name"],
                               "description": "[%s] %s" % (server.name, tool.get("description") or ""),
                               "inputSchema": tool.get("inputSchema") or {"type": "object"},
-                              "config_version": server.version, "grant_version": grant.version})
+                              "config_version": self._version(server), "grant_version": grant.version})
         return {"tools": tools, "unavailable": unavailable}
 
     def call(self, helper: str, server_id: str, tool: str, arguments: Dict[str, Any],
              config_version: str, grant_version: str) -> Dict[str, Any]:
         """替帮手调用一个工具。授权或配置变了就拒绝，要它重新列工具。"""
         server = self.settings.servers.get(server_id)
-        grant = self.settings.grant(helper, server_id)
+        grant = self.grant(helper, server_id)
         if server is None or not server.enabled or not grant.enabled \
                 or (grant.tools is not None and tool not in grant.tools):
             raise CapabilityError("这个工具已经不给 %s 用了" % helper)
-        if server.version != config_version or grant.version != grant_version:
+        if self._version(server) != config_version or grant.version != grant_version:
             raise CapabilityError("%s 的配置或授权变了：请重新列一次工具再用" % server.name)
-        return self._session(server).call_tool(tool, arguments)
+        session = self._session(server)
+        # Connecting can block; recheck a policy changed while waiting before any effect.
+        if self.grant(helper, server_id).version != grant_version or self._version(server) != config_version:
+            raise CapabilityError("%s 的授权变了：请重新列一次工具再用" % server.name)
+        return session.call_tool(tool, arguments)
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             sessions, self._sessions = list(self._sessions.values()), {}
         for session in sessions:
             session.close()

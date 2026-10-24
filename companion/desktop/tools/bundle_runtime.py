@@ -4,6 +4,7 @@
 import json
 import hashlib
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,8 @@ def main():
         ], check=True)
     sys.path.insert(0, str(ROOT / "runtime"))
     from xiaoyou_runtime import __version__
+    shutil.copytree(ROOT / "runtime/third_party",
+                    DESKTOP / "runtime-dist/xiaoyou-runtime/third_party", dirs_exist_ok=True)
     manifest = {"platform": sys.platform, "architecture": platform.machine(),
                 "runtime_version": __version__, "python": platform.python_version(),
                 "pyinstaller": PyInstaller.__version__, "pillow": PIL.__version__}

@@ -1,6 +1,9 @@
 export type Json = Record<string, unknown>;
 
-export interface DisplayBlock { id: string; text: string; complete: boolean; runs?: { text: string; bold: boolean }[] }
+/** One styled piece of text. Styles a client does not know are dropped; the text never is. */
+export interface DisplayRun { text: string; bold: boolean; italic?: boolean; strike?: boolean; code?: 'inline' | 'block';
+  language?: string; heading?: number; href?: string; quote?: boolean }
+export interface DisplayBlock { id: string; text: string; complete: boolean; runs?: DisplayRun[] }
 export interface DisplayProjection {
   version: 1;
   id: string;
@@ -151,6 +154,12 @@ export interface DesktopAPI {
   directoryOpen(input: {space: string; runtime: string; id: string}): Promise<Json>;
   directoryMetadata(input: { space: string; runtime: string; id: string }): Promise<Json>;
   openNative(input: { space: string; id: string; runtime: string }): Promise<void>;
+  openLink(href: string): Promise<void>;
+  helperOptions(input: { space: string }): Promise<Json>;
+  helperModels(input: { space: string; gateway_url: string; key?: string }): Promise<Json>;
+  helperGrants(input: { space: string; name: string; grants: Json }): Promise<Json>;
+  addHelper(input: { space: string; helper: Json }): Promise<Json>;
+  removeHelper(input: { space: string; name: string }): Promise<Json>;
   connectLocal(): Promise<void>;
   importConfig(): Promise<void>;
   approve(input: { space: string; id: string; runtime: string; decision: 'allow' | 'deny' }): Promise<void>;

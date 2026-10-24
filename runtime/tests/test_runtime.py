@@ -2719,12 +2719,13 @@ class XiaoyouTests(TempDirCase):
         xiaoyou, store = make_xiaoyou(self.folder / "upkeep", [voice, self.codex])
         self.addCleanup(xiaoyou.close)
         old = time.time() - 3600
-        store.transcript.add("default", "u-1", "你好", "在呢", "deepseek", ["deepseek"])
+        card = xiaoyou._writer.task_open("default", "upkeep")
+        xiaoyou._writer.exchange(card["id"], "你好", "在呢", turn_id="u-1")
         later = time.time() + 3600  # 一小时后：对话已经安静了
         xiaoyou._pulse.tick(now=later)  # 第一次：只记下从哪开始
         self.assertEqual(voice.gate_jobs, [])
-        store.transcript.add("default", "u-2", "以后回复短一点", "好", "deepseek", ["deepseek"])
-        store.transcript.add("default", "u-3", "晚上别找我", "好", "deepseek", ["deepseek"])
+        xiaoyou._writer.exchange(card["id"], "以后回复短一点", "好", turn_id="u-2")
+        xiaoyou._writer.exchange(card["id"], "晚上别找我", "好", turn_id="u-3")
         xiaoyou._pulse.tick(now=time.time())  # 刚说完：还不安静，不整理
         self.assertEqual(voice.gate_jobs, [])
         voice.tool_calls = [("remember", {"note": "回复短一点", "kind": "偏好", "quote": "以后回复短一点"})]
@@ -3169,11 +3170,18 @@ class XiaoyouTests(TempDirCase):
     def test_a_restart_marks_what_was_still_going(self):
         self.codex.gate.clear()
         self.say("@codex one slow")
+        self.assertTrue(until(lambda: self.codex.started))
+        # Stop the old worker before opening another writer on its state.
+        # Runtime shutdown does not confirm a durable task cancellation.
+        self.xiaoyou._tasks.cancel("c1")
+        self.codex.gate.set()
+        self.xiaoyou.close()
         again, _ = make_xiaoyou(self.folder, [Scripted("claude"), Scripted("codex", speaks=False)])
         self.addCleanup(again.close)
         card = again.cards.get("c1")
-        self.assertEqual((card["state"], card["entries"][-1]["text"]),
-                         ("failed", "Runtime 重启了，这件事没做完"))
+        self.assertEqual((card["state"], card["brief"]),
+                         ("unknown", "上次执行结果尚未确认，不会自动重做"))
+        self.assertEqual(again.recover_tasks(ready=True), 0)
 
 
 class Recorder(workspace_module.Workspace):

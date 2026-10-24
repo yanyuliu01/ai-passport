@@ -156,8 +156,11 @@ class OwnerMemory:
         target = self._log_dir / ("%s.md" % day)
         with open(target, "a", encoding="utf-8") as stream:
             stream.write(line)
+            stream.flush()
+            os.fsync(stream.fileno())
         if os.name == "posix":
             os.chmod(target, 0o600)
+        _sync_directory(target.parent)
 
 
 def _checked(note: str, quote: str) -> Tuple[Tuple[str, str], Optional[str]]:
@@ -175,9 +178,22 @@ def _atomic(path: Path, body: str) -> None:
     handle, name = tempfile.mkstemp(prefix=".owner-", dir=str(path.parent))
     with os.fdopen(handle, "w", encoding="utf-8") as stream:
         stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
     if os.name == "posix":
         os.chmod(name, 0o600)
     os.replace(name, path)
+    _sync_directory(path.parent)
+
+
+def _sync_directory(path):
+    if os.name != "posix":
+        return
+    folder = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
 
 
 def prompt_section(notes: List[str]) -> List[str]:

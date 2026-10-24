@@ -26,8 +26,8 @@ import threading
 import time
 from pathlib import Path
 import uuid
-from collections import OrderedDict, deque
-from typing import Any, Callable, Deque, Dict, List, Optional, Union
+from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from .agents import AgentError
 from .cards import ACTIVE
@@ -35,6 +35,9 @@ from .config import EFFORT_LEVELS
 from .identity import CAPABILITIES, PROTOCOL, fingerprint, host_proof, runtime_id, subject_id
 from .devices import Devices, KINDS as DEVICE_KINDS, hash_secret, new_credential
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
+from .loop import ConversationLoop
+from .effects import (Effects, EffectUncertain, EffectFenceError, check_transition as check_effect_transition,
+                      valid as valid_effects, facts as effect_facts)
 from . import operations
 from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
@@ -149,6 +152,7 @@ class Service:
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
+        self._helpers_lock = threading.RLock()
         # 这台 Runtime 的固定编号：客户端拿它和消息编号拼成全局编号。
         self.runtime_id = runtime_id(store.state_dir)
         # 小幽这个主体的编号（统一主体的预留）：和电脑无关，跟着 state 目录走。
@@ -170,19 +174,19 @@ class Service:
         self._written = 0
         # 对话名 → 这条线上还没处理的东西：消息编号，或者一件要在这条线上做的事（转述
         # 帮手的结果）。有工作线程在处理的对话记在 _busy 里。
-        self._lanes: Dict[str, Deque[Union[str, Callable[[], None]]]] = {}
-        self._busy: Dict[str, threading.Thread] = {}
+        self.loop = ConversationLoop(self._changed, self._handle, MAX_BUSY_CONVERSATIONS)
+        self._lanes, self._busy = self.loop.lanes, self.loop.busy
         # 已经被一个工作线程领走的消息：同一句话重复排进队也只处理一次。
         self._claimed: set = set()
         # 在等负责的电脑（连不上，或者还没同步到它的绑定）的话：联系上、绑定变了时再排一次。
         self._parked: Dict[str, str] = {}  # 消息编号 → 对话
-        self._slots = threading.Semaphore(MAX_BUSY_CONVERSATIONS)
         self._closed = False
         # 卡的编号 → 等这件事结束才算处理完的消息（别的 Runtime 转过来的）。
         self._held: Dict[str, str] = {}
         # 小幽网络（mesh.py）：加入了网络时由 Mesh 设上。在别的 Runtime 的事里说的话转交给那台。
         self.mesh: Optional[Any] = None
         xiaoyou.defer = self._defer
+        xiaoyou.retry_effects = self.retry_effects
         xiaoyou.cards.subscribe(self._card_changed)
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
         if seq > xiaoyou.cards.seq:
@@ -207,6 +211,18 @@ class Service:
             self.discovery.start()
         else:
             self.discovery.status = {'phase': 'disabled', 'indexed_files': 0, 'pending_files': 0}
+        self.recover_tasks()
+
+    def recover_tasks(self):
+        # Policy, identity and result-delivery lanes must exist before any
+        # recovered helper can request a tool or publish its completion.
+        with self._changed:
+            if self._closed:
+                return 0
+            self._xiaoyou._task_recovery_ready = True
+        # Do not re-enable readiness outside the close/admission boundary, or
+        # hold polling and owner-admission locks while scanning native files.
+        return self._xiaoyou.recover_tasks()
 
     def _review_event(self, event: Dict[str, Any]) -> None:
         from . import __version__
@@ -238,7 +254,17 @@ class Service:
             if message.get("relay_to") and message["status"] == "running":
                 # 转交给别的 Runtime 的话：那台可能已经在做，结果到了 mesh.py 会接上。
                 continue
-            if message["operation_state"] == "pending" and message["kind"] == "text":
+            effects = message.get("_effects")
+            if effects and valid_effects(effects) and message.get("text") and all(
+                    item["state"] in ("pending", "succeeded") for item in effects):
+                # No new model decision is needed: resume saved unclaimed
+                # effects, or deliver saved outcomes without replaying them.
+                # This request already called a model. Keep its outer claim
+                # running: old binaries must see uncertainty, never replay
+                # the original owner input as a wholly unstarted request.
+                message.update(status="queued", operation_state="running", _resume_effects=True)
+            if (message["operation_state"] == "pending" and message["kind"] == "text") or (
+                    message.get("_resume_effects") and message["operation_state"] == "running"):
                 requeue.append(message["id"])
             else:
                 unfinished.append(message["id"])
@@ -257,6 +283,8 @@ class Service:
                 # 结果已经提交、只是投递中断：用存下的结果，不重做。
                 message.update(status="done", operation_state="succeeded", reply=reply, card=card_id,
                                stage=None, helper=None, partial="", finished_at=time.time())
+                if any(item.get("state") in ("running", "unknown") for item in message.get("_effects", [])):
+                    message["operation_state"] = "unknown"
                 self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                 self._remember(message)
                 (requeue if message_id in requeue else unfinished).remove(message_id)
@@ -264,8 +292,32 @@ class Service:
             message = self._messages[message_id]
             voice = message["kind"] == "voice" and not message["text"]
             note = RESTART_VOICE_NOTE if voice else RESTART_NOTE
+            if message.get("_effects"):
+                note = effect_facts(message["_effects"]) if valid_effects(message["_effects"]) else (
+                    "保存的操作记录无法读取，需要先核对。")
             said = message["text"] or "（语音）"
             existing = cards.get(message["card"]) if message.get("card") else None
+            dispatch = cards.dispatch(existing["id"]) if existing is not None else None
+            if (message.get("hop", 0) > 0 and operations.valid_dispatch(dispatch)
+                    and dispatch["run_id"] == existing.get("run_id")
+                    and existing.get("origin_message") == message_id + ":you"):
+                if existing["state"] in ("done", "failed", "cancelled"):
+                    final = cards.message(dispatch["run_id"] + "-summary:reply")
+                    reply = (final["text"] if final and final.get("task") == existing["id"]
+                             and final.get("status") == "final" else existing["brief"])
+                    self._settle(message_id, existing, reply=reply)
+                    continue
+                if (dispatch["run_id"] == existing.get("run_id")
+                        and dispatch["state"] in ("pending", "unknown")):
+                    # The remote caller is still waiting for this exact helper
+                    # run, not a new message or an automatic retry.
+                    self._held[existing["id"]] = message_id
+                    message.update(status="running", operation_state="unknown", partial="",
+                                   stage="queued" if dispatch["state"] == "pending" else "unknown",
+                                   error=None, finished_at=None)
+                    writer.by(cause=message_id).request_changed(message)
+                    self._remember(message)
+                    continue
             if existing is not None and message.get("hop", 0) > 0:
                 # 别的 Runtime 转来、在等那件事结束的：那张卡启动时已经标成没做完了，
                 # 不再另开一张，消息跟着它。
@@ -325,9 +377,34 @@ class Service:
         """添加帮手时能选什么：这台电脑装了哪些 harness、每种能怎么接入模型。"""
         from . import helpers
         added = self._xiaoyou.helpers.names() if self._xiaoyou.helpers is not None else []
-        return {"harnesses": helpers.options(), "added": added}
+        library = self._xiaoyou._gate.capabilities
+        servers = [{"id": server.id, "name": server.name} for server in library.settings.servers.values()] if library else []
+        registry = self._xiaoyou.helpers
+        grants = {}
+        for name in added:
+            grants[name] = {}
+            for server in library.settings.servers.values() if library else []:
+                grant = library.grant(name, server.id)
+                grants[name][server.id] = (False if not grant.enabled else
+                                          {"tools": grant.tools} if grant.tools is not None else True)
+        return {"runtime_id": self.runtime_id, "harnesses": helpers.options(), "added": added,
+                "capabilities": servers, "helper_grants": grants}
+
+    def helper_models(self, body: Any) -> Dict[str, Any]:
+        from .helper_models import catalog, ModelServiceError, DEFAULT_URL
+        if not isinstance(body, dict) or not isinstance(body.get("key", "magpie"), str) \
+                or len(body.get("key", "magpie")) > 4096 or any(c in body.get("key", "") for c in "\r\n"):
+            raise RequestError("模型服务请求不正确")
+        try:
+            return catalog(body.get("gateway_url", DEFAULT_URL), body.get("key") or "magpie")
+        except ModelServiceError as error:
+            raise RequestError(str(error))
 
     def helper_add(self, body: Any) -> Dict[str, Any]:
+        with self._helpers_lock:
+            return self._helper_add(body)
+
+    def _helper_add(self, body: Any) -> Dict[str, Any]:
         """加一个帮手（设置 › 帮手 › 添加帮手）：校验、记下、立刻能派活。Key 只写进本机文件。"""
         from . import agents as agents_module
         from .helpers import HelperError
@@ -336,10 +413,18 @@ class Service:
             raise RequestError("这台 Runtime 没有开帮手登记")
         if not isinstance(body, dict):
             raise RequestError("请求体应为对象")
+        if body.get("access") == "magpie":
+            listed = self.helper_models(body)
+            selected = next((item for item in listed["models"] if item["id"] == body.get("model")), None)
+            if selected is None:
+                raise RequestError("这个模型已不在模型服务的列表中，请刷新再选")
+            body = dict(body, model_info=selected)
         try:
             spec = registry.add(body)
         except HelperError as error:
             raise RequestError(str(error))
+        except OSError:
+            raise UnavailableError("帮手未能保存，请重试") from None
         agent = agents_module.create(spec)
         try:
             self._xiaoyou.add_agent(agent)
@@ -350,17 +435,43 @@ class Service:
         return {"helper": registry.view(spec.name), "problem": agent.check()}
 
     def helper_remove(self, name: Any) -> Dict[str, Any]:
+        with self._helpers_lock:
+            return self._helper_remove(name)
+
+    def _helper_remove(self, name: Any) -> Dict[str, Any]:
         from .helpers import HelperError
         registry = self._xiaoyou.helpers
         name = _name(name, "name")
         if registry is None or name not in registry.names():
             raise RequestError("没有在界面上加过叫 %s 的帮手" % name)
         try:
-            self._xiaoyou.remove_agent(name)
-            registry.remove(name)
+            if not self._xiaoyou.remove_agent(name, persist=lambda: registry.remove(name)):
+                registry.remove(name)  # Remove a saved helper that could not be loaded.
         except (HelperError, ValueError) as error:
             raise RequestError(str(error))
+        except OSError:
+            raise UnavailableError("帮手未能移除，请重试") from None
         return {"removed": name}
+
+    def helper_grants(self, name: str, body: Any) -> Dict[str, Any]:
+        from .capabilities import parse, CapabilityError
+        from .helpers import HelperError
+        with self._helpers_lock:
+            registry, library = self._xiaoyou.helpers, self._xiaoyou._gate.capabilities
+            if registry is None or name not in registry.names() or not isinstance(body, dict):
+                raise RequestError("没有这个界面上添加的帮手，或授权格式不正确")
+            if library is None:
+                raise RequestError("这台电脑没有能力库")
+            # Reuse exactly the config grant validator, including server/tool validation.
+            servers = {key: {"command": "validation-only"} for key in library.settings.servers}
+            try:
+                parse({"mcp_servers": servers, "grants": {name: body}}, [name])
+                registry.set_grants(name, body)
+            except (CapabilityError, HelperError) as error:
+                raise RequestError(str(error))
+            except OSError:
+                raise UnavailableError("授权未能保存，请重试") from None
+            return {"name": name, "grants": registry.grants(name)}
 
     def usage(self, refresh: bool = False) -> Dict[str, Any]:
         """订阅额度和每个帮手的模型、档位。refresh 为 True 时现在就去问一次再答（慢）。"""
@@ -651,20 +762,14 @@ class Service:
 
     def _line_up(self, conversation: str, item: Union[str, Callable[[], None]]) -> None:
         """调用时已经拿着锁：排到这个对话的线上，线上没人在处理就起一个。"""
-        self._lanes.setdefault(conversation, deque()).append(item)
-        if conversation not in self._busy:
-            worker = threading.Thread(
-                target=self._drain, args=(conversation,), daemon=True,
-                name="xiaoyou-%s" % conversation,
-            )
-            self._busy[conversation] = worker
-            worker.start()
+        return self.loop.enqueue(conversation, item)
 
     def _defer(self, conversation: str, work: Callable[[], None]) -> None:
         """小幽要在这个对话的线上做一件事（转述帮手的结果）：排在已经到的话后面。"""
         with self._changed:
             if not self._closed:
-                self._line_up(conversation, work)
+                return self._line_up(conversation, work)
+            return False
 
     # ---- 卡 ----
 
@@ -970,7 +1075,7 @@ class Service:
 
         nonce：客户端带来的随机数；key_hash 是它用的凭据的哈希（server.py 按请求算）。带了就
         回 host_proof，客户端在任何线路上都能核对连到的是持有它凭据的 Runtime（设计第 6 节）。"""
-        capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof"] \
+        capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof", "execution_reconciliation"] \
             + (["mesh"] if self.mesh is not None else [])
         result = {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
                   "protocol": PROTOCOL, "capabilities": capabilities,
@@ -1211,18 +1316,57 @@ class Service:
         self._xiaoyou.cancel(card_id, actor=actor, reason=reason, announce=announce)
         return self._xiaoyou.cards.get(card_id)
 
+    def reconcile_task(self, card_id, body):
+        """Recheck the saved execution identity, never submit the task again."""
+        card_id = _name(card_id, "card")
+        if not isinstance(body, dict) or set(body) != {"run_id"}:
+            raise RequestError("核对请求只需原 run_id")
+        run_id = _name(body["run_id"], "run_id")
+        with self._changed:
+            card = self.card_store.get(card_id)
+            if self._closed:
+                raise UnavailableError("Runtime 正在关闭")
+            if not card:
+                raise RequestError("没有这件事")
+            if card.get("mesh_origin") or card.get("monitoring_only"):
+                raise ConflictError("请在原执行 Runtime 核对这件事")
+            if card.get("run_id") != run_id:
+                raise ConflictError("任务已进入另一轮，请刷新后核对原执行")
+            intent = self.card_store.dispatch(card_id)
+            from .operations import valid_dispatch
+            if not valid_dispatch(intent) or intent["run_id"] != run_id:
+                raise ConflictError("原执行的恢复记录不可用")
+            if not self._xiaoyou._recovery_owner(card, intent):
+                raise ConflictError("原执行负责人尚未确认，暂不能发布核对结果")
+            if intent["state"] == "succeeded" and card["state"] == "done":
+                return {"status": "confirmed", "card": presentation.card(
+                    card, self.runtime_id, self.card_store.message)}
+            if intent["state"] != "unknown" or self._xiaoyou._tasks.active(card_id):
+                raise ConflictError("任务尚在处理，不能核对为重启后的未知执行")
+        # File I/O does not hold the polling/admission condition lock.
+        self._xiaoyou.reconcile_task(card_id, run_id)
+        card = self.card_store.get(card_id)
+        if not card or card.get("run_id") != run_id:
+            raise ConflictError("核对期间任务已进入另一轮，未覆盖新任务")
+        confirmed = card["state"] == "done" and (self.card_store.dispatch(card_id) or {}).get("state") == "succeeded"
+        return {"status": "confirmed" if confirmed else "unconfirmed",
+                "card": presentation.card(card, self.runtime_id, self.card_store.message)}
+
     def _card_changed(self, card: Dict[str, Any]) -> None:
         if card["state"] in ACTIVE:
             return
+        if card["state"] == "unknown" and self._xiaoyou.cards.dispatch(card["id"]):
+            return  # An unconfirmed execution is not a terminal failure.
         with self._changed:
             message_id = self._held.pop(card["id"], None)
         if message_id is not None:
             self._settle(message_id, card)
 
-    def _settle(self, message_id: str, card: Dict[str, Any]) -> None:
+    def _settle(self, message_id: str, card: Dict[str, Any], reply: Optional[str] = None) -> None:
         """等着一件事结束的消息：那件事结束了，把最终的话填进去。"""
-        said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
-        reply = said[-1] if said else card["brief"]
+        if reply is None:
+            said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
+            reply = said[-1] if said else card["brief"]
         if card["state"] == "done":
             self._update(message_id, status="done", reply=reply, brief=card["brief"],
                          mood=card["mood"], stage=None, helper=None, finished_at=time.time())
@@ -1257,6 +1401,9 @@ class Service:
 
     def _snapshot(self, message: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = dict(message)
+        snapshot.pop("_effects", None)
+        snapshot.pop("_effect_owner", None)
+        snapshot.pop("_resume_effects", None)
         snapshot["presentation"] = presentation.response(message, self.runtime_id)
         # Current replies must not wait behind a paginated history replay. These
         # are the same log records/revisions as /sync, never request-local revs.
@@ -1332,7 +1479,7 @@ class Service:
         self.review.close()
         with self._changed:
             self._closed = True
-            workers = list(self._busy.values())
+            workers = self.loop.stop()
         self._xiaoyou.close()
         for worker in workers:
             worker.join(timeout=5)
@@ -1342,7 +1489,8 @@ class Service:
         for message_id in list(self._messages):
             if len(self._messages) <= MAX_KEPT_MESSAGES:
                 break
-            if self._messages[message_id]["status"] in FINISHED:
+            if self._messages[message_id]["status"] in FINISHED and not any(
+                    item.get("state") != "succeeded" for item in self._messages[message_id].get("_effects", [])):
                 del self._messages[message_id]
 
     def _update(self, message_id: str, strict: bool = False, **fields: Any) -> None:
@@ -1379,6 +1527,67 @@ class Service:
             # 再把投影的新修订号写下去；操作状态和结果在上面公开之前已经落盘了。
             self._flush(captured, strict=strict)
 
+    def _effects_for(self, message_id):
+        with self._changed:
+            message = self._messages[message_id]
+            conversation = message["conversation"]
+            delegated = bool(message.get("hop") or message.get("pin"))
+            saved = message.get("_effects", [])
+            if not valid_effects(saved):
+                raise EffectUncertain("保存的操作记录无法读取，需要先核对。")
+            owner = message.get("_effect_owner") or (
+                {"owner": self.runtime_id, "generation": None} if delegated else self._effect_owner(conversation))
+        def guard():
+            if self._closed:
+                raise EffectFenceError("Runtime 正在关闭，未开始新的操作。")
+            if not delegated and self._effect_owner(conversation) != owner:
+                raise EffectFenceError("对话负责人已经改变，停止旧轮次的操作与回复。")
+        def checkpoint(records):
+            # Admission, handoff and claims share this serialization boundary.
+            with self._write_lock:
+                with self._changed:
+                    guard()
+                    current = self._messages.get(message_id)
+                    if current is None or current.get("operation_state") != "running":
+                        raise EffectUncertain("这轮请求已经结束，不能领取新的操作。")
+                    check_effect_transition(current.get("_effects", []), records, message_id)
+                try:
+                    self._update(message_id, strict=True, _effects=records, _effect_owner=owner)
+                except OSError:
+                    if self._ledger.saved_effects(message_id) != records:
+                        raise
+                    # A projection/receipt failure after journal commit does
+                    # not retract the claim/result that is already durable.
+                    with self._changed:
+                        self._messages[message_id].update(_effects=records, _effect_owner=owner)
+        return Effects(message_id, saved, checkpoint, guard)
+
+    def _effect_owner(self, conversation):
+        view = self.owner(conversation)
+        if view.get("unresolved") or view.get("conflict"):
+            raise EffectFenceError("对话负责人尚未确认。")
+        return {"owner": view.get("owner") or self.runtime_id, "generation": view.get("generation", 0)}
+
+    def retry_effects(self):
+        """Retry saved outcomes/unclaimed inputs after a storage failure, never a model decision."""
+        if self._closed:
+            return
+        with self._changed:
+            candidates = [item["id"] for item in self._messages.values()
+                          if item.get("status") == "running" and item.get("operation_state") == "running"
+                          and item["id"] not in self._claimed and item.get("_effects")
+                          and valid_effects(item["_effects"]) and all(effect["state"] in ("pending", "succeeded")
+                              for effect in item["_effects"])]
+        for mid in candidates:
+            try:
+                self._update(mid, strict=True, _resume_effects=True)
+            except OSError:
+                continue
+            with self._changed:
+                conversation = self._messages[mid]["conversation"]
+                if mid not in self._lanes.get(conversation, ()):
+                    self._line_up(conversation, mid)
+
     def _report(self, message_id: str, kind: str, agent: Optional[str], text: str) -> None:
         """小幽报告这一轮走到了哪一步。"""
         with self._changed:
@@ -1407,26 +1616,6 @@ class Service:
             self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
             self._changed.notify_all()
 
-    def _drain(self, conversation: str) -> None:
-        """处理一个对话里排着的消息，直到排空。"""
-        with self._slots:
-            while True:
-                with self._changed:
-                    lane = self._lanes.get(conversation)
-                    if not lane:
-                        self._lanes.pop(conversation, None)
-                        self._busy.pop(conversation, None)
-                        return
-                    item = lane.popleft()
-                if isinstance(item, str):
-                    self._handle(item)
-                    continue
-                try:
-                    item()
-                except Exception as error:  # 工作线程不能死
-                    sys.stderr.write("这条线上的一件事出错了：%s: %s\n" % (
-                        type(error).__name__, error))
-
     # ---- 对话负责人（ownership.py，设计第 6 节） ----
 
     def _route(self, message: Dict[str, Any]) -> bool:
@@ -1434,6 +1623,17 @@ class Service:
 
         只管主人直接说的话（hop 为 0、不是在某件事里面补充）：替别的电脑执行的派活、进行中
         的事留在执行它的那台。检查和领取在同一把锁里，移交（handoff）也要这把锁，中间没有窗口。"""
+        if self.mesh is None and self._xiaoyou._config.mesh_secret:
+            self._parked[message["id"]] = message["conversation"]
+            return False
+        if message.get("_effects") and not (message.get("hop") or message.get("pin")):
+            try:
+                if message.get("_effect_owner") != self._effect_owner(message["conversation"]):
+                    self._parked[message["id"]] = message["conversation"]
+                    return False
+            except EffectFenceError:
+                self._parked[message["id"]] = message["conversation"]
+                return False
         if self.mesh is None or message.get("hop", 0) or message.get("pin") \
                 or (message.get("relay_to") and not message.get("routed")):
             return True
@@ -1514,12 +1714,21 @@ class Service:
         """调用时拿着锁：这段对话现在能不能交出去。"""
         if self._lanes.get(conversation) or conversation in self._busy:
             return "这段对话还有话在处理，等处理完再交"
+        if any(item.get("conversation") == conversation and item.get("_effects") and (
+                item.get("status") not in FINISHED or any(effect.get("state") in ("pending", "running", "unknown")
+                    for effect in item["_effects"]))
+                for item in self._messages.values()):
+            return "这段对话还有操作结果待核对，先确认原操作再移交"
         if any(self._messages.get(item, {}).get("conversation") == conversation for item in self._claimed) \
                 or conversation in self._parked.values():
             return "这段对话还有话在处理，等处理完再交"
         active = [card for card in self._xiaoyou.cards.recent(conversation, 10 ** 6)
-                  if card["state"] in ACTIVE and not card.get("mesh_origin") and not card.get("monitoring_only")]
+                  if (card["state"] in ACTIVE or (card["state"] == "unknown"
+                      and self._xiaoyou.cards.dispatch(card["id"])))
+                  and not card.get("mesh_origin") and not card.get("monitoring_only")]
         if active:
+            if active[0]["state"] == "unknown":
+                return "这段对话里还有执行结果待核对（%s），核对后再交" % active[0]["title"]
             return "这段对话里还有事在做（%s），做完再交" % active[0]["title"]
         return None
 
@@ -1527,7 +1736,8 @@ class Service:
         with self._changed:
             message = self._messages.get(message_id)
             # 只领还没开始的：同一句话排了两次、或者已经结束了，都不再处理。
-            if (message is None or message["operation_state"] != "pending"
+            if (message is None or (message["operation_state"] != "pending" and not (
+                    message["operation_state"] == "running" and message.get("_resume_effects")))
                     or message_id in self._claimed):
                 return
             self._parked.pop(message_id, None)
@@ -1615,8 +1825,12 @@ class Service:
                 self._update(message_id, stage="交给 %s 了" % name, mood="busy")
             return
         try:
-            with self._reply_writer.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
-                if message.get("attachments"):
+            scope = self._effects_for(message_id)
+            with self._xiaoyou.effects(scope), self._reply_writer.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
+                if message.get("_resume_effects"):
+                    turn = self._xiaoyou.resume_effects(scope, message,
+                        lambda kind, agent, detail: self._report(message_id, kind, agent, detail))
+                elif message.get("attachments"):
                     turn = self._xiaoyou.hear_images(text, conversation, message_id,
                         message["attachments"], asked=asked, hop=hop)
                 else:
@@ -1625,6 +1839,16 @@ class Service:
                         effort=effort, model=model,
                         report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail),
                     )
+                scope.guard()
+        except EffectUncertain as error:
+            self._fail(message_id, conversation, text, str(error), pin, unknown=True)
+            return
+        except OSError:
+            if "scope" in locals() and scope.selected and not scope.uncertain:
+                self._update(message_id, _resume_effects=True, stage="排队中：操作已保存，等待存储恢复")
+                return
+            self._fail(message_id, conversation, text, "操作记录暂时无法保存，这轮没有开始新的操作。", pin)
+            return
         except AgentError as error:
             self._fail(message_id, conversation, text, str(error), pin)
             return
@@ -1644,16 +1868,29 @@ class Service:
             return
         self._update(
             message_id, status="done", reply=turn.reply, brief=turn.brief, mood=turn.mood,
-            agent=turn.agent, card=turn.card, stage=None, helper=None, partial="",
+            agent=turn.agent, card=turn.card, started=turn.started, stage=None, helper=None, partial="",
             finished_at=time.time(),
+            **({"operation_state": "unknown"} if scope.uncertain else {}),
         )
 
-    def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False) -> None:
+    def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False,
+              unknown: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
+        if unknown:
+            original = self.card_store.message(message_id + ":you")
+            existing = self.card_store.get(original.get("task")) if original else None
+            if existing and existing["conversation"] == conversation and not existing.get("monitoring_only"):
+                if self.card_store.message(message_id + ":reply") is None:
+                    self._reply_writer.by(cause=message_id).reply(existing["id"], error,
+                        turn_id=message_id, scope="task" if pin else "main", kind="note")
+                self._update(message_id, status="failed", operation_state="unknown", error=error,
+                    mood="oops", stage=None, helper=None, card=existing["id"], partial="", finished_at=time.time())
+                return
         card = self._reply_writer.by(cause=message_id).task_open(conversation, text, "failed")
         self._reply_writer.by(cause=message_id).exchange(card["id"], said=text, say=error, brief=error, mood="oops",
                                   turn_id=message_id, scope="task" if pin else "main")
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
             card=card["id"], partial="", finished_at=time.time(),
+            **({"operation_state": "unknown"} if unknown else {}),
         )

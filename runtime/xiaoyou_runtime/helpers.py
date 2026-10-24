@@ -4,7 +4,8 @@ config.json 里写的帮手照旧；这里记的是之后加的，放在 state/h
 一起建起来，加了、删了都立刻生效，不用重启。每个帮手用和 config.json 一样的规则校验
 （config._agent），所以两处写出来的帮手没有差别。
 
-接入模型两种方式：
+接入模型三种方式：
+- 模型服务：Magpie 管供应商和协议转换，帮手只拿本机网关凭据。
 - 填 Key：Key 写进 state/helper-secrets/<帮手名>.key（只有本机账号能读），帮手用 env_files
   按服务商自己的环境变量读，Key 不进 helpers.json，也不回给客户端。
 - 订阅登录：用这台电脑上这个 harness 自己的登录（比如 codex login、在 pi 里 /login），这里
@@ -26,19 +27,18 @@ from . import config as config_module
 from .config import AgentSpec, ConfigError
 
 FORMAT = 1
-# 每种 harness：命令、怎么登录（None 是不支持订阅登录）、填 Key 时认哪些服务商的环境变量。
+# 每种 harness：命令、怎么登录（None 是不支持订阅登录）。填 Key 和 harness 无关：任何 harness 都能
+# 填任何服务商的 Key，按服务商自己的环境变量交给它；能不能用上看那个 harness 认不认这个变量。
 HARNESSES: Dict[str, Dict[str, Any]] = {
-    "claude_code": {"label": "Claude Code", "command": "claude",
-                    "login": "在这台电脑上用 claude 登录过就行",
-                    "providers": {"anthropic": "ANTHROPIC_API_KEY"}},
-    "codex": {"label": "Codex", "command": "codex", "login": "在这台电脑上运行过 codex login 就行",
-              "providers": {}},
-    "dsh": {"label": "DeepSeek（dsh）", "command": "dsh", "login": None,
-            "providers": {"deepseek": "DEEPSEEK_API_KEY"}},
-    "pi": {"label": "pi", "command": "pi", "login": "在 pi 里用 /login 登录过就行",
-           "providers": {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
-                         "deepseek": "DEEPSEEK_API_KEY", "google": "GEMINI_API_KEY",
-                         "openrouter": "OPENROUTER_API_KEY"}},
+    "claude_code": {"label": "Claude Code", "command": "claude", "login": "在这台电脑上用 claude 登录过就行"},
+    "codex": {"label": "Codex", "command": "codex", "login": "在这台电脑上运行过 codex login 就行"},
+    "dsh": {"label": "DeepSeek（dsh）", "command": "dsh", "login": None},
+    "pi": {"label": "pi", "command": "pi", "login": "在 pi 里用 /login 登录过就行"},
+}
+# 填 Key 时的服务商 → 环境变量；custom 是自己写变量名（env）。
+PROVIDERS: Dict[str, str] = {
+    "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "deepseek": "DEEPSEEK_API_KEY",
+    "google": "GEMINI_API_KEY", "openrouter": "OPENROUTER_API_KEY",
 }
 MAX_KEY_CHARS = 4096
 MAX_DESCRIPTION_CHARS = 200
@@ -52,10 +52,10 @@ def options() -> List[Dict[str, Any]]:
     """添加帮手时能选的 harness：这台电脑装了没有、能怎么接入模型。"""
     rows = []
     for harness, row in HARNESSES.items():
-        ways = (["key"] if row["providers"] else []) + (["login"] if row["login"] else [])
         rows.append({"harness": harness, "label": row["label"],
                      "installed": shutil.which(row["command"]) is not None,
-                     "ways": ways, "providers": sorted(row["providers"]), "login_hint": row["login"]})
+                     "ways": ["magpie", "key"] + (["login"] if row["login"] else []),
+                     "providers": sorted(PROVIDERS) + ["custom"], "login_hint": row["login"]})
     return rows
 
 
@@ -81,10 +81,18 @@ class Registry:
         return [row for row in rows or [] if isinstance(row, dict) and isinstance(row.get("name"), str)]
 
     def _spec(self, row: Dict[str, Any]) -> AgentSpec:
-        raw = {key: value for key, value in row.items() if key not in ("name", "access", "provider", "added_at")}
+        raw = {key: value for key, value in row.items()
+               if key not in ("name", "access", "provider", "env", "added_at", "gateway_url", "grants", "grant_revision", "model_info")}
         if row.get("access") == "key":
-            env = HARNESSES[row["type"]]["providers"][row["provider"]]
+            env = row.get("env") or PROVIDERS.get(row.get("provider", ""), "")
             raw["env_files"] = {env: str(self._secrets / ("%s.key" % row["name"]))}
+        elif row.get("access") == "magpie":
+            from .helper_models import binding, ModelServiceError
+            try:
+                raw.update(binding(row, self._path.parent / "helper-config" / row["name"],
+                                   self._secrets / ("%s.key" % row["name"])))
+            except (ModelServiceError, KeyError) as error:
+                raise HelperError("模型服务登记不正确：%s" % error) from None
         try:
             spec = config_module._agent(row["name"], raw, self._base, 0, {})
         except ConfigError as error:
@@ -135,11 +143,33 @@ class Registry:
         if "effort" in row:
             row["efforts"] = list(config_module.EFFORTS_BY_TYPE[harness])
         key_value = None
-        if access == "key":
+        if access == "magpie":
+            from .helper_models import address, ModelServiceError
+            try:
+                row["gateway_url"] = address(body.get("gateway_url"))
+            except ModelServiceError as error:
+                raise HelperError(str(error))
+            if not row.get("model"):
+                raise HelperError("请先从模型服务选择一个模型")
+            row["model_info"] = body.get("model_info", {})
+            supported = row["model_info"].get("efforts", [])
+            row["efforts"] = [level for level in config_module.EFFORTS_BY_TYPE[harness]
+                              if level in supported or (level == "off" and "none" in supported)]
+            if row.get("effort") and row["effort"] not in row["efforts"]:
+                raise HelperError("这个模型没有提供所选的努力程度，请刷新模型列表")
+            key_value = body.get("key", "magpie")
+            if not isinstance(key_value, str) or not key_value.strip() or len(key_value) > MAX_KEY_CHARS \
+                    or any(ch in key_value for ch in "\r\n"):
+                raise HelperError("模型服务的访问凭据不正确")
+        elif access == "key":
             provider = body.get("provider")
-            if provider not in HARNESSES[harness]["providers"]:
-                raise HelperError("%s 填 Key 时服务商只能是 %s" % (
-                    HARNESSES[harness]["label"], "、".join(HARNESSES[harness]["providers"]) or "（不支持填 Key）"))
+            if provider == "custom":
+                env = body.get("env")
+                if not isinstance(env, str) or not config_module.ENV_NAME.match(env):
+                    raise HelperError("自定义服务商要写环境变量名（字母、数字、下划线，不以数字开头）")
+                row["env"] = env
+            elif provider not in PROVIDERS:
+                raise HelperError("服务商只能是 %s，或者 custom（自己写环境变量名）" % "、".join(PROVIDERS))
             key_value = body.get("key")
             if not isinstance(key_value, str) or not key_value.strip() or len(key_value) > MAX_KEY_CHARS:
                 raise HelperError("要填 API Key")
@@ -148,7 +178,7 @@ class Registry:
             if not HARNESSES[harness]["login"]:
                 raise HelperError("%s 不支持订阅登录，要填 Key" % HARNESSES[harness]["label"])
         else:
-            raise HelperError("access 只能是 key（填 Key）或 login（订阅登录）")
+            raise HelperError("access 只能是 magpie（模型服务）、key（填 Key）或 login（订阅登录）")
         with self._lock:
             if name in self._reserved or any(item["name"] == name for item in self._rows):
                 raise HelperError("已经有叫 %s 的帮手了" % name)
@@ -179,12 +209,39 @@ class Registry:
                 raise
             self._remove_secret(name)
 
+    def grants(self, name: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = next((item for item in self._rows if item["name"] == name), None)
+            return dict(row["grants"]) if row is not None and "grants" in row else None
+
+    def set_grants(self, name: str, grants: Dict[str, Any]) -> None:
+        with self._lock:
+            index = next((i for i, row in enumerate(self._rows) if row["name"] == name), None)
+            if index is None:
+                raise HelperError("没有这个界面上添加的帮手")
+            previous = self._rows[index]
+            self._rows[index] = dict(previous, grants=grants, grant_revision=previous.get("grant_revision", 0) + 1)
+            try:
+                self._save()
+            except OSError:
+                self._rows[index] = previous
+                raise
+
+    def policy(self, name: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = next((item for item in self._rows if item["name"] == name), None)
+            if row is None:
+                return None
+            return {"grants": dict(row.get("grants", {})), "revision": row.get("grant_revision", 0)}
+
     def _write_secret(self, name: str, value: str) -> None:
         self._secrets.mkdir(parents=True, exist_ok=True)
         path = self._secrets / ("%s.key" % name)
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
         if os.name == "posix":
             os.chmod(path, 0o600)
 
@@ -209,5 +266,5 @@ class Registry:
             row = next((item for item in self._rows if item["name"] == name), None)
         if row is None:
             return None
-        return {key: row[key] for key in ("name", "type", "access", "provider", "model", "effort",
+        return {key: row[key] for key in ("name", "type", "access", "provider", "env", "model", "effort", "gateway_url", "grants",
                                           "description", "added_at") if key in row}

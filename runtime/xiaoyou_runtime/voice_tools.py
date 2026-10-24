@@ -61,13 +61,16 @@ class Toolbox:
                  check: Callable[[Dict[str, Any]], Optional[str]],
                  lookup: Callable[[str], Optional[str]], memory: Any = None,
                  recall: Optional[Callable[[str], str]] = None, promises: Any = None,
-                 conversation: str = "default", only: Optional[Iterable[str]] = None):
+                 conversation: str = "default", only: Optional[Iterable[str]] = None,
+                 before_effect: Optional[Callable[[], None]] = None, effects=None):
         self._helpers = helpers
         self._memory = memory  # memory.OwnerMemory；None 就没有 remember / replace / forget
         self._recall = recall  # recall(query) → 给她看的结果；None 就没有 recall
         self._promises = promises  # promises.Promises；None 就没有 track / resolve
         self._conversation = conversation
         self._only = set(only) if only is not None else None
+        self._before_effect = before_effect
+        self._effects = effects
         self._efforts = efforts
         self._models = models
         self._check = check
@@ -186,6 +189,22 @@ class Toolbox:
         self.calls.append((name, args))
         if self._only is not None and name not in self._only:
             return "这一轮没有 %s 这个工具" % name, True
+        if name in ("remember", "replace") and self._memory is not None:
+            from .memory import _checked
+            _, problem = _checked(str(args.get("note") or ""), str(args.get("quote") or ""))
+            if problem:
+                return problem, True
+        if name in ("remember", "replace", "forget", "track", "resolve"):
+            def invoke():
+                if self._before_effect is not None:
+                    self._before_effect()
+                return self._call(name, args)
+            if self._effects is not None:
+                return self._effects.run(name, args, invoke)
+            return invoke()
+        return self._call(name, args)
+
+    def _call(self, name: str, args: Any) -> Tuple[str, bool]:
         if name == "recall" and self._recall is not None:
             query = str(args.get("query") or "").strip()
             return (self._recall(query), False) if query else ("要写想找什么", True)

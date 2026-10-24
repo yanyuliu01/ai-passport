@@ -1,12 +1,112 @@
 """Read one known native source, without resuming it or changing its files."""
 import base64
 import json
+import os
 import re
 from pathlib import Path
 
 from .conversation_directory import uid, agent_home, home_scope
 from .desktop_sync import Cursor, DesktopSync, MAX_LINE_BYTES
 from .message_log import entry_message
+
+MAX_EXECUTION_BYTES = 16 * 1024 * 1024
+
+
+def execution(spec, binding):
+    """Read a completed, identity-bound Codex turn without resuming a session.
+
+    Observation history is deliberately insufficient evidence: commentary, a
+    final-looking message, or another turn's completion cannot settle a run.
+    Older/unsupported formats and sources beyond the bounded scan stay unknown.
+    """
+    if spec.type != 'codex':
+        return None
+    sid, turn = binding.get('native_session_id'), binding.get('native_turn_id')
+    if (not isinstance(sid, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', sid)
+            or not isinstance(turn, str) or not turn):
+        return None
+    home = agent_home(spec)
+    if home_scope(home) != binding.get('native_scope'):
+        return None
+    root = home / 'sessions'
+    paths = [p for p in root.rglob('*' + sid + '.jsonl')
+             if 'subagents' not in p.parts and not p.is_symlink()
+             and p.resolve().is_relative_to(root.resolve())]
+    if len(paths) != 1:
+        return None
+    path = paths[0]
+    with path.open('rb') as stream:
+        original = os.fstat(stream.fileno())
+        if original.st_size > MAX_EXECUTION_BYTES:
+            return None
+        used, identity, active, answer, completed = 0, False, None, '', None
+        while used < original.st_size:
+            line = stream.readline(min(MAX_LINE_BYTES + 1, original.st_size - used))
+            used += len(line)
+            if not line or len(line) > MAX_LINE_BYTES or not line.endswith(b'\n'):
+                return None
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeError):
+                return None
+            if not isinstance(event, dict) or not isinstance(event.get('payload'), dict):
+                return None
+            payload, kind = event['payload'], event.get('type')
+            if kind == 'session_meta':
+                source = payload.get('source')
+                if (payload.get('id') != sid or payload.get('parent_thread_id')
+                        or isinstance(source, dict) and 'subagent' in source):
+                    return None
+                identity = True
+                continue
+            if not identity:
+                return None
+            if kind == 'event_msg':
+                event_type, tid = payload.get('type'), payload.get('turn_id')
+                if event_type == 'task_started':
+                    if tid == turn and (active == turn or completed is not None):
+                        return None  # Ambiguous duplicate/reused turn identity.
+                    active, answer = tid, ''
+                elif event_type in ('turn_aborted', 'task_failed'):
+                    if tid == turn or active == turn:
+                        return None
+                    active, answer = None, ''
+                elif event_type == 'task_complete':
+                    if active == turn and tid == turn:
+                        text = payload.get('last_agent_message')
+                        text = text.strip() if isinstance(text, str) else answer
+                        if not text:
+                            return None
+                        if answer and text != answer:
+                            return None
+                        completed = text
+                    elif tid == turn:
+                        return None
+                    active, answer = None, ''
+            elif kind == 'turn_context':
+                # A context change with no matching start/end range is a gap.
+                tid = payload.get('turn_id')
+                if active == turn and tid not in (None, turn):
+                    return None
+            elif kind == 'response_item' and active == turn:
+                if (payload.get('type') == 'message' and payload.get('role') == 'assistant'
+                        and payload.get('phase') in ('final', 'final_answer')
+                        and payload.get('channel') in (None, '', 'final', 'final_answer')):
+                    from .desktop_content import message_text
+                    answer = message_text(payload.get('content'))
+        latest = os.fstat(stream.fileno())
+        # Appends are safe only on a subsequent query of a stable snapshot.
+        if (latest.st_size, latest.st_mtime_ns, latest.st_ino) != (
+                original.st_size, original.st_mtime_ns, original.st_ino):
+            return None
+    if completed is None:
+        return None
+    try:
+        completed.encode('utf-8')
+    except UnicodeError:
+        return None
+    from .desktop_content import redact_credentials
+    return redact_credentials(completed)
 
 
 class _ReadOnly:

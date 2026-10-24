@@ -24,6 +24,7 @@ R3.3 起和任务一样走“快照 + 日志”（world.py）：每次变化只�
 import hashlib
 import json
 import sys
+from copy import deepcopy
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -95,6 +96,12 @@ class Ledger:
     @property
     def path(self) -> Path:
         return self._path
+
+    def saved_effects(self, message_id):
+        """Effects whose journal append and fsync already returned successfully."""
+        if self._journal is None:
+            return None
+        return deepcopy(self._journal._last.get("m:" + message_id, {}).get("_effects"))
 
     def load(self) -> Tuple["OrderedDict[str, Dict[str, Any]]", "OrderedDict[str, Dict[str, Any]]", int]:
         """读回（消息, 去重表, 见过的最大序号）。没有文件是第一次启动；文件坏了不拒绝启动，

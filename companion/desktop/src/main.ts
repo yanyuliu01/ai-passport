@@ -197,6 +197,23 @@ async function main(): Promise<void> {
   ipc('directory-history', value => { const input=object(value); return client.directoryHistory(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100),input.cursor === undefined ? undefined : requiredString(input.cursor,1024)); });
   ipc('directory-open', value => { const input=object(value); return client.directoryOpen(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100)); });
   ipc('directory-metadata', value => { const input=object(value); return client.directoryMetadata(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100)); });
+  ipc('helper-options', value => client.helperOptions(requiredString(object(value).space, 100)));
+  ipc('helper-models', value => { const input = object(value);
+    return client.helperModels(requiredString(input.space, 100), { gateway_url: requiredString(input.gateway_url, 512),
+      ...(input.key ? { key: requiredString(input.key, 4096) } : {}) }); });
+  ipc('helper-grants', value => { const input = object(value);
+    return client.helperGrants(requiredString(input.space, 100), requiredString(input.name, 24), object(input.grants)); });
+  ipc('helper-add', value => { const input = object(value), helper = object(input.helper);
+    const text = (key: string, limit: number) => helper[key] === undefined || helper[key] === '' ? undefined : requiredString(helper[key], limit);
+    const body: Json = { name: requiredString(helper.name, 24), harness: requiredString(helper.harness, 32), access: requiredString(helper.access, 8) };
+    for (const [key, limit] of [['model', 64], ['effort', 16], ['provider', 32], ['env', 64], ['description', 200], ['gateway_url', 512]] as const) { const item = text(key, limit); if (item !== undefined) body[key] = item; }
+    if (body.access === 'key' || (body.access === 'magpie' && helper.key)) body.key = requiredString(helper.key, 4096);
+    return client.addHelper(requiredString(input.space, 100), body); });
+  ipc('helper-remove', value => { const input = object(value); return client.removeHelper(requiredString(input.space, 100), requiredString(input.name, 24)); });
+  ipc('open-link', value => { const href = requiredString(value, 2000);
+    // The Gateway only emits these; check again so a renderer bug cannot open anything else.
+    if (!/^(https?:\/\/|mailto:)/i.test(href)) throw new Error('只能打开网页或邮件链接');
+    return shell.openExternal(href); });
   ipc('open-native', value => { const input = object(value); return shell.openExternal(client.nativeSession(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100))); });
 
   ipc('select-conversation', value => { const input = object(value); client.selectConversation(requiredString(input.space, 100), requiredString(input.conversation, 100)); });

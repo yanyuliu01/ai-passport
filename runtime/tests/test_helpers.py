@@ -37,6 +37,16 @@ class RegistryTests(TempDirCase):
         self.assertFalse(key_file.exists())
         self.assertEqual(self.registry().specs(), [])
 
+    def test_any_harness_takes_any_key_including_a_custom_variable(self):
+        registry = self.registry()
+        spec = registry.add({"name": "codex-key", "harness": "codex", "access": "key",
+                             "provider": "openai", "key": "sk-1"})
+        self.assertEqual(list(spec.env_files), ["OPENAI_API_KEY"])
+        spec = registry.add({"name": "claude-moon", "harness": "claude_code", "access": "key",
+                             "provider": "custom", "env": "ANTHROPIC_AUTH_TOKEN", "key": "sk-2"})
+        self.assertEqual(list(spec.env_files), ["ANTHROPIC_AUTH_TOKEN"])
+        self.assertEqual(registry.view("claude-moon")["env"], "ANTHROPIC_AUTH_TOKEN")
+
     def test_a_subscription_helper_records_only_the_way(self):
         spec = self.registry().add({"name": "codex2", "harness": "codex", "access": "login"})
         self.assertEqual((spec.type, spec.env_files), ("codex", {}))
@@ -48,7 +58,8 @@ class RegistryTests(TempDirCase):
             ({"name": "bad name", "harness": "pi", "access": "login"}, "名字"),
             ({"name": "x", "harness": "gpt", "access": "login"}, "harness"),
             ({"name": "x", "harness": "dsh", "access": "login"}, "不支持订阅登录"),
-            ({"name": "x", "harness": "codex", "access": "key", "provider": "openai", "key": "k"}, "服务商"),
+            ({"name": "x", "harness": "codex", "access": "key", "provider": "acme", "key": "k"}, "服务商"),
+            ({"name": "x", "harness": "codex", "access": "key", "provider": "custom", "env": "1BAD", "key": "k"}, "环境变量名"),
             ({"name": "x", "harness": "pi", "access": "key", "provider": "openai"}, "API Key"),
             ({"name": "x", "harness": "pi", "access": "login", "effort": "ultra"}, "effort"),
         ]
@@ -59,12 +70,13 @@ class RegistryTests(TempDirCase):
         with self.assertRaisesRegex(helpers.HelperError, "config.json"):
             registry.remove("claude")
 
-    def test_options_say_which_harnesses_take_a_key_or_a_login(self):
+    def test_options_offer_every_key_to_every_harness_and_login_where_it_exists(self):
         rows = {row["harness"]: row for row in helpers.options()}
-        self.assertEqual(rows["dsh"]["ways"], ["key"])
-        self.assertEqual(rows["codex"]["ways"], ["login"])
-        self.assertEqual(rows["pi"]["ways"], ["key", "login"])
-        self.assertIn("openai", rows["pi"]["providers"])
+        self.assertEqual(rows["dsh"]["ways"], ["magpie", "key"])
+        self.assertEqual(rows["codex"]["ways"], ["magpie", "key", "login"])
+        self.assertEqual(rows["pi"]["ways"], ["magpie", "key", "login"])
+        self.assertEqual(rows["codex"]["providers"], rows["pi"]["providers"])
+        self.assertIn("custom", rows["dsh"]["providers"])
 
 
 class ServiceTests(TempDirCase):

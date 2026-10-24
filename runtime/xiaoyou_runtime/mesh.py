@@ -1211,6 +1211,7 @@ class Mesh:
 
     def start(self) -> None:
         self.claim_home()
+        self._service.recover_tasks()
         for relay in self._service.relayed():
             with self._lock:
                 self._relays[relay["id"]] = relay["relay_to"]

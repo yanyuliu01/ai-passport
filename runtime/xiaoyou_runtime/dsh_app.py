@@ -73,8 +73,9 @@ class AcpServer:
         command = list(spec.command) + ["--profile", "acp"]
         # 这个帮手自己的 skill 目录：--patch 是 dsh 自己的参数，写在 --profile 后面。
         from .helper_extras import dsh_skill_patch
+        from .helper_models import dsh_patch
         self._patch: Optional[Path] = None
-        lines = dsh_skill_patch(spec)
+        lines = dsh_skill_patch(spec) + dsh_patch(spec)
         if lines:
             handle, name = tempfile.mkstemp(prefix="dsh-skills-", suffix=".yml")
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -250,8 +251,11 @@ def run(spec: AgentSpec, job: Job, control: Control, env: Optional[Dict[str, str
 def _set_tier(server: AcpServer, session_id: str, deadline: float, tier: Any) -> None:
     model, effort = tier
     if model:
+        from .helper_models import URL_ENV, PROVIDER
+        spec = getattr(server, "_spec", None)
+        provider = PROVIDER if spec is not None and URL_ENV in spec.env else PROMPT_PROVIDER
         request_id = server.request("session/set_config_option", {
-            "sessionId": session_id, "configId": "model", "value": _model_value(model)})
+            "sessionId": session_id, "configId": "model", "value": json.dumps([provider, model], separators=(",", ":"))})
         server.expect(request_id, deadline, "session/set_config_option(model)")
     if effort:
         request_id = server.request("session/set_config_option", {

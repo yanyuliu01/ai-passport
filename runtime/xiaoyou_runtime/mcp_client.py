@@ -14,6 +14,7 @@ import json
 import os
 import queue
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -35,7 +36,11 @@ class McpError(Exception):
 
 def connect(server: Any, connection: Dict[str, Dict[str, str]]) -> "Session":
     session = HttpSession(server, connection) if server.url else StdioSession(server, connection)
-    session.initialize()
+    try:
+        session.initialize()
+    except Exception:
+        session.close()
+        raise
     return session
 
 
@@ -86,6 +91,8 @@ class Session:
             cursor = result.get("nextCursor")
             if not cursor:
                 break
+        else:
+            raise McpError("%s 的工具列表超过翻页上限" % self.server.name)
         return tools
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -193,6 +200,7 @@ class HttpSession(Session):
         self._negotiated: Optional[str] = None
 
     def _post(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        deadline = time.monotonic() + CALL_SECONDS
         request = urllib.request.Request(self.server.url, method="POST",
                                          data=json.dumps(message, ensure_ascii=False).encode("utf-8"))
         request.add_header("Content-Type", "application/json")
@@ -208,8 +216,30 @@ class HttpSession(Session):
                 self._session_id = response.headers.get("Mcp-Session-Id") or self._session_id
                 if "id" not in message:
                     return None  # 通知：服务回 202，没有内容
-                body = response.read(MAX_RESULT_BYTES + 1)
                 kind = response.headers.get("Content-Type", "")
+                sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                expired = threading.Event()
+                def cancel_read() -> None:
+                    expired.set()
+                    if sock is not None:
+                        try:
+                            sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                timer = threading.Timer(max(0.001, deadline - time.monotonic()), cancel_read)
+                timer.daemon = True
+                timer.start()
+                try:
+                    if "text/event-stream" in kind:
+                        result = self._event_result(response, message["id"], deadline)
+                        if expired.is_set():
+                            raise McpError("%s 的事件流已超时" % self.server.name)
+                        return result
+                    body = response.read(MAX_RESULT_BYTES + 1)
+                    if expired.is_set():
+                        raise McpError("%s 的回答已超时" % self.server.name)
+                finally:
+                    timer.cancel()
         except urllib.error.HTTPError as error:
             raise McpError("%s 回答 HTTP %d" % (self.server.name, error.code))
         except (urllib.error.URLError, OSError) as error:
@@ -235,6 +265,34 @@ class HttpSession(Session):
             if isinstance(parsed, dict) and parsed.get("id") == message["id"]:
                 return parsed
         raise McpError("%s 的回答看不懂" % self.server.name)
+
+    def _event_result(self, response: Any, request_id: int, deadline: float) -> Dict[str, Any]:
+        count, data = 0, []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise McpError("%s 的事件流已超时" % self.server.name)
+            # Bound both idle reads and the whole stream, including heartbeat-only streams.
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if sock is not None:
+                sock.settimeout(remaining)
+            line = response.readline(MAX_RESULT_BYTES + 1)
+            count += len(line)
+            if count > MAX_RESULT_BYTES:
+                raise McpError("%s 的结果超过 %d KB" % (self.server.name, MAX_RESULT_BYTES // 1024))
+            text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+            if text.startswith("data:"):
+                data.append(text[5:].lstrip())
+            elif not text and data:
+                try:
+                    parsed = json.loads("\n".join(data))
+                except ValueError:
+                    parsed = None
+                data = []
+                if isinstance(parsed, dict) and parsed.get("id") == request_id:
+                    return parsed
+            if not line:
+                raise McpError("%s 的事件流结束了，没有返回本次结果" % self.server.name)
 
     def request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         message = self._post({"jsonrpc": "2.0", "id": self._id(), "method": method, "params": params})

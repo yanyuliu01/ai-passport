@@ -4,6 +4,7 @@ import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, Phon
 import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
+import { HelperSettings } from './helpers';
 import { DisplayText } from './display-text';
 import { Onboarding } from './onboarding';
 import './style.css';
@@ -16,7 +17,7 @@ type TaskRef = { id: string; runtime: string };
 function App() {
   const [directoryOpen,setDirectoryOpen]=useState(false);
   const [view, setView] = useState<ClientView>(empty), [loaded, setLoaded] = useState(false), [setupOpen, setSetupOpen] = useState(false);
-  const [page, setPage] = useState<Page>('home'), [sidebarOpen, setSidebarOpen] = useState(false);
+  const [page, setPage] = useState<Page>('chat'), [sidebarOpen, setSidebarOpen] = useState(false);
   const [text, setText] = useState(''), [problem, setProblem] = useState(''), [working, setWorking] = useState(false), [sending, setSending] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskRef>(), [target, setTarget] = useState<TaskRef & { legacy: boolean }>();
   const [historyLimit, setHistoryLimit] = useState(100), [completedOpen, setCompletedOpen] = useState(false), [unverifiedOpen, setUnverifiedOpen] = useState(false), [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -43,14 +44,14 @@ function App() {
   const completed = tasks.filter(task => !activeTask(task) && !unverifiedTask(task)).slice().reverse();
   selection.current = space?.id + '/' + space?.selectedConversation;
   const title = page === 'home' ? '首页' : page === 'chat' ? target?.legacy ? '任务续聊' : conversation?.id === 'default' ? '主对话' : conversation?.title || '主对话'
-    : page === 'work' ? '工作记录' : page === 'native' ? '原会话记录' : '连接与设置';
+    : page === 'work' ? '在做的事' : page === 'native' ? '原会话记录' : '设置';
   const messageVersion = messages.filter(message => ['final', 'done', 'failed', 'cancelled'].includes(message.status)).map(message => message.id + ':' + message.rev).join('|');
   useEffect(() => {
     void window.xiaoyou.snapshot().then(value => { setView(value); if (!value.setup?.confirmed) setSetupOpen(true); setLoaded(true); }).catch(() => setProblem('暂时无法连接后台服务'));
     return window.xiaoyou.subscribe(setView);
   }, []);
   useEffect(() => { setHistoryLimit(100); setText(''); setUsage(undefined); }, [space?.id, space?.selectedConversation]);
-  useEffect(() => { setSelectedTask(undefined); setDetail(undefined); setTarget(undefined); setPage('home'); }, [space?.id]);
+  useEffect(() => { setSelectedTask(undefined); setDetail(undefined); setTarget(undefined); setPage('chat'); }, [space?.id]);
   useEffect(() => {
     if (page === 'chat') bottom.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
     if (space && page === 'chat' && document.hasFocus() && document.visibilityState === 'visible') void window.xiaoyou.markRead({ space: space.id, conversation: space.selectedConversation }).catch(() => {});
@@ -104,25 +105,23 @@ function App() {
   const latestTaskMessage = new Map<string, string>();
   for (const message of messages) if (message.task && message.author?.kind !== 'owner') latestTaskMessage.set(String(message._runtimeId) + '/' + message.task, message.id);
   if (!loaded) return <main className="app-loading" role="status">{problem || '正在读取本机设置…'}</main>;
-  if (!view.setup?.confirmed || setupOpen) return <Onboarding view={view} onDone={() => { setSetupOpen(false); setPage('home'); }} />;
+  if (!view.setup?.confirmed || setupOpen) return <Onboarding view={view} onDone={() => { setSetupOpen(false); setPage('chat'); }} />;
   return <div className={'shell ' + (sidebarOpen ? 'sidebar-is-open' : '')}>
     {sidebarOpen && <button className="sidebar-shade" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)} />}
     <aside className="sidebar" aria-label="小幽导航">
       <div className="identity"><Avatar size={42} /><div><strong>小幽</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{space?.connected ? '记录已连接' : '离线 · 保留本机记录'}</small></div></div>
-      <button className={'nav ' + (page === 'home' ? 'selected' : '')} onClick={() => go('home')}><Icon name="home" /><span>首页</span></button>
       <button className={'nav ' + (page === 'chat' && conversation?.id === 'default' && !target?.legacy ? 'selected' : '')} onClick={() => void chooseConversation('default')}><Icon name="chat" /><span>主对话</span>{space?.conversations.find(item => item.id === 'default')?.unread && page !== 'chat' && <i className="unread-dot" />}</button>
-      <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>工作记录</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length}</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
+      <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length} 件等你</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
       <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyou.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
       <div className="side-conversations">{space?.conversations.filter(item => item.id !== 'default' && !item.archived).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{shortTime(item.updatedAt)}</small>}</button>)}
         {!space?.conversations.some(item => item.id !== 'default') && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
-      <button className="nav" onClick={()=>setDirectoryOpen(true)}>统一会话目录</button>
       <div className="side-heading helpers-heading"><span>帮手</span></div>
       <div className="side-helpers">{helpers.map(item => <div className="side-helper" key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => { const task = tasks.find(task => helperMatchesTask(item, task) && activeTask(task)); task ? openTask(task) : setUsage(item.id); }}><span>{item.label}</span><small>{tasks.some(task => helperMatchesTask(item, task) && activeTask(task)) ? tasks.some(task => helperMatchesTask(item, task) && task.state === 'waiting') ? '等你决定' : '进行中' : item.connected ? '暂无工作' : '离线'}</small></button></div>)}
         {!helpers.length && <p className="side-empty">尚无帮手数据</p>}</div>
-      <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>连接与设置</span></button><small>小幽桌面版 {view.version}</small></div>
+      <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>设置</span></button><small>小幽桌面版 {view.version}</small></div>
     </aside>
-    <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div><button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')} title="服务连接与模型实际可用性分别验证"><i className={'dot ' + (space?.connected ? 'online' : '')} />{space?.catchingUp ? '正在同步记录' : space?.connected ? '记录已同步' : '离线记录'}</button></header>
-      {page !== 'home' && page !== 'chat' && <button className="return-home" onClick={() => go('home')}><Icon name="home" />返回首页</button>}
+    <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')} title="服务连接与模型实际可用性分别验证"><i className={'dot ' + (space?.connected ? 'online' : '')} />{space?.catchingUp ? '正在同步记录' : space?.connected ? '记录已同步' : '离线记录'}</button>}</header>
+      {page !== 'home' && page !== 'chat' && <button className="return-home" onClick={() => go('chat')}><Icon name="chat" />返回主对话</button>}
       {problem && <div role="alert" className="alert"><span>{problem}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
       {page === 'home' && <section className="home-page"><Avatar size={156} /><h2>小幽在这里</h2><p>不管在哪台设备，接着聊。</p><div className="home-helpers">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}</div><div className="home-actions"><button className="primary" onClick={() => void chooseConversation('default')}><Icon name="chat" />继续主对话</button><button onClick={() => go('settings')}><Icon name="phone" />连接手机</button></div><p className="home-connection-note">{space?.connected ? '电脑记录已连接 · 手机连接需单独验证' : '电脑连接恢复中 · 本机记录保留'}</p>{awaiting.length > 0 && <button className="quiet-button" onClick={() => go('work')}>{awaiting.length} 件事等你决定 <Icon name="next" /></button>}</section>}
       {page === 'chat' && <>
@@ -169,7 +168,7 @@ function App() {
       {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小幽转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
         {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小幽')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
         {(!detail || !(detail.entries as Json[] | undefined)?.length) && <p className="quiet-empty">尚无可读取的原会话片段。</p>}{selected && !selected.monitoring_only && <button className="primary" onClick={() => void run(() => supplement(selected))}>补充要求</button>}</section>}
-      {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyou.select(id))} />}
+      {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyou.select(id))} onDirectory={() => setDirectoryOpen(true)} />}
     </main>
     {directoryOpen && space && <Directory key={space.id} space={space} onClose={()=>setDirectoryOpen(false)}/>}
     {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyou.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
@@ -209,21 +208,37 @@ function Usage({ helper, tasks, disabled, onClose, onRefresh, onTask }: { helper
     <p className="usage-freshness">{stale ? '缓存或暂无最新数据' : '最近上报'} · {helper.updatedAt ? new Date(helper.updatedAt).toLocaleTimeString('zh-CN') : '尚未上报'}<br />{helper.device}</p><footer><button disabled={disabled || !helper.connected} onClick={onRefresh}><Icon name="refresh" />刷新用量</button>{task && <button className="primary" onClick={() => onTask(task)}>查看当前工作 <Icon name="next" /></button>}</footer>
   </section></div>;
 }
-function Settings({ view, space, disabled, onSetup, onRun, onSelect }: { view: ClientView; space?: SpaceView; disabled: boolean; onSetup(): void; onRun(action: () => Promise<unknown>): Promise<void>; onSelect(id: string): void }) {
+function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory }: { view: ClientView; space?: SpaceView; disabled: boolean; onSetup(): void; onRun(action: () => Promise<unknown>): Promise<void>; onSelect(id: string): void; onDirectory(): void }) {
   const [invitation, setInvitation] = useState(''), [relayURL, setRelayURL] = useState(''), [relayToken, setRelayToken] = useState('');
   const [phone, setPhone] = useState<PhoneConnection>(), [phoneBusy, setPhoneBusy] = useState(false), [phoneNotice, setPhoneNotice] = useState('');
   async function checkPhone() { setPhoneBusy(true); setPhoneNotice(''); try { setPhone(await window.xiaoyou.phoneConnection()); } catch { setPhoneNotice('检测失败，请确认本机服务后重试。'); } finally { setPhoneBusy(false); } }
-  useEffect(() => { void checkPhone(); }, [space?.id, view.setup?.service]);
-  return <section className="settings-page"><h2>手机扫码，和各处的小幽接上话</h2><p className="settings-intro">查看服务、设备和同步状态。关闭窗口后，小幽继续在后台运行。</p>
-    <RelayHostSettings view={view} disabled={disabled} onRun={onRun} />
-    <article className="settings-card vertical"><h3>异地连接手机或电脑</h3><p>手机 App 0.30.1 起支持电脑内置节点，点击「扫码连接电脑」，扫码后核对设备指纹，再在本机确认。一个手机可添加多台电脑，已有连接会保留。</p><p>{view.pairing.relayState} · 已配对 {view.pairing.joined} 台</p><button disabled={disabled || view.pairing.relayState !== '加密通信入口已连接' || Boolean(view.relayHost?.enabled && !view.relayHost.publicURL)} onClick={() => void onRun(() => window.xiaoyou.invite())}>生成连接二维码</button>{view.pairing.relayState === '未设置跨网入口' && <p>先启用上方的常开电脑节点，或在高级设置连接已有入口。</p>}{view.relayHost?.enabled && !view.relayHost.publicURL && <p>节点已在本机运行；补充公网地址并确认入站条件后才能生成异地邀请。</p>}{view.pairing.invitation && <><PairingCode link={view.pairing.invitation} /><details><summary>复制邀请链接</summary><textarea aria-label="生成的邀请" readOnly value={view.pairing.invitation} /><small>仅发送给你自己的设备，邀请含一次性连接凭据。</small></details></>}</article>
-    <details className="settings-card vertical phone-setup"><summary>已有网络连接（兼容入口）</summary><h3><Icon name="phone" />连接手机 App</h3><p>手机连接的是这台电脑提供的小幽服务。桌面记录已同步，并不表示手机已经连通。不同网络请使用下方的加密邀请，需要双方可达的 WSS 入口。</p><ol><li>电脑侧检测当前可用入口。</li><li>复制连接串，发送到你自己的手机；在手机「连接与设置」中粘贴并连接。</li><li>用手机发一句话，再检查两端是否出现同一条记录。</li></ol><button disabled={phoneBusy} onClick={() => void checkPhone()}>{phoneBusy ? '正在核对服务身份…' : '重新检测手机入口'}</button>{phone && <><div className="phone-status-grid"><span>同一网络<strong>{phone.lan === 'computer-verified' ? '电脑侧入口已验证' : '未开放局域网入口'}</strong></span><span>异地连接<strong>{phone.remote === 'existing-private-network' ? '可使用已有私有网络' : '未配置可达入口'}</strong></span></div><p className="phone-note">{phone.note}</p>{phone.routes.map(route => <div className="phone-route" key={route.url}><span>{route.kind === 'lan' ? '同一局域网' : '现有私有网络（如 Tailscale）'}<small>{route.url}</small></span><button disabled={disabled} onClick={() => void onRun(async () => { await window.xiaoyou.copyPhoneConnection(route.url); setPhoneNotice('已复制含连接凭据的连接串。仅发给自己的手机；粘贴后不要留在公开位置。'); })}>复制手机连接串</button></div>)}</>}{phoneNotice && <p role="status">{phoneNotice}</p>}</details>
-    <article className="settings-card"><div><h3>本机服务</h3><p>{view.runtime.message}</p><small>{view.setup?.service === 'bundled' ? '客户端管理' : view.setup?.service === 'external' ? '复用已有服务' : '当前通过已配对设备使用服务'}</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
-    <article className="settings-card vertical"><h3>当前连接</h3>{space?.connections?.map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}<small>{item.local ? '本机回环连接' : '已配对设备 · 加密通道'}</small></span><small>{item.connected ? '已连接' : '等待恢复'}</small></div>)}{!space?.connections?.length && <p>暂无连接</p>}{view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}</article>
-    {view.pairing.requests.map(request => <article className="decision" key={request.id}><h3>{request.name} 请求加入</h3><p>确认这是你正在配对的设备。</p><code>{request.fingerprint}</code><button disabled={disabled} className="primary" onClick={() => void onRun(() => window.xiaoyou.acceptJoin(request.id))}>确认加入</button></article>)}
-    <article className="settings-card vertical"><h3>连接已有小幽</h3><p>在已有设备上生成邀请，再粘贴到这里。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
-    <article className="settings-card"><div><h3>登录时启动</h3><p>系统登录后在后台恢复已确认的连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(false))}>关闭</button></article>
-    <details className="advanced"><summary>高级连接设置</summary><p>首次部署通信入口时使用。入口只转发密文；手机和电脑都主动连接，不需要处于同一网络，也不使用 Tailscale。扫码不会自动创建公网入口。</p><label>WSS 入口地址<input placeholder="wss://你的通信入口" value={relayURL} onChange={event => setRelayURL(event.target.value)} /></label><label>入口访问密钥<input type="password" autoComplete="off" value={relayToken} onChange={event => setRelayToken(event.target.value)} /></label><button disabled={disabled || !relayURL.trim() || relayToken.length < 32} onClick={() => void onRun(async () => { await window.xiaoyou.setRelay({url: relayURL.trim(), token: relayToken}); setRelayToken(''); })}>保存并连接入口</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.importConfig())}>选择已有 Runtime 配置</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.configureRelay())}>导入通信入口</button></details>
+  // One-time pairing needs a reachable relay; without one, the developer options explain how to set it up.
+  const canInvite = view.pairing.relayState === '加密通信入口已连接' && !(view.relayHost?.enabled && !view.relayHost.publicURL);
+  return <section className="settings-page">
+    <div className="settings-group">手机</div>
+    <article className="settings-card vertical">
+      {view.pairing.invitation ? <PairingCode link={view.pairing.invitation} /> : <div><h3>添加手机</h3><p>手机小幽 › 设置 › 添加电脑，扫码后在这里确认。之后换网络也会自动连上。</p></div>}
+      <button className="primary" disabled={disabled || !canInvite} onClick={() => void onRun(() => window.xiaoyou.invite())}>{view.pairing.invitation ? '换一个二维码' : '添加手机'}</button>
+      {!canInvite && <small>这台电脑还没有外网入口，先在下面的开发者选项里设置一次。</small>}
+    </article>
+    {view.pairing.requests.map(request => <article className="decision" key={request.id}><h3>{request.name} 请求加入</h3><p>确认这是你正在配对的设备。</p><code>{request.fingerprint}</code><button disabled={disabled} className="primary" onClick={() => void onRun(() => window.xiaoyou.acceptJoin(request.id))}>确认</button></article>)}
+    <div className="settings-group">这台电脑</div>
+    <article className="settings-card"><div><h3>小幽在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
+    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(false))}>关闭</button></article>
+    <div className="settings-group">帮手</div>
+    <HelperSettings space={space} helpers={space?.helpers || []} disabled={disabled} onRun={onRun} />
+    <div className="settings-group">其他电脑</div>
+    <article className="settings-card vertical">{space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '在线' : '连不上'}</small></div>)}
+      {!space?.connections?.some(item => !item.local) && <p>还没有别的电脑</p>}
+      {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}</article>
+    <details className="advanced" onToggle={event => { if ((event.target as HTMLDetailsElement).open && !phone) void checkPhone(); }}><summary>开发者选项</summary>
+      <p>通信入口、连接串、会话目录和旧的连接方式。正常使用不需要打开。</p>
+      <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
+      <RelayHostSettings view={view} disabled={disabled} onRun={onRun} />
+      <article className="settings-card vertical"><h3>已有网络连接（兼容入口）</h3><p>{view.pairing.relayState} · 已配对 {view.pairing.joined} 台</p><button disabled={phoneBusy} onClick={() => void checkPhone()}>{phoneBusy ? '正在核对服务身份…' : '重新检测手机入口'}</button>{phone && <>{phone.routes.map(route => <div className="phone-route" key={route.url}><span>{route.kind === 'lan' ? '同一局域网' : '现有私有网络'}<small>{route.url}</small></span><button disabled={disabled} onClick={() => void onRun(async () => { await window.xiaoyou.copyPhoneConnection(route.url); setPhoneNotice('已复制含连接凭据的连接串，只发给自己的手机。'); })}>复制连接串</button></div>)}<p className="phone-note">{phone.note}</p></>}{phoneNotice && <p role="status">{phoneNotice}</p>}</article>
+      <article className="settings-card vertical"><h3>连接已有小幽</h3><p>在已有设备上生成邀请，再粘贴到这里。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
+      <article className="settings-card vertical"><h3>通信入口</h3><p>入口只转发密文；手机和电脑都主动连接，不需要在同一网络，也不用 Tailscale。</p><label>WSS 入口地址<input placeholder="wss://你的通信入口" value={relayURL} onChange={event => setRelayURL(event.target.value)} /></label><label>入口访问密钥<input type="password" autoComplete="off" value={relayToken} onChange={event => setRelayToken(event.target.value)} /></label><div><button disabled={disabled || !relayURL.trim() || relayToken.length < 32} onClick={() => void onRun(async () => { await window.xiaoyou.setRelay({url: relayURL.trim(), token: relayToken}); setRelayToken(''); })}>保存并连接入口</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.importConfig())}>选择已有 Runtime 配置</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.configureRelay())}>导入通信入口</button></div></article>
+    </details>
   </section>;
 }
 function RelayHostSettings({ view, disabled, onRun }: { view: ClientView; disabled: boolean; onRun(action: () => Promise<unknown>): Promise<void> }) {
@@ -243,7 +258,7 @@ function RelayHostSettings({ view, disabled, onRun }: { view: ClientView; disabl
 function PairingCode({ link }: { link: string }) {
   const [code, setCode] = useState<{dataURL: string; expiresAt: number}>(), [now, setNow] = useState(Date.now()), [error, setError] = useState('');
   useEffect(() => { let current = true; setCode(undefined); setError(''); void window.xiaoyou.invitationQR(link).then(value => { if (current) setCode(value); }).catch(() => { if(current) setError('二维码无法生成，请重新生成邀请'); }); const timer = setInterval(() => setNow(Date.now()), 1000); return () => { current = false; clearInterval(timer); }; }, [link]);
-  return <div className="pairing-code">{code && now < code.expiresAt ? <><img src={code.dataURL} width={320} height={320} alt="用手机小幽扫描此二维码连接电脑" /><p>手机「连接与设置 → 扫码连接电脑」</p><small>还剩 {Math.max(0,Math.ceil((code.expiresAt-now)/1000))} 秒 · 扫码后请核对设备指纹并在电脑确认</small></> : <p>{error || (code ? '二维码已过期，请重新生成' : '正在生成二维码…')}</p>}</div>;
+  return <div className="pairing-code">{code && now < code.expiresAt ? <><img src={code.dataURL} width={320} height={320} alt="用手机小幽扫描此二维码连接电脑" /><p>手机小幽 › 设置 › 添加电脑</p><small>还剩 {Math.max(0,Math.ceil((code.expiresAt-now)/1000))} 秒 · 扫码后请核对设备指纹并在电脑确认</small></> : <p>{error || (code ? '二维码已过期，请重新生成' : '正在生成二维码…')}</p>}</div>;
 }
 function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(task.worker_session && !task._staleEpoch && !activeTask(task)
   && space?.connections?.some(item => item.runtime === task._runtimeId && item.local && item.connected && item.capabilities.includes('desktop_handoff'))

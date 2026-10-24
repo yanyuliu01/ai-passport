@@ -87,7 +87,7 @@ class RecordTest(TempDirCase):
 class TranscriptFromLogTest(TempDirCase):
     """Step 4: the model's conversation record takes its text from the message log."""
 
-    def test_turns_keep_only_references_and_read_the_log(self):
+    def test_turns_are_projected_without_a_second_transcript_write(self):
         from test_runtime import Scripted, make_xiaoyou
         import json
         claude = Scripted("claude")
@@ -96,10 +96,10 @@ class TranscriptFromLogTest(TempDirCase):
         xiaoyou.hear("你好", "default", "t1")
         turn = store.transcript.turns("default")[-1]
         self.assertEqual(("你好", "re:你好"), (turn["text"], turn["reply"]))
-        saved = json.loads((self.folder / "state" / "transcript.json").read_text("utf-8"))["default"]["turns"][-1]
-        self.assertEqual(("t1:you", "t1:reply"), (saved.get("you_ref"), saved.get("reply_ref")))
-        self.assertNotIn("text", saved)
-        self.assertNotIn("reply", saved)
+        self.assertFalse((self.folder / "state" / "transcript.json").exists())
+        saved = json.loads((self.folder / "state" / "context.json").read_text("utf-8"))["default"]["receipts"]
+        self.assertEqual(["claude"], saved["t1:reply"]["seen"])
+        self.assertNotIn("你好", json.dumps(saved, ensure_ascii=False))
 
     def test_text_not_in_the_log_is_kept_and_missing_log_entries_are_dropped(self):
         from xiaoyou_runtime.store import Transcript

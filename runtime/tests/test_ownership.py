@@ -128,6 +128,12 @@ class OwnershipMeshTests(TempDirCase):
         before = self.mac.service.submit("交之前说的", client_id="m1")
         self.assertTrue(until(lambda: self.mac.get(before["id"]).get("status") == "done", 10))
         early = self.mac.get(before["id"])["card"]
+        # A durable reply can be visible before its conversation lane finishes
+        # cleanup. This scenario hands off an idle conversation.
+        def idle():
+            with self.mac.service._changed:
+                return self.mac.service._busy_reason("default") is None
+        self.assertTrue(until(idle, 10))
         result = self.mac.service.handoff("default", "Windows")
         self.assertEqual((result["status"], result["generation"]), ("applied", 2))
         self.assertTrue(until(lambda: self.win.service.owner("default")["owner"] == self.win.id, 15))

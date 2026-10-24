@@ -863,7 +863,16 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         raise ConfigError(str(error))
     from . import capabilities as capabilities_module
     try:
-        capabilities = capabilities_module.parse(raw.get("capabilities"), [spec.name for spec in agents])
+        helper_names = [spec.name for spec in agents]
+        try:
+            saved_helpers = json.loads((state_dir / "helpers.json").read_text(encoding="utf-8"))
+            for item in saved_helpers.get("helpers", []):
+                name = item.get("name") if isinstance(item, dict) else None
+                if isinstance(name, str) and AGENT_NAME.fullmatch(name):
+                    helper_names.append(name)
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass  # Registry reports a damaged helper file without blocking startup.
+        capabilities = capabilities_module.parse(raw.get("capabilities"), helper_names)
     except capabilities_module.CapabilityError as error:
         raise ConfigError(str(error))
     iterate = _expect(raw.get("iterate", {}), dict, "iterate")

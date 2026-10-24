@@ -911,6 +911,8 @@ class CodexAgent(Agent):
         self._run = run
 
     def _env(self) -> Optional[Dict[str, str]]:
+        from .helper_models import prepare_codex
+        prepare_codex(self.spec)
         if (self.spec.config_dir is None and not self.spec.env and not self.spec.env_files
                 and not self._parent_session()):
             return None
@@ -929,7 +931,8 @@ class CodexAgent(Agent):
         spec = self.spec
         # 能力网关入口（有这一轮的钥匙时）：-c 是 codex 的全局参数，写在子命令前面。
         gate = job.control.gate if job.control is not None and not job.plain else None
-        command = list(spec.command) + helper_extras.codex_overrides(gate)
+        from .helper_models import codex_overrides as model_overrides
+        command = list(spec.command) + model_overrides(spec) + helper_extras.codex_overrides(gate)
         command += ["exec", "--json", "--skip-git-repo-check", "-o", str(last_message)]
         if spec.sandbox:
             command += ["--sandbox", spec.sandbox]
@@ -1115,7 +1118,9 @@ class DshAgent(Agent):
         # 只说话这条线求的是几秒内答完：关掉思考，不然 DeepSeek 默认的 reasoningEffort
         # 是 high，光思考就能花上十几二十秒，跟这条线的用途对不上。
         from .helper_extras import dsh_skill_patch
+        from .helper_models import dsh_patch, URL_ENV, PROVIDER
         skills = [] if plain else dsh_skill_patch(self.spec)
+        skills += dsh_patch(self.spec)
         if not model and not plain and not skills:
             return None
         folder.mkdir(parents=True, exist_ok=True)
@@ -1125,9 +1130,9 @@ class DshAgent(Agent):
         if effective_model:
             lines += ["- id: agent-default-model",
                      "  name: '@deepseek-ai/dsh-agent-default-model'",
-                     "  config:", "    provider: %s" % self.PROVIDER,
-                     "    model: %s" % effective_model]
-            if plain:
+                     "  config:", "    provider: %s" % (PROVIDER if URL_ENV in self.spec.env else self.PROVIDER),
+                     "    model: %s" % json.dumps(effective_model)]
+            if plain and (URL_ENV not in self.spec.env or "off" in self.spec.efforts):
                 lines.append('    reasoningEffort: "off"')
         if plain:
             for plugin in self.NO_TOOLS_PLUGINS:
@@ -1284,6 +1289,8 @@ class PiAgent(Agent):
         self._run = run
 
     def _env(self) -> Optional[Dict[str, str]]:
+        from .helper_models import prepare_pi
+        prepare_pi(self.spec)
         if not self.spec.env and not self.spec.env_files and not self._parent_session():
             return None
         env = self._inherited_env()

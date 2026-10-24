@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -30,6 +31,7 @@ from .task_audit import TaskAudit
 from .conversations import ConversationCatalog
 from .message_log import MessageLog
 from . import world
+from . import operations
 from .world import Journal
 from .store import _write
 from .artifacts import clean_attachments
@@ -135,6 +137,22 @@ class Cards:
                 card.update(state="unknown", desktop_status="unknown", stale=True,
                             brief="电脑会话状态尚未更新", approval=None, queued=False,
                             updated_at=time.time(), finished_at=None, seq=self._seq)
+                continue
+            dispatch = card.get("dispatch")
+            if operations.valid_dispatch(dispatch) and dispatch["run_id"] == card.get("run_id"):
+                began = any(row.get("run_id") == dispatch["run_id"]
+                            for row in card.get("execution_attempts", []))
+                if dispatch["state"] == "pending" and not began:
+                    card.update(state="working", queued=True, started_at=None, approval=None,
+                                brief="排队中：等待恢复执行", finished_at=None, seq=self._seq)
+                    continue
+                dispatch["state"] = "unknown"
+                card.update(state="unknown", queued=False, approval=None, finished_at=None,
+                            brief="上次执行结果尚未确认，不会自动重做", seq=self._seq)
+                continue
+            if dispatch is not None:
+                card.update(state="unknown", queued=False, approval=None, finished_at=None,
+                            brief="执行记录无法核对，不会自动重做", seq=self._seq)
                 continue
             if card.get("relay_state") == "relay_queued":
                 card["relay_state"] = "interrupted"
@@ -246,6 +264,8 @@ class Cards:
             "result_ready": card.get("result_ready") is True,
             "summary_partial": text("summary_partial"),
             "run_id": text("run_id"),
+            **({"dispatch": deepcopy(card["dispatch"])} if isinstance(card.get("dispatch"), dict) else {}),
+            **({"progress_watch": deepcopy(card["progress_watch"])} if "progress_watch" in card else {}),
             **{key: text(key) for key in ("native_scope", "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "borrowed_session", "borrowed_cwd", "desktop_card")},
             "binding_error": text("binding_error"),
             "last_meaningful_at": number("last_meaningful_at"),
@@ -279,8 +299,16 @@ class Cards:
         return kept
 
     @staticmethod
-    def _copy(card: Dict[str, Any]) -> Dict[str, Any]:
+    def _copy(card: Dict[str, Any], private: bool = False) -> Dict[str, Any]:
         copy = dict(card)
+        if private and "dispatch" in card:
+            copy["dispatch"] = deepcopy(card["dispatch"])
+        else:
+            copy.pop("dispatch", None)
+        if private and "progress_watch" in card:
+            copy["progress_watch"] = deepcopy(card["progress_watch"])
+        else:
+            copy.pop("progress_watch", None)
         copy["execution_attempts"] = [dict(item) for item in card.get("execution_attempts", [])]
         copy["entries"] = [dict(entry, attachments=[dict(item) for item in entry.get("attachments", [])])
                            for entry in card["entries"]]
@@ -289,6 +317,49 @@ class Cards:
         copy["supplements"] = [dict(item) for item in card.get("supplements", [])]
         copy["cost"] = dict(card["cost"]) if card.get("cost") else None
         return copy
+
+    def watches(self):
+        with self._changed:
+            return [(self._copy(card), deepcopy(card.get("progress_watch")))
+                    for card in self._cards.values() if card.get("run_id")
+                    and card["state"] in ("working", "waiting")
+                    and not card.get("mesh_origin") and not card.get("monitoring_only")]
+
+    def checkpoint_watch(self, card_id, run_id, previous, current):
+        with self._changed:
+            card = self._cards.get(card_id)
+            if (not card or card.get("run_id") != run_id or card["state"] not in ("working", "waiting")
+                    or card.get("mesh_origin") or card.get("monitoring_only")
+                    or card.get("progress_watch") != previous
+                    or not operations.watch_transition(previous, current, run_id)):
+                return None
+            original = card
+            card = self._copy(card, private=True)
+            card["progress_watch"] = deepcopy(current)
+            self._cards[card_id] = card
+            try:
+                snapshot = self._touch(card)
+            except OSError:
+                self._cards[card_id] = original
+                raise
+        return self._tell(snapshot)
+
+    def dispatches(self):
+        """Private recovery inputs; never part of feed/sync or mesh payloads."""
+        with self._changed:
+            return [(self._copy(card), deepcopy(card["dispatch"]))
+                    for card in self._cards.values()
+                    if not card.get("mesh_origin") and not card.get("monitoring_only")
+                    and card["state"] in ACTIVE + ("unknown",)
+                    and isinstance(card.get("dispatch"), dict)]
+
+    def dispatch(self, card_id):
+        with self._changed:
+            card = self._cards.get(card_id)
+            if card is None or card.get("mesh_origin") or card.get("monitoring_only"):
+                return None
+            value = card.get("dispatch")
+            return deepcopy(value) if isinstance(value, dict) else None
 
     def _save(self) -> None:
         """写一份快照（连同它包含到哪条任务日志），落稳后压缩日志。"""
@@ -350,6 +421,14 @@ class Cards:
         """日志里的一条消息（没有返回 None）。"""
         with self._changed:
             return self._log.get(message_id)
+
+    def context_snapshot(self, conversation):
+        """Model history and attribution from one read lock, without UI copies."""
+        with self._changed:
+            tasks = {card["id"]: {"id": card["id"], "title": card["title"]}
+                     for card in self._cards.values()
+                     if card["conversation"] == conversation and not card.get("monitoring_only")}
+            return tasks, self._log.since(conversation, 0, self._seq)
 
     def request(self, message: Dict[str, Any]) -> None:
         """Service 收下的一次请求变了（见 MessageLog.request）。"""
@@ -488,7 +567,12 @@ class Cards:
         self._journal.record(card)  # 记进任务日志就算落盘了；快照攒够了才重写
         self._log.retain(entry["id"] for item in self._cards.values() for entry in item["entries"])
         if self._journal.pending >= world.SNAPSHOT_EVERY or self._seq >= self._reserved:
-            self._save()
+            try:
+                self._save()
+            except OSError as error:
+                # The journal above is already durable. A failed checkpoint
+                # must not turn an accepted input into an ambiguous failure.
+                sys.stderr.write("任务快照写入失败，已保存的日志仍然有效：%s\n" % error)
         self._changed.notify_all()
         return self._copy(card)
 
@@ -502,24 +586,41 @@ class Cards:
         """每次有卡变化就调用一次（在锁外面，拿到的是那一刻的副本）。"""
         self._listeners.append(listener)
 
-    def bind_execution(self, card_id, attempt, fields):
+    def bind_execution(self, card_id, attempt, fields, *, required=False):
         with self._changed:
             card = self._cards.get(card_id)
             if card is None or card.get('mesh_origin'):
-                return
+                return False
+            if required and (card['state'] not in ACTIVE or not fields.get('run_id')
+                             or card.get('run_id') != fields['run_id']):
+                return False
+            dispatch = card.get("dispatch")
+            if required and dispatch is not None and (
+                    not operations.valid_dispatch(dispatch)
+                    or dispatch["run_id"] != fields["run_id"]
+                    or dispatch["state"] not in ("pending", "running")):
+                return False
             rows = [dict(i) for i in card.get('execution_attempts', [])]
             existing = next((i for i in rows if i.get('attempt_id') == attempt), None)
             if existing is None:
                 existing = {'attempt_id':attempt}
                 rows.append(existing)
             existing.update(fields)
-            card['execution_attempts'] = rows[-64:]
             seq = self._issue()
             self.audit.append({'id':'binding-'+attempt+'-'+str(seq), 'task':card_id, 'seq':seq,
                                'phase':'binding', 'text':'Native execution association',
                                'binding':dict(existing), 'created_at':time.time()})
-            snapshot = self._touch(card)
+            previous = self._copy(card, private=True)
+            try:
+                card['execution_attempts'] = rows[-64:]
+                if required and dispatch is not None:
+                    card["dispatch"] = dict(dispatch, state="running")
+                snapshot = self._touch(card)
+            except OSError:
+                self._cards[card_id] = previous
+                raise
         self._tell(snapshot)
+        return True
 
     def retained(self):
         """Immutable canonical snapshots evicted from the live sync window."""
@@ -571,7 +672,8 @@ class Cards:
         for card in group:
             if left <= MAX_CARDS:
                 break
-            if card["state"] in ACTIVE or card["id"] in protected:
+            if card["state"] in ACTIVE or card["id"] in protected or (
+                    card["state"] == "unknown" and card.get("dispatch")):
                 continue
             self._seal_card(card)
             self._journal.remove(card["id"], self._seq)
@@ -640,6 +742,7 @@ class Cards:
                attachments: Optional[List[Dict[str, Any]]] = None,
                turn_id: Optional[str] = None, scope: str = "main", kind: str = "reply",
                author: str = "xiaoyou",
+               expected_run=None, expected_execution=None, expected_active_run=None,
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。"""
@@ -647,6 +750,22 @@ class Cards:
             card = self._cards.get(card_id)
             if card is None:
                 return None
+            if expected_active_run is not None and (
+                    card.get("run_id") != expected_active_run or card["state"] not in ACTIVE):
+                return None
+            if expected_run is not None and (
+                    card.get("run_id") != expected_run[0]
+                    or (card.get("dispatch") or {}).get("state") != expected_run[1]
+                    or card["state"] not in ACTIVE + ("unknown",)):
+                return None
+            if expected_execution is not None:
+                attempts = card.get("execution_attempts", [])
+                if expected_run is None or not attempts or attempts[-1] != expected_execution:
+                    return None
+            previous = card
+            if expected_run is not None or expected_active_run is not None:
+                card = self._copy(card, private=True)
+                self._cards[card_id] = card
             now = time.time()
             provenance = self.current_provenance()
             first_new = len(card["entries"])
@@ -682,7 +801,14 @@ class Cards:
                                        fields.get("title_source", card.get("title_source", "task")))
                 fields.update(name.fields(), title_truncated=name.truncated or
                               fields.get("title_truncated") is True)
+            old_run = card.get("run_id")
             card.update(fields)
+            if card.get("run_id") != old_run:
+                card.pop("progress_watch", None)
+            if isinstance(card.get("dispatch"), dict):
+                terminal = operations.FROM_STATUS.get(fields.get("state"))
+                if terminal in operations.TERMINAL:
+                    card["dispatch"] = dict(card["dispatch"], state=terminal)
             # 交给过帮手的事走到结束：记下完成时间，好按天给第三屏分组。又接着做的
             # （补充、改要求）不算完，下次结束时再记。
             if card["state"] in ACTIVE:
@@ -691,7 +817,12 @@ class Cards:
                 card["finished_at"] = None
             elif card["agent"] and not card.get("finished_at"):
                 card["finished_at"] = now
-            snapshot = self._touch(card)
+            try:
+                snapshot = self._touch(card)
+            except OSError:
+                if expected_run is not None or expected_active_run is not None:
+                    self._cards[card_id] = previous
+                raise
         return self._tell(snapshot)
 
     @staticmethod

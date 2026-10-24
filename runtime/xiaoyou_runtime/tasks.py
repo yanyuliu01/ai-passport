@@ -11,8 +11,11 @@
 """
 
 import threading
+import hashlib
+import json
+from copy import deepcopy
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import uuid
 from typing import Any, Callable, Deque, Dict, List, Optional
 
@@ -23,6 +26,16 @@ MAX_PENDING = 8
 
 # 一件事做完（或没做成）时调用：(任务, 结果, 错误)；两个里正好有一个不是 None。
 Finish = Callable[["Task", Optional[Outcome], Optional[str]], None]
+
+
+class StartError(RuntimeError):
+    """Admission completed, but no worker thread could be started."""
+
+
+def fingerprint(agent: Agent) -> str:
+    """Bind recovery to the configured helper without storing its credentials."""
+    data = json.dumps(asdict(agent.spec), sort_keys=True, default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def redo_note(text: str, original: Optional[str]) -> str:
@@ -66,6 +79,22 @@ class Task:
     full_reply_saved: bool = False
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
+    def intent(self, images=()) -> Dict[str, Any]:
+        return {"version": 1, "state": "pending", "run_id": self.run_id,
+                "agent": self.agent.name, "fingerprint": fingerprint(self.agent),
+                "images": list(images),
+                "input": deepcopy({**{key: getattr(self, key) for key in (
+                    "text", "system", "schema", "hop", "effort", "model",
+                    "cwd", "borrowed_session", "title", "redo")},
+                    "after": list(self.after)})}
+
+    @classmethod
+    def restore(cls, card, agent, intent, images=()):
+        data = deepcopy(intent["input"])
+        data["after"] = deque(data["after"])
+        return cls(card=card["id"], conversation=card["conversation"],
+                   agent=agent, run_id=intent["run_id"], images=tuple(images), **data)
+
     @property
     def session_key(self) -> str:
         # 对话名里不能有斜杠，所以这个键不会和某个对话撞上。
@@ -85,6 +114,7 @@ class Tasks:
         self._release = release or (lambda task, control: None)
         self._lock = threading.Lock()
         self._active: Dict[str, Task] = {}
+        self._closed = False
         self._threads: List[threading.Thread] = []
         self._slots = threading.Semaphore(max_parallel) if max_parallel > 0 else None
 
@@ -96,21 +126,39 @@ class Tasks:
         with self._lock:
             return len(self._active)
 
-    def start(self, task: Task) -> bool:
-        """开始做一件事；这张卡上已经有任务在做时返回 False。"""
+    def start(self, task: Task, before_start: Optional[Callable[[], None]] = None) -> bool:
+        """开始做一件事；重复时返回 False，不调用 before_start。
+
+        before_start 在任务占位后、线程启动前保存本地派发记录；失败时不启动。
+        """
         with self._lock:
-            if task.card in self._active:
+            if self._closed or task.card in self._active:
                 return False
             task.queued = self._slots is not None
             self._active[task.card] = task
-            thread = threading.Thread(target=self._run, args=(task,), daemon=True,
-                                      name="xiaoyou-task-%s" % task.card)
+            prepared = False
+            try:
+                # Reserve this card before saving its run identity. A duplicate
+                # cannot replace the identity of a worker already executing.
+                # This callback persists/enqueues locally; it must not do I/O
+                # to a helper or wait for a worker.
+                if before_start is not None:
+                    before_start()
+                prepared = True
+                thread = threading.Thread(target=self._run, args=(task,), daemon=True,
+                                          name="xiaoyou-task-%s" % task.card)
+                thread.start()
+            except BaseException as error:
+                self._active.pop(task.card, None)
+                if prepared and isinstance(error, Exception):
+                    raise StartError("Worker thread could not start") from error
+                raise
             self._threads = [old for old in self._threads if old.is_alive()] + [thread]
-        thread.start()
         return True
 
     def amend(self, card: str, mode: str, text: str, effort: Optional[str] = None,
-              model: Optional[str] = None, before_queue: Optional[Callable[[], None]] = None) -> Optional[str]:
+              model: Optional[str] = None, before_queue: Optional[Callable[[], None]] = None,
+              before_change: Optional[Callable[..., None]] = None) -> Optional[str]:
         """对正在做的事补充或改要求。返回实际怎么办的：steer、redo、after；排着的补充已经
         有 MAX_PENDING 条、这条没记上时返回 full；没在做返回 None。
 
@@ -121,6 +169,10 @@ class Tasks:
             task = self._active.get(card)
             if task is None:
                 return None
+            if mode == "after" and len(task.after) >= MAX_PENDING:
+                return "full"
+            if before_change is not None:
+                before_change(task, mode, text, effort, model)
             switched = ((effort is not None and effort != task.effort)
                         or (model is not None and model != task.model))
             if effort is not None:
@@ -128,9 +180,6 @@ class Tasks:
             if model is not None:
                 task.model = model
             if mode == "after":
-                if len(task.after) >= MAX_PENDING:
-                    # 排着的补充满了：明说没记上，不能回“after”让人以为记下了。
-                    return "full"
                 if before_queue is not None:
                     before_queue()
                 task.after.append(text)
@@ -159,6 +208,7 @@ class Tasks:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             tasks = list(self._active.values())
             self._active.clear()
             threads = list(self._threads)
@@ -176,7 +226,15 @@ class Tasks:
                 task.queued = False
                 gone = task.cancelled
             if not gone:
-                self._started(task)
+                try:
+                    self._started(task)
+                except Exception as failure:
+                    with self._lock:
+                        if self._active.get(task.card) is task:
+                            self._active.pop(task.card, None)
+                    self._finish(task, None, "Runtime 内部出错：%s: %s" % (
+                        type(failure).__name__, failure))
+                    return
                 self._work(task)
         finally:
             if self._slots is not None:

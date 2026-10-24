@@ -28,7 +28,9 @@ from xiaoyou_runtime.service import Service  # noqa: E402
 
 GOLDEN = Path(__file__).resolve().parent / "intake_golden.json"
 VOLATILE = re.compile(r"[0-9a-f]{12,32}")
-DROP = {"provenance", "changed_by"}
+# The new private helper input has its own recovery tests. The existing
+# public-state golden remains unchanged; replay equality below still checks it.
+DROP = {"provenance", "changed_by", "dispatch"}
 
 
 def normalize(value, tokens):
@@ -73,7 +75,12 @@ class IntakeTests(TempDirCase):
         pending = []
         start = tasks.start
         if controlled:
-            patch = mock.patch.object(tasks, "start", side_effect=lambda task: pending.append(task) or True)
+            def hold(task, before_start=None):
+                if before_start is not None:
+                    before_start()
+                pending.append(task)
+                return True
+            patch = mock.patch.object(tasks, "start", side_effect=hold)
             patch.start()
             self.addCleanup(patch.stop)
 

@@ -35,6 +35,53 @@
 状态：验证阶段，先跑在自己的电脑上。同一份代码之后要搬到虚拟机，里面没有任何假设
 某台机器的地方。见[哪些验证过、哪些没有](#哪些验证过哪些没有)。
 
+## 帮手重启恢复（R6.1 源码）
+
+已保存但尚未领取的帮手输入，在启动策略和身份初始化后，沿用原运行编号及参数恢复。
+原帮手缺失、配置改变或图片缺失／改变时保留排队，等待核对；可能已经开始执行的任务
+保持 `unknown`，不自动重做。消息日志里已有完整执行结果时，使用稳定的总结编号，
+将保存的结果一次送回原对话，不再次调用模型。私有恢复输入保存在现有任务日志，
+不进入客户端或 Mesh 投影；没有这些输入的旧任务仍按原先行为标为未完成。
+跨电脑交来的请求重启后继续等同一次执行，不把结果不明提前报成终态失败。
+剩余工作及仅源码的验证范围见[重构交接](../docs/development/runtime-refactor-design.zh_CN.md#2026-10-24-核对与后续顺序)。
+
+升级前保留状态目录副本。旧程序会忽略新增恢复字段，回退时不能覆盖保留的待执行输入。
+
+Runtime 没保存到结果时，恢复流程可只读检查原 Codex 会话中明确完成的轮次。
+核对最新执行尝试、原帮手配置、原生目录、会话及轮次；进展、部分输出或另一轮完成都不算。
+执行尝试已变化时不能发布旧结果；较长的恢复回复将完整原文保存在附件。
+
+在实际执行的 Runtime 上调用 `POST /v1/cards/<id>/reconcile`，请求体为
+`{"run_id":"<original run>"}`，可重新核对一件结果不明的帮手任务。只有最终结果已持久发布，
+才返回 `status: confirmed` 和卡；证据不足则返回 `unconfirmed`。旧运行编号、远端副本、
+观察卡或仍在执行的任务返回 `409`；接口需要认证。它不会恢复原生会话、调用模型或重做操作。
+`/v1/info` 以 `execution_reconciliation` 声明能力。本批只有后端查询接口，没有 App 核对页面，
+也不能人工覆盖请求操作的不确定结果。未支持的 harness、缺失／歧义／分叉／损坏的来源，以及
+超过 16 MiB 的原生文件，仍保留结果不明。
+
+## 模型上下文与对话队列（R6.2 源码）
+
+本机新对话历史从权威消息读取；聊天、帮手结果、检索和主动提醒不再另外维护一份 transcript。
+`context.json` 只保存模型投递进度和上下文重置边界。客户端迁移期间保留旧 transcript
+历史和 share/import 入口。聊天、结果回调与定时唤醒共用每个对话的一条有界队列。
+旁聊提醒回到原对话；已经关闭或过期的唤醒不再启动模型调用。提醒可能已改变承诺时，
+保留未确认的唤醒，不重复执行工具。决定迁移和验收的剩余范围见
+[源码交接](../docs/development/runtime-refactor-design.zh_CN.md#2026-10-24-核对与后续顺序)。本批源码未部署。
+
+进展唤醒编号、原输入、领取、已生成回复、次数和冷却时间，现在保存在现有任务日志中。
+原运行仍在执行时，通过其对话队列恢复待处理输入或补投已保存回复；重放本身不调用模型或工具。
+中断的领取没有保存回复时，保留未确认。完整 Runtime 重启不会为了播报旧进展而复活中断的帮手。
+换轮、负责人变化或任务结束后不能再发布过期通知；私有观察数据不进入客户端／Mesh 投影。
+
+## 请求操作持久化（R6 源码）
+
+记忆／承诺工具和模型选定的任务动作，在宣布完成之前，先将决定、领取和结果保存到现有请求日志。
+存储恢复／重启后，不再调用模型重做决定：未领取的输入继续执行，已保存的结果回到原对话。
+结果不明的操作保留核对，阻止自动重做和负责人移交。工具执行后模型回复丢失，不会触发 JSON
+退路或另一轮修改。CLI `--once` 沿用同一条 Service 路径；私有操作输入不进入客户端和 Mesh
+投影。请求回复新增 `started` 元数据，表示是否曾把工作交给帮手。核对入口、剩余来源迁移和
+仅源码的验收范围见[源码交接](../docs/development/runtime-refactor-design.zh_CN.md#2026-10-24-核对与后续顺序)。
+
 ## 当前请求快照（0.23.1）
 
 接收结果及 `GET /v1/messages/<id>` 新增 `message_snapshot`，包含 `runtime_id`、
@@ -1047,9 +1094,11 @@ JSON；下列语音、固件和附件二进制接口除外。
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小幽在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
-| `GET /v1/helpers/options` | `{"harnesses": [{"harness", "label", "installed", "ways", "providers", "login_hint"}], "added"}`：添加帮手时能选什么。`ways` 是 `key` 和 / 或 `login`；`providers` 是填 Key 时认哪些服务商；`added` 是这样加过的帮手。 |
-| `POST /v1/helpers` | `{"name", "harness", "model"?, "effort"?, "description"?, "access": "key" 或 "login", "provider"?, "key"?}` 加一个帮手，立刻能派活，重启后还在（`state/helpers.json`）。Key 只写进 `state/helper-secrets/<名字>.key`，不会回给客户端。`login` 用这台电脑上这个 harness 自己的登录。回 `201 {"helper", "problem"}`；`problem` 是启动检查（比如命令没装），不挡添加。 |
+| `GET /v1/helpers/options` | harnesses、界面添加的帮手、MCP 服务与当前授权；接入方式包括 `magpie`、`key`、`login`。 |
+| `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` 添加帮手。`magpie` 从模型服务选择模型，支持跨服务商接入；`key` 直接传变量，`login` 使用原生登录。返回 `201 {helper,problem}`。 |
 | `POST /v1/helpers/<名字>/remove` | 去掉一个用 `POST /v1/helpers` 加的帮手和它的 Key；写在 `config.json` 里的会被拒绝。 |
+| `POST /v1/helpers/models` | `{gateway_url,key?}` 读取本机 Magpie 实时模型目录，不返回凭据。 |
+| `POST /v1/helpers/<name>/capabilities` | `{server_id: true/false/{tools:[...]}}` 持久化界面所加帮手的授权，下次调用生效。 |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。`client_id` 用来防重复（0.7.0 起按对话算，并且重启后仍然有效）：同一个对话里同一个 `client_id` 再来，内容一样返回原来那条，不重做；内容不一样返回 `409`。这条消息落盘后才返回 `202`，见[消息落盘与重启](#消息落盘与重启)。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
@@ -1063,6 +1112,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
 | `GET /v1/artifacts/<id>/thumbnail` | 图片预览的二进制内容；没有可用预览时返回 `404`，可退回 `/content`。 |
 | `POST /v1/cards/<编号>/cancel` | 取消这件事，返回这张卡；它已经不在做了就原样返回。没有这张卡返回 `404`；电脑端观察卡返回 `400`，需要到电脑端停止。 |
+| `POST /v1/cards/<number>/reconcile`，请求体 `{"run_id":"<original run>"}` | 在原执行 Runtime 上核对结果不明的帮手任务，不重做；返回 `200 {status: "confirmed" 或 "unconfirmed", card}`。运行编号过期或卡不适用时返回 `409`。见前文帮手重启恢复。 |
 | `POST /v1/approvals/<编号>`，请求体 `{"decision": "allow" 或 "deny"}` | 回答一个授权，也支持仍有效、`remote_actionable: true` 的电脑端审批。没有该授权（或 Runtime 重启过）返回 `404`；已回答、只能提醒、过期或其他失效请求返回 `409`。 |
 | `POST /v1/conversations/<名字>/history`，请求体 `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`：这些轮次（最多 30 轮）里有几轮是这台 Runtime 之前不知道的。它们会随下一句话告诉接话的代理。 |
 | `POST /v1/conversations/<名字>/reset` | 这个对话从头开始：所有代理的会话都忘掉，对话记录清空。 |
@@ -1500,8 +1550,9 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
   Claude Code。会话编号只在本机有效：Runtime 搬家，之前的对话不会跟着走。
 - 服务本身只有明文 HTTP。让它监听 `127.0.0.1`，再通过你自己掌握的加密通道访问
   （私有组网、SSH 隧道，或带 TLS 的反向代理）。直接监听公网地址不安全。
-- 排队中和已完成的消息记录只在内存里。重启后旧的消息编号会返回 `404`；对话能接着聊，
-  因为会话表在磁盘上。
+- 已接受的消息和请求去重记录保存在 `messages.jsonl`，`messages.json` 是检查点。
+  重启后查询原消息编号；排队中的文字消息继续处理，已经开始但结果不明的工作先核对，
+  不自动重做。帮手输入遵循上面的恢复规则。
 
 ## 哪些验证过、哪些没有
 
@@ -1514,7 +1565,7 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 `runtime/tests/test_runtime.py`（`./tools/validate.sh --static` 会运行）验证了：配置
 检查和旧写法的兼容；交给假的 `claude`、`codex` 可执行文件的完整命令行和标准输入、结果与
 错误的解析、会话续接；点名和路由的先后顺序、用一条命令做路由器；卡的存取、序号、落盘
-和重启后把没做完的标成失败；小幽直接回答、交给帮手后立刻能接下一句、几件事同时做、
+和重启后把旧格式中没做完的标成失败；小幽直接回答、交给帮手后立刻能接下一句、几件事同时做、
 补充、改要求（包括真的停掉一个进程再重跑）、取消（包括另开了会话的孙进程）、并行上限、
 授权的登记、等待和回答、权限询问工具本身和那个只听本机的入口、交给假的 Claude Code 时
 从询问到主人回答再到文件写或不写的整条路、Codex 的 app-server 模式（对着替身：一轮、
@@ -1665,6 +1716,8 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
 
 ```bash
 python3 runtime/tests/test_runtime.py
+python3 runtime/tests/test_dispatch_safety.py
+python3 runtime/tests/test_dispatch_recovery.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
 python3 runtime/tests/test_desktop_content.py

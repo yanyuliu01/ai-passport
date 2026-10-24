@@ -116,6 +116,36 @@ export class DesktopClient {
       this.db.set('usage:' + endpoint.runtimeId, usage); this.changed();
     }));
   }
+  /** Helpers run on this computer, so they are managed through its own Runtime only. */
+  private localEndpoint(space: string): Endpoint {
+    const endpoint = [...this.endpoints.values()].find(item => item.spaceId === space
+      && !item.url.startsWith('peer://') && this.link(item)?.connected);
+    if (!endpoint) throw new Error('这台电脑上的小幽还没连上，连上后才能管理帮手');
+    return endpoint;
+  }
+  helperOptions(space: string): Promise<Json> {
+    return this.transport.request(this.localEndpoint(space), 'GET', '/v1/helpers/options');
+  }
+  helperModels(space: string, body: Json): Promise<Json> {
+    return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/models', body);
+  }
+  helperGrants(space: string, name: string, grants: Json): Promise<Json> {
+    return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/capabilities', grants);
+  }
+  async addHelper(space: string, helper: Json): Promise<Json> {
+    const endpoint = this.localEndpoint(space);
+    const result = await this.transport.request(endpoint, 'POST', '/v1/helpers', helper);
+    const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
+    if (lifetime) void this.loadAgents(endpoint, lifetime);
+    return result;
+  }
+  async removeHelper(space: string, name: string): Promise<Json> {
+    const endpoint = this.localEndpoint(space);
+    const result = await this.transport.request(endpoint, 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/remove', {});
+    const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
+    if (lifetime) void this.loadAgents(endpoint, lifetime);
+    return result;
+  }
   async taskDetail(space: string, id: string, runtime: string, before?: number): Promise<Json> {
     const cache = 'detail:' + runtime + '/' + id;
     let endpoint: Endpoint;

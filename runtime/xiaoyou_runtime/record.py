@@ -23,7 +23,7 @@ TASK_FIELDS = {"state", "agent", "brief", "mood", "started_at", "queued", "fresh
                "title", "title_source", "attachments", "progress_lines", "borrowed_session",
                "borrowed_cwd", "desktop_card", "finished_at", "error", "delegated_to",
                "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "last_meaningful_at", "supplements",
-               "cancelled_by", "cancel_reason"}
+               "cancelled_by", "cancel_reason", "dispatch"}
 
 
 class RecordError(ValueError):
@@ -114,30 +114,39 @@ class Record:
         return self._cards.open(conversation, title, state, agent,
                                 **dict(getattr(self._local, "fields", {}), **fields))
 
-    def task(self, card_id: str, **fields: Any) -> Optional[Dict[str, Any]]:
+    def task(self, card_id: str, *, expected_run=None, **fields: Any) -> Optional[Dict[str, Any]]:
         """一件事的状态、谁在做、用量、授权这些字段变了。不含说的话。"""
         unknown = set(fields) - TASK_FIELDS
         if unknown:
             raise RecordError("task() 不改这些字段：%s（说的话走 exchange / reply）" % sorted(unknown))
-        return self._cards.update(card_id, **fields)
+        return self._cards.update(card_id, expected_run=expected_run, **fields)
 
-    def execution_binding(self, card_id, attempt, **fields):
+    def execution_binding(self, card_id, attempt, *, required=False, **fields):
         allowed = {'run_id','agent','native_scope','native_session_id','native_turn_id','range_state','started_at','ended_at'}
         if set(fields)-allowed:
             raise RecordError('Unknown execution binding field')
         try:
-            self._cards.bind_execution(card_id, attempt, fields)
+            if required:
+                if not self._cards.bind_execution(card_id, attempt, fields, required=True):
+                    raise RecordError("Task execution is no longer current")
+            else:
+                self._cards.bind_execution(card_id, attempt, fields)
             return True
         except OSError:
+            if required:
+                raise
             # An optional association cannot strand the worker before its
             # result/failure is reconciled. Persist the audit gap when possible.
             sys.stderr.write('Execution binding storage unavailable; audit has a gap.\n')
             self._cards.update(card_id, binding_error='audit_gap')
             return False
 
-    def progress(self, card_id: str, line: str) -> Optional[Dict[str, Any]]:
+    def progress(self, card_id: str, line: str, run_id=None) -> Optional[Dict[str, Any]]:
         """帮手报了一行进展。"""
-        return self._cards.update(card_id, progress=redact_credentials(line))
+        return self._cards.update(card_id, progress=redact_credentials(line), expected_active_run=run_id)
+
+    def progress_checkpoint(self, card_id, run_id, previous, current):
+        return self._cards.checkpoint_watch(card_id, run_id, previous, current)
 
     def activity(self, card_id: str, author: str, phase: str, text: str,
                  event_id: str) -> None:
@@ -175,11 +184,14 @@ class Record:
 
     def reply(self, card_id: str, say: str, *, turn_id: Optional[str] = None, scope: str = "main",
               kind: str = "reply", author: str = "xiaoyou",
-              attachments: Optional[List[Dict[str, Any]]] = None, **fields: Any) -> Optional[Dict[str, Any]]:
+              attachments: Optional[List[Dict[str, Any]]] = None, expected_run=None, expected_execution=None, expected_active_run=None,
+              **fields: Any) -> Optional[Dict[str, Any]]:
         """小幽或帮手单独说的一句（帮手的结果、小幽的总结）。"""
         self._check(scope, kind)
         result = self._cards.update(card_id, say=say, turn_id=turn_id, scope=scope, kind=kind, author=author,
-                                  attachments=attachments, **self._task_fields(fields))
+                                  attachments=attachments, expected_run=expected_run, expected_execution=expected_execution,
+                                  expected_active_run=expected_active_run,
+                                  **self._task_fields(fields))
         if result is not None and scope == "main":
             try:
                 self.conversation_touch(result["conversation"])

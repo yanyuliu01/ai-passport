@@ -74,6 +74,7 @@ class Promises:
             items = self._read()
             for item in items:
                 if item["id"] == item_id:
+                    item.pop("wake", None)
                     item["nudged"] = now
                     step = REPEAT.get(item.get("every") or "")
                     if step and item.get("due"):
@@ -82,6 +83,21 @@ class Promises:
                         item["nudged"] = None
             self._write(items)
 
+    def claim_wake(self, item_id: str, event_id: str) -> None:
+        """Save uncertainty before a timer can mutate memory or commitments.
+
+        A read-only model failure may retry. Once a tool could have changed
+        state, an unconfirmed wake must be reconciled instead of replayed.
+        """
+        with self._lock:
+            items = self._read()
+            item = next((value for value in items if value["id"] == item_id and value["status"] == "active"), None)
+            if item is None or item.get("wake"):
+                raise RuntimeError("Reminder wake is no longer available")
+            item["wake"] = {"id": event_id, "state": "unknown", "at": time.time()}
+            # This boundary must be durable before a tool is called.
+            self._write(items, durable=True)
+
     def _read(self) -> List[Dict[str, Any]]:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
@@ -89,14 +105,23 @@ class Promises:
             return []
         return [item for item in data if isinstance(item, dict) and "id" in item] if isinstance(data, list) else []
 
-    def _write(self, items: List[Dict[str, Any]]) -> None:
+    def _write(self, items: List[Dict[str, Any]], durable: bool = True) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle, name = tempfile.mkstemp(prefix=".promises-", dir=str(self._path.parent))
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             json.dump(items[-200:], stream, ensure_ascii=False, indent=1)
+            if durable:
+                stream.flush()
+                os.fsync(stream.fileno())
         if os.name == "posix":
             os.chmod(name, 0o600)
         os.replace(name, self._path)
+        if durable and os.name == "posix":
+            folder = os.open(str(self._path.parent), os.O_RDONLY)
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
 
 
 def when(due: Optional[float]) -> str:
@@ -115,4 +140,6 @@ def prompt_section(items: List[Dict[str, Any]], now: Optional[float] = None) -> 
                                            {"day": "，每天", "week": "，每周"}.get(item.get("every") or "", ""),
                                            "，已经到点" if late else "",
                                            "：" + item["detail"] if item.get("detail") else ""))
+        if item.get("wake"):
+            lines.append("  上次提醒中的工具操作结果尚未确认；先核对记录，不能重新执行。")
     return lines

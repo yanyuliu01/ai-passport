@@ -44,6 +44,74 @@ Status: verification stage, intended to run on your own computer. The same
 code is meant to move to a virtual machine later; nothing in it assumes a
 particular host. See [What is and is not verified](#what-is-and-is-not-verified).
 
+## Helper restart recovery (R6.1 source)
+
+Saved helper inputs that were not yet claimed resume after startup policy and
+identity initialization with the same run id and parameters. Missing/changed
+helpers and unavailable or changed images stay queued for reconciliation.
+Executions that may have started remain `unknown` and are never blindly rerun.
+A final execution result already in the message log returns to its original
+conversation once under its stable summary id, without another model call.
+Delegated requests keep waiting for the same run across restart; no result is
+reported as a terminal failure merely because execution is unconfirmed.
+Private recovery inputs stay in the existing task journal and are omitted from
+client and Mesh projections. Old tasks without these inputs retain their
+unfinished-task restart behavior. See the [refactor handoff](../docs/development/runtime-refactor-design.md#2026-10-24-review-and-continuation-order)
+for remaining work and source-only validation.
+
+Preserve a state-directory copy before upgrading. An older program ignores the
+new recovery fields; do not let a rollback overwrite the retained pending inputs.
+
+If no Runtime result was saved, recovery can read the original Codex session's
+explicitly completed turn. It matches the latest execution attempt, helper
+configuration, native home, session and turn; commentary, partial output and
+another turn's completion do not qualify. A changed attempt cannot publish an old
+result. Long recovered answers retain their complete text in an attachment.
+
+`POST /v1/cards/<id>/reconcile` with `{"run_id":"<original run>"}` rechecks one
+unknown helper run on its executing Runtime. It returns `status: confirmed` with
+the card only after a final result is durably published, otherwise `unconfirmed`.
+A stale run, foreign/observed card or active execution returns `409`; authentication
+is required. The endpoint never resumes a native session, invokes a model or
+repeats an action. It is advertised as `execution_reconciliation` in `/v1/info`.
+This is a backend query endpoint, not an App review screen or manual override of
+uncertain request effects. Unsupported harnesses, missing/ambiguous/forked or
+malformed sources, and native files larger than 16 MiB remain unknown.
+
+## Model context and conversation queue (R6.2 source)
+
+New local conversation history is read from canonical messages; chat, helper
+results, recall and proactive notes no longer maintain a second transcript.
+`context.json` contains only model-delivery receipts and context-reset boundaries.
+Old transcript history and the share/import endpoint remain readable during
+client migration. Chat, result callbacks and timer wakes share one bounded queue
+per conversation. Side-conversation reminders return to their original conversation;
+closed or stale wakes do not start another model call. A reminder that may have
+changed commitments keeps an unconfirmed wake instead of repeating its tools.
+See the [source handoff](../docs/development/runtime-refactor-design.md#2026-10-24-review-and-continuation-order)
+for remaining decision migration and acceptance. This source is not deployed.
+
+Progress wake ids, original inputs, claims, saved replies, counts and cooldowns
+now live in the existing task journal. Pending/saved results for the still-active
+original run return through its conversation queue; replay itself calls no model
+or tool. An interrupted claim with no saved reply stays unconfirmed. A full
+Runtime restart does not revive an interrupted helper to deliver an old progress
+update. Changed runs/owners and completed tasks do not publish stale notifications;
+private watch data stays off client/Mesh projections.
+
+## Saved request effects (R6 source)
+
+Memory/commitment tools and model-selected task actions save their selection,
+claim and result in the existing request journal before announcing completion.
+Storage recovery/restart resumes unclaimed inputs without a model retry; saved
+results are delivered to the original conversation. Unconfirmed effects are
+retained and block automatic replay and owner handoff. A lost model response
+after a tool does not cause JSON fallback or another mutation. CLI `--once`
+uses the same Service path. Private effect inputs stay off client/Mesh projections.
+Request replies include additive `started` metadata for work handed to a helper.
+See the [source handoff](../docs/development/runtime-refactor-design.md#2026-10-24-review-and-continuation-order)
+for remaining reconciliation, event-source migration and source-only acceptance.
+
 ## Current request snapshots (0.23.1)
 
 Acceptance and `GET /v1/messages/<id>` include an additive `message_snapshot`
@@ -1352,9 +1420,11 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyou can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
-| `GET /v1/helpers/options` | `{"harnesses": [{"harness", "label", "installed", "ways", "providers", "login_hint"}], "added"}`: what can be picked when adding a helper. `ways` is `key` and / or `login`; `providers` are the services whose API key the harness takes; `added` lists helpers added this way. |
-| `POST /v1/helpers` | `{"name", "harness", "model"?, "effort"?, "description"?, "access": "key" or "login", "provider"?, "key"?}` adds a helper that can be given work at once and is kept across restarts in `state/helpers.json`. A key is written only to `state/helper-secrets/<name>.key` and is never returned. `login` uses the harness's own login on this computer. Answers `201 {"helper", "problem"}`; `problem` is the start-up check (for example a command not installed), which does not prevent adding. |
+| `GET /v1/helpers/options` | Harnesses, UI-added helpers, MCP services and current grants; access ways include `magpie`, `key` and `login`. |
+| `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` adds a helper. `magpie` selects a model through the model service; `key` passes a native environment variable; `login` uses native sign-in. Returns `201 {helper,problem}`. |
 | `POST /v1/helpers/<name>/remove` | Removes a helper added through `POST /v1/helpers` and its key; helpers written in `config.json` are refused. |
+| `POST /v1/helpers/models` | `{gateway_url,key?}` reads a local Magpie live model catalog, without returning credentials. |
+| `POST /v1/helpers/<name>/capabilities` | `{server_id: true/false/{tools:[...]}}` persists grants for a UI-added helper, checked on its next call. |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}` (since 0.6.0). `accounts` has one entry per subscription login: `{"id", "kind", "agents", "state", "windows": [{"kind": "5h" or "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`; `left` is the percentage that remains, `null` when unknown. `agents` has one entry per helper: `{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`; `running` is how many rounds it is working on and `now` the model of the one in progress. Without `refresh` the numbers at hand are returned (and asked for again in the background when they are old); with it they are asked for now, which takes a few seconds. See [Usage](#usage-what-is-left-of-each-subscription). |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). `client_id` deduplicates retries (since 0.7.0 per conversation, and it survives a restart): the same `client_id` in the same conversation returns the original message when the content matches and `409` when it differs. The message is written to disk before `202` is returned; see [Messages on disk and restarts](#messages-on-disk-and-restarts). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
@@ -1368,6 +1438,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
 | `GET /v1/artifacts/<id>/thumbnail` | A binary image preview; `404` when no preview is available. Use `/content` as the fallback. |
 | `POST /v1/cards/<number>/cancel` | Cancels that thing and returns the card; a thing that is no longer in progress is returned unchanged. `404` if there is no such card; `400` for a desktop monitoring card, which must be stopped on the desktop. |
+| `POST /v1/cards/<number>/reconcile` with `{"run_id":"<original run>"}` | Rechecks an unknown helper execution on its original Runtime without rerunning it; `200 {status: "confirmed" or "unconfirmed", card}`. `409` for a stale run or an ineligible card. See helper restart recovery above. |
 | `POST /v1/approvals/<number>` with `{"decision": "allow" or "deny"}` | Answers an approval, including a live desktop request with `remote_actionable: true`. `404` if there is no such approval (or the runtime was restarted); `409` for an already answered, notification-only, expired, or otherwise stale request. |
 | `POST /v1/conversations/<name>/history` with `{"turns": [{"id", "text", "reply", "at"?}]}` | `{"accepted": n}`: how many of the turns (at most 30) this runtime did not know. They are told to the agent that takes the next message. |
 | `POST /v1/conversations/<name>/reset` | Starts that conversation over: every agent's session is forgotten and the transcript is cleared. |
@@ -1945,9 +2016,10 @@ holds only the part it took part in.
 - The service speaks plain HTTP. Keep it on `127.0.0.1` and reach it through an
   encrypted channel you control (a private network overlay, an SSH tunnel, or a
   reverse proxy with TLS). Listening on a public address directly is not safe.
-- Pending and finished message records live in memory. After a restart, old
-  message identifiers return `404`; conversations continue because the session
-  table is on disk.
+- Accepted message records and request deduplication persist in `messages.jsonl`
+  with `messages.json` checkpoints. Query the original message id after restart;
+  pending text resumes and uncertain started work is reconciled, never blindly
+  repeated. Helper inputs follow the recovery rules above.
 
 ## What is and is not verified
 
@@ -1966,7 +2038,7 @@ Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
 command line and standard input given to fake `claude` and `codex` executables,
 result and error parsing, session continuation; naming an agent, the order of
 routing rules and a command as the router; storing cards, their sequence numbers, writing them to
-disk and marking unfinished ones as failed after a restart; Xiaoyou answering
+disk and marking legacy unfinished ones as failed after a restart; Xiaoyou answering
 directly, being free for the next sentence right after handing work out,
 several things in progress at once, adding to a thing, changing its request
 (including really stopping a process and running it again), cancelling
@@ -2194,6 +2266,8 @@ Known risks:
 
 ```bash
 python3 runtime/tests/test_runtime.py
+python3 runtime/tests/test_dispatch_safety.py
+python3 runtime/tests/test_dispatch_recovery.py
 python3 runtime/tests/test_firmware.py
 python3 runtime/tests/test_desktop_sync.py
 python3 runtime/tests/test_desktop_content.py

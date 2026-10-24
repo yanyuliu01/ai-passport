@@ -14,7 +14,6 @@ import threading
 import socket
 import sys
 import time
-import uuid
 from pathlib import Path
 
 from . import reports as reports_module
@@ -32,7 +31,40 @@ from .server import make_server
 from .service import Service
 from .store import Store
 from .usage import EFFORT_NAMES, Usage
-from .xiaoyou import Xiaoyou
+from .xiaoyou import Turn, Xiaoyou
+
+
+def _once_turn(config, args, xiaoyou, store):
+    """CLI input uses the same durable request/effect path as connected clients."""
+    service = Service(xiaoyou, store)
+    mesh = Mesh(config, service, xiaoyou) if config.mesh_secret else None
+    def close():
+        if mesh is not None:
+            mesh.close()
+        service.close()
+    try:
+        if mesh is not None:
+            mesh.start()
+        message = service.submit(args.once, conversation=args.conversation, agent=args.agent)
+        deadline = time.monotonic() + config.voice_timeout_seconds + 30
+        seen = 0
+        while True:
+            message = service.get(message["id"], wait=.5)
+            for event in message.get("events", [])[seen:]:
+                print("（%s %s：%s）" % (event["kind"], event.get("agent") or "-", event["text"]), file=sys.stderr)
+            seen = len(message.get("events", []))
+            if message["status"] in ("done", "failed"):
+                break
+            if time.monotonic() >= deadline:
+                raise AgentError("消息已保存，仍在等待原对话的处理结果；编号 %s" % message["id"])
+        if message["status"] != "done":
+            raise AgentError(message.get("error") or "这次操作没有完成")
+        card = xiaoyou.cards.get(message.get("card")) or {}
+        return Turn(message["reply"], message["brief"], message["mood"], message["agent"],
+                    message.get("card") or "", message.get("started", card.get("state") in ("working", "waiting"))), close
+    except Exception:
+        close()
+        raise
 
 
 def _is_loopback(host: str) -> bool:
@@ -210,21 +242,13 @@ def main(argv=None) -> int:
     xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config),
                       Usage(config, enabled=config.usage_enabled and args.once is None))
 
-    if args.once is None:
-        # 常驻的时候才开后台节拍（事情做到一半值不值得说、答应的事到点、整理记忆）。
-        xiaoyou.start_pulse()
-
     if args.once is not None:
         if args.agent is not None and not xiaoyou.has(args.agent):
             print("没有叫 %s 的代理（现在有：%s）" % (
                 args.agent, "、".join(agent.name for agent in agents)), file=sys.stderr)
             return 2
         try:
-            turn = xiaoyou.hear(
-                args.once, args.conversation, uuid.uuid4().hex, asked=args.agent,
-                report=lambda kind, agent, detail: print(
-                    "（%s %s：%s）" % (kind, agent or "-", detail), file=sys.stderr),
-            )
+            turn, close_once = _once_turn(config, args, xiaoyou, store)
         except AgentError as error:
             print("没成功：%s" % error, file=sys.stderr)
             return 1
@@ -258,7 +282,7 @@ def main(argv=None) -> int:
                 xiaoyou.close()
                 print("取消了", file=sys.stderr)
                 return 1
-            xiaoyou.close()
+            close_once()
             said = [entry["text"] for entry in card["entries"] if entry["role"] == "xiaoyou"]
             if card["state"] != "done":
                 print("没成功：%s" % (said[-1] if said else card["state"]), file=sys.stderr)
@@ -267,6 +291,7 @@ def main(argv=None) -> int:
             print()
             print(said[-1])
             return 0
+        close_once()
         print("[%s] %s" % (turn.mood, turn.brief))
         print()
         print(turn.reply)
@@ -299,6 +324,7 @@ def main(argv=None) -> int:
         print("已加入小幽网络：先去找 %s；告诉别人从 %s 连这台" % (
             "、".join(config.mesh_peers) or "（没写，等别人来连）",
             "、".join(config.mesh_advertise) or "（不对外，只往外连）"), file=sys.stderr)
+    xiaoyou.start_pulse()
     desktop = None
     if args.desktop_sync or config.desktop_sync:
         # 命令行写了的优先，没写的用配置里的。

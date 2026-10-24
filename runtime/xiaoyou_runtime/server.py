@@ -26,10 +26,11 @@
   GET  /v1/artifacts/<编号>/content     按附件编号取得已保存的文件快照
   GET  /v1/artifacts/<编号>/thumbnail   取得图片缩略图（不可用时返回 404）
   POST /v1/cards/<编号>/cancel          取消一件事
+  POST /v1/cards/<编号>/reconcile       {"run_id"} 只读核对原执行；有明确完成证据才发布结果，不重做
   POST /v1/approvals/<编号>             {"decision": "allow" 或 "deny"} 回答一个授权
   POST /v1/conversations/<名字>/reset   让这个对话从头开始
   GET  /v1/helpers/options              添加帮手时能选的 harness（装了没有、能怎么接入模型）
-  POST /v1/helpers                      {"name","harness","model","effort","access":"key"|"login","provider","key"}
+  POST /v1/helpers                      {"name","harness","model","effort","access":"key"|"login","provider","env","key"}
                                         加一个帮手，立刻能派活；Key 只写进本机文件，不回给客户端
   POST /v1/helpers/<名字>/remove        去掉一个在界面上加的帮手
   GET  /v1/devices                      配对过的设备（不含凭据）和权限权威
@@ -729,6 +730,12 @@ def make_server(config: Config, service: Service,
                 if parts == ["v1", "helpers"]:
                     self._send(201, service.helper_add(body))
                     return
+                if parts == ["v1", "helpers", "models"]:
+                    self._send(200, service.helper_models(body))
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "capabilities":
+                    self._send(200, service.helper_grants(parts[2], body))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "remove":
                     self._send(200, service.helper_remove(parts[2]))
                     return
@@ -759,6 +766,9 @@ def make_server(config: Config, service: Service,
                         self._fail(409, "这个授权已经回答过了")
                     else:
                         self._send(200, {"id": parts[2], "decision": body["decision"]})
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "reconcile":
+                    self._send(200, service.reconcile_task(parts[2], body))
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "cards"] and parts[3] == "cancel":
                     card = service.cancel(parts[2], actor=_cancel_actor(body, self.headers.get("User-Agent", "")),

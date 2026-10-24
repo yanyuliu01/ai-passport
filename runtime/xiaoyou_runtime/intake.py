@@ -19,7 +19,7 @@ SOURCES = ("owner", "helper", "desktop", "mesh", "xiaoyou", "timer", "system")
 
 # Record 里会改动记录的方法。不在这里的（读取、opening 这类上下文）原样转给 Record。
 WRITES = frozenset({
-    "task_open", "task", "execution_binding", "progress", "activity", "attach",
+    "task_open", "task", "execution_binding", "progress", "progress_checkpoint", "activity", "attach",
     "exchange", "reply", "observed_open", "observed", "replica_task", "replica_message",
     "request_changed", "sequence",
     "conversation_create", "conversation_rename", "conversation_replica", "conversation_touch",

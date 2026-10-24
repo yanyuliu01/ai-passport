@@ -1,15 +1,15 @@
 """小幽记在这台电脑上的东西。
 
-三样：
+本地会话和模型投递进度：
   sessions.json    每个对话里（以及每件事里）、每个代理接着聊要用的会话编号
-  transcript.json  小幽自己的对话记录：主人说了什么、她答了什么、是谁做的、哪些代理见过
+  context.json     哪些已保存的消息已交给哪个代理，以及对话重置边界（不复制正文）
+  transcript.json  旧记录和旧客户端导入的兼容来源；本机新消息不再写入
   voice/           还没识别的录音（只在识别前短暂存在）
 
 收下的话（消息）另记在 messages.json，见 ledger.py。
 
-对话记录属于小幽，不属于任何一个代理。代理各自的会话里只有它参与过的部分；换一个
-代理接话时，Runtime 从这里取出它没见过的那几轮先告诉它。手机从别的 Runtime 带过来
-的对话也进这里，对所有本机代理来说都是“没见过”。
+对话正文以 Cards 的消息日志为准，由 ContextBuilder 按需投影；这里只保存会话续接和
+投递元数据。旧客户端带来的对话仍保留兼容导入，不能当成本机新消息的第二个写入口。
 """
 
 import json
@@ -41,6 +41,7 @@ class Store:
         self._path = state_dir / "sessions.json"
         self._voice_dir = state_dir / "voice"
         self._transcript = Transcript(state_dir / "transcript.json", state_dir / "shared.json")
+        self._context = None
         # 录音只在识别前短暂落盘；上次没来得及删的（比如中途被关掉）启动时清掉。
         for leftover in self._voice_dir.glob("*.wav"):
             try:
@@ -74,8 +75,18 @@ class Store:
         return self._voice_dir / (message_id + ".wav")
 
     @property
-    def transcript(self) -> "Transcript":
-        return self._transcript
+    def transcript(self):
+        """Compatibility read facade; Runtime authors through Intake."""
+        return self._context if self._context is not None else self._transcript
+
+    def bind_context(self, cards, memory=None, promises=None):
+        from .context import ContextBuilder
+        def resolve(mid):
+            message = cards.message(mid)
+            return message.get("text") if message and message.get("status") == "final" else None
+        self._transcript.resolve_with(resolve)
+        self._context = ContextBuilder(cards, self._transcript, self.state_dir / "context.json", memory, promises)
+        return self._context
 
     def session(self, conversation: str, agent: str) -> Optional[str]:
         with self._lock:
@@ -276,6 +287,17 @@ class Transcript:
         with self._lock:
             turns = [dict(turn) for turn in self._entry(conversation)["turns"]]
         return self._views(turns)
+
+    def context_turns(self, conversation):
+        """Read migration references without rewriting the old transcript."""
+        with self._lock:
+            result = []
+            for turn in self._entry(conversation)["turns"]:
+                view = self._view(turn)
+                if view is not None:
+                    result.append(dict(view, **{key: turn[key] for key in ("you_ref", "reply_ref")
+                                                if key in turn}))
+            return result
 
     def clear(self, conversation: str) -> bool:
         """对话重新开始：记录清掉，但仍然记得见过哪些轮次，手机再带回来也不会重新算进来。
