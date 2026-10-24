@@ -408,6 +408,28 @@ def make_server(config: Config, service: Service,
             if not self._authorized():
                 return
             query = parse_qs(url.query)
+            if parts == ["v1", "timers", "effects"] or (
+                    len(parts) == 4 and parts[:2] == ["v1", "timers"] and parts[3] == "effects"):
+                try:
+                    if len(parts) == 3:
+                        result = service.timer_reviews(query.get("conversation", [None])[0],
+                            query.get("cursor", [None])[0], int(query.get("limit", ["50"])[0]))
+                    else:
+                        result = service.timer_effect_review(parts[2])
+                    self._send(200, result)
+                except ConflictError as error:
+                    self._fail(409, str(error))
+                except (RequestError, ValueError) as error:
+                    self._fail(400, str(error))
+                return
+            if len(parts) == 4 and parts[:2] == ["v1", "messages"] and parts[3] == "effects":
+                try:
+                    self._send(200, service.effect_review(parts[2]))
+                except ConflictError as error:
+                    self._fail(409, str(error))
+                except RequestError as error:
+                    self._fail(400, str(error))
+                return
             if len(parts) == 4 and parts[:2] == ["v1", "artifacts"] and parts[3] in ("content", "thumbnail"):
                 self._artifact_get(parts[2], parts[3] == "thumbnail")
                 return
@@ -709,6 +731,14 @@ def make_server(config: Config, service: Service,
                         image_ids=body.get("image_ids"), reply_scope=body.get("reply_scope"),
                     )
                     self._send(202, message)
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "messages"] and parts[3] == "effects":
+                    actor = "device:" + self.device["id"] if self.device else "legacy-client"
+                    self._send(200, service.review_effects(parts[2], body, actor=actor))
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "timers"] and parts[3] == "effects":
+                    actor = "device:" + self.device["id"] if self.device else "legacy-client"
+                    self._send(200, service.review_timer_effects(parts[2], body, actor=actor))
                     return
                 if parts in (["v1", "review", "mode"], ["v1", "review", "batch"]):
                     from .service import _name

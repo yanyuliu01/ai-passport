@@ -19,11 +19,13 @@
 同时拿到变了的卡和变了的消息：另一台手机能看到这边刚说的话和正在生成的回复。
 """
 
+import hashlib
 import json
 import re
 import sys
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 import uuid
 from collections import OrderedDict
@@ -36,8 +38,9 @@ from .identity import CAPABILITIES, PROTOCOL, fingerprint, host_proof, runtime_i
 from .devices import Devices, KINDS as DEVICE_KINDS, hash_secret, new_credential
 from .ledger import MAX_DEDUPE, Ledger, content_hash, dedupe_key
 from .loop import ConversationLoop
-from .effects import (Effects, EffectUncertain, EffectFenceError, check_transition as check_effect_transition,
-                      valid as valid_effects, facts as effect_facts)
+from .effects import (Effects, SavedWake, EffectUncertain, EffectFenceError, check_transition as check_effect_transition,
+                      valid as valid_effects, facts as effect_facts, review_revision,
+                      review_outcomes, valid_review, review_text, review_record, owner_binding)
 from . import operations
 from .reports import ReportError, Reports
 from .stt import Stt, SttError, describe_wav
@@ -1075,7 +1078,7 @@ class Service:
 
         nonce：客户端带来的随机数；key_hash 是它用的凭据的哈希（server.py 按请求算）。带了就
         回 host_proof，客户端在任何线路上都能核对连到的是持有它凭据的 Runtime（设计第 6 节）。"""
-        capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof", "execution_reconciliation"] \
+        capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof", "execution_reconciliation", "request_effect_review", "timer_effect_review"] \
             + (["mesh"] if self.mesh is not None else [])
         result = {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyou.cards.epoch,
                   "protocol": PROTOCOL, "capabilities": capabilities,
@@ -1352,6 +1355,300 @@ class Service:
         return {"status": "confirmed" if confirmed else "unconfirmed",
                 "card": presentation.card(card, self.runtime_id, self.card_store.message)}
 
+    def _review_message(self, message_id):
+        message = self._messages.get(_name(message_id, "message"))
+        if not message:
+            raise RequestError("没有这轮请求")
+        if message.get("relay_to") or message.get("hop"):
+            raise ConflictError("请在原处理 Runtime 核对请求")
+        records = message.get("_effects")
+        if (not records or not valid_effects(records)
+                or any(not item["id"].startswith(message["id"] + ":") for item in records)
+                or not any(item["state"] != "succeeded" for item in records)):
+            raise ConflictError("这轮请求没有可核对的操作记录")
+        if message.get("status") not in FINISHED or message.get("operation_state") != "unknown":
+            raise ConflictError("请求尚在处理或没有结果不明的操作")
+        if review_record(message) is not None and not valid_review(message):
+            raise ConflictError("人工核对记录与原操作不一致，请保留数据并检查")
+        return message
+
+    def _effect_review_done(self, message):
+        # Keep a durable publication receipt: ordinary chat/card retention must
+        # not resurrect uncertainty after its review note leaves the UI window.
+        return valid_review(message) and review_record(message)["published"]
+
+    def effect_review(self, message_id):
+        """Explicit authenticated inspection; private inputs stay out of sync."""
+        with self._changed:
+            message = self._review_message(message_id)
+            # This endpoint is deliberately separate from general client feeds.
+            return {"message_id": message["id"], "operation_id": message["operation_id"],
+                    "conversation": message["conversation"], "runtime_id": self.runtime_id,
+                    "revision": review_revision(message),
+                    "status": "reviewed" if self._effect_review_done(message) else (
+                        "recorded" if valid_review(message) else "needs_review"),
+                    "effects": deepcopy(message["_effects"]),
+                    "review": deepcopy(review_record(message))}
+
+    def _review_guard(self, message):
+        if self._closed:
+            raise UnavailableError("Runtime 正在关闭")
+        if message["id"] in self._claimed or message["conversation"] in self._busy:
+            raise ConflictError("对话仍在处理，稍后刷新再核对")
+        owner = owner_binding(message) or {}
+        if owner.get("owner") != self.runtime_id:
+            raise ConflictError("请在原操作负责人上核对")
+        if not message.get("pin"):
+            try:
+                current = self._effect_owner(message["conversation"])
+            except EffectFenceError as error:
+                raise ConflictError(str(error)) from error
+            if current != owner:
+                raise ConflictError("原操作负责人或代次已改变，不能沿用旧核对")
+        problem = self.permission_problem()
+        if problem:
+            raise ConflictError(problem)
+
+    def review_effects(self, message_id, body, actor="legacy-client"):
+        """Record a human disposition; never invoke, retry or roll back effects."""
+        if not isinstance(body, dict) or set(body) != {"operation_id", "revision", "review_id", "outcomes"}:
+            raise RequestError("人工核对需要 operation_id、revision、review_id 和逐项 outcomes")
+        review_id, actor = _name(body["review_id"], "review_id"), _name(actor, "actor")
+        try:
+            review_id.encode("utf-8")
+            actor.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise RequestError("核对身份应为有效 UTF-8 文本") from error
+        with self._write_lock:
+            with self._changed:
+                message = self._review_message(message_id)
+                if body["operation_id"] != message["operation_id"] or body["revision"] != review_revision(message):
+                    raise ConflictError("操作记录已变化，请刷新后重新核对")
+                try:
+                    outcomes = review_outcomes(message["_effects"], body["outcomes"])
+                except ValueError as error:
+                    raise RequestError(str(error)) from error
+                existing = review_record(message)
+                if existing and (existing["id"] != review_id or existing["actor"] != actor
+                                 or existing["outcomes"] != outcomes):
+                    raise ConflictError("这轮操作已经有另一份人工核对记录")
+                if self._effect_review_done(message):
+                    return self.effect_review(message_id)
+                self._review_guard(message)
+                card = self.card_store.get(message.get("card"))
+                if (not card or card["conversation"] != message["conversation"]
+                        or card.get("mesh_origin") or card.get("monitoring_only")):
+                    raise ConflictError("原对话的核对记录位置不可用，请先恢复原记录")
+                review = existing or {"version": 1, "id": review_id, "revision": body["revision"],
+                                      "actor": actor, "at": time.time(), "outcomes": outcomes, "published": False}
+            if not existing:
+                self._save_effect_review(message_id, review)
+            try:
+                with self._changed:
+                    message = self._review_message(message_id)
+                    self._review_guard(message)
+                    complete = self._effect_review_done(message)
+                if not complete:
+                    self._xiaoyou.intake.writer("owner", actor=actor, cause=message_id + ":effect-review").reply(
+                        card["id"], review_text(message), turn_id=message_id + "-effect-review",
+                        scope="task" if message.get("pin") and message.get("reply_scope") != "main" else "main",
+                        kind="note")
+                    note = self.card_store.message(message_id + "-effect-review:reply")
+                    if not note or note.get("status") != "final" or note.get("text") != review_text(message):
+                        raise UnavailableError("核对说明尚未保存，请用相同编号重试")
+                    with self._changed:
+                        self._review_guard(message)
+                    self._save_effect_review(message_id, dict(review, published=True))
+            except OSError as error:
+                raise UnavailableError("核对已保存，说明暂未发布，请用相同编号重试") from error
+            result = self.effect_review(message_id)
+            if result["status"] != "reviewed":
+                raise UnavailableError("核对说明尚未发布，请用相同编号重试")
+            return result
+
+    def _save_effect_review(self, message_id, review):
+        # The baseline already removes this private envelope from all response
+        # projections. A new top-level field would leak when rolling back.
+        owner = dict(self._messages[message_id]["_effect_owner"], review=deepcopy(review))
+        try:
+            self._update(message_id, strict=True, _effect_owner=owner)
+        except OSError as error:
+            # A lost projection receipt cannot erase an fsynced review.
+            if self._ledger.saved_effect_review(message_id) == review:
+                with self._changed:
+                    self._messages[message_id]["_effect_owner"] = owner
+            raise UnavailableError("人工核对暂未完整发布，请用相同编号重试") from error
+
+    def _timer_entry(self, timer_id):
+        timer_id = _name(timer_id, "timer")
+        entries = [entry for entry in self._xiaoyou._pulse.timer_entries()
+                   if isinstance(entry["wake"], dict) and entry["wake"].get("id") == timer_id]
+        if not entries:
+            raise RequestError("没有这个定时操作")
+        if len(entries) != 1:
+            raise ConflictError("定时操作来源有歧义，不能确认")
+        return entries[0]
+
+    def _timer_message(self, entry):
+        wake, conversation = entry["wake"], entry["conversation"]
+        if not isinstance(wake, dict) or not isinstance(wake.get("id"), str):
+            raise ConflictError("定时来源无法读取，请保留数据后检查")
+        owner = wake.get("owner")
+        if (not isinstance(owner, list) or len(owner) != 2 or not isinstance(owner[0], str)
+                or type(owner[1]) is not int):
+            raise ConflictError("旧领取没有可核对的操作明细或负责人")
+        source = wake.get("source")
+        if entry["kind"] == "promise":
+            if (not isinstance(source, dict) or source.get("id") != entry["source_id"]
+                    or (source.get("conversation") or "default") != conversation):
+                raise ConflictError("原提醒来源或对话已改变")
+            suffix = hashlib.sha256(json.dumps([source.get("due"), source.get("nudged")]).encode()).hexdigest()[:16]
+            expected_id = "%s-due-%s" % (entry["source_id"], suffix)
+            allowed = {"track", "resolve"}
+        else:
+            if (not isinstance(source, list) or not source or any(not isinstance(ref, list)
+                    or len(ref) != 2 or not all(isinstance(part, str) for part in ref) for ref in source)):
+                raise ConflictError("原整理窗口无法核对")
+            expected_id = "upkeep-" + hashlib.sha256(json.dumps([conversation, source]).encode()).hexdigest()[:32]
+            allowed = {"remember", "replace", "forget"}
+        bare = {key: value for key, value in wake.items() if key not in ("review", "review_card")}
+        try:
+            SavedWake(expected_id, owner, source, bare, lambda before, after: None, lambda: None)
+        except EffectUncertain as error:
+            raise ConflictError(str(error)) from error
+        records = wake["effects"]
+        if (not records or any(item["name"] not in allowed for item in records)
+                or not any(item["state"] != "succeeded" for item in records)):
+            raise ConflictError("没有待人工核对的操作；已保存结果由原流程补投")
+        binding = {"owner": owner[0], "generation": owner[1], "timer_kind": entry["kind"],
+                   "source_id": entry["source_id"], "input": source}
+        if "review" in wake:
+            binding["review"] = wake["review"]
+        message = {"id": wake["id"], "operation_id": wake["id"], "conversation": conversation,
+                   "card": wake.get("card"), "_effects": records, "_effect_owner": binding}
+        if (("review" in wake and not valid_review(message))
+                or entry["archived"] and not (valid_review(message) and review_record(message)["published"])):
+            raise ConflictError("定时核对记录与原操作不一致，请保留数据后检查")
+        return message
+
+    def _timer_view(self, entry):
+        message = self._timer_message(entry)
+        return {"timer_id": message["id"], "operation_id": message["operation_id"],
+                "kind": entry["kind"], "source_id": entry["source_id"],
+                "conversation": entry["conversation"], "runtime_id": self.runtime_id,
+                "revision": review_revision(message),
+                "status": "reviewed" if entry["archived"] else (
+                    "recorded" if valid_review(message) else "needs_review"),
+                "effects": deepcopy(message["_effects"]), "source": deepcopy(entry["wake"].get("source")),
+                "review": deepcopy(review_record(message))}
+
+    def timer_effect_review(self, timer_id):
+        return self._timer_view(self._timer_entry(timer_id))
+
+    def timer_reviews(self, conversation=None, cursor=None, limit=50):
+        if conversation is not None:
+            conversation = _name(conversation, "conversation")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise RequestError("limit 应为 1 到 100")
+        rows = []
+        for entry in self._xiaoyou._pulse.timer_entries(include_history=False):
+            if conversation is not None and entry["conversation"] != conversation:
+                continue
+            row = {"kind": entry["kind"], "source_id": entry["source_id"],
+                   "conversation": entry["conversation"],
+                   "timer_id": entry["wake"].get("id") if isinstance(entry["wake"], dict) else None}
+            try:
+                view = self._timer_view(entry)
+                row.update(status=view["status"], revision=view["revision"], reviewable=True)
+            except ConflictError as error:
+                row.update(status="unavailable", reason=str(error), reviewable=False)
+            rows.append(row)
+        rows.sort(key=lambda row: (row["kind"], row["source_id"], row["timer_id"] or ""))
+        version = hashlib.sha256(json.dumps([conversation, rows], sort_keys=True).encode()).hexdigest()
+        offset = 0
+        if cursor:
+            try:
+                stamp, index = cursor.split(":")
+                offset = int(index)
+                if offset < 0 or offset > len(rows):
+                    raise ValueError()
+            except (ValueError, AttributeError):
+                raise RequestError("无效的核对列表游标") from None
+            if stamp != version:
+                raise ConflictError("核对列表已变化，请从第一页刷新")
+        page = rows[offset:offset + limit]
+        next_cursor = version + ":" + str(offset + len(page)) if offset + len(page) < len(rows) else None
+        return {"timers": page, "next_cursor": next_cursor}
+
+    def _timer_review_guard(self, entry):
+        if self._closed:
+            raise UnavailableError("Runtime 正在关闭")
+        if entry["conversation"] in self._busy or self._lanes.get(entry["conversation"]):
+            raise ConflictError("原对话仍在处理，请稍后刷新")
+        if self._xiaoyou._pulse._owner(entry["conversation"]) != tuple(entry["wake"]["owner"]):
+            raise ConflictError("原定时操作负责人或代次已改变")
+        problem = self.permission_problem()
+        if problem:
+            raise ConflictError(problem)
+
+    def review_timer_effects(self, timer_id, body, actor="legacy-client"):
+        if not isinstance(body, dict) or set(body) != {"operation_id", "revision", "review_id", "outcomes"}:
+            raise RequestError("人工核对需要 operation_id、revision、review_id 和逐项 outcomes")
+        review_id, actor = _name(body["review_id"], "review_id"), _name(actor, "actor")
+        try:
+            review_id.encode("utf-8")
+            actor.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise RequestError("核对身份应为有效 UTF-8 文本") from error
+        with self._write_lock:
+            with self._changed:
+                entry = self._timer_entry(timer_id)
+                message = self._timer_message(entry)
+                if body["operation_id"] != timer_id or body["revision"] != review_revision(message):
+                    raise ConflictError("原定时操作已变化，请刷新后核对")
+                try:
+                    outcomes = review_outcomes(message["_effects"], body["outcomes"])
+                except ValueError as error:
+                    raise RequestError(str(error)) from error
+                existing = review_record(message)
+                if existing and (existing["id"] != review_id or existing["actor"] != actor or existing["outcomes"] != outcomes):
+                    raise ConflictError("原定时操作已有另一份核对")
+                if entry["archived"]:
+                    return self._timer_view(entry)
+                self._timer_review_guard(entry)
+                review = existing or {"version": 1, "id": review_id, "revision": body["revision"],
+                    "actor": actor, "at": time.time(), "outcomes": outcomes, "published": False}
+            try:
+                if not review["published"]:
+                    card = self._xiaoyou._pulse._reminder_card(entry["conversation"], "定时操作人工核对",
+                        timer_id + "-effect-review", entry["wake"].get("review_card"), state="waiting")
+                    if not existing:
+                        self._xiaoyou._pulse.checkpoint_timer(entry,
+                            dict(entry["wake"], review=review, review_card=card["id"]))
+                    entry = self._timer_entry(timer_id)
+                    with self._changed:
+                        self._timer_review_guard(entry)
+                    message = self._timer_message(entry)
+                    text = review_text(message)
+                    self._xiaoyou.intake.writer("owner", actor=actor, cause=timer_id + ":effect-review").reply(
+                        card["id"], text, turn_id=timer_id + "-effect-review", scope="main", kind="note", state="done")
+                    note = self.card_store.message(timer_id + "-effect-review:reply")
+                    if not note or note.get("status") != "final" or note.get("text") != text:
+                        raise UnavailableError("核对说明尚未保存，请用原编号重试")
+                    with self._changed:
+                        self._timer_review_guard(entry)
+                    self._xiaoyou._pulse.checkpoint_timer(entry,
+                        dict(entry["wake"], review=dict(review, published=True)))
+                entry = self._timer_entry(timer_id)
+                with self._changed:
+                    self._timer_review_guard(entry)
+                self._xiaoyou._pulse.archive_timer_review(entry)
+            except EffectUncertain as error:
+                raise ConflictError(str(error)) from error
+            except OSError as error:
+                raise UnavailableError("核对尚未完整发布，请用相同身份和内容重试") from error
+            return self.timer_effect_review(timer_id)
+
     def _card_changed(self, card: Dict[str, Any]) -> None:
         if card["state"] in ACTIVE:
             return
@@ -1404,6 +1701,7 @@ class Service:
         snapshot.pop("_effects", None)
         snapshot.pop("_effect_owner", None)
         snapshot.pop("_resume_effects", None)
+        snapshot.pop("_effect_review", None)
         snapshot["presentation"] = presentation.response(message, self.runtime_id)
         # Current replies must not wait behind a paginated history replay. These
         # are the same log records/revisions as /sync, never request-local revs.
@@ -1535,7 +1833,7 @@ class Service:
             saved = message.get("_effects", [])
             if not valid_effects(saved):
                 raise EffectUncertain("保存的操作记录无法读取，需要先核对。")
-            owner = message.get("_effect_owner") or (
+            owner = owner_binding(message) or (
                 {"owner": self.runtime_id, "generation": None} if delegated else self._effect_owner(conversation))
         def guard():
             if self._closed:
@@ -1628,7 +1926,7 @@ class Service:
             return False
         if message.get("_effects") and not (message.get("hop") or message.get("pin")):
             try:
-                if message.get("_effect_owner") != self._effect_owner(message["conversation"]):
+                if owner_binding(message) != self._effect_owner(message["conversation"]):
                     self._parked[message["id"]] = message["conversation"]
                     return False
             except EffectFenceError:
@@ -1714,7 +2012,10 @@ class Service:
         """调用时拿着锁：这段对话现在能不能交出去。"""
         if self._lanes.get(conversation) or conversation in self._busy:
             return "这段对话还有话在处理，等处理完再交"
-        if any(item.get("conversation") == conversation and item.get("_effects") and (
+        if self._xiaoyou._pulse.unconfirmed(conversation):
+            return "这段对话还有定时操作或投递结果待核对，先确认原操作再移交"
+        if any(item.get("conversation") == conversation and item.get("_effects")
+                and not self._effect_review_done(item) and (
                 item.get("status") not in FINISHED or any(effect.get("state") in ("pending", "running", "unknown")
                     for effect in item["_effects"]))
                 for item in self._messages.values()):

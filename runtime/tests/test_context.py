@@ -160,6 +160,139 @@ class ContextTests(TempDirCase):
         self.assertIn(self.card["id"], [card["id"] for card in frame["cards"]])
         self.assertEqual(6, len(frame["cards"]))
 
+    def test_speaking_does_not_mark_history_omitted_from_the_prompt_as_seen(self):
+        voice = Scripted("speaker")
+        x, _ = make_xiaoyou(self.folder / "bounded", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "retained history")
+        for index in range(20):
+            x._writer.exchange(card["id"], "question-%d" % index, "a" * 900,
+                               turn_id="old-%d" % index)
+        x._speak(voice, "current request", "default", "system", None, 0, catch_up=True)
+        self.assertNotIn("question-0", voice.jobs[0].text)
+        self.assertIn("old-0", [turn["id"] for turn in x.context.unseen("default", "speaker")])
+
+    def test_a_partial_history_excerpt_is_not_a_full_turn_delivery_receipt(self):
+        voice = Scripted("speaker")
+        x, _ = make_xiaoyou(self.folder / "excerpt", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "long retained answer")
+        x._writer.exchange(card["id"], "older question", "a" * 2000 + "unquoted tail", turn_id="long")
+        x._speak(voice, "current request", "default", "system", None, 0, catch_up=True)
+        self.assertNotIn("unquoted tail", voice.jobs[0].text)
+        self.assertEqual(["long"], [turn["id"] for turn in x.context.unseen("default", "speaker")])
+
+    def test_segment_boundaries_are_versioned_and_reading_never_writes_history(self):
+        for index in range(65):
+            self.exchange("turn-%03d" % index, text="question-%d" % index)
+        pages = self.context.segments("side")
+        self.assertEqual([32, 32, 1], [page["count"] for page in pages])
+        self.assertEqual("turn-000", pages[0]["first"])
+        self.assertEqual("turn-064", pages[-1]["last"])
+        self.assertEqual(65, len({turn["id"] for page in pages for turn in page["turns"]}))
+        self.assertEqual(pages[0], self.context.segment("side", pages[0]["id"]))
+        self.context.mark("side", "reader", pages[0]["turns"])
+        self.assertEqual([page["id"] for page in pages], [page["id"] for page in self.context.segments("side")])
+        self.assertFalse((self.state / "transcript.json").exists())
+        raw = (self.state / "context.json").read_text(encoding="utf-8")
+        self.assertNotIn("question-", raw)
+        self.assertNotIn("saved answer", raw)
+
+    def test_revised_reset_and_foreign_segments_are_not_returned_under_old_ids(self):
+        self.exchange()
+        segment = self.context.segments("side")[0]
+        with self.assertRaises(ValueError):
+            self.context.segment("other", segment["id"])
+        self.exchange(reply="revised authoritative answer")
+        with self.assertRaises(ValueError):
+            self.context.segment("side", segment["id"])
+        revised = self.context.segments("side")[0]
+        self.assertEqual("revised authoritative answer", revised["turns"][0]["reply"])
+        self.context.clear("side")
+        with self.assertRaises(ValueError):
+            Store(self.state).bind_context(self.cards).segment("side", revised["id"])
+
+    def test_returned_segment_is_a_snapshot_and_cannot_mutate_the_source(self):
+        self.exchange()
+        key = self.context.segments("side")[0]["id"]
+        selected = self.context.segment("side", key)
+        selected["turns"][0]["reply"] = "client changes snapshot"
+        self.assertEqual("saved answer", self.context.segment("side", key)["turns"][0]["reply"])
+
+    def test_window_budget_and_receipts_match_complete_visible_quotes_only(self):
+        self.exchange("short", text="entire question", reply="entire answer")
+        self.exchange("long", text="long question", reply="a" * 2000 + "not included")
+        window = self.context.window("side", "reader", max_chars=2000)
+        self.assertLessEqual(len(window["body"]), 2000)
+        self.assertIn("不代表完整历史档案", window["body"])
+        self.assertIn("片段", window["body"])
+        self.assertNotIn("not included", window["body"])
+        self.assertIn("long", [turn["id"] for turn in window["turns"]])
+        self.assertNotIn("long", [turn["id"] for turn in window["receipts"]])
+        self.context.mark("side", "reader", window["turns"])
+        self.assertIn("long", [turn["id"] for turn in self.context.unseen("side", "reader")])
+        for turn in window["receipts"]:
+            self.assertIn(turn["text"], window["body"])
+            self.assertIn(turn["reply"], window["body"])
+
+    def test_an_oversized_single_turn_stays_within_the_total_budget(self):
+        self.exchange(text="q" * 4000, reply="r" * 4000)
+        window = self.context.window("side", "reader", max_chars=256)
+        self.assertLessEqual(len(window["body"]), 256)
+        self.assertEqual([], window["receipts"])
+        self.assertEqual(1, window["coverage"]["excerpts"])
+
+    def test_seed_only_uses_recent_turns_without_receipting_unselected_history(self):
+        for index in range(5):
+            self.exchange("old-%d" % index, text="q%d" % index)
+        window = self.context.window("side", "reader", seed=2)
+        self.assertEqual(["old-3", "old-4"], [turn["id"] for turn in window["turns"]])
+        self.context.mark("side", "reader", window["receipts"])
+        self.assertEqual(["old-0", "old-1", "old-2"],
+                         [turn["id"] for turn in self.context.unseen("side", "reader")])
+        self.assertEqual("", self.context.window("other", "reader")["body"])
+
+    def test_invalid_context_window_parameters_fail_before_a_model_call(self):
+        for fields in ({"seed": 0}, {"seed": -1}, {"seed": True}, {"max_chars": 255},
+                       {"text_chars": 0}, {"reply_chars": -1}):
+            with self.assertRaises(ValueError):
+                self.context.window("side", "reader", **fields)
+
+    def test_retained_history_before_the_recent_window_is_recallable_and_resettable(self):
+        from xiaoyou_runtime.store import MAX_TURNS
+        voice = Scripted("speaker")
+        x, store = make_xiaoyou(self.folder / "archive", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "retained archive")
+        for index in range(MAX_TURNS + 5):
+            x._writer.exchange(card["id"], "quartz-old-anchor" if not index else "question %d" % index,
+                               "older answer %d" % index, turn_id="retained-%03d" % index)
+        self.assertEqual(MAX_TURNS, len(x.context.turns("default")))
+        self.assertEqual(MAX_TURNS + 5, len(x.context.history("default")))
+        self.assertIn("quartz-old-anchor", x.recall("default", "quartz-old-anchor"))
+        self.assertTrue(x.recall("other", "quartz-old-anchor").startswith("没找到"))
+        self.assertFalse((store.state_dir / "transcript.json").exists())
+        x.context.clear("default")
+        self.assertEqual([], x.context.history("default"))
+        self.assertTrue(x.recall("default", "quartz-old-anchor").startswith("没找到"))
+
+    def test_provider_failure_and_decision_only_do_not_mark_the_window_seen(self):
+        from xiaoyou_runtime.agents import AgentError
+        voice = Scripted("speaker")
+        x, _ = make_xiaoyou(self.folder / "receipt-boundary", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "history")
+        x._writer.exchange(card["id"], "old question", "old answer", turn_id="old")
+        voice.fail_on = "failed current request"
+        with self.assertRaises(AgentError):
+            x._speak(voice, "failed current request", "default", "system", None, 0, catch_up=True)
+        self.assertEqual(["old"], [turn["id"] for turn in x.context.unseen("default", "speaker")])
+        voice.fail_on = None
+        x._speak(voice, "decision", "default", "system", None, 0, catch_up=True, decision_only=True)
+        self.assertEqual(["old"], [turn["id"] for turn in x.context.unseen("default", "speaker")])
+        x._speak(voice, "reply", "default", "system", None, 0, catch_up=True)
+        self.assertEqual([], x.context.unseen("default", "speaker"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -310,8 +310,8 @@ class Cards:
         else:
             copy.pop("progress_watch", None)
         copy["execution_attempts"] = [dict(item) for item in card.get("execution_attempts", [])]
-        copy["entries"] = [dict(entry, attachments=[dict(item) for item in entry.get("attachments", [])])
-                           for entry in card["entries"]]
+        copy["entries"] = [dict(entry, **({"attachments": [dict(item) for item in entry.get("attachments", [])]}
+                           if not private or "attachments" in entry else {})) for entry in card["entries"]]
         copy["attachments"] = [dict(item) for item in card.get("attachments", [])]
         copy["progress"] = list(card["progress"])
         copy["supplements"] = [dict(item) for item in card.get("supplements", [])]

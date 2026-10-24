@@ -718,3 +718,29 @@ managed goals before historical native sources. This prevents a large native
 index from displacing actionable records from the first page. The 0.22.0 Mac
 bundle remains API-compatible; Android 0.30.1 includes the directory and the
 separately validated communication increment.
+
+## Five-entry increment (2026-10-24)
+
+Android 0.32.0 (version code 60) and desktop 0.1.8 reduce the pages to the five entries in section 1 of the
+[complete plan](xiaoyou-agent-model.md) without changing Runtime APIs. Both clients use the same wording:
+
+- **Main chat**: the phone home and the text chat are one entry and one conversation in two forms. The app
+  opens in voice form; the keyboard or the reply card switches to text; the microphone at the top right of
+  the text form switches back. The Xiaoyou row in the sidebar shows status only and is no longer a second
+  entry. The desktop client no longer has a separate home page.
+- **Side chats**: a side chat nobody has written in yet (`title_source` is `pending`) is not listed, except
+  the one that is open.
+- **Work in progress** (formerly "work records"): lists only work handed to helpers, not observed computer
+  sessions, in three groups: waiting for you, in progress and ended (collapsed). Work whose state is
+  unconfirmed stays under in progress. On the phone a waiting item offers deny / allow this time in place.
+  The detail has one primary button, add a requirement, the last three steps with "all N", then one quiet
+  line with the computer, source chat and original session; directory and session IDs sit behind ⓘ.
+- **Helpers**: both clients say busy, waiting for you, idle or cannot connect.
+- **Settings**: Xiaoyou (pairing state, add a computer), the device, preferences and a developer page.
+  Connection strings, the route list, firmware versions, notification sources, the unified directory,
+  local mark sync, tests and logs moved to the developer page. The phone adds a computer only by scanning.
+- **Connection state** has three phrases only: connected, cannot connect (retrying) and needs pairing.
+
+Validation: Android unit tests, debug build and Lint, and desktop tests and UI build passed; the desktop UI
+was rendered in a browser with synthetic data. Phone install and rendering, the packaged Mac window, the
+native Windows window and the two Electron shell scripts (selectors updated) were not run.

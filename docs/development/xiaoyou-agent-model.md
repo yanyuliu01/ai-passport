@@ -122,5 +122,6 @@ Follow the reliability rules for full measurements, sample counts and fault matr
 | 10-23 | Modular cleanup happens after the execution and recovery contracts are in place, not as a separate code move first |
 | 10-23 | Repeated messages are deduplicated by request ID; identical text with a different ID is a new message |
 | 10-23 | The desktop client ships with dsh and pi preinstalled; the user only enters a key (details decided later) |
+| 10-24 | The phone home and the main chat are one entry and one conversation in two forms: the app opens in voice form, the keyboard or the reply card switches to text, and the text form switches back from its top-right button |
 
 This plan replaces conflicting product presentation and implementation sequencing in earlier plans. Identity, encryption, permission, persistence and recovery constraints in the [unified message model](unified-message-model.md), [desktop transport and synchronization plan](xiaoyou-desktop-plan.md), and [decide, then speak](decide-then-speak.md) remain effective. Original evidence stays in the [interaction simplification issue list](app-runtime-simplification.md); this document does not maintain another set of issue IDs and metrics.

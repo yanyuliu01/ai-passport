@@ -114,12 +114,14 @@ class Record:
         return self._cards.open(conversation, title, state, agent,
                                 **dict(getattr(self._local, "fields", {}), **fields))
 
-    def task(self, card_id: str, *, expected_run=None, **fields: Any) -> Optional[Dict[str, Any]]:
+    def task(self, card_id: str, *, expected_run=None, expected_active_run=None,
+             **fields: Any) -> Optional[Dict[str, Any]]:
         """一件事的状态、谁在做、用量、授权这些字段变了。不含说的话。"""
         unknown = set(fields) - TASK_FIELDS
         if unknown:
             raise RecordError("task() 不改这些字段：%s（说的话走 exchange / reply）" % sorted(unknown))
-        return self._cards.update(card_id, expected_run=expected_run, **fields)
+        return self._cards.update(card_id, expected_run=expected_run,
+                                  expected_active_run=expected_active_run, **fields)
 
     def execution_binding(self, card_id, attempt, *, required=False, **fields):
         allowed = {'run_id','agent','native_scope','native_session_id','native_turn_id','range_state','started_at','ended_at'}

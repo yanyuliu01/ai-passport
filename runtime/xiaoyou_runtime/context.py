@@ -16,6 +16,8 @@ from .store import MAX_TURNS
 from .cards import ACTIVE
 from .world import durable_write
 
+SEGMENT_TURNS = 32
+
 
 def _version(*values):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -63,7 +65,8 @@ class ContextBuilder:
                              if item.get("conversation", "default") == conversation]
                             if self._promises is not None else []}
 
-    def turns(self, conversation, exclude=()):
+    def history(self, conversation, exclude=()):
+        """All readable retained turns, never a promise of an eternal archive."""
         # One Cards lock supplies a consistent message/task view. No model or
         # effect runs while projecting it, including after a journal replay.
         tasks, messages = self._cards.context_snapshot(conversation)
@@ -123,7 +126,79 @@ class ContextBuilder:
                     turn["seen"] = sorted(set(turn["seen"] + receipt.get("seen", [])))
                     turn["by"] = receipt.get("by") or turn["by"]
                 result.append(turn)
-            return result[-MAX_TURNS:]
+            return result
+
+    def turns(self, conversation, exclude=()):
+        """Bounded compatibility view for existing recent-history callers."""
+        return self.history(conversation, exclude)[-MAX_TURNS:]
+
+    @staticmethod
+    def _segments(conversation, turns):
+        segments = []
+        for offset in range(0, len(turns), SEGMENT_TURNS):
+            page = turns[offset:offset + SEGMENT_TURNS]
+            segments.append({"id": _version(conversation, [(turn["_key"], turn["_version"]) for turn in page]),
+                             "first": page[0]["id"], "last": page[-1]["id"], "count": len(page),
+                             "turns": page})
+        return segments
+
+    def segments(self, conversation):
+        """Derived version-bound pages; no second history file or model call."""
+        return self._segments(conversation, self.history(conversation))
+
+    def segment(self, conversation, segment_id):
+        for segment in self.segments(conversation):
+            if segment["id"] == segment_id:
+                return deepcopy(segment)
+        raise ValueError("History segment changed or is no longer readable")
+
+    def window(self, conversation, agent, *, seed=None, max_chars=8000, text_chars=500, reply_chars=1000):
+        """Render bounded quotes and receipt only complete, actually quoted turns."""
+        if type(max_chars) is not int or max_chars < 256:
+            raise ValueError("Context window budget must be at least 256 characters")
+        if seed is not None and (type(seed) is not int or not 1 <= seed <= MAX_TURNS):
+            raise ValueError("Context seed must contain 1 to MAX_TURNS recent turns")
+        if any(type(size) is not int or size < 1 for size in (text_chars, reply_chars)):
+            raise ValueError("Context excerpt sizes must be positive integers")
+        turns = self.history(conversation)
+        segments = self._segments(conversation, turns)
+        eligible = turns[-seed:] if seed is not None else [turn for turn in turns if agent not in turn["seen"]]
+        labels = {turn["_key"]: page["id"] for page in segments for turn in page["turns"]}
+        def notice(selected, excerpts):
+            return ("（可读留存 %d 轮、%d 段；本轮引用 %d 轮，其中 %d 轮只有片段。"
+                    "未引用或未完整引用的历史没有标为已读；需要时先用 recall 检索原记录。"
+                    "这个范围不代表完整历史档案。）" % (len(turns), len(segments), selected, excerpts))
+        remaining = max_chars - len(notice(len(turns), len(turns))) - 2
+        selected, receipts, blocks = [], [], []
+        for turn in reversed(eligible):
+            quoted = dict(turn, text=turn["text"][:text_chars], reply=turn["reply"][:reply_chars])
+            excerpt = quoted["text"] != turn["text"] or quoted["reply"] != turn["reply"]
+            block = "[留存段 %s / %s%s]\n主人：%s\n小幽：%s" % (
+                labels[turn["_key"]], turn["id"], "，片段" if excerpt else "", quoted["text"], quoted["reply"])
+            if len(block) > remaining:
+                if blocks:
+                    break
+                block = block[:remaining - len("…（片段）")] + "…（片段）"
+                excerpt = True
+            quoted["_excerpted"] = excerpt
+            selected.append(quoted)
+            if not excerpt:
+                receipts.append(turn)
+            blocks.append(block)
+            remaining -= len(block) + 2
+        selected.reverse()
+        receipts.reverse()
+        blocks.reverse()
+        excerpts = sum(turn["_excerpted"] for turn in selected)
+        coverage_needed = len(segments) > 1 or len(selected) < len(eligible) or excerpts
+        if not coverage_needed:
+            # Keep ordinary complete catch-up quotes small and compatible.
+            # Already-delivered turns are not omitted eligible input.
+            blocks = ["主人：%s\n小幽：%s" % (turn["text"], turn["reply"]) for turn in selected]
+        prefix = notice(len(selected), excerpts) + "\n\n" if blocks and coverage_needed else ""
+        return {"body": prefix + "\n\n".join(blocks), "turns": selected, "receipts": receipts,
+                "coverage": {"retained": len(turns), "segments": len(segments), "eligible": len(eligible),
+                             "selected": len(selected), "complete": len(receipts), "excerpts": excerpts}}
 
     def unseen(self, conversation, agent):
         return [turn for turn in self.turns(conversation) if agent not in turn["seen"]]
@@ -135,7 +210,7 @@ class ContextBuilder:
             if self._cards.message(turn["id"] + ":reply") is None])
 
     def mark(self, conversation, agent, turns):
-        self._mark(conversation, [agent], turns)
+        self._mark(conversation, [agent], [turn for turn in turns if not turn.get("_excerpted")])
 
     def delivered(self, conversation, turn_id, agents, by=None, *, reply=None, prompt=None):
         if reply is None:

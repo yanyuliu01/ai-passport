@@ -62,7 +62,8 @@ class Toolbox:
                  lookup: Callable[[str], Optional[str]], memory: Any = None,
                  recall: Optional[Callable[[str], str]] = None, promises: Any = None,
                  conversation: str = "default", only: Optional[Iterable[str]] = None,
-                 before_effect: Optional[Callable[[], None]] = None, effects=None):
+                 before_effect: Optional[Callable[[], None]] = None, effects=None,
+                 guard: Optional[Callable[[], None]] = None):
         self._helpers = helpers
         self._memory = memory  # memory.OwnerMemory；None 就没有 remember / replace / forget
         self._recall = recall  # recall(query) → 给她看的结果；None 就没有 recall
@@ -71,6 +72,7 @@ class Toolbox:
         self._only = set(only) if only is not None else None
         self._before_effect = before_effect
         self._effects = effects
+        self._guard = guard or (lambda: None)
         self._efforts = efforts
         self._models = models
         self._check = check
@@ -185,6 +187,7 @@ class Toolbox:
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
         """执行一次工具调用。返回（给模型看的结果，是不是出错）。"""
+        self._guard()
         args = args if isinstance(args, dict) else {}
         self.calls.append((name, args))
         if self._only is not None and name not in self._only:
@@ -195,14 +198,21 @@ class Toolbox:
             if problem:
                 return problem, True
         if name in ("remember", "replace", "forget", "track", "resolve"):
+            if name in ("replace", "forget") and self._memory is not None and self._effects is not None:
+                args = dict(args, _memory_revision=self._memory.revision())
             def invoke():
                 if self._before_effect is not None:
                     self._before_effect()
-                return self._call(name, args)
+                self._guard()
+                result = self._call(name, args)
+                self._guard()
+                return result
             if self._effects is not None:
                 return self._effects.run(name, args, invoke)
             return invoke()
-        return self._call(name, args)
+        result = self._call(name, args)
+        self._guard()
+        return result
 
     def _call(self, name: str, args: Any) -> Tuple[str, bool]:
         if name == "recall" and self._recall is not None:
@@ -216,7 +226,8 @@ class Toolbox:
         if name == "replace" and self._memory is not None:
             try:
                 said = self._memory.replace(int(args.get("number")), str(args.get("note") or ""),
-                                            quote=str(args.get("quote") or ""))
+                                            quote=str(args.get("quote") or ""),
+                                            **({"expected": args["_memory_revision"]} if "_memory_revision" in args else {}))
             except (TypeError, ValueError):
                 return "number 要写记着的那条的编号", True
             return said, not said.startswith("改好了")
@@ -247,7 +258,8 @@ class Toolbox:
             return self._memory.remember(note), not note
         if name == "forget" and self._memory is not None:
             try:
-                return self._memory.forget(int(args.get("number"))), False
+                return self._memory.forget(int(args.get("number")),
+                    **({"expected": args["_memory_revision"]} if "_memory_revision" in args else {})), False
             except (TypeError, ValueError):
                 return "number 要写记着的那条的编号", True
         if name not in ACTION_TOOLS:

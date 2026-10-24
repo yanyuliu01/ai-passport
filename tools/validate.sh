@@ -180,6 +180,10 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_loop.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_progress_wakes.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_effects.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_effect_review.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_timer_effects.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_timer_review.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_relay_fences.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_world.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_operations.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_sync_window.py

@@ -481,13 +481,14 @@ class ConfigTests(TempDirCase):
             config_module.load(write_config(self.folder, server={"token": TOKEN, "name": "x" * 41}), {})
 
     def test_environment_overrides_file(self):
+        state_override = self.folder / "env-state"
         loaded = self.load(env={
             "XIAOYOU_HOST": "0.0.0.0", "XIAOYOU_PORT": "9000",
-            "XIAOYOU_TOKEN": "env-token-env-token-env", "XIAOYOU_STATE_DIR": "/var/lib/xiaoyou",
+            "XIAOYOU_TOKEN": "env-token-env-token-env", "XIAOYOU_STATE_DIR": str(state_override),
         })
         self.assertEqual((loaded.host, loaded.port), ("0.0.0.0", 9000))
         self.assertEqual(loaded.token, "env-token-env-token-env")
-        self.assertEqual(loaded.state_dir, Path("/var/lib/xiaoyou"))
+        self.assertEqual(loaded.state_dir, state_override)
 
     def test_app_recap_defaults_off_and_only_claude_code_can_turn_it_on(self):
         default = self.load(agents={"claude": {"type": "claude_code", "command": ["claude"]}})
@@ -4085,7 +4086,7 @@ class SharedHistoryTests(TempDirCase):
         self.assertEqual(self.agent.texts[-1], "新的开始")
         self.assertEqual(service.share("default", [self.turn(1)]), 0)
 
-    def test_long_histories_are_trimmed_to_the_most_recent(self):
+    def test_long_histories_keep_bounded_recent_excerpts_without_false_receipts(self):
         turns = [{"id": "t%d" % n, "text": "问" * 3000, "reply": "答%d" % n + "x" * 3000, "at": n}
                  for n in range(30)]
         self.assertEqual(self.service.share("default", turns), 30)
@@ -4094,9 +4095,17 @@ class SharedHistoryTests(TempDirCase):
         self.assertLess(len(prompt), 12000)
         self.assertIn("答29", prompt)
         self.assertNotIn("答0x", prompt)
-        # What did not fit is not told later either: it would arrive out of order.
+        # A partial quote is not proof of full delivery. A later catch-up still
+        # uses bounded recent quotes, rather than presenting older turns as new.
+        self.assertEqual(30, len(self.store.transcript.unseen("default", "claude")))
         self.done("然后呢")
-        self.assertEqual(self.agent.texts[1], "然后呢")
+        later = self.agent.texts[1]
+        self.assertLess(len(later), 12000)
+        self.assertTrue(later.endswith("然后呢"))
+        self.assertIn("答29", later)
+        self.assertNotIn("答0x", later)
+        self.assertIn("片段", later)
+        self.assertEqual(30, len(self.store.transcript.unseen("default", "claude")))
 
     def test_bad_offers_are_refused(self):
         good = self.turn(1)
