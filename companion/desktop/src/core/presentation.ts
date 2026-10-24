@@ -81,7 +81,16 @@ export function listedSideChat(item: Conversation, open: string): boolean {
 }
 /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
 export const listedTask = (task: Json) => Boolean(task.agent) && !task.monitoring_only;
-export type WorkSection = 'waiting' | 'running' | 'ended';
+/** The latest progress sentence: the Gateway's marker-free text when projected, else the raw field. */
+export function taskProgress(task: Json): string {
+  const view = task.presentation as Json | undefined, projected = view?.version === 1;
+  for (const key of ['progress', 'brief']) {
+    const value = projected && typeof view?.[key] === 'string' ? String(view[key]) : String(task[key] || '');
+    if (value) return value;
+  }
+  return '';
+}
+export type WorkSection ='waiting' | 'running' | 'ended';
 /** Three groups; a task whose state is unconfirmed has not ended, so it stays with the running ones. */
 export function workSection(task: Json): WorkSection {
   if (activeTask(task)) return task.state === 'waiting' || (task.presentation as Json)?.group === 'waiting' ? 'waiting' : 'running';

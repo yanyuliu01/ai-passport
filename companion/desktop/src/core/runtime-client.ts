@@ -1,3 +1,4 @@
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Endpoint, Json, SyncPage } from '../shared.js';
 
 export class RuntimeError extends Error {
@@ -70,12 +71,32 @@ export class HTTPRuntimeTransport implements RuntimeTransport {
   }
 }
 
+const DEVICE_CREDENTIAL = /^dev\.([0-9a-f]{16})\.([0-9a-f]{64})$/;
+/** Runtime devices.hash_secret: the secret of a device credential, or the whole legacy shared token. */
+export function credentialHash(token: string): string {
+  const secret = DEVICE_CREDENTIAL.exec(token)?.[2] ?? token;
+  return createHash('sha256').update('xiaoyou-device\0' + secret, 'utf8').digest('hex');
+}
+/** Runtime identity.host_proof: HMAC keyed by the credential hash over the host id and the client's nonce. */
+export function hostProof(token: string, host: string, nonce: string): string {
+  return createHmac('sha256', Buffer.from(credentialHash(token), 'utf8')).update('xiaoyou-host-proof\0' + host + '\0' + nonce, 'utf8').digest('hex');
+}
+export function proofMatches(token: string, host: unknown, nonce: string, answer: unknown): boolean {
+  if (typeof host !== 'string' || !host || typeof answer !== 'string' || answer.length !== 64) return false;
+  return timingSafeEqual(Buffer.from(hostProof(token, host, nonce)), Buffer.from(answer));
+}
+
 export async function identify(transport: RuntimeTransport, url: string, token: string, name = '这台电脑'): Promise<Endpoint> {
   const candidate: Endpoint = { runtimeId: '', spaceId: '', name, url: validateRuntimeURL(url), token, capabilities: [] };
-  const info = await transport.request(candidate, 'GET', '/v1/info');
+  const nonce = randomBytes(16).toString('hex');
+  const info = await transport.request(candidate, 'GET', '/v1/info?nonce=' + nonce);
   if (typeof info.runtime_id !== 'string' || typeof info.subject_id !== 'string'
     || !Array.isArray(info.capabilities) || !info.capabilities.includes('sync'))
     throw new RuntimeError('此 Runtime 尚不支持所需同步协议', 426);
+  // A Runtime that declares host proofs must answer one for this credential; otherwise it is not ours.
+  const host = info.host as Json | undefined;
+  if (info.capabilities.includes('host_proof') && !proofMatches(token, host?.id, nonce, host?.proof))
+    throw new RuntimeError('需要重新配对：这台电脑上的服务没能证明自己是你的小幽', 401);
   return { ...candidate, runtimeId: info.runtime_id, spaceId: info.subject_id,
     capabilities: info.capabilities.filter(item => typeof item === 'string') };
 }

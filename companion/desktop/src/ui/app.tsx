@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, PhoneConnection } from '../shared';
-import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection } from '../core/presentation';
+import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -21,6 +21,7 @@ function App() {
   const [text, setText] = useState(''), [problem, setProblem] = useState(''), [working, setWorking] = useState(false), [sending, setSending] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskRef>(), [target, setTarget] = useState<TaskRef & { legacy: boolean }>();
   const [historyLimit, setHistoryLimit] = useState(100), [completedOpen, setCompletedOpen] = useState(false), [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const [stopping, setStopping] = useState(''), [reconcileNote, setReconcileNote] = useState('');
   const [usage, setUsage] = useState<string>(), [detail, setDetail] = useState<Json>(), [detailError, setDetailError] = useState(''), [allSteps, setAllSteps] = useState(false), [highlight, setHighlight] = useState('');
   const detailGeneration = useRef(0), selection = useRef('');
   const bottom = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
@@ -53,6 +54,7 @@ function App() {
   }, []);
   useEffect(() => { setHistoryLimit(100); setText(''); setUsage(undefined); }, [space?.id, space?.selectedConversation]);
   useEffect(() => { setSelectedTask(undefined); setDetail(undefined); setTarget(undefined); setPage('chat'); }, [space?.id]);
+  useEffect(() => setReconcileNote(''), [selectedTask?.id, selectedTask?.runtime]);
   useEffect(() => {
     if (page === 'chat') bottom.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
     if (space && page === 'chat' && document.hasFocus() && document.visibilityState === 'visible') void window.xiaoyou.markRead({ space: space.id, conversation: space.selectedConversation }).catch(() => {});
@@ -151,7 +153,7 @@ function App() {
         {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小幽会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
         {completed.length > 0 && <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已结束 {completed.length}</button>}{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
         <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一件事')}</h2></div>
-          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{String(selected.progress || selected.brief || '暂无新的进展')}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
+          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{stopping === taskKey(selected) && activeTask(selected) ? '正在停止…' : selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{taskProgress(selected) || '暂无新的进展'}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
           {space?.approvals.filter(approval => approval._runtimeId === selected._runtimeId && (approval.card === selected.id || approval.task === selected.id || (selected.approval as Json | undefined)?.id === approval.id)).map(approval => <Decision key={String(approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyou.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
           <div className="task-detail-actions"><button className="primary" disabled={working || Boolean(selected._staleEpoch) || Boolean(selected.monitoring_only)} onClick={() => void run(() => supplement(selected))}>补充要求</button>
             {canOpenNative(selected, space) && <button disabled={working} onClick={() => space && void run(() => window.xiaoyou.openNative({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}>在 Codex 打开 <Icon name="external" /></button>}</div>
@@ -161,7 +163,9 @@ function App() {
           {allSteps && detail?.more === true && <button className="quiet-button" onClick={() => space && selectedTask && void readAction(async () => { const generation = detailGeneration.current; const previous = await window.xiaoyou.taskDetail({ space: space.id, ...selectedTask, before: Number(detail.before) }); if (generation !== detailGeneration.current) return; setDetail(value => ({ ...previous, events: [...(previous.events as Json[] || []), ...(value?.events as Json[] || [])] })); })}>加载更早进展</button>}
           <div className="task-meta"><span>{space?.connections?.find(item => item.runtime === selected._runtimeId)?.name || '来源设备'}</span><button className="quiet-button" onClick={() => void readAction(async () => { await chooseConversation(String(selected.conversation || 'default')); setHighlight(String(selected.origin_message || '')); })}>来源聊天 <Icon name="next" /></button><button className="quiet-button" onClick={() => go('native')}>原会话 <Icon name="next" /></button></div>
           <details className="execution-info"><summary><Icon name="info" />执行信息</summary><dl><dt>执行者</dt><dd>{String(selected.worker_agent || selected.agent || '未记录')}</dd><dt>目录</dt><dd>{String(selected.worker_cwd || selected.project || '未记录')}</dd><dt>会话</dt><dd>{String(selected.worker_session || selected.session_id || '未记录')}</dd></dl></details>
-          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(() => window.xiaoyou.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}><Icon name="stop" />停止</button>}
+          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(async () => { await window.xiaoyou.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }); setStopping(taskKey(selected)); })}><Icon name="stop" />停止</button>}
+          {unverifiedTask(selected) && !selected.monitoring_only && Boolean(selected.run_id) && space?.connections?.find(item => item.runtime === selected._runtimeId)?.capabilities.includes('execution_reconciliation')
+            && <div className="reconcile"><button disabled={working} onClick={() => space && void run(async () => { setReconcileNote(''); const status = await window.xiaoyou.reconcile({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId), run: String(selected.run_id) }); setReconcileNote(status === 'confirmed' ? '核对好了，结果已回到原对话' : '没找到足够的完成证据，保持待确认'); })}>核对结果</button>{reconcileNote && <small role="status">{reconcileNote}</small>}</div>}
         </> : <div className="work-unselected">选一件事，查看进展。</div>}</div></section>}
       {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小幽转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
         {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小幽')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
@@ -264,5 +268,6 @@ function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(
   && space?.connections?.some(item => item.runtime === task._runtimeId && item.local && item.connected && item.capabilities.includes('desktop_handoff'))
   && space.helpers?.some(item => item.runtime === task._runtimeId && item.name === (task.worker_agent || task.agent) && item.type === 'codex')); }
 function clean(error: unknown): string { return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '操作未完成，请重试'; }
-function relayLabel(state: string): string { return ({ supplement_received: '已收到补充要求', relay_queued: '等待转交', received: '已收到补充要求', queued: '等待转交', relayed: '已转交原会话', executing: '正在执行补充要求' } as Record<string, string>)[state] || '补充要求状态：' + state; }
+/** Same wording as the phone (WorkRecords.relayLabel). */
+function relayLabel(state: string): string { return ({ supplement_received: '已收到补充要求', received: '已收到补充要求', relay_queued: '补充要求等本轮结束后转交', queued: '补充要求等本轮结束后转交', relayed: '补充要求已转交原会话', executing: '正在执行补充要求', interrupted: '小幽重启过，补充要求还留着，等你确认后再转交' } as Record<string, string>)[state] || '补充要求状态：' + state; }
 createRoot(document.getElementById('root')!).render(<App />);

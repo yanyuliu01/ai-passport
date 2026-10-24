@@ -28,13 +28,28 @@ final class Markdown {
     static CharSequence projected(Presentation view, int index) {
         java.util.List<Object> runs = view.runs(index);
         if (runs.isEmpty()) return view.blocks().get(index);
-        SpannableStringBuilder out = new SpannableStringBuilder();
-        for (Object value : runs) {
-            java.util.Map<String,Object> run = Json.object(value);
-            int start = out.length(); out.append(Json.string(run,"text"));
-            if (Json.flag(run,"bold")) out.setSpan(new StyleSpan(Typeface.BOLD), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
+        FormatRuns format = FormatRuns.of(runs);
+        SpannableStringBuilder out = new SpannableStringBuilder(format.text);
+        for (FormatRuns.Span span : format.spans) for (Object style : spans(span))
+            out.setSpan(style, span.start, span.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         return out;
+    }
+
+    private static final int CODE_BACKGROUND = 0xffeef1f6, QUOTE_COLOR = 0xff5f6f84, QUOTE_BAR = 0xffc9d3e0;
+
+    private static Object[] spans(FormatRuns.Span span) {
+        switch (span.style) {
+            case BOLD: return new Object[] {new StyleSpan(Typeface.BOLD)};
+            case ITALIC: return new Object[] {new StyleSpan(Typeface.ITALIC)};
+            case STRIKE: return new Object[] {new android.text.style.StrikethroughSpan()};
+            case CODE: return new Object[] {new android.text.style.TypefaceSpan("monospace"), new android.text.style.BackgroundColorSpan(CODE_BACKGROUND)};
+            case CODE_BLOCK: return new Object[] {new android.text.style.TypefaceSpan("monospace"), new android.text.style.BackgroundColorSpan(CODE_BACKGROUND),
+                    new android.text.style.RelativeSizeSpan(0.92f)};
+            case HEADING: return new Object[] {new android.text.style.RelativeSizeSpan(Integer.parseInt(span.value) <= 2 ? 1.18f : 1.06f)};
+            case QUOTE: return new Object[] {new android.text.style.ForegroundColorSpan(QUOTE_COLOR), new android.text.style.QuoteSpan(QUOTE_BAR)};
+            case LINK: return new Object[] {new android.text.style.URLSpan(span.value)};
+            default: return new Object[0];
+        }
     }
 
     /** 她要发的几条消息：按单独一行的 --- 分开，去掉空的。 */

@@ -318,10 +318,11 @@ final class CardViews {
                 continue;
             }
             boolean last = index == card.entries.size() - 1;
-            String text = !mine && last && !card.active() && !card.brief.isEmpty()
-                    ? card.brief : entry.text;
-            // 设备小屏只认纯文字：手机上画的加粗、列表、分条记号去掉（Markdown.plain）。
-            lines.add((mine ? "你：" : "ds：") + oneLine(mine ? text : Markdown.plain(text), THREAD_ENTRY_CHARS));
+            boolean brief = !mine && last && !card.active() && !card.brief.isEmpty();
+            String text = brief ? card.brief : entry.text;
+            // 设备小屏只认纯文字：用 Runtime 给的 plain；旧记录才在本地去掉加粗、列表、分条记号。
+            lines.add((mine ? "你：" : "ds：") + oneLine(mine ? text
+                    : Presentation.plain(brief ? null : entry.presentation, text), THREAD_ENTRY_CHARS));
         }
         StringBuilder out = new StringBuilder();
         for (int index = lines.size() - 1; index >= 0; index--) {

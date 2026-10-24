@@ -41,6 +41,26 @@ final class WorkRecords {
         }
     }
 
+    /** The latest progress sentence: the Gateway's marker-free text when projected, else the raw last line. */
+    static String progress(Card card) {
+        if (card.presentation != null && card.presentation.supported && !card.presentation.value("progress").isEmpty())
+            return card.presentation.value("progress");
+        return card.progress.isEmpty() ? "" : card.progress.get(card.progress.size() - 1);
+    }
+
+    /** 补充要求走到哪一步，各自来自对应的事实；和电脑客户端用同一套说法。 */
+    static String relayLabel(String state) {
+        switch (state == null ? "" : state) {
+            case "": return "";
+            case "supplement_received": case "received": return "已收到补充要求";
+            case "relay_queued": case "queued": return "补充要求等本轮结束后转交";
+            case "relayed": return "补充要求已转交原会话";
+            case "executing": return "正在执行补充要求";
+            case "interrupted": return "小幽重启过，补充要求还留着，等你确认后再转交";
+            default: return "补充要求状态：" + state;
+        }
+    }
+
     static String title(Card card) {
         if (!card.title.isEmpty() && !card.titleSource.equals("fallback")) return card.title;
         return card.monitoringOnly ? "未命名 " + AppPresentation.name(AppPresentation.owner(card)) + " 会话" : "未命名工作";

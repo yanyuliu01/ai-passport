@@ -267,6 +267,7 @@ async function main(): Promise<void> {
   ipc('accept-join', value => network.accept(requiredString(value, 100)));
   ipc('approve', value => { const input = object(value); return client.approve(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.decision, 5), requiredString(input.runtime, 100)); });
   ipc('cancel', value => { const input = object(value); return client.cancel(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100)); });
+  ipc('reconcile', value => { const input = object(value); return client.reconcileTask(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100), requiredString(input.run, 128)); });
   ipc('login-start', value => {
     if (typeof value !== 'boolean') throw new Error('启动选项无效');
     app.setLoginItemSettings({ openAtLogin: value, args: ['--background'] });

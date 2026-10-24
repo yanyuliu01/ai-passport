@@ -23,6 +23,13 @@ final class Presentation {
     String author() { return supported ? Json.string(Json.object(raw.get("author")), "label") : ""; }
     boolean inChat() { return !supported || value("placement").equals("chat"); }
     boolean complete() { return supported && Json.flag(raw, "complete"); }
+    /** The Gateway's plain text for one-line places (home card, device screen, copy); null when not given. */
+    String plain() { return supported && raw.get("plain") instanceof String ? (String) raw.get("plain") : null; }
+    /** Plain text, or the legacy local clean-up for records without a projection. */
+    static String plain(Presentation view, String text) {
+        String value = view == null ? null : view.plain();
+        return value != null ? value : Markdown.plain(text);
+    }
     List<String> blocks() {
         List<String> result = new ArrayList<>();
         if (!supported) return result;

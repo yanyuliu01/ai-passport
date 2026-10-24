@@ -102,6 +102,50 @@ final class SyncCache {
                 pending(), usage);
     }
 
+    /**
+     * The applied records and the cursor that covers them, as one document: saving them together is what
+     * lets a restart continue from the cursor without skipping records it never applied.
+     */
+    String save() {
+        Map<String, Object> root = new HashMap<>();
+        root.put("version", 1); root.put("conversation", conversation); root.put("epoch", epoch);
+        root.put("cursor", cursor); root.put("presentation", presentationVersion);
+        root.put("tasks", new ArrayList<>(tasks.values())); root.put("messages", new ArrayList<>(messages.values()));
+        return UsageEvents.json(root);
+    }
+
+    /** A saved document back, or null when it is unreadable or from another format; then sync starts over. */
+    static SyncCache restore(String json, String conversation) {
+        Map<String, Object> root = json == null ? null : Json.parseObject(json);
+        if (root == null || Json.number(root, "version") != 1 || !conversation.equals(Json.string(root, "conversation"))) return null;
+        String cursor = Json.string(root, "cursor"), epoch = Json.string(root, "epoch");
+        if (cursor.isEmpty() || epoch.isEmpty()) return null;
+        SyncCache cache = new SyncCache(conversation);
+        cache.cursor = cursor; cache.epoch = epoch;
+        cache.presentationVersion = (int) Json.number(root, "presentation");
+        for (Object item : Json.list(root, "tasks")) {
+            Map<String, Object> task = Json.object(item);
+            if (!Json.string(task, "id").isEmpty()) cache.tasks.put(Json.string(task, "id"), task);
+        }
+        for (Object item : Json.list(root, "messages")) {
+            Map<String, Object> message = Json.object(item);
+            if (!Json.string(message, "id").isEmpty()) cache.messages.put(Json.string(message, "id"), message);
+        }
+        return cache;
+    }
+
+    /** Everything held, as if it had just arrived: what a restored cache hands to the screens. */
+    Result everything() {
+        List<Card> cards = new ArrayList<>();
+        for (String id : tasks.keySet()) {
+            Card card = card(id);
+            if (card != null) cards.add(card);
+        }
+        long seq = 0;
+        try { seq = Long.parseLong(cursor); } catch (NumberFormatException opaque) { /* opaque cursors carry no number */ }
+        return new Result(false, seq, false, cards, pending(), null);
+    }
+
     private static String cursorOf(Object value) {
         if (value instanceof Double) return Long.toString(((Double) value).longValue());
         if (value instanceof Number) return Long.toString(((Number) value).longValue());

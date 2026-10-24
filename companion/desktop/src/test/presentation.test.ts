@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
-import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection } from '../core/presentation.js';
+import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection, taskProgress } from '../core/presentation.js';
+import { credentialHash, proofMatches } from '../core/runtime-client.js';
 import { allowedRPC } from '../core/peers.js';
 import type { Endpoint, Json, Message, SyncPage } from '../shared.js';
 const runtime = '1'.repeat(32), space = '2'.repeat(32);
@@ -191,6 +192,30 @@ test('five-entry lists: three connection words, no empty side chats, only handed
   assert.equal(workSection({ agent: 'codex', state: 'working' }), 'running');
   assert.equal(workSection({ agent: 'codex', state: 'unknown' }), 'running');
   assert.equal(workSection({ agent: 'codex', state: 'cancelled' }), 'ended');
+});
+test('host proofs match the Runtime golden values for device and legacy credentials', () => {
+  // Computed with Runtime devices.hash_secret and identity.host_proof.
+  const device = 'dev.0123456789abcdef.' + 'ab'.repeat(32), legacy = 'synthetic-legacy-token';
+  const host = 'a'.repeat(32), nonce = '00112233445566778899aabbccddeeff';
+  assert.equal(credentialHash(device), 'c3f9d969e5bae4f4ac38e0c4e1c483918fe4e2e2bbd5404ad2f8b75c106f2ef3');
+  assert.equal(credentialHash(legacy), '64e48e4d7c819a192bd8e3b8471e2c39c77b71e8e9b754cc7f76ea852b13c71a');
+  assert.equal(proofMatches(device, host, nonce, '421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba'), true);
+  assert.equal(proofMatches(legacy, host, nonce, 'ce80809bf2bd4297e233bbbc8e67d60821eb3ac8486e75b066be43d4f98306f0'), true);
+  assert.equal(proofMatches(legacy, host, nonce, '421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba'), false);
+  assert.equal(proofMatches(device, 'b'.repeat(32), nonce, '421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba'), false);
+  assert.equal(proofMatches(device, host, nonce, undefined), false);
+});
+test('task detail uses the Gateway progress sentence before raw fields', () => {
+  assert.equal(taskProgress({ progress: '**raw** step', presentation: { version: 1, progress: 'raw step' } }), 'raw step');
+  assert.equal(taskProgress({ progress: 'legacy step' }), 'legacy step');
+  assert.equal(taskProgress({ brief: 'only brief', presentation: { version: 1, brief: 'only brief' } }), 'only brief');
+  assert.equal(taskProgress({ presentation: { version: 2, progress: 'future' }, progress: 'kept' }), 'kept');
+});
+test('relay allows a read-only reconcile with only the original run id', () => {
+  assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: 'run-abc' }), true);
+  assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: 'run-abc', text: 'do it again' }), false);
+  assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', {}), false);
+  assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: '../x y' }), false);
 });
 test('metadata and native navigation RPC cannot carry execution input', () => {
   assert.equal(allowedRPC('POST','/v1/directory/native-id/metadata',{}),true);

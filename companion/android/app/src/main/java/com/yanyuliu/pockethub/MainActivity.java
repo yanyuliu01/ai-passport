@@ -879,7 +879,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     /** 整体连接状态只有三种说法；自己的话不重复电脑名和地址。 */
     private String connectionWord() {
-        return AppPresentation.connection(RuntimeClient.selected(this) != null, HubStore.get().runtimeConnected());
+        return AppPresentation.connection(RuntimeClient.selected(this) != null && !HubStore.get().pairingProblem(),
+                HubStore.get().runtimeConnected());
     }
 
     /** 主对话是一个入口、两种样子：语音（首页）和文字。记住上次用的是哪种。 */
@@ -971,7 +972,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (card.id.equals(openTask)) show(TAB_HOME);
             toast("已归档，可在侧边栏「已归档」找回");
         });
-        if (stoppable) sheet.option("停止", "正在做的帮手会停下，已经做好的部分保留", true, () -> confirmStop(card));
+        if (stoppable) sheet.option("停止", "正在做的帮手会停下，已经做好的部分保留", true, () -> confirmStop(card, () -> {
+            stoppingCard = card.id; stoppingAt = System.currentTimeMillis(); taskKey = null; onHubChanged();
+        }));
         sheet.show();
     }
 
@@ -2160,7 +2163,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             }
             LinearLayout bubble = bubbleShell(false);
             TextView words = bubbleWords(false, ""); words.setTextIsSelectable(true);
-            words.setOnClickListener(v -> { if (group.getTag() instanceof String) showMessageActions((String) group.getTag()); });
+            words.setOnClickListener(v -> { if (group.getTag() instanceof String) showMessageActions((String) group.getTag(), words.getText()); });
             words.setTag(parts.get(index)); words.setText(presentation != null && presentation.supported
                     ? Markdown.projected(presentation,index) : Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
@@ -2271,7 +2274,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         ChatHistory.Message reply = lastReply();
         android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (reply == null || clipboard == null) return;
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(companionName() + "的回复", Markdown.plain(reply.text)));
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(companionName() + "的回复", Presentation.plain(reply.presentation, reply.text)));
         toast("已复制");
     }
 
@@ -2778,7 +2781,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         List<ChatHistory.Message> messages = store.mainMessages("default");
         for (int index = messages.size() - 1; index >= 0; index--) {
             ChatHistory.Message message = messages.get(index);
-            if (!message.role.equals("you") && !message.text.isEmpty()) return message.text;
+            if (message.role.equals("you")) continue;
+            String plain = message.presentation == null ? null : message.presentation.plain();
+            if (plain != null && !plain.isEmpty()) return plain;
+            if (!message.text.isEmpty()) return Markdown.plain(message.text);
         }
         return "";
     }
@@ -3795,8 +3801,23 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 })).show();
     }
 
-    private void showMessageActions(String id) {
-        new Sheet(this, "消息", false).option("开旁聊", "引用这句话，主对话保持不变", false, () -> createSideChat(id)).show();
+    private void showMessageActions(String id) { showMessageActions(id, null); }
+
+    /** 点一条消息：开旁聊；回复里有链接时，链接也列在这里打开（气泡要能选字，不直接响应点链接）。 */
+    private void showMessageActions(String id, CharSequence shown) {
+        Sheet sheet = new Sheet(this, "消息", false).option("开旁聊", "引用这句话，主对话保持不变", false, () -> createSideChat(id));
+        if (shown instanceof android.text.Spanned) {
+            android.text.Spanned text = (android.text.Spanned) shown;
+            for (android.text.style.URLSpan link : text.getSpans(0, text.length(), android.text.style.URLSpan.class)) {
+                String url = link.getURL();
+                String label = text.subSequence(text.getSpanStart(link), text.getSpanEnd(link)).toString();
+                sheet.option("打开链接：" + label, url, false, () -> {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+                    catch (android.content.ActivityNotFoundException none) { fail("没有能打开这个链接的应用"); }
+                });
+            }
+        }
+        sheet.show();
     }
 
     private void createSideChat(String message) {
@@ -3996,13 +4017,30 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (!CardViews.titleNotice(card).isEmpty()) head.addView(text(CardViews.titleNotice(card), 12, false));
         LinearLayout status = column(); status.setPadding(dp(16), dp(16), dp(16), dp(16)); status.setBackground(surface(Color.WHITE, Color.WHITE, 20));
         WorkRecords.Group group = WorkRecords.group(card, connected, System.currentTimeMillis() / 1000.0);
-        String state = group == WorkRecords.Group.UNCERTAIN ? "状态待确认" : AppPresentation.stateLabel(card, connected);
+        // 停止请求发出、还没有执行方确认的终态：如实说“正在停止”，不提前说已停止。
+        boolean stopping = card.id.equals(stoppingCard) && card.active();
+        String state = stopping ? "正在停止…" : group == WorkRecords.Group.UNCERTAIN ? "状态待确认" : AppPresentation.stateLabel(card, connected);
         status.addView(text(state, 17, true));
-        status.addView(text(connected ? progressAge(card) : "服务离线，显示上次同步的记录", 13, false));
-        if (!card.progress.isEmpty()) status.addView(text((group == WorkRecords.Group.UNCERTAIN ? "最后记录：" : "") + card.progress.get(card.progress.size() - 1), 14, false));
-        if (card.relayState.equals("relay_queued")) status.addView(text("补充要求等本轮结束后转交", 13, false));
-        if (card.relayState.equals("interrupted")) status.addView(text("小幽重启过，补充要求还留着，等你确认后再转交", 13, false));
+        status.addView(text(connected ? progressAge(card) : "连不上，显示上次的记录", 13, false));
+        String latest = WorkRecords.progress(card);
+        if (!latest.isEmpty()) status.addView(text((group == WorkRecords.Group.UNCERTAIN ? "最后记录：" : "") + latest, 14, false));
+        String relay = WorkRecords.relayLabel(card.relayState);
+        if (!relay.isEmpty()) status.addView(text(relay, 13, false));
         if (!card.pendingSupplement.isEmpty()) status.addView(text("待转交：" + CardViews.oneLine(card.pendingSupplement, 80), 13, false));
+        if (group == WorkRecords.Group.UNCERTAIN && !card.monitoringOnly && !card.runId.isEmpty()
+                && HubStore.get().can("execution_reconciliation")) {
+            status.addView(button("核对结果", v -> {
+                v.setEnabled(false);
+                RuntimeClient.reconcile(this, card.id, card.runId, (result, error) -> {
+                    v.setEnabled(true);
+                    if (error != null) { fail(error.replaceFirst("^Runtime 返回 \\d+：", "")); return; }
+                    // 只读核对：有完成证据才算 confirmed；证据不足保持待确认，不替你判定。
+                    toast(result != null && Json.string(result, "status").equals("confirmed")
+                            ? "核对好了，结果已回到原对话" : "没找到足够的完成证据，保持待确认");
+                    taskKey = null; onHubChanged();
+                });
+            }));
+        }
         Card.Approval approval = group == WorkRecords.Group.WAITING ? approvalFor(card) : null;
         if (approval != null) status.addView(decisionButtons(approval));
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.setMargins(0, dp(16), 0, dp(12)); head.addView(status, sp);

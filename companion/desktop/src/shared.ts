@@ -164,6 +164,7 @@ export interface DesktopAPI {
   importConfig(): Promise<void>;
   approve(input: { space: string; id: string; runtime: string; decision: 'allow' | 'deny' }): Promise<void>;
   cancel(input: { space: string; id: string; runtime: string }): Promise<void>;
+  reconcile(input: { space: string; id: string; runtime: string; run: string }): Promise<'confirmed' | 'unconfirmed'>;
   invite(): Promise<string>;
   join(invitation: string): Promise<void>;
   acceptJoin(id: string): Promise<void>;

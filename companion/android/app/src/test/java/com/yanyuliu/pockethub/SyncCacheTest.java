@@ -169,4 +169,38 @@ public class SyncCacheTest {
         assertFalse(history.pending(new SyncCache.Pending("m3:reply", "", "main", "xiaoyou", "半句", "streaming", 11)));
         assertEquals("thinking", history.main().get(2).status);
     }
+
+    @Test public void savedRecordsAndCursorRestoreTogetherAfterARestart() {
+        SyncCache cache = new SyncCache("*");
+        String reply = "{\"id\":\"m2\",\"rev\":3,\"task\":\"c1\",\"conversation\":\"default\",\"status\":\"final\","
+                + "\"text\":\"done\",\"author\":{\"kind\":\"xiaoyou\"},\"created_at\":12}";
+        String streaming = "{\"id\":\"m3\",\"rev\":1,\"conversation\":\"default\",\"status\":\"streaming\","
+                + "\"text\":\"half\",\"author\":{\"kind\":\"xiaoyou\"},\"created_at\":13}";
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":\"opaque:7\",\"messages\":[" + reply + "," + streaming + "],\"tasks\":["
+                + TASK.replace("\"members\":[", "\"members\":[\"m2\",") + "]}"));
+        SyncCache restored = SyncCache.restore(cache.save(), "*");
+        assertNotNull(restored);
+        assertEquals("opaque:7", restored.cursor());
+        assertEquals("e1", restored.epoch());
+        SyncCache.Result all = restored.everything();
+        assertEquals(1, all.cards.size());
+        assertEquals(cache.card("c1").entries.size(), all.cards.get(0).entries.size());
+        assertEquals(1, all.pending.size());
+        assertEquals("m3", all.pending.get(0).id);
+        // An older revision arriving after the restart still loses to the restored one.
+        restored.apply(page("{\"epoch\":\"e1\",\"seq\":\"opaque:8\",\"messages\":[" + reply.replace("\"rev\":3", "\"rev\":2")
+                .replace("done", "stale") + "],\"tasks\":[]}"));
+        assertEquals("opaque:8", restored.cursor());
+        assertEquals("done", restored.card("c1").entries.get(0).text);
+    }
+
+    @Test public void unreadableOrForeignSavesStartOver() {
+        assertNull(SyncCache.restore(null, "*"));
+        assertNull(SyncCache.restore("{broken", "*"));
+        assertNull(SyncCache.restore(new SyncCache("*").save(), "*"));  // nothing applied yet: no epoch
+        SyncCache cache = new SyncCache("default");
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":1,\"messages\":[],\"tasks\":[]}"));
+        assertNull(SyncCache.restore(cache.save(), "*"));
+        assertNotNull(SyncCache.restore(cache.save(), "default"));
+    }
 }

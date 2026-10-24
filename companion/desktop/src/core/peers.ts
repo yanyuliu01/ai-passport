@@ -56,6 +56,9 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     && Object.keys(body).every(key => ['text', 'client_id', 'conversation', 'card', 'pin', 'reply_scope', 'agent', 'effort', 'model', 'attachments'].includes(key))
     && (body.reply_scope === undefined || body.reply_scope === 'main'));
   if (/^\/v1\/approvals\/[a-zA-Z0-9._:-]+$/.test(url.pathname)) return ['allow', 'deny'].includes(String(body?.decision));
+  // Read-only recheck of an unknown execution: only the original run id, never new execution input.
+  if (/^\/v1\/cards\/[a-zA-Z0-9._:-]+\/reconcile$/.test(url.pathname)) return Boolean(body && Object.keys(body).length === 1
+    && typeof body.run_id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(body.run_id));
   return /^\/v1\/cards\/[a-zA-Z0-9._:-]+\/cancel$/.test(url.pathname);
 }
 

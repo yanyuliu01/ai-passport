@@ -128,7 +128,7 @@ test('explicit configuration attach cannot be redirected by inherited Runtime po
   const { dir } = await fixture(t), file = join(dir, 'config.json');
   await writeFile(file, JSON.stringify({ server: { port: 54321, token: 'configured-token-123456' } }));
   const transport = new HTTPRuntimeTransport(async (url, init) => {
-    assert.equal(String(url), 'http://127.0.0.1:54321/v1/info');
+    assert.match(String(url), /^http:\/\/127\.0\.0\.1:54321\/v1\/info\?nonce=[0-9a-f]{32}$/);
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer configured-token-123456');
     return new Response(JSON.stringify({ runtime_id: endpoint.runtimeId, subject_id: endpoint.spaceId, capabilities: ['sync'] }));
   });

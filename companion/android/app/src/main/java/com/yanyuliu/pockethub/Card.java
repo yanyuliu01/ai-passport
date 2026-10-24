@@ -257,6 +257,7 @@ final class Card {
         if (card.workerCwd.isEmpty()) card.workerCwd = Json.string(raw, "desktop_cwd");
         card.originMessage = Json.string(raw, "origin_message"); card.relayState = Json.string(raw, "relay_state");
         card.lastMeaningfulAt = Json.number(raw, "last_meaningful_at");
+        card.runId = Json.string(raw, "run_id");
         for (Object item : Json.list(raw, "supplements")) {
             Map<String, Object> addition = Json.object(item);
             if (Json.string(addition, "state").equals("queued")) card.pendingSupplement += Json.string(addition, "text") + "\n";
@@ -265,6 +266,8 @@ final class Card {
     }
 
     String conversation = "default", workerSession = "", workerCwd = "", relayState = "", originMessage = "";
+    /** 这件事现在那一轮执行的编号；结果不明时按它核对原执行（POST /v1/cards/<id>/reconcile）。 */
+    String runId = "";
     double lastMeaningfulAt;
     String pendingSupplement = "", originHost = "";
     String directoryId = "", originalTitle = "", displayProject = "";
@@ -349,7 +352,7 @@ final class Card {
                 source, project, sessionId, monitoringOnly, "unknown", observedAt, true,
                 contentScope, contentTruncated, titleSource, titleTruncated, attachments);
         copy.activity = activity; copy.conversation = conversation; copy.workerSession = workerSession;
-        copy.workerCwd = workerCwd; copy.originMessage = originMessage; copy.relayState = relayState;
+        copy.workerCwd = workerCwd; copy.originMessage = originMessage; copy.relayState = relayState; copy.runId = runId;
         copy.lastMeaningfulAt = lastMeaningfulAt;
         copy.originHost = originHost; copy.pendingSupplement = pendingSupplement; copy.turnEnded = turnEnded;
         copy.directoryId = directoryId; copy.originalTitle = originalTitle; copy.displayProject = displayProject;

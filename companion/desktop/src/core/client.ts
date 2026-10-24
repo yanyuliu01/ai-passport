@@ -399,6 +399,13 @@ export class DesktopClient {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);
     await this.transport.request(endpoint, 'POST', '/v1/cards/' + encodeURIComponent(id) + '/cancel', {});
   }
+  /** Read-only recheck of an execution whose result is unknown; confirmed only with completion evidence. */
+  async reconcileTask(space: string, id: string, runtime: string, run: string): Promise<'confirmed' | 'unconfirmed'> {
+    const endpoint = this.endpointForRecord(space, 'task', id, runtime);
+    if (!endpoint.capabilities.includes('execution_reconciliation')) throw new Error('这台电脑的小幽还不支持核对，请先更新');
+    const result = await this.transport.request(endpoint, 'POST', '/v1/cards/' + encodeURIComponent(id) + '/reconcile', { run_id: run });
+    return result.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+  }
   private endpointForRecord(space: string, kind: string, id: string, runtime?: string): Endpoint {
     const rows = this.db.db.prepare('SELECT runtime,data,epoch FROM records WHERE space=? AND kind=? AND id=? ORDER BY seen DESC')
       .all(space, kind, id);

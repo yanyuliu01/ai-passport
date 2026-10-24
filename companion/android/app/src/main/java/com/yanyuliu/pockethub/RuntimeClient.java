@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -195,17 +196,80 @@ final class RuntimeClient {
     /** 问这个地址上的 Runtime 是谁、会什么（/v1/info）。 */
     private static java.util.Set<String> identify(Context context, Target target) throws IOException {
         java.util.Set<String> abilities = new java.util.HashSet<>();
-        Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info",
-                target.token, null, null, 10, true));
+        // 经中继的线路由中继自己的钉住密钥核对身份，令牌也不经这里；直连才带随机数要 host_proof。
+        boolean direct = !target.url.startsWith("relay://");
+        String nonce = HostProof.nonce();
+        Map<String, Object> info;
+        try {
+            info = Json.parseObject(requestText("GET", target.url + "/v1/info" + (direct ? "?nonce=" + nonce : ""),
+                    target.token, null, null, 10, true));
+        } catch (IOException error) {
+            if (String.valueOf(error.getMessage()).contains("401")) HubStore.get().pairingProblem(true);
+            throw error;
+        }
         if (info != null) {
             for (Object item : Json.list(info, "capabilities")) if (item instanceof String) abilities.add((String) item);
+            if (direct && abilities.contains("host_proof")) {
+                Map<String, Object> host = Json.object(info.get("host"));
+                if (!HostProof.matches(target.token, Json.string(host, "id"), nonce, Json.string(host, "proof"))) {
+                    // 答不出证明：不是持有这部手机凭据的小幽。不再往下发请求，等主人重新配对。
+                    HubStore.get().pairingProblem(true);
+                    throw new IOException("需要重新配对：这个地址上的电脑没能证明自己是你配对的小幽");
+                }
+            }
+            HubStore.get().pairingProblem(false);
+            HubStore.get().capabilities(abilities);
             String id = Json.string(info, "runtime_id");
             if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
             // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
             String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
             prefs(context).edit().putString("sid:" + target.url, subject).apply();
+            if (direct && abilities.contains("devices") && !HostProof.device(target.token)) upgradeCredential(context, target);
         }
         return abilities;
+    }
+
+    /**
+     * 还在用旧的共享令牌：向这台电脑要一份这部手机自己的凭据（POST /v1/devices），确认它能用、
+     * 也答得出 host_proof 之后才换上；没换成就继续用旧令牌，下次再试。要到但还不能用的凭据
+     * （权限权威那台还没同步过来）先记着，下次接着核对，不重复要新的。
+     */
+    private static void upgradeCredential(Context context, Target target) {
+        SharedPreferences prefs = prefs(context);
+        String pendingKey = "pending_dev:" + target.url;
+        try {
+            String credential = prefs.getString(pendingKey, null);
+            if (credential == null) {
+                String body = "{\"name\":" + jsonString(android.os.Build.MODEL == null ? "手机" : android.os.Build.MODEL) + ",\"kind\":\"phone\"}";
+                Map<String, Object> issued = Json.parseObject(requestText("POST", target.url + "/v1/devices", target.token,
+                        body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 15));
+                credential = issued == null ? "" : Json.string(issued, "credential");
+                if (!HostProof.device(credential)) return;  // 权威不在线等原因拒绝：照旧用共享令牌
+                prefs.edit().putString(pendingKey, credential).apply();
+            }
+            String nonce = HostProof.nonce();
+            Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info?nonce=" + nonce,
+                    credential, null, null, 10));
+            Map<String, Object> host = info == null ? null : Json.object(info.get("host"));
+            if (host == null || !HostProof.matches(credential, Json.string(host, "id"), nonce, Json.string(host, "proof"))) return;
+            synchronized (RuntimeClient.class) {
+                List<Target> list = targets(context), updated = new ArrayList<>();
+                Target chosen = selected(context);
+                for (Target item : list)
+                    updated.add(item.url.equals(target.url) ? new Target(item.name, item.url, credential) : item);
+                store(context, updated, chosen == null ? target.url : chosen.url);
+            }
+            prefs.edit().remove(pendingKey).apply();
+            HubStore.get().log("这部手机已换成自己的凭据");
+        } catch (IOException | RuntimeException error) {
+            HubStore.get().log("这次没换成自己的凭据，继续用原来的：" + error.getMessage());
+        }
+    }
+
+    private static String jsonString(String value) {
+        StringBuilder out = new StringBuilder();
+        BuddyProtocol.quote(out, value);
+        return out.toString();
     }
 
     static synchronized void select(Context context, String url) {
@@ -265,11 +329,12 @@ final class RuntimeClient {
                     // 另一台电脑：摆出它自己的卡和同步进度（没见过就从头取）；同一台不动。
                     store.showComputer(key);
                     store.selectedRuntime(target.url, key);
+                    restoreSync(app, key);
                     if (abilities.contains("presentation_v1")) store.syncCache().requirePresentation();
                     final Target shared = target;
                     QUICK.execute(() -> shareHistory(app, shared));
                 }
-                more = fetchSync(target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
+                more = fetchSync(app, historyKey(app, target), target, store.syncCache(), more ? 0 : FEED_WAIT_SECONDS, true);
                 failures = 0;
                 complained = null;
             } catch (IOException | RuntimeException error) {
@@ -318,7 +383,53 @@ final class RuntimeClient {
      * 用 /v1/sync 取一页变化并交给中枢；没有变化时最多等 wait 秒。返回 true 表示还有下一页，
      * 应该马上接着取。游标、epoch 由 cache 管，整页应用完才往前走。
      */
-    private static boolean fetchSync(Target target, SyncCache cache, int wait, boolean interruptible)
+    /** 同步记录和游标存成一个文件（每台电脑一份），整份替换：重启后接着游标取，不从头追。 */
+    private static File syncFile(Context app, String key) {
+        return new File(new File(app.getFilesDir(), "sync"), ArtifactDownload.key(key) + ".json");
+    }
+
+    private static final Object SYNC_FILES = new Object();
+
+    private static void saveSync(Context app, String key, String document) {
+        synchronized (SYNC_FILES) {
+            File file = syncFile(app, key), temp = new File(file.getPath() + ".tmp");
+            try {
+                if (!file.getParentFile().isDirectory() && !file.getParentFile().mkdirs()) throw new IOException("无法建立同步目录");
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(temp)) {
+                    out.write(document.getBytes(StandardCharsets.UTF_8)); out.getFD().sync();
+                }
+                if (!temp.renameTo(file)) throw new IOException("无法替换同步记录");
+            } catch (IOException error) {
+                // 存不下只是下次多取一些，不影响这次显示。
+                temp.delete();
+                HubStore.get().log("同步进度没存下：" + error.getMessage());
+            }
+        }
+    }
+
+    /** 这台电脑还没有内存里的进度时，把上次存下的记录和游标放回去，并交给页面。 */
+    private static void restoreSync(Context app, String key) {
+        HubStore store = HubStore.get();
+        if (!store.syncCache().epoch().isEmpty()) return;
+        String document;
+        synchronized (SYNC_FILES) {
+            File file = syncFile(app, key);
+            if (!file.isFile()) return;
+            try { document = new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8); }
+            catch (IOException error) { return; }
+        }
+        SyncCache saved = SyncCache.restore(document, "*");
+        if (saved == null) return;
+        synchronized (store) {
+            if (!store.syncCache().epoch().isEmpty()) return;
+            store.useSyncCache(saved);
+            SyncCache.Result all = saved.everything();
+            store.applyFeed(all.seq, all.cards, null);
+            store.applyPending(all.pending);
+        }
+    }
+
+    private static boolean fetchSync(Context app, String key, Target target, SyncCache cache, int wait, boolean interruptible)
             throws IOException {
         HubStore store = HubStore.get();
         long epoch = store.cardsEpoch();
@@ -336,11 +447,14 @@ final class RuntimeClient {
         }
         // 核对“还是这台电脑”和写进去在同一把锁里：中间换了电脑，这一页就整页不要，
         // 不会把上一台的卡写到下一台的显示里。
+        String document = null;
+        boolean more;
         synchronized (store) {
             if (store.cardsEpoch() != epoch) {
                 return false;  // 等的时候换了 Runtime：这是上一台的回答
             }
             if (page.containsKey("conversations")) store.conversations(Json.list(page, "conversations"));
+            String before = cache.cursor();
             SyncCache.Result result = cache.apply(page);
             if (result.replaced) {
                 store.detachHistoryTasks();
@@ -353,8 +467,15 @@ final class RuntimeClient {
             if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
             store.runtimeConnected(true);
             store.catchingUp(result.more);
-            return result.more;
+            more = result.more;
+            // 记录和游标在同一把锁里取出，存下的总是“应用到哪一页、游标就在哪一页”。
+            // 换了一份记录时 resetCards 已换上空的进度：存它，下次从头取，不放回旧记录。
+            if (result.replaced) document = store.syncCache().save();
+            else if (!before.equals(cache.cursor()) || !Json.list(page, "messages").isEmpty()
+                    || !Json.list(page, "tasks").isEmpty()) document = cache.save();
         }
+        if (document != null && key != null && !key.isEmpty()) saveSync(app, key, document);
+        return more;
     }
 
     /**
@@ -837,6 +958,27 @@ final class RuntimeClient {
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
                 Target selected = selected(context);
                 if (selected != null && selected.url.equals(target.url) && selected.token.equals(target.token)) callback.done(out, issue);
+            });
+        });
+    }
+
+    /**
+     * 结果不明的一件事：请原执行的电脑只读核对那一轮（不重做）。回 confirmed（结果已发布）或
+     * unconfirmed（证据不足，保持待确认）；轮次变了、在别的电脑执行等返回 409，原话交给界面。
+     */
+    static void reconcile(Context context, String card, String runId, CatalogCallback callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, "连不上小幽"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> result = null; String error = null;
+            try {
+                String body = "{\"run_id\":" + jsonString(runId) + "}";
+                result = Json.parseObject(requestText("POST", target.url + "/v1/cards/" + card + "/reconcile", target.token,
+                        body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 30));
+            } catch (Exception problem) { error = problem.getMessage(); }
+            Map<String, Object> out = result; String issue = error;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target selected = selected(context);
+                if (selected != null && selected.url.equals(target.url)) callback.done(out, issue);
             });
         });
     }

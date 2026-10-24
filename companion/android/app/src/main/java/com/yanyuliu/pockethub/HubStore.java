@@ -507,6 +507,26 @@ public final class HubStore {
     /** 现在这台电脑的 /v1/sync 进度；和卡一起收起、一起放回，所以两者总是对得上。 */
     public synchronized SyncCache syncCache() { return sync; }
 
+    private boolean pairingProblem;
+    private java.util.Set<String> capabilities = new java.util.HashSet<>();
+
+    /** 现在这台电脑在 /v1/info 声明的能力；界面按它决定是否给出核对之类的入口。 */
+    public synchronized boolean can(String capability) { return capabilities.contains(capability); }
+
+    public synchronized void capabilities(java.util.Set<String> value) { capabilities = new java.util.HashSet<>(value); }
+
+    /** 凭据被拒（401）或电脑答不出 host_proof：界面说“需要配对”，而不是“连不上”。 */
+    public boolean pairingProblem() { synchronized (this) { return pairingProblem; } }
+
+    public void pairingProblem(boolean value) {
+        boolean changed;
+        synchronized (this) { changed = pairingProblem != value; pairingProblem = value; }
+        if (changed) notifyChanged();
+    }
+
+    /** 放回上次存下的同步记录和游标（RuntimeClient.restoreSync）；调用方随后把其中的卡交给页面。 */
+    synchronized void useSyncCache(SyncCache saved) { sync = saved; }
+
     /**
      * 换成显示另一台电脑：这台的卡和同步进度收起来，那台以前收起来的放回去，之后接着增量取；
      * 没见过的那台从头取。同一台（包括它的另一个地址）什么都不动。
