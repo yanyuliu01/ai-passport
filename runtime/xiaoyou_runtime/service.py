@@ -2167,11 +2167,14 @@ class Service:
             if current is not None and current["state"] not in ACTIVE:
                 self._card_changed(current)
             return
+        # The reply entry knows whether the owner cut in; polling/SSE clients see the same mark.
+        said = self._xiaoyou.cards.message(message_id + ":reply") or {}
         self._update(
             message_id, status="done", reply=turn.reply, brief=turn.brief, mood=turn.mood,
             agent=turn.agent, card=turn.card, started=turn.started, stage=None, helper=None, partial="",
             finished_at=time.time(),
             **({"operation_state": "unknown"} if scope.uncertain else {}),
+            **({"interrupted": True} if said.get("interrupted") else {}),
         )
 
     def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False,

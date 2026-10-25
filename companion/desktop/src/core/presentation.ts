@@ -13,6 +13,12 @@ export function messageBlocks(record: Message): DisplayBlock[] {
   return ['final', 'done', 'failed', 'cancelled'].includes(record.status || 'final') && record.text
     ? [{ id: record.id, text: record.text, complete: true }] : [];
 }
+/** The status line under a message: unfinished, cut short by the owner, failed or stopped; '' otherwise. */
+export function messageStatusText(record: Message): string {
+  const issue = displayIssue(record), view = projection(record);
+  if (issue || !view) return issue;
+  return !view.complete || view.interrupted === true || ['failed', 'cancelled'].includes(view.status) ? view.status_label : '';
+}
 export function authorLabel(record: Json): string {
   return projection(record)?.author.label || String((record.author as Json)?.name || '小幽');
 }

@@ -38,6 +38,15 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Replies cut short (App 0.32.3)
+
+When the owner sends a message while Xiaoyou is still replying, the part she
+already said stays in the chat. With a Runtime that marks it
+(`presentation.interrupted`), the bubble shows the localized "interrupted" status line under
+it, so a cut-short reply is not mistaken for a complete answer. The desktop
+client uses the same rule. Older Runtimes send no mark and the bubble looks as
+before. A lost connection keeps its own local message.
+
 ## Restoring mixed history (App 0.32.2)
 
 Cached legacy messages, local pending messages and Runtime display projections

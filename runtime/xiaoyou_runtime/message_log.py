@@ -80,6 +80,7 @@ def entry_message(card: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]
         "attachments": [dict(item) for item in entry.get("attachments", [])],
         "created_at": entry.get("at") or card.get("created_at") or 0,
         **({"provenance": dict(entry["provenance"])} if entry.get("provenance") else {}),
+        **({"interrupted": True} if entry.get("interrupted") else {}),
     }
 
 

@@ -3,14 +3,22 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { messageBlocks, projection, mainMessages, taskStatusLabel, displayIssue } from '../core/presentation.js';
+import { messageBlocks, messageStatusText, projection, mainMessages, taskStatusLabel, displayIssue } from '../core/presentation.js';
 import { orderMessages } from '../core/message-order.js';
 import { ClientDatabase } from '../core/database.js';
 import type { Message, SyncPage } from '../shared.js';
 
 const fixture = JSON.parse(readFileSync(new URL('../../../../tests/fixtures/presentation-v1.json', import.meta.url), 'utf8')) as {
-  cases: { name: string; wire: Message; visible: string[]; rendered: string[]; placement: string }[];
+  cases: { name: string; wire: Message; visible: string[]; rendered: string[]; placement: string; status_text: string }[];
 };
+
+test('the status line under each message matches Android, including a reply cut short', () => {
+  for (const row of fixture.cases) assert.equal(messageStatusText(row.wire), row.status_text, row.name);
+  const cut = fixture.cases.find(row => row.name === 'interrupted-reply')!;
+  assert.equal(projection(cut.wire)?.interrupted, true);
+  assert.deepEqual(messageBlocks(cut.wire).map(block => block.text), ['秋天先从风里来']);
+  assert.equal(messageStatusText({ ...cut.wire, presentation: { ...cut.wire.presentation!, version: 2 } as never }), '显示规则版本不兼容');
+});
 
 test('desktop consumes the same golden Gateway blocks as Android', () => {
   for (const row of fixture.cases) {

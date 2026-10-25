@@ -16,6 +16,8 @@ export interface DisplayProjection {
   status: string;
   status_label: string;
   complete: boolean;
+  /** Final text the owner cut into: only part of the reply was said. */
+  interrupted?: boolean;
   blocks: DisplayBlock[];
   order: [number, string, number, string];
 }

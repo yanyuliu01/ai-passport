@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, PhoneConnection } from '../shared';
-import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, type ReviewOutcome } from '../core/presentation';
+import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, messageStatusText, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, type ReviewOutcome } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -196,9 +196,9 @@ function App() {
 }
 function Bubble({ message, task, onTask, onBranch, onReview, canBranch, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onBranch(): void; onReview?: () => void; canBranch: boolean; highlight: boolean }) {
   const mine = message.author?.kind === 'owner' || message.kind === 'user';
-  const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message);
+  const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message), status = messageStatusText(message);
   if (!mine && !blocks.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
-  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{(issue || view && (!view.complete || ['failed', 'cancelled'].includes(view.status))) && <small role="status">{issue || view?.status_label}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
+  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{status && <small role="status">{status}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
 }
 /**
  * The owner's word on a request whose operations ended unknown. Records a disposition only: nothing

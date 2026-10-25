@@ -23,6 +23,14 @@ final class Presentation {
     String author() { return supported ? Json.string(Json.object(raw.get("author")), "label") : ""; }
     boolean inChat() { return !supported || value("placement").equals("chat"); }
     boolean complete() { return supported && Json.flag(raw, "complete"); }
+    /** Final text the owner cut into: only part of the reply was said. */
+    boolean interrupted() { return complete() && Json.flag(raw, "interrupted"); }
+    /** The status line under a message (same rule as desktop): unfinished, cut short, failed or stopped. */
+    String statusLine() {
+        if (!supported) return label();
+        String status = value("status");
+        return !complete() || interrupted() || status.equals("failed") || status.equals("cancelled") ? label() : "";
+    }
     /** The Gateway's plain text for one-line places (home card, device screen, copy); null when not given. */
     String plain() { return supported && raw.get("plain") instanceof String ? (String) raw.get("plain") : null; }
     /** Plain text, or the legacy local clean-up for records without a projection. */

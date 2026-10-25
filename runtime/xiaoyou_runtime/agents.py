@@ -339,7 +339,8 @@ class Job:
     tools: Any = None
     decision_only: bool = False
     decision_messages: Any = None
-    # 主人插话了（threading.Event 被设上）：边说边出的这一次马上停下，已经说出的部分照样交回
+    # 主人插话了（threading.Event 被设上）：边说边出的这一次马上停下，已经说出的部分照样交回。
+    # 真的因此提前停下的代理把它的 took_effect 设为 True（见 Cut）。
     interrupt: Any = None
     # 在哪个目录里跑；None 用代理配置的 workdir。接着电脑上的会话时要用那个会话的目录，
     # Claude Code 只在原项目目录下找得到要 --resume 的会话
@@ -352,6 +353,21 @@ class Job:
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
     return Path(job.cwd) if job.cwd else spec.workdir
+
+
+class Cut(threading.Event):
+    """主人插话的信号。took_effect：说话的代理确实因此提前停下，交回的只是说了一半的话；
+    回复已经说完之后才插话的不算。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.took_effect = False
+
+
+def stopped_early(interrupt: Any) -> None:
+    """说话的代理因为插话不再往下说时调用。"""
+    if isinstance(interrupt, Cut):
+        interrupt.took_effect = True
 
 
 @dataclass(frozen=True)

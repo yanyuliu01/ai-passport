@@ -2356,9 +2356,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private String statusText(ChatHistory.Message message) {
+        // Local status "interrupted" is a lost connection, not the Gateway's cut-short reply.
         if (message.presentation != null && !message.status.equals("interrupted"))
-            return message.presentation.complete() && !message.status.equals("failed")
-                    && !message.presentation.value("status").equals("cancelled") ? "" : message.presentation.label();
+            return message.status.equals("failed") ? message.presentation.label() : message.presentation.statusLine();
         switch (message.status) {
             case "sending": return message.role.equals("you") ? "发送中…" : "";
             case "failed": return message.role.equals("you") ? "发送未成功" : "";

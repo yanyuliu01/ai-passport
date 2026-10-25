@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import router as routing
-from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Job,
+from .agents import (MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Cut, Job,
                      Outcome, clip, fields_from_text, span)
 from .approvals import STALL, Approvals, Gate
 from .artifacts import ArtifactError, ArtifactStore
@@ -1240,7 +1240,7 @@ class Xiaoyou:
 
     @contextmanager
     def speaking_turn(self, conversation):
-        cut = threading.Event()
+        cut = Cut()
         with self._speaking_lock:
             self._speaking[conversation] = cut
         try:
@@ -1332,18 +1332,19 @@ class Xiaoyou:
             reply = "这件事我没办成：%s" % problem
             mood, brief = "oops", None
         return self._apply_conversation(lead, text, conversation, turn_id, plan, reply, brief, mood,
-                                        hop, say, pinned, effort, model)
+                                        hop, say, pinned, effort, model,
+                                        interrupted=getattr(cut, "took_effect", False))
 
     def _apply_conversation(self, lead: Agent, text: str, conversation: str, turn_id: str,
                             plan: Dict[str, Any], reply: str, brief: Any, mood: Any, hop: int,
                             say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
-                            defer_reply: bool = False, seen=None) -> Turn:
+                            defer_reply: bool = False, seen=None, interrupted: bool = False) -> Turn:
         scope = getattr(self._effect_scope, "current", None)
         if scope is not None:
             scope.guard()
         if scope is None or plan["type"] == "none":
             return self._apply_conversation_now(lead, text, conversation, turn_id, plan, reply,
-                brief, mood, hop, say, pinned, effort, model, defer_reply, seen)
+                brief, mood, hop, say, pinned, effort, model, defer_reply, seen, interrupted)
         from .tasks import fingerprint
         selection = dict(plan)
         target = selection.pop("card", None)
@@ -1354,9 +1355,10 @@ class Xiaoyou:
                 "reply": reply, "brief": brief, "mood": mood, "hop": hop, "pinned": pinned,
                 "effort": effort, "model": model, "defer_reply": defer_reply,
                 "agents": {name: fingerprint(self._agents[name]) for name in names if name in self._agents}}
+        # interrupted is display-only: it stays out of the saved selection and its result.
         result = scope.run("task_action", args, lambda: self._action_result(self._apply_conversation_now(
             lead, text, conversation, turn_id, plan, reply, brief, mood, hop, say, pinned,
-            effort, model, defer_reply), plan), key=turn_id + ":action")
+            effort, model, defer_reply, interrupted=interrupted), plan), key=turn_id + ":action")
         return Turn(**{key: value for key, value in result.items() if key != "_facts"})
 
     def _action_result(self, turn, plan):
@@ -1372,10 +1374,13 @@ class Xiaoyou:
         return dict(asdict(turn), _facts=facts)
 
     def _apply_conversation_now(self, lead, text, conversation, turn_id, plan, reply, brief, mood,
-                                hop, say, pinned, effort, model, defer_reply=False, seen=None):
+                                hop, say, pinned, effort, model, defer_reply=False, seen=None,
+                                interrupted=False):
         def exchange(*args: Any, **kwargs: Any) -> Any:
             if defer_reply:
                 kwargs["say"] = None
+            elif interrupted:
+                kwargs["interrupted"] = True  # 主人插话，这句只说了一半
             return self._writer.exchange(*args, **kwargs)
 
         kind = plan["type"]
@@ -1561,9 +1566,12 @@ class Xiaoyou:
                     plan = spoken_plan
             return self._apply_conversation(lead, text, conversation, turn_id, plan, reply, None,
                                              "happy", hop, say, pinned, effort, model,
-                                             seen=[] if outcome is None else None)
+                                             seen=[] if outcome is None else None,
+                                             interrupted=outcome is not None and cut.took_effect)
         current = self._cards.get(committed.card) or {}
         extra = {} if current.get("state") in ACTIVE else {"brief": clip(reply, self._config.brief_max_chars)}
+        if outcome is not None and cut.took_effect:
+            extra["interrupted"] = True
         self._writer.reply(committed.card, reply, turn_id=turn_id, scope="task" if pinned else "main", **extra)
         self.context.delivered(conversation, turn_id, [] if outcome is None else [lead.name], committed.agent)
         return shape(reply, None, "busy" if committed.started else "happy", self._config.brief_max_chars,

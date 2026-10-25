@@ -12,6 +12,12 @@ increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
 
+## Replies cut short (0.1.8 source)
+
+A reply the owner cut into keeps the words already said and shows the localized "interrupted" label
+under the bubble when the Runtime marks it (`presentation.interrupted`). The
+status-line rule is shared with Android through the golden fixture.
+
 ## Owner review version checks (0.1.8 source)
 
 Request and timer confirmations carry the exact revision displayed to the owner.

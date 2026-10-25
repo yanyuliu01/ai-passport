@@ -102,7 +102,8 @@
       "rendered": [
         "First message",
         "Second message"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "one-complete-one-unfinished",
@@ -205,7 +206,8 @@
       "placement": "chat",
       "rendered": [
         "First message"
-      ]
+      ],
+      "status_text": "正在回复"
     },
     {
       "name": "no-complete-message",
@@ -293,7 +295,8 @@
       },
       "visible": [],
       "placement": "chat",
-      "rendered": []
+      "rendered": [],
+      "status_text": "正在回复"
     },
     {
       "name": "empty-snapshot-retracts-blocks",
@@ -369,7 +372,8 @@
       },
       "visible": [],
       "placement": "chat",
-      "rendered": []
+      "rendered": [],
+      "status_text": "正在回复"
     },
     {
       "name": "fenced-code-preserves-separator",
@@ -482,7 +486,8 @@
       "rendered": [
         "Example\n---",
         "Done"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "owner-literal-separator",
@@ -572,7 +577,8 @@
       "placement": "chat",
       "rendered": [
         "My text\n---\nMore"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "native-item-boundary",
@@ -678,7 +684,8 @@
       "placement": "source",
       "rendered": [
         "Native answer\n---\nLiteral separator"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "native-protocol-input",
@@ -770,7 +777,8 @@
       "placement": "source",
       "rendered": [
         "Forwarded input"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "tool-evidence",
@@ -862,7 +870,8 @@
       "placement": "work",
       "rendered": [
         "Tool text\n---\nOutput"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "task-result",
@@ -952,7 +961,8 @@
       "placement": "work",
       "rendered": [
         "Result"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "failed-reply",
@@ -1042,7 +1052,8 @@
       "placement": "chat",
       "rendered": [
         "Unavailable"
-      ]
+      ],
+      "status_text": "未完成"
     },
     {
       "name": "cancelled-reply",
@@ -1132,7 +1143,8 @@
       "placement": "chat",
       "rendered": [
         "Stopped"
-      ]
+      ],
+      "status_text": "已停止"
     },
     {
       "name": "same-text-new-turn",
@@ -1222,7 +1234,8 @@
       "placement": "chat",
       "rendered": [
         "First message"
-      ]
+      ],
+      "status_text": ""
     },
     {
       "name": "shared-formatting-runs",
@@ -1332,7 +1345,8 @@
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
           ]
         }
-      }
+      },
+      "status_text": ""
     },
     {
       "name": "complete-formatting-runs",
@@ -1499,7 +1513,102 @@
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/turn:reply"
           ]
         }
-      }
+      },
+      "status_text": ""
+    },
+    {
+      "name": "interrupted-reply",
+      "input": {
+        "id": "cut:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "cut:you",
+        "status": "final",
+        "rev": 12,
+        "created_at": 20,
+        "turn_at": 20,
+        "attachments": [],
+        "text": "秋天先从风里来",
+        "interrupted": true
+      },
+      "wire": {
+        "id": "cut:reply",
+        "conversation": "default",
+        "scope": "main",
+        "author": {
+          "kind": "xiaoyou",
+          "name": "xiaoyou"
+        },
+        "source": {
+          "type": "runtime",
+          "runtime_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "kind": "reply",
+        "reply_to": "cut:you",
+        "status": "final",
+        "rev": 12,
+        "created_at": 20,
+        "turn_at": 20,
+        "attachments": [],
+        "text": "秋天先从风里来",
+        "interrupted": true,
+        "presentation": {
+          "version": 1,
+          "input_revision": "6dde35ff365cce711f6c",
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cut:reply",
+          "turn_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cut",
+          "conversation": "default",
+          "author": {
+            "kind": "xiaoyou",
+            "name": "xiaoyou",
+            "label": "小幽"
+          },
+          "kind": "reply",
+          "event": "assistant_message",
+          "placement": "chat",
+          "status": "final",
+          "status_label": "已打断",
+          "complete": true,
+          "blocks": [
+            {
+              "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cut:reply#0",
+              "text": "秋天先从风里来",
+              "complete": true,
+              "runs": [
+                {
+                  "text": "秋天先从风里来",
+                  "bold": false
+                }
+              ]
+            }
+          ],
+          "interrupted": true,
+          "plain": "秋天先从风里来",
+          "order": [
+            20,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cut",
+            1,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cut:reply"
+          ]
+        }
+      },
+      "visible": [
+        "秋天先从风里来"
+      ],
+      "rendered": [
+        "秋天先从风里来"
+      ],
+      "placement": "chat",
+      "status_text": "已打断"
     }
   ]
 }

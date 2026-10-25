@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text
+from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text, stopped_early
 from .config import AgentSpec
 from .voice_tools import JOIN, TOOL_SESSION_PREFIX
 
@@ -220,6 +220,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 for event in events(response, check_deadline):
                     if job.interrupt is not None and job.interrupt.is_set():
                         cut[0] = True  # 主人插话了：不再往下读，已经说出的部分照样算
+                        stopped_early(job.interrupt)
                         break
                     kind = event.get("type")
                     if kind == "error":

@@ -752,7 +752,10 @@ the model makes the judgement.
   round to say what she did.
 - **Cutting in**: if you send a message while she is still replying, the reply stops at once (what she already
   said is kept and marked as interrupted) and she answers your new message. Relays of helper results are not
-  interrupted. Needs App 0.25.0 (sending while she replies).
+  interrupted. Needs App 0.25.0 (sending while she replies). In 0.23.1 source after `10364f2`, the cut-short
+  reply stays `status: final` and also carries `interrupted: true` on the sync message, the polling/SSE request
+  record and `presentation` (its `status_label` is the localized "interrupted" label). Only a speaker that actually stopped early sets it;
+  a message arriving after the reply was complete does not. Older clients ignore the field and show the text.
 
 ## The companion remembers (0.17.0)
 

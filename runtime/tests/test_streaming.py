@@ -23,7 +23,7 @@ from test_runtime import Scripted, TempDirCase, make_xiaoyou, write_config  # no
 from xiaoyou_runtime import config as config_module  # noqa: E402
 from xiaoyou_runtime import dsh_stream  # noqa: E402
 from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
-from xiaoyou_runtime.agents import AgentError, DshAgent, Job, Outcome  # noqa: E402
+from xiaoyou_runtime.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
 from xiaoyou_runtime.service import Service  # noqa: E402
 from xiaoyou_runtime.server import make_server  # noqa: E402
 from xiaoyou_runtime.xiaoyou import reply_so_far  # noqa: E402
@@ -344,6 +344,28 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual(outcome.text, "我这就去")
         self.assertEqual(len(opener.requests), 1)  # 不再提醒、不再接着说
         self.assertEqual(outcome.fields["action"], {"type": "none"})
+
+    def test_a_cut_that_stops_the_stream_takes_effect(self):
+        cut = Cut()
+        opener = FakeOpener(sse("我这就去", "把这几天", "的事情拢一拢。"))
+
+        def heard(text):
+            cut.set()
+
+        dsh_stream.run(dsh_spec(self.folder), Job(text="回顾一下", system="S", plain=True,
+                       on_text=heard, tools=self.toolbox(), interrupt=cut),
+                       {"DEEPSEEK_API_KEY": "k"}, "deepseek-v4-pro", heard, opener)
+        self.assertTrue(cut.took_effect)
+
+    def test_a_cut_after_the_stream_finished_has_no_effect(self):
+        cut = Cut()
+        opener = FakeOpener(sse("好的。"))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="回顾一下", system="S", plain=True,
+                                 on_text=lambda text: None, tools=self.toolbox(), interrupt=cut),
+                                 {"DEEPSEEK_API_KEY": "k"}, "deepseek-v4-pro", lambda text: None, opener)
+        cut.set()
+        self.assertEqual("好的。", outcome.text)
+        self.assertFalse(cut.took_effect)
 
     def test_xiaoyou_interrupt_only_hits_a_reply_in_progress(self):
         xiaoyou, _ = make_xiaoyou(self.folder / "cut", [Scripted("claude")])

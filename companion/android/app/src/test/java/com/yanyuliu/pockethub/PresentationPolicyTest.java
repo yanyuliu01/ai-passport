@@ -70,5 +70,27 @@ public class PresentationPolicyTest {
     @Test public void unsupportedPolicyIsExplicit() {
         Presentation view=Presentation.restore("{\"version\":2,\"blocks\":[]}");
         assertFalse(view.supported); assertEquals("显示规则版本不兼容",view.label());
+        assertEquals("显示规则版本不兼容",view.statusLine());
+    }
+    @Test public void statusLineMatchesDesktopForEveryGoldenCase() throws Exception {
+        for (Object value : cases()) {
+            Map<String,Object> row = Json.object(value);
+            Presentation view = Presentation.from(Json.object(row.get("wire")).get("presentation"));
+            assertEquals(Json.string(row,"name"), Json.string(row,"status_text"), view.statusLine());
+        }
+    }
+    @Test public void aCutShortReplyKeepsItsMarkThroughSyncAndRestore() throws Exception {
+        Map<String,Object> wire = null;
+        for (Object value : cases()) if (Json.string(Json.object(value),"name").equals("interrupted-reply"))
+            wire = Json.object(Json.object(value).get("wire"));
+        assertNotNull(wire);
+        SyncCache cache = new SyncCache("*");
+        SyncCache.Result result = cache.apply(Json.parseObject(UsageEvents.json(Map.of("seq",1,"epoch","test","messages",List.of(wire),"tasks",List.of()))));
+        ChatHistory history = new ChatHistory();
+        assertTrue(history.pending(result.pending.get(0)));
+        ChatHistory.Message shown = ChatHistory.restore(history.json()).main().get(0);
+        assertTrue(shown.presentation.interrupted());
+        assertEquals("已打断", shown.presentation.statusLine());
+        assertEquals(List.of("秋天先从风里来"), shown.presentation.blocks());
     }
 }

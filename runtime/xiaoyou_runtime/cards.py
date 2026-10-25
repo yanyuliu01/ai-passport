@@ -746,7 +746,7 @@ class Cards:
                turn_id: Optional[str] = None, scope: str = "main", kind: str = "reply",
                author: str = "xiaoyou",
                expected_run=None, expected_execution=None, expected_active_run=None,
-               expected_run_id=None,
+               expected_run_id=None, interrupted: bool = False,
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
         fresh 表示新的一轮开始了，之前的进展清掉。expected_run_id 只要求卡还是这次派发
@@ -784,7 +784,9 @@ class Cards:
                 card["entries"].append(
                     {"role": "xiaoyou", "text": say[:MAX_ENTRY_CHARS], "at": now,
                      "id": turn_id + ":reply" if turn_id else "", "scope": scope,
-                     "kind": kind, "author": author})
+                     "kind": kind, "author": author,
+                     # The owner cut in: only part of this reply was said.
+                     **({"interrupted": True} if interrupted else {})})
             if attachments is not None:
                 incoming = clean_attachments(attachments)
                 self._merge_attachments(card, incoming)

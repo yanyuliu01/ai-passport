@@ -171,13 +171,14 @@ class Record:
     # ---- 说的话 ----
 
     def exchange(self, card_id: str, said: Optional[str], say: Optional[str], *, turn_id: Optional[str] = None,
-                 scope: str = "main", kind: str = "reply", **fields: Any) -> Optional[Dict[str, Any]]:
+                 scope: str = "main", kind: str = "reply", interrupted: bool = False,
+                 **fields: Any) -> Optional[Dict[str, Any]]:
         """主人说的一句（said，可以没有）和对它的回答（say）。编号是 turn_id + :you / :reply。"""
         if getattr(self._local, "fields", {}).get("reply_scope") == "main":
             scope = "main"
         self._check(scope, kind)
         result = self._cards.update(card_id, said=said, say=say, turn_id=turn_id, scope=scope, kind=kind,
-                                  **self._task_fields(fields))
+                                  interrupted=interrupted, **self._task_fields(fields))
         if result is not None and scope == "main":
             try:
                 self.conversation_touch(result["conversation"])
@@ -188,12 +189,12 @@ class Record:
     def reply(self, card_id: str, say: str, *, turn_id: Optional[str] = None, scope: str = "main",
               kind: str = "reply", author: str = "xiaoyou",
               attachments: Optional[List[Dict[str, Any]]] = None, expected_run=None, expected_execution=None, expected_active_run=None,
-              **fields: Any) -> Optional[Dict[str, Any]]:
+              interrupted: bool = False, **fields: Any) -> Optional[Dict[str, Any]]:
         """小幽或帮手单独说的一句（帮手的结果、小幽的总结）。"""
         self._check(scope, kind)
         result = self._cards.update(card_id, say=say, turn_id=turn_id, scope=scope, kind=kind, author=author,
                                   attachments=attachments, expected_run=expected_run, expected_execution=expected_execution,
-                                  expected_active_run=expected_active_run,
+                                  expected_active_run=expected_active_run, interrupted=interrupted,
                                   **self._task_fields(fields))
         if result is not None and scope == "main":
             try:

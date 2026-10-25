@@ -16,6 +16,8 @@ LABELS = {
     'unavailable': '当前不可用', 'unknown': '状态待确认',
     'turn_ended': '本轮已结束',
 }
+# A complete reply the owner cut into: the words are final, only part was said.
+INTERRUPTED_LABEL = '已打断'
 
 
 FORMATTING = ('bold', 'italic', 'strike', 'code', 'code_block', 'heading', 'link', 'quote', 'list')
@@ -183,6 +185,9 @@ def message(record, runtime_id=''):
     # A source-owned revision fingerprint is independent of local mesh seq/rev.
     revision = {name: record.get(name) for name in
                 ('conversation', 'scope', 'author', 'kind', 'status', 'text', 'partial', 'attachments', 'input_origin')}
+    interrupted = terminal and record.get('interrupted') is True
+    if interrupted:
+        revision['interrupted'] = True  # Only when set, so existing revisions stay stable.
     digest = hashlib.sha256(json.dumps(revision, sort_keys=True, ensure_ascii=False,
                                       separators=(',', ':')).encode()).hexdigest()[:20]
     reply_to = record.get('reply_to')
@@ -195,8 +200,10 @@ def message(record, runtime_id=''):
         'version': VERSION, 'input_revision': digest, 'id': key, 'turn_id': turn,
         'conversation': record.get('conversation') or 'default', 'author': author,
         'kind': record.get('kind') or 'reply', 'event': event, 'placement': placement,
-        'status': status, 'status_label': LABELS.get(status, LABELS['unknown']),
+        'status': status,
+        'status_label': INTERRUPTED_LABEL if interrupted else LABELS.get(status, LABELS['unknown']),
         'complete': terminal, 'blocks': blocks,
+        **({'interrupted': True} if interrupted else {}),
         # Unstyled text for one-line places (home card, device screen, copying).
         'plain': '\n\n'.join(plain(block['runs']) for block in blocks),
         'order': [record.get('turn_at', record.get('created_at')) or 0, turn, 0 if author['kind'] == 'owner' else 1, key],
@@ -250,4 +257,6 @@ def response(record, runtime_id=''):
     reply.update(status={'done': 'final', 'failed': 'failed'}.get(status, 'streaming' if status == 'running' else 'queued'),
                  text=record.get('reply') if status == 'done' else record.get('error') or '',
                  partial=record.get('partial') or '')
+    if status == 'done' and record.get('interrupted') is True:
+        reply['interrupted'] = True
     return message(reply, runtime_id)['presentation']
