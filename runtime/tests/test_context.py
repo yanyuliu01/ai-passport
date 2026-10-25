@@ -8,6 +8,7 @@ from test_runtime import Scripted, TempDirCase, make_xiaoyou
 from xiaoyou_runtime.world.cards import Cards
 from xiaoyou_runtime.events.intake import Intake
 from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.loop.context import bind as bind_context
 
 
 class ContextTests(TempDirCase):
@@ -19,7 +20,7 @@ class ContextTests(TempDirCase):
         self.writer = self.intake.writer("owner", actor="test")
         self.store = Store(self.state)
         self.store.transcript.resolve_with(lambda mid: (self.cards.message(mid) or {}).get("text"))
-        self.context = self.store.bind_context(self.cards)
+        self.context = bind_context(self.store, self.cards)
         self.card = self.writer.task_open("side", "original task")
 
     def exchange(self, tid="a", text="question", reply="saved answer"):
@@ -38,7 +39,7 @@ class ContextTests(TempDirCase):
         # Simulate a checkpoint missing its final message/task update.
         (self.state / "cards.json").unlink()
         rebuilt = Cards(self.state / "cards.json")
-        context = Store(self.state).bind_context(rebuilt)
+        context = bind_context(Store(self.state), rebuilt)
         self.assertEqual(["saved answer"], [turn["reply"] for turn in context.turns("side")])
 
     def test_result_and_activity_do_not_duplicate_the_public_summary(self):
@@ -65,7 +66,7 @@ class ContextTests(TempDirCase):
         raw = (self.state / "context.json").read_text("utf-8")
         self.assertNotIn("question", raw)
         self.assertNotIn("saved answer", raw)
-        self.assertEqual([], Store(self.state).bind_context(self.cards).unseen("side", "speaker"))
+        self.assertEqual([], bind_context(Store(self.state), self.cards).unseen("side", "speaker"))
         self.assertEqual(["a"], [turn["id"] for turn in self.context.unseen("side", "other")])
 
     def test_receipt_for_a_model_snapshot_does_not_hide_a_concurrent_message_revision(self):
@@ -96,7 +97,7 @@ class ContextTests(TempDirCase):
         self.assertTrue(self.context.clear("side"))
         self.assertFalse(self.context.clear("side"))
         self.exchange(reply="a late revision")
-        context = Store(self.state).bind_context(self.cards)
+        context = bind_context(Store(self.state), self.cards)
         self.assertEqual([], context.turns("side"))
         self.assertEqual("a late revision", self.cards.message("a:reply")["text"])
         self.exchange("new", text="new question", reply="new answer")
@@ -136,12 +137,12 @@ class ContextTests(TempDirCase):
     def test_a_damaged_reset_boundary_does_not_silently_restore_old_context(self):
         (self.state / "context.json").write_text("[]", encoding="utf-8")
         with self.assertRaises(RuntimeError):
-            Store(self.state).bind_context(self.cards)
+            bind_context(Store(self.state), self.cards)
 
     def test_decision_and_speaker_frames_read_current_task_and_conversation_commitments(self):
         from xiaoyou_runtime.world.promises import Promises
         promises = Promises(self.state / "promises.json")
-        context = self.store.bind_context(self.cards, promises=promises)
+        context = bind_context(self.store, self.cards, promises=promises)
         promises.track("side commitment", conversation="side")
         promises.track("other commitment", conversation="other")
         before = context.frame("side", self.card)
@@ -210,7 +211,7 @@ class ContextTests(TempDirCase):
         self.assertEqual("revised authoritative answer", revised["turns"][0]["reply"])
         self.context.clear("side")
         with self.assertRaises(ValueError):
-            Store(self.state).bind_context(self.cards).segment("side", revised["id"])
+            bind_context(Store(self.state), self.cards).segment("side", revised["id"])
 
     def test_returned_segment_is_a_snapshot_and_cannot_mutate_the_source(self):
         self.exchange()

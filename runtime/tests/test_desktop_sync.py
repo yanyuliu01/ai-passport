@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.helpers.agents import create
+from xiaoyou_runtime.helpers.factory import create
 from xiaoyou_runtime.world.cards import Cards
 from xiaoyou_runtime.config import load
 from xiaoyou_runtime.events.desktop_hook import record

@@ -411,7 +411,7 @@ class Service:
 
     def _helper_add(self, body: Any) -> Dict[str, Any]:
         """加一个帮手（设置 › 帮手 › 添加帮手）：校验、记下、立刻能派活。Key 只写进本机文件。"""
-        from ..helpers import agents as agents_module
+        from ..helpers.factory import create as create_agent
         from ..helpers.helpers import HelperError
         registry = self._xiaoyou.helpers
         if registry is None:
@@ -430,7 +430,7 @@ class Service:
             raise RequestError(str(error))
         except OSError:
             raise UnavailableError("帮手未能保存，请重试") from None
-        agent = agents_module.create(spec)
+        agent = create_agent(spec)
         try:
             self._xiaoyou.add_agent(agent)
         except ValueError as error:

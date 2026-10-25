@@ -30,6 +30,7 @@ RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
 from xiaoyou_runtime.helpers import agents as agents_module  # noqa: E402
+from xiaoyou_runtime.helpers import factory  # noqa: E402
 from xiaoyou_runtime.world import approvals as approvals_module  # noqa: E402
 from xiaoyou_runtime.helpers import permission_mcp  # noqa: E402
 from xiaoyou_runtime.world import cards as cards_module  # noqa: E402
@@ -936,7 +937,7 @@ class ClaudeCodeAgentTests(TempDirCase):
             "type": "claude_code", "command": [sys.executable, str(fake)], "model": "some-model",
             "allowed_tools": ["Read", "Grep"], "extra_args": ["--max-turns", "9"],
         }}), {})
-        self.agent = agents_module.create(self.config.agents[0])
+        self.agent = factory.create(self.config.agents[0])
         self.schema = xiaoyou_module.reply_schema()
 
     def calls(self):
@@ -1069,7 +1070,7 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(flags(Job("x", plain=True, effort="low")), ("some-model", "low"))
         # The flags come before the owner's own extra arguments.
         self.assertEqual(self.agent.command(Job("x"))[-2:], ["--max-turns", "9"])
-        silent = agents_module.create(dataclasses.replace(
+        silent = factory.create(dataclasses.replace(
             self.config.agents[0], effort=None, efforts=[], model=None))
         self.assertNotIn("--effort", silent.command(Job("x", effort="high")))
         self.assertNotIn("--model", silent.command(Job("x")))
@@ -1112,15 +1113,15 @@ class ClaudeCodeAgentTests(TempDirCase):
         old.write_text("import sys\nprint('Usage: claude [options]\\n  --model <model>  Model')\n",
                        encoding="utf-8")
         spec = dataclasses.replace(self.config.agents[0], command=[sys.executable, str(old)])
-        self.assertIn("不认 --effort", agents_module.create(spec).check())
+        self.assertIn("不认 --effort", factory.create(spec).check())
         # No effort is passed: nothing to complain about. Help that says nothing either way passes.
-        self.assertIsNone(agents_module.create(dataclasses.replace(
+        self.assertIsNone(factory.create(dataclasses.replace(
             spec, effort=None, efforts=[])).check())
         self.assertIsNone(self.agent.check())
 
     def test_missing_command_is_explained_at_start_and_when_used(self):
         spec = dataclasses.replace(self.config.agents[0], command=[str(self.folder / "no-such-claude")])
-        missing = agents_module.create(spec)
+        missing = factory.create(spec)
         self.assertIn("no-such-claude", missing.check())
         with self.assertRaisesRegex(AgentError, "no-such-claude"):
             missing.run(Job("x"))
@@ -1303,7 +1304,7 @@ class AppRecapTests(TempDirCase):
                 "config_dir": "claude-isolated", "workdir": workdir, "app_recap": True}
         spec.update(overrides)
         config = config_module.load(write_config(self.folder, agents={"claude": spec}), {})
-        return agents_module.create(config.agents[0]), config.agents[0]
+        return factory.create(config.agents[0]), config.agents[0]
 
     def _write_app_session(self, workdir_name, turns):
         escaped = str((self.folder / workdir_name).resolve()).replace("/", "-")
@@ -1345,7 +1346,7 @@ class AppRecapTests(TempDirCase):
         config = config_module.load(write_config(self.folder, agents={"claude": {
             "type": "claude_code", "command": [sys.executable, str(fake)], "workdir": "proj",
         }}), {})
-        agent = agents_module.create(config.agents[0])
+        agent = factory.create(config.agents[0])
         agent.run(Job("正常问一句"))
         self.assertEqual(self.calls()[0]["stdin"], "正常问一句")
 
@@ -1369,7 +1370,7 @@ class CodexAgentTests(TempDirCase):
             "type": "codex", "command": [sys.executable, str(fake)], "model": "some-model",
             "sandbox": "workspace-write", "extra_args": ["-c", "x=1"], "mode": "exec",
         }}), {})
-        self.agent = agents_module.create(self.config.agents[0])
+        self.agent = factory.create(self.config.agents[0])
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
@@ -1380,7 +1381,7 @@ class CodexAgentTests(TempDirCase):
         loaded = config_module.load(write_config(self.folder, agents={"codex": {
             "type": "codex", "command": ["codex"], "env": {"HTTPS_PROXY": "http://127.0.0.1:7897"},
             "env_files": {"OPENAI_API_KEY": "key.txt"}}}), {})
-        env = agents_module.create(loaded.agents[0])._env()
+        env = factory.create(loaded.agents[0])._env()
         self.assertEqual(("http://127.0.0.1:7897", "sk-file"), (env["HTTPS_PROXY"], env["OPENAI_API_KEY"]))
         clean = {key: value for key, value in os.environ.items()
                  if key not in agents_module.PARENT_SESSION_ENV}
@@ -1392,7 +1393,7 @@ class CodexAgentTests(TempDirCase):
         # CODEX_SANDBOX_NETWORK_DISABLED would cut the helper off the network.
         session = {"CODEX_SANDBOX_NETWORK_DISABLED": "1", "CODEX_SANDBOX": "seatbelt",
                    "CODEX_THREAD_ID": "t", "ANTHROPIC_AUTH_TOKEN": "session-token"}
-        dsh = agents_module.create(dataclasses.replace(self.config.agents[0], type="dsh",
+        dsh = factory.create(dataclasses.replace(self.config.agents[0], type="dsh",
                                                        command=["dsh"], config_dir=None))
         with mock.patch.dict(os.environ, session):
             for agent in (self.agent, dsh):
@@ -1438,7 +1439,7 @@ class CodexAgentTests(TempDirCase):
         self.assertIsNone(self.calls()[0]["home"])
         self.assertIsNone(self.agent.check())
         home = self.folder / "codex-home"
-        separate = agents_module.create(dataclasses.replace(self.config.agents[0], config_dir=home))
+        separate = factory.create(dataclasses.replace(self.config.agents[0], config_dir=home))
         # Codex refuses to start when the directory is missing; say so before it is asked anything.
         self.assertIn(str(home), separate.check())
         home.mkdir()
@@ -1473,7 +1474,7 @@ class CodexAgentTests(TempDirCase):
             self.agent.run(Job("q"))
         spec = dataclasses.replace(self.config.agents[0], command=[str(self.folder / "no-codex")])
         with self.assertRaisesRegex(AgentError, "no-codex"):
-            agents_module.create(spec).run(Job("q"))
+            factory.create(spec).run(Job("q"))
 
 
 class CodexAppServerTests(TempDirCase):
@@ -1492,7 +1493,7 @@ class CodexAppServerTests(TempDirCase):
             "type": "codex", "command": [sys.executable, str(fake)], "model": "some-model",
             "extra_args": ["-c", "x=1"],
         }}), {})
-        self.agent = agents_module.create(self.config.agents[0])
+        self.agent = factory.create(self.config.agents[0])
 
     def entries(self):
         return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
@@ -1566,7 +1567,7 @@ class CodexAppServerTests(TempDirCase):
                          [37, 40])
         self.assertEqual(control.tokens, {"in": 300, "out": 60, "cached": 200})
         # With no model in the config, the one Codex says it uses is reported.
-        plain = agents_module.create(dataclasses.replace(self.config.agents[0], model=None))
+        plain = factory.create(dataclasses.replace(self.config.agents[0], model=None))
         control = self.control()
         control.model = models.append
         plain.run(Job("q", control=control))
@@ -1666,16 +1667,16 @@ class CodexAppServerTests(TempDirCase):
             os.environ["FAKE_CODEX_MODE"] = mode
             with self.assertRaisesRegex(AgentError, expected, msg=mode):
                 self.agent.run(Job("q", control=self.control()))
-        missing = agents_module.create(dataclasses.replace(
+        missing = factory.create(dataclasses.replace(
             self.config.agents[0], command=[str(self.folder / "no-codex")]))
         with self.assertRaisesRegex(AgentError, "no-codex"):
             missing.run(Job("q", control=self.control()))
-        slow = agents_module.create(dataclasses.replace(self.config.agents[0], timeout_seconds=1))
+        slow = factory.create(dataclasses.replace(self.config.agents[0], timeout_seconds=1))
         os.environ["FAKE_CODEX_MODE"] = "hang"
         with self.assertRaisesRegex(AgentError, "超过 1 秒"):
             slow.run(Job("q", control=self.control()))
         # Not capped, but silent in the middle of a command for too long, and nobody to ask.
-        quiet = agents_module.create(dataclasses.replace(
+        quiet = factory.create(dataclasses.replace(
             self.config.agents[0], idle_seconds=30, idle_command_seconds=1))
         with self.assertRaisesRegex(AgentError, "Codex 已经 1 秒没有动静"):
             quiet.run(Job("q", control=self.control()))
@@ -1697,7 +1698,7 @@ class CodexAppServerTests(TempDirCase):
         # Without a control (no background thing behind it) the one-shot mode is used.
         fake = self.folder / "fake_codex.py"
         fake.write_text(FAKE_CODEX, encoding="utf-8")
-        agent = agents_module.create(dataclasses.replace(
+        agent = factory.create(dataclasses.replace(
             self.config.agents[0], command=[sys.executable, str(fake)]))
         self.assertEqual(agent.run(Job("q")).text, "written q")
 
@@ -1738,7 +1739,7 @@ class CommandAgentTests(TempDirCase):
     def agent(self, command, **extra):
         loaded = config_module.load(write_config(self.folder, agents={
             "tool": dict({"type": "command", "command": command}, **extra)}), {})
-        return agents_module.create(loaded.agents[0])
+        return factory.create(loaded.agents[0])
 
     def test_the_text_goes_in_on_stdin_and_stdout_is_the_result(self):
         script = "import sys; print('got:' + sys.stdin.read().upper())"
@@ -2111,7 +2112,7 @@ class TasksTests(TempDirCase):
     def command(self, script):
         loaded = config_module.load(write_config(self.folder, agents={
             "tool": {"type": "command", "command": [sys.executable, "-c", script]}}), {})
-        return agents_module.create(loaded.agents[0])
+        return factory.create(loaded.agents[0])
 
     def test_changing_the_request_stops_the_process_and_runs_again(self):
         # Sleeps for ever unless it is told the request changed.
@@ -2498,7 +2499,7 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
             dataclasses.replace(loaded.agents[0], idle_seconds=idle,
                                 idle_command_seconds=idle_command)])
         self.store = Store(loaded.state_dir)
-        self.xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents],
+        self.xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents],
                                self.store)
         self.service = Service(self.xiaoyou, self.store)
         self.addCleanup(self.service.close)
@@ -2585,7 +2586,7 @@ class WorkWithApprovalTests(TempDirCase):
         loaded = config_module.load(write_config(self.folder, agents={"claude": {
             "type": "claude_code", "command": [sys.executable, str(fake)]}}), {})
         self.store = Store(loaded.state_dir)
-        self.xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents], self.store)
+        self.xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], self.store)
         self.service = Service(self.xiaoyou, self.store)
         self.addCleanup(self.service.close)
 
@@ -4123,7 +4124,7 @@ def start_runtime(case, folder, env=None, **overrides):
     environment.update(env or {})
     loaded = config_module.load(write_config(folder, **overrides), environment)
     store = Store(loaded.state_dir, legacy_agent=loaded.default_agent)
-    xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents], store)
+    xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], store)
     service = Service(xiaoyou, store, stt_module.create(loaded))
     server = make_server(loaded, service)
     server.RequestHandlerClass.log_message = lambda *args: None
@@ -4301,7 +4302,7 @@ class RemoteAgentTests(TempDirCase):
             self, self.folder / "other", server={"token": OTHER_TOKEN, "name": "windows"})
 
     def remote(self, token=OTHER_TOKEN, url=None):
-        return agents_module.create(config_module.AgentSpec(
+        return factory.create(config_module.AgentSpec(
             name="pc", type="remote", description="the other computer", aliases=[], speaks=True,
             timeout_seconds=20, url=url or self.other, token=token))
 

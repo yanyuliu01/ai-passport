@@ -79,14 +79,15 @@ class Store:
         """Compatibility read facade; Runtime authors through Intake."""
         return self._context if self._context is not None else self._transcript
 
-    def bind_context(self, cards, memory=None, promises=None):
-        from ..loop.context import ContextBuilder
-        def resolve(mid):
-            message = cards.message(mid)
-            return message.get("text") if message and message.get("status") == "final" else None
-        self._transcript.resolve_with(resolve)
-        self._context = ContextBuilder(cards, self._transcript, self.state_dir / "context.json", memory, promises)
-        return self._context
+    @property
+    def legacy_transcript(self):
+        """The pre-R6 transcript file, which the loop's ContextBuilder still reads."""
+        return self._transcript
+
+    def use_context(self, context):
+        """Serve transcript reads through the loop's ContextBuilder (see loop.context.bind)."""
+        self._context = context
+        return context
 
     def session(self, conversation: str, agent: str) -> Optional[str]:
         with self._lock:

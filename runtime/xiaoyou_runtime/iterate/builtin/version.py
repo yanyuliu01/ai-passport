@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..objects import Issue
-from ..plugins import Skip
+from ..objects import Skip
 from .planner import RISKS, allowed, gather_context, risk_floor
 
 MAX_GROUPS = 6

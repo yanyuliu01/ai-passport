@@ -26,7 +26,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .agents import MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text, stopped_early
+from .base import (
+    MAX_OUTPUT_CHARS, AgentError, Job, Outcome, clip, fields_from_text, stopped_early
+)
 from ..config import AgentSpec
 from ..loop.voice_tools import JOIN, TOOL_SESSION_PREFIX
 

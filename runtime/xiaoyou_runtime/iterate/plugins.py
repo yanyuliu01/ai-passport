@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .objects import Skip  # noqa: F401  re-exported for plugins written against plugins.Skip
+
 KINDS = ("source", "detector", "grouper", "version_planner", "triage", "planner", "implementer", "gate", "policy", "releaser",
          "observer")
 PERMISSIONS = ("read_state", "read_repo", "model", "write_worktree", "git_commit", "publish",
@@ -44,10 +46,6 @@ class PluginError(Exception):
 
 class PermissionDenied(PluginError):
     pass
-
-
-class Skip(Exception):
-    """插件说这一次做不了（比如没有可用的模型），不算出错。"""
 
 
 @dataclass

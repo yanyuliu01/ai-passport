@@ -32,7 +32,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .. import __version__
-from .agents import AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip, fields_from_text, kill_tree
+from .base import (
+    AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip, fields_from_text, kill_tree
+)
 from ..config import AgentSpec
 
 HANDSHAKE_SECONDS = 20

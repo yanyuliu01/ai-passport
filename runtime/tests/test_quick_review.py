@@ -331,13 +331,13 @@ class QuickReviewTests(unittest.TestCase):
 
 class QuickReviewHttpTests(unittest.TestCase):
     def setUp(self):
-        from test_runtime import write_config, config_module, agents_module, Xiaoyou, Store, Service, TOKEN
+        from test_runtime import write_config, config_module, factory, Xiaoyou, Store, Service, TOKEN
         from xiaoyou_runtime.api.server import make_server
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.config = config_module.load(write_config(Path(self.temp.name)), {"XIAOYOU_PORT": "8765"})
         store = Store(self.config.state_dir)
-        xiaoyou = Xiaoyou(self.config, [agents_module.create(spec) for spec in self.config.agents], store)
+        xiaoyou = Xiaoyou(self.config, [factory.create(spec) for spec in self.config.agents], store)
         self.service = Service(xiaoyou, store)
         self.addCleanup(self.service.close)
         # Config is frozen; a private test port never touches the running Runtime.

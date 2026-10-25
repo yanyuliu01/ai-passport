@@ -14,7 +14,8 @@ import threading
 import time
 from pathlib import Path
 
-from .agents import AgentError, ClaudeCodeAgent
+from .base import AgentError
+from .agents import ClaudeCodeAgent
 
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
@@ -186,7 +187,7 @@ class DeepSeekClaudeCodeAgent(ClaudeCodeAgent):
         if outcome.fields is not None:
             # The base parser preserves the JSON text in .text. Only its reply
             # field belongs in the conversation / phone / firmware.
-            from .agents import Outcome
+            from .base import Outcome
             outcome = Outcome(outcome.fields["reply"], outcome.session_id, outcome.fields)
         return outcome
 

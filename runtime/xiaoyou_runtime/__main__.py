@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .events import reports as reports_module
 from . import __version__, app_release, firmware_cli
-from .helpers import agents as agent_module
+from .helpers.factory import create as create_agent
 from .loop import router as router_module, workspace as workspace_module
 from .events import stt
 from .helpers.agents import AgentError
@@ -179,7 +179,7 @@ def main(argv=None) -> int:
         else:
             print(meter.report(args.detail))
         return 0
-    agents = [agent_module.create(spec) for spec in config.agents]
+    agents = [create_agent(spec) for spec in config.agents]
     router = router_module.create(
         config, lambda message: print(message, file=sys.stderr))
     roster = "、".join(

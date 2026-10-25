@@ -20,6 +20,7 @@ sys.path.insert(0, str(RUNTIME))
 
 from xiaoyou_runtime.world.artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
 from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.intake import attach_artifacts
 from xiaoyou_runtime.api.server import make_server
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1sAAAAASUVORK5CYII=")
@@ -47,7 +48,7 @@ class ArtifactTests(unittest.TestCase):
         source = self.workspace / "preview.png"
         source.write_bytes(PNG)
         before = self.cards.get("c1")["seq"]
-        card = self.store.register_for_card(self.cards, "c1", [{"path": str(source), "name": "方案.png"}])
+        card = attach_artifacts(self.store, self.cards, "c1", [{"path": str(source), "name": "方案.png"}])
         meta = card["attachments"][0]
         self.assertEqual((meta["kind"], meta["mime"], meta["width"], meta["height"]),
                          ("image", "image/png", 1, 1))
@@ -67,8 +68,8 @@ class ArtifactTests(unittest.TestCase):
     def test_reimport_is_stable_and_copies_are_detached(self):
         source = self.workspace / "report.pdf"
         source.write_bytes(b"%PDF-1.7\nreport")
-        first = self.store.register_for_card(self.cards, "c1", [str(source)])
-        second = self.store.register_for_card(self.cards, "c1", [str(source)])
+        first = attach_artifacts(self.store, self.cards, "c1", [str(source)])
+        second = attach_artifacts(self.store, self.cards, "c1", [str(source)])
         self.assertEqual(first["attachments"][0]["id"], second["attachments"][0]["id"])
         self.assertEqual(len(second["attachments"]), 1)
         first["attachments"][0]["name"] = "mutated"

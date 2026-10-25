@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 
-from ..helpers.agents import AgentError
+from ..helpers.base import AgentError
 
 MAX_EFFECTS = 32
 MUTATIONS = {"remember", "replace", "forget", "track", "resolve", "task_action"}

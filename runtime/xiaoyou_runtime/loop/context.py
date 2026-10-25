@@ -23,6 +23,16 @@ def _version(*values):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def bind(store, cards, memory=None, promises=None):
+    """Build the context for this store and make the store's transcript reads use it."""
+    def resolve(mid):
+        message = cards.message(mid)
+        return message.get("text") if message and message.get("status") == "final" else None
+    store.legacy_transcript.resolve_with(resolve)
+    return store.use_context(ContextBuilder(cards, store.legacy_transcript, store.state_dir / "context.json",
+                                            memory, promises))
+
+
 class ContextBuilder:
     def __init__(self, cards, legacy, path, memory=None, promises=None):
         self._cards, self._legacy, self._path = cards, legacy, path

@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.helpers import agents, codex_app, desktop_handoff
+from xiaoyou_runtime.helpers import agents, codex_app, desktop_handoff, factory
 from xiaoyou_runtime.config import AgentSpec, ConfigError, load
 from xiaoyou_runtime.helpers.tasks import Task, Tasks
 from xiaoyou_runtime.world.store import Store
@@ -32,7 +32,7 @@ class DesktopHandoffTests(unittest.TestCase):
         self.spec = AgentSpec(name="cc", type="claude_code", description="", aliases=[],
                               speaks=False, timeout_seconds=60, command=["claude"],
                               workdir=self.root, config_dir=self.root / "isolated")
-        self.agent = agents.create(self.spec)
+        self.agent = factory.create(self.spec)
         self.env = mock.patch.dict(os.environ, {}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -55,7 +55,7 @@ class DesktopHandoffTests(unittest.TestCase):
         run = mock.Mock()
         self.exporter.return_value = "找不到原始记录"
         self.assertIn("找不到", desktop_handoff.open_session(
-            agents.create(spec), "thread-1", run=run, platform="darwin"))
+            factory.create(spec), "thread-1", run=run, platform="darwin"))
         run.assert_not_called()
 
     def test_import_is_session_scoped_idempotent_and_never_overwrites_desktop_work(self):
@@ -109,7 +109,7 @@ class DesktopHandoffTests(unittest.TestCase):
     def test_codex_uses_native_deep_link_with_shared_home(self):
         spec = dataclasses.replace(self.spec, type="codex", command=["codex"], config_dir=None)
         run = mock.Mock(return_value=SimpleNamespace(returncode=0))
-        self.assertEqual(desktop_handoff.open_session(agents.create(spec), "thread-1",
+        self.assertEqual(desktop_handoff.open_session(factory.create(spec), "thread-1",
                                                       run=run, platform="darwin"), "")
         self.assertEqual(run.call_args.args[0], ["open", "codex://threads/thread-1"])
 
@@ -136,7 +136,7 @@ class DesktopHandoffTests(unittest.TestCase):
         for sid in (None, "", "--flag", "a/b", "x?query=secret"):
             self.assertTrue(desktop_handoff.open_session(self.agent, sid, run=run, platform="darwin"))
         spec = dataclasses.replace(self.spec, env={"ANTHROPIC_API_KEY": "secret"})
-        self.assertIn("订阅", desktop_handoff.open_session(agents.create(spec), "session-1",
+        self.assertIn("订阅", desktop_handoff.open_session(factory.create(spec), "session-1",
                                                            run=run, platform="darwin"))
         run.assert_not_called()
 
@@ -215,7 +215,7 @@ send({"id": 999, "method": "item/commandExecution/requestApproval", "params": {"
             "app_server_socket": "service.sock"}}), {})
         control = agents.Control()
         control.ask = mock.Mock(return_value=False)
-        outcome = agents.create(config.agents[0]).run(agents.Job("hello", control=control))
+        outcome = factory.create(config.agents[0]).run(agents.Job("hello", control=control))
         self.assertEqual(outcome.text, "final hello")
         control.ask.assert_not_called()
         events = [json.loads(line) for line in log.read_text().splitlines()]
@@ -232,7 +232,7 @@ send({"id": 999, "method": "item/commandExecution/requestApproval", "params": {"
             "type": "codex", "command": [sys.executable, str(fake)],
             "app_server_socket": "service.sock"}}), {})
         with self.assertRaises(agents.AgentError):
-            agents.create(config.agents[0]).run(agents.Job("hello", timeout=0.2,
+            factory.create(config.agents[0]).run(agents.Job("hello", timeout=0.2,
                                                           control=agents.Control()))
         events = [json.loads(line).get("got", {}) for line in log.read_text().splitlines()]
         interrupts = [e["params"] for e in events if e.get("method") == "turn/interrupt"]

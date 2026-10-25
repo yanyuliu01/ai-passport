@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .. import __version__
-from .agents import (
+from .base import (
     AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip, codex_tokens, fields_from_text,
     kill_tree
 )

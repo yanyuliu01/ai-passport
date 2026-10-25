@@ -18,6 +18,7 @@ from pathlib import Path
 from test_runtime import TOKEN, Scripted, TempDirCase, free_port, make_xiaoyou, until, write_config
 
 from xiaoyou_runtime.helpers import agents as agents_module
+from xiaoyou_runtime.helpers import factory
 from xiaoyou_runtime import config as config_module
 from xiaoyou_runtime.api import shared_history
 from xiaoyou_runtime.delivery.mesh import Mesh, local_id, subject_for
@@ -394,7 +395,7 @@ class MeshHttpTests(TempDirCase):
             "XIAOYOU_PORT": str(port), "XIAOYOU_NAME": name, "XIAOYOU_MESH_SECRET": SECRET,
             "XIAOYOU_MESH_PEERS": ",".join(peers), "XIAOYOU_MESH_ADVERTISE": url})
         store = Store(loaded.state_dir, legacy_agent=loaded.default_agent)
-        xiaoyou = Xiaoyou(loaded, [agents_module.create(spec) for spec in loaded.agents], store)
+        xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], store)
         service = Service(xiaoyou, store)
         mesh = Mesh(loaded, service, xiaoyou)
         server = make_server(loaded, service)

@@ -87,7 +87,10 @@ class TtftReportTests(TempDirCase):
         self.assertIn("NO SAMPLES", text)
 
     def test_the_state_folder_is_not_changed(self):
-        before = {path.name: path.read_bytes() for path in Path(self.state).glob("messages.json*")}
+        # Stop the Runtime first, so only the tool could change the files.
+        self.service.close()
+        self.x.close()
+        before ={path.name: path.read_bytes() for path in Path(self.state).glob("messages.json*")}
         self.run_tool(self.phone("send key=fast t=1", "bubble key=fast t=2"), "--state", str(self.state))
         after = {path.name: path.read_bytes() for path in Path(self.state).glob("messages.json*")}
         self.assertEqual(before, after)

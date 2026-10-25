@@ -36,6 +36,7 @@ from ..helpers.agents import (
     MOVED, RESUME_HINT, SILENT, STOP, WAIT, Agent, AgentError, Control, Cut, Job, Outcome, clip,
     fields_from_text, span
 )
+from .context import bind as bind_context
 from ..world.approvals import STALL, Approvals, Gate
 from ..world.artifacts import ArtifactError, ArtifactStore
 from ..events.intake import Intake
@@ -761,7 +762,7 @@ class Xiaoyou:
         self._writer = self.intake.writer("xiaoyou", actor="xiaoyou")
         # Model history is a projection of canonical messages, with legacy
         # transcript imports retained for old clients during migration.
-        self.context = store.bind_context(self._cards, self.memory, self.promises)
+        self.context = bind_context(store, self._cards, self.memory, self.promises)
         self.artifacts = ArtifactStore(config)
         self._approvals = Approvals(self._approval_changed, self.intake.writer("system", actor="approvals").sequence)
         self._gate = Gate(self._approvals)
@@ -781,7 +782,7 @@ class Xiaoyou:
         # 在界面上加的帮手（helpers.Registry，state/helpers.json）：和配置里的一起建起来。
         # 记录坏了不挡启动：说一声，这台就先不能在界面上加帮手。
         from ..helpers import helpers as helpers_module
-        from ..helpers.agents import create as create_agent
+        from ..helpers.factory import create as create_agent
         self.helpers: Optional[Any] = None
         try:
             self.helpers = helpers_module.Registry(config.state_dir, config.base_dir,

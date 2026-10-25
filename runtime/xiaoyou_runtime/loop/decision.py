@@ -7,7 +7,7 @@ import threading
 import time
 import urllib.request
 
-from ..helpers.agents import Outcome
+from ..helpers.base import Outcome
 from ..helpers import dsh_stream
 
 DEADLINE_SECONDS = 1.3

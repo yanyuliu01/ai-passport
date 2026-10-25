@@ -80,6 +80,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .. import __version__
 from ..app_release import AppRelease, AppReleaseError, byte_range
 from ..world.artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
+from ..events.intake import attach_artifacts
 from ..config import Config
 from ..world.quick_review import ReviewConflict
 from ..iterate.events import EventError, EventStore, types_from_dirs
@@ -818,8 +819,8 @@ def make_server(config: Config, service: Service,
                         self._fail(404, "没有这件事")
                         return
                     try:
-                        card = artifacts.register_for_card(cards, parts[2], body.get("artifacts"),
-                                                           body.get("entry_index"))
+                        card = attach_artifacts(artifacts, cards, parts[2], body.get("artifacts"),
+                                                body.get("entry_index"))
                     except ArtifactError as error:
                         self._fail(400, str(error))
                         return

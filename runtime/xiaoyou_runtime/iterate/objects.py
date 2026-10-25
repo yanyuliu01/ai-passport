@@ -10,6 +10,10 @@ ISSUE_STATES = ("open", "planned", "fixing", "released", "closed", "failed", "ig
 MAX_EVIDENCE = 10
 
 
+class Skip(Exception):
+    """插件说这一次做不了（比如没有可用的模型），不算出错。"""
+
+
 @dataclass
 class Signal:
     """一次观察：App 报来的一个事件、对话里的一句抱怨、一件失败的事。"""

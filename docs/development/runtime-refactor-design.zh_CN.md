@@ -438,11 +438,17 @@ CLI `--once` 改为通过 Service 和对话循环提交，沿用相同的请求�
 
 **状态核对（2026-10-26）。**两个客户端都已有人工核对入口：手机和桌面端都能核对结果不明的请求操作与定时操作，也能请 Runtime 重新核对结果不明的任务执行（`execution_reconciliation`）。Claude Code 帮手的执行有意不做原生结果查询。它的会话记录标出每一轮的提问（`promptId`），却没有明确的“本轮完成”记录：一轮以一到两条 `end_turn` 或 `stop_sequence` 的回答结束，后面跟着内部记账记录，中途中断的运行看起来也可能一样。按上面的规则，看起来像最终回答的消息不能证明成功，所以结果不明的 Claude Code 执行交给主人核对，不从会话记录里认定。
 
-这仍不是 R6 全部完成：分段摘要策略、长历史相关性／延迟验收和默认流程切换仍待完成，每一项都需要主人决定，或用真实模型和客户端测量。负责人检查现已覆盖请求、定时、转述和帮手启动路径；已领取执行的后续轮次沿用原领取。真实客户端与模型验收允许切换前，保留 JSON 兼容路径和 `decide_first=false`。R7 已按层移动文件（见下）；它的循环导入清理及 R8 删除仍被客户端使用的接口尚未开始。源码未部署；本批没有真实账号、设备、三秒首答或真实跨端恢复验收。升级前保留状态目录副本；旧程序会忽略新增恢复与上下文字段，回退时应保留这份副本，不能覆盖待办输入和上下文重置边界。
+这仍不是 R6 全部完成：分段摘要策略、长历史相关性／延迟验收和默认流程切换仍待完成，每一项都需要主人决定，或用真实模型和客户端测量。负责人检查现已覆盖请求、定时、转述和帮手启动路径；已领取执行的后续轮次沿用原领取。真实客户端与模型验收允许切换前，保留 JSON 兼容路径和 `decide_first=false`。R7 已按层移动文件并清除循环导入（见下）；R8 删除仍被客户端使用的接口尚未开始。源码未部署；本批没有真实账号、设备、三秒首答或真实跨端恢复验收。升级前保留状态目录副本；旧程序会忽略新增恢复与上下文字段，回退时应保留这份副本，不能覆盖待办输入和上下文重置边界。
 
 **R7 文件移动（2026-10-26，后端源码）。**主人决定先往下做，延迟测量之后再做。模块只移动、不改代码，放进六个分层包：`events/`（接收、记录、消息与操作日志、消息记录、语音和图片输入、外部上报，以及桌面会话的接入）、`world/`（world、store、cards、对话及其目录和元数据、产物、负责人、设备、身份、授权、快速核对、约定、记忆、任务标题、任务审计、用量）、`delivery/`（presentation、mesh、mesh 共享）、`loop/`（xiaoyou、loop、上下文、决定、语音工具、操作、主动节拍、回忆、路由、共享工作区、项目简报）、`helpers/`（agents、tasks、帮手目录、扩展与模型、能力、MCP 客户端、权限 MCP、Codex／Claude／dsh 适配、模型网关、桌面交接）和 `api/`（server、Service、一致性检查、对话命令行、共享历史）。配置、固件、发布、Windows 文件工具、`__main__` 和 `iterate/` 留在包根目录。导入、测试、工具和文档路径都改成新名字；`git mv` 保留了文件历史。有五个旧路径因为已写进安装好的配置或说明，仍然可以运行：`python -m xiaoyou_runtime.desktop_hook`（hook 命令；新生成的命令也继续用这个名字，重复合并不会多出一条）、`python -m xiaoyou_runtime.permission_mcp`、`python -m xiaoyou_runtime.conformance`、`runtime/xiaoyou_runtime/shared_history.py`（hook 命令和 AGENTS.md；`setup-history-sync` 仍能认出自己装的 hook），以及 `runtime/xiaoyou_runtime/project_brief.py`（帮手的 `command` 配置）。线协议、接口和存储格式都没变。
 
 移动验证：每个模块都能导入，新旧入口都能运行。全部 Runtime 测试文件在已提交基线 `07f4a9b` 和候选上都跑过：失败编号完全一致，只有 `test_runtime.py` 里两个 HTTP 测试在基线那次失败（已知的 Windows 连接中断），在候选上通过。只在候选上出现的失败有一个，已修复：共享历史安装器按原来的读取器路径认出自己的 hook，所以 hook 继续写这个路径。仓库检查通过。只通过函数内导入形成的两个循环（围绕 `helpers/agents.py` 的一个，以及 `world/store.py` → `loop/context.py` → `world/cards.py` → `world/artifacts.py` → `events/intake.py` → `events/record.py`）尚未清理。设备测试、完整门禁和部署未运行。
+
+**R7 循环导入（2026-10-26，后端源码）。**有三个循环只通过函数内的导入形成，三个都已清除；静态门禁里的 `test_import_layers.py` 连函数内导入一起检查，以后再出现循环就会失败。（1）`helpers/agents.py` 既放共用类型又放具体代理，还导入了反过来依赖这些类型的协议适配模块。共用类型（`Job`、`Outcome`、`Control`、`Watchdog`、`AgentError`、命令执行函数和 `Agent` 基类）挪到 `helpers/base.py`；`agents.py` 用原来的名字导出它们，适配模块（`codex_app`、`dsh_app`、`dsh_stream`、`claude_gateway`、`loop/decision`、`loop/effects`）改从 `base` 导入。`create()` 挪到 `helpers/factory.py`，因为它要用 `claude_gateway`，而 `claude_gateway` 继承 `ClaudeCodeAgent`。（2）`world/store.py` 自己构造 agent loop 层的 `ContextBuilder`：现在由 `loop/context.bind(store, cards, ...)` 构造，再交给 `Store.use_context`。`world/artifacts.py` 自己通过 Intake 写附件：这一步改为 `events/intake.attach_artifacts`，由 HTTP 接口调用。（3）`iterate/` 里的内置插件从加载它们的插件注册模块导入 `Skip`；`Skip` 现在放在 `iterate/objects.py`，`plugins.Skip` 仍指向它。行为、接口和存储格式都没变。
+
+还有几处低层导入高层，但不构成循环；这里只列出、没有挪动：`events/desktop_content` → `loop/project_brief`，`world/approvals` → `helpers/capabilities`，`world/conversation_metadata` → `helpers/model_gateway`，`world/memory` 和 `world/promises` → `loop/effects`，以及 `world/usage` → `helpers/agents`、`claude_gateway` 和 `codex_app`。
+
+循环验证：每个模块都能导入，每个入口都能运行。循环检查在上一个提交 `cf7e243` 上能找出全部三个循环，现在一个都没有。全部 Runtime 测试文件重新跑过：失败编号与 `07f4a9b` 基线那次一致，只有 `test_runtime.py` 里同样那两个只在基线那次失败的 HTTP 测试在这里通过。第一次候选运行发现测试辅助代码还在调用 `agents.create`，现已改用 `factory.create`。`test_ttft_report` 现在先停掉 Runtime 再比较状态文件；之前 Runtime 仍在运行时出现过一次未能复现的失败。仓库检查通过。设备测试、完整门禁和部署未运行。
 
 ## 8. 借鉴：Raft 与 DS-Bot-App
 

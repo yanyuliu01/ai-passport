@@ -13,6 +13,7 @@ import inspect
 
 from typing import Any, Callable, Optional
 
+from ..world.artifacts import ArtifactError
 from .record import Record
 
 SOURCES = ("owner", "helper", "desktop", "mesh", "xiaoyou", "timer", "system")
@@ -82,3 +83,18 @@ class Intake:
 
     def writer(self, source: str, actor: Optional[str] = None, cause: Optional[str] = None) -> Writer:
         return Writer(self.record, source, actor, cause)
+
+
+def attach_artifacts(artifacts, cards, card_id: str, manifest: Any, entry_index: Optional[int] = None,
+                     agent: Optional[str] = None):
+    """Register a task's files with the artifact store, then attach them through Intake."""
+    card = cards.get(card_id)
+    if card is None:
+        raise ArtifactError("没有这件事")
+    # Validate the binding before copying any files or updating the index.
+    if entry_index is not None and (isinstance(entry_index, bool) or not isinstance(entry_index, int)
+                                   or not 0 <= entry_index < len(card["entries"])):
+        raise ArtifactError("entry_index 应该是现有消息的序号")
+    attachments = artifacts.register(card_id, manifest, agent=agent or card.get("agent"))
+    return Intake.for_cards(cards).writer("helper", actor=agent or card.get("agent") or "runtime",
+                                           cause=card_id).attach(card_id, attachments, entry_index)

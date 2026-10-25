@@ -209,7 +209,7 @@ def run_cli(config, args):
     if card.get("state") not in ("done", "failed", "cancelled"):
         print("任务仍在运行或状态未知，先等任务结束再交接到桌面端", file=sys.stderr)
         return 2
-    from .agents import create
+    from .factory import create
     warning = open_session(create(spec), sid)
     if warning:
         print(warning, file=sys.stderr)

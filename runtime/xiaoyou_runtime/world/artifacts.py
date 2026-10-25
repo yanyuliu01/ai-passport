@@ -340,19 +340,6 @@ class ArtifactStore:
             result.append(meta)
         return result
 
-    def register_for_card(self, cards: Any, card_id: str, manifest: Any,
-                          entry_index: Optional[int] = None, agent: Optional[str] = None) -> Dict[str, Any]:
-        card = cards.get(card_id)
-        if card is None:
-            raise ArtifactError("没有这件事")
-        # Validate the binding before copying any files or updating the index.
-        if entry_index is not None and (isinstance(entry_index, bool) or not isinstance(entry_index, int)
-                                       or not 0 <= entry_index < len(card["entries"])):
-            raise ArtifactError("entry_index 应该是现有消息的序号")
-        attachments = self.register(card_id, manifest, agent=agent or card.get("agent"))
-        from ..events.intake import Intake  # Local import avoids the Cards/artifacts import cycle.
-        return Intake.for_cards(cards).writer("helper", actor=agent or card.get("agent") or "runtime",
-                                               cause=card_id).attach(card_id, attachments, entry_index)
 
     def register_task(self, cards: Any, card_id: str, text: str = "",
                       fields: Optional[Dict[str, Any]] = None, agent: Optional[str] = None) -> List[Dict[str, Any]]:

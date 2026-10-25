@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..plugins import Skip
+from ..objects import Skip
 
 MAX_FILES = 3
 MAX_SNIPPETS = 3
