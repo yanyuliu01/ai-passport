@@ -274,9 +274,9 @@ are viewed on the phone, not transferred to the device over BLE.
 The Runtime HTTP request and attachment fields are documented in
 [HTTP interface](../runtime/README.md#http-interface) and
 [task images and downloadable files](../runtime/README.md#task-images-and-downloadable-files).
-Their implementations are `runtime/xiaoyou_runtime/server.py`, `cards.py`, and
+Their implementations are `runtime/xiaoyou_runtime/api/server.py`, `cards.py`, and
 `artifacts.py`; the agent reply schemas are `reply_schema()` and `lane_schema()`
-in `runtime/xiaoyou_runtime/xiaoyou.py`. Display branding does not rename Python
+in `runtime/xiaoyou_runtime/loop/xiaoyou.py`. Display branding does not rename Python
 modules, the Android package, JSON roles such as `xiaoyou`, or the BLE device name
 `Claude-XXXXXX`.
 

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from test_runtime import TempDirCase, Scripted, make_xiaoyou, until
-from xiaoyou_runtime import presentation
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.delivery import presentation
+from xiaoyou_runtime.api.service import Service
 
 FIXTURE = Path(__file__).resolve().parents[2] / 'tests/fixtures/presentation-v1.json'
 

@@ -11,11 +11,11 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.agents import Agent, Outcome
-from xiaoyou_runtime.cards import MAX_ENTRY_CHARS, Cards
+from xiaoyou_runtime.helpers.agents import Agent, Outcome
+from xiaoyou_runtime.world.cards import MAX_ENTRY_CHARS, Cards
 from xiaoyou_runtime.config import AgentSpec, load
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime.xiaoyou import Xiaoyou
+from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
 
 
 class OutputAgent(Agent):
@@ -155,7 +155,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
         self.assertTrue(restored["result_ready"])
 
     def test_old_summary_cannot_close_a_new_task_run(self):
-        from xiaoyou_runtime.tasks import Task
+        from xiaoyou_runtime.helpers.tasks import Task
         agent = OutputAgent("unused")
         runtime, _ = self.runtime(agent)
         card = runtime.cards.open("default", "task", "working", "fixture")
@@ -170,7 +170,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
     def test_original_is_available_before_streamed_summary_finishes(self):
         import threading
         from test_runtime import Scripted, make_xiaoyou, until
-        from xiaoyou_runtime.service import Service
+        from xiaoyou_runtime.api.service import Service
         ready, finish = threading.Event(), threading.Event()
         class Voice(Scripted):
             def run(self, job):

@@ -9,8 +9,8 @@ import urllib.request
 
 from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime
 
-from xiaoyou_runtime import helpers
-from xiaoyou_runtime.service import RequestError, Service
+from xiaoyou_runtime.helpers import helpers
+from xiaoyou_runtime.api.service import RequestError, Service
 
 
 class RegistryTests(TempDirCase):

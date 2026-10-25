@@ -4,9 +4,9 @@ import threading
 from unittest import mock
 
 from test_runtime import TempDirCase
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.record import Record
-from xiaoyou_runtime import message_log
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.record import Record
+from xiaoyou_runtime.events import message_log
 
 
 class ActivityTest(TempDirCase):
@@ -72,8 +72,8 @@ class ActivityTest(TempDirCase):
 class AcpActivityTest(TempDirCase):
     def test_public_chunks_and_tool_results_exclude_thoughts_and_other_sessions(self):
         from test_streaming import dsh_spec
-        from xiaoyou_runtime import dsh_app
-        from xiaoyou_runtime.agents import Control, Job
+        from xiaoyou_runtime.helpers import dsh_app
+        from xiaoyou_runtime.helpers.agents import Control, Job
 
         def event(kind, session="session-1", **fields):
             return {"method": "session/update", "params": {"sessionId": session,
@@ -111,7 +111,7 @@ class AcpActivityTest(TempDirCase):
 
 class ActivityMeshTest(TempDirCase):
     def test_relay_retention_separates_activity_from_chat_and_survives_reload(self):
-        from xiaoyou_runtime import mesh
+        from xiaoyou_runtime.delivery import mesh
         records = [{"k": "message", "id": "chat-%s" % n, "oseq": n,
                     "data": {"kind": "reply"}} for n in range(1, 4)]
         records += [{"k": "message", "id": "event-%s" % n, "oseq": n,

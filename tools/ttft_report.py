@@ -60,7 +60,7 @@ def runtime_messages(state):
     if state is None:
         return {}
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime"))
-    from xiaoyou_runtime import ledger
+    from xiaoyou_runtime.events import ledger
     path = Path(state) / "messages.json"
     if not path.exists():
         raise SystemExit("No messages.json under %s" % state)

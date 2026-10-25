@@ -188,8 +188,8 @@ App 通知的“通知使用权”是另一项权限。
 Runtime HTTP 请求和附件字段分别见
 [HTTP 接口](../runtime/README.zh_CN.md#http-接口)和
 [任务图片和可下载文件](../runtime/README.zh_CN.md#任务图片和可下载文件)。
-实现位于 `runtime/xiaoyou_runtime/server.py`、`cards.py` 和 `artifacts.py`；代理回复的
-schema 是 `runtime/xiaoyou_runtime/xiaoyou.py` 中的 `reply_schema()` 与 `lane_schema()`。
+实现位于 `runtime/xiaoyou_runtime/api/server.py`、`cards.py` 和 `artifacts.py`；代理回复的
+schema 是 `runtime/xiaoyou_runtime/loop/xiaoyou.py` 中的 `reply_schema()` 与 `lane_schema()`。
 界面改名不会修改 Python 模块、安卓包名、`xiaoyou` 等 JSON role 或 BLE 设备名
 `Claude-XXXXXX`。
 

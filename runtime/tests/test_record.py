@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 
 from test_runtime import TempDirCase
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.record import Record, RecordError
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.record import Record, RecordError
 
 PACKAGE = Path(__file__).resolve().parent.parent / "xiaoyou_runtime"
 # The hub itself and the stores underneath it.
@@ -102,7 +102,7 @@ class TranscriptFromLogTest(TempDirCase):
         self.assertNotIn("你好", json.dumps(saved, ensure_ascii=False))
 
     def test_text_not_in_the_log_is_kept_and_missing_log_entries_are_dropped(self):
-        from xiaoyou_runtime.store import Transcript
+        from xiaoyou_runtime.world.store import Transcript
         log = {"a:you": "问", "a:reply": "答"}
         transcript = Transcript(self.folder / "transcript.json")
         transcript.resolve_with(log.get)

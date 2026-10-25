@@ -287,7 +287,7 @@ Xiaoyou's service, the owner talks to the same Xiaoyou in the same conversations
 "Multiple runtimes" section above only lets the phone connect to several computers, each with
 its own records; a unified subject means Xiaoyou on several computers is still one Xiaoyou.
 
-It is built as the Xiaoyou mesh (`runtime/xiaoyou_runtime/mesh.py`, described for operators in
+It is built as the Xiaoyou mesh (`runtime/xiaoyou_runtime/delivery/mesh.py`, described for operators in
 the runtime README, "The Xiaoyou mesh"). These reservations made that possible without a data
 migration or an app change, and must stay intact:
 

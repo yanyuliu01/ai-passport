@@ -17,13 +17,13 @@ try:
     from PIL import Image
 except ImportError:
     Image = None
-from xiaoyou_runtime.agents import Agent, AgentSpec, Job, Outcome, CodexAgent
-from xiaoyou_runtime.artifacts import ArtifactError, ArtifactStore
-from xiaoyou_runtime.image_inputs import upload, resolve
+from xiaoyou_runtime.helpers.agents import Agent, AgentSpec, Job, Outcome, CodexAgent
+from xiaoyou_runtime.world.artifacts import ArtifactError, ArtifactStore
+from xiaoyou_runtime.events.image_inputs import upload, resolve
 from xiaoyou_runtime.config import load
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime.xiaoyou import Xiaoyou
-from xiaoyou_runtime.service import Service, ConflictError, RequestError
+from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
+from xiaoyou_runtime.api.service import Service, ConflictError, RequestError
 
 class Vision(Agent):
     def __init__(self):
@@ -89,7 +89,7 @@ class ImageInputsTests(unittest.TestCase):
         for extra in ({'card':'c1'},{'pin':True},{'agent':'missing'}):
             with self.assertRaises(RequestError):service.submit('image',image_ids=[item['id']],**extra)
     def test_authenticated_http_upload_send_and_content(self):
-        from xiaoyou_runtime.server import make_server
+        from xiaoyou_runtime.api.server import make_server
         runtime, service = self.runtime()
         server = make_server(self.config, service, artifacts=runtime.artifacts)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()

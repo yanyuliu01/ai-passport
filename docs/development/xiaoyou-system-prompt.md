@@ -7,8 +7,8 @@
 The maintained base prompt is [runtime/persona.txt](../../runtime/persona.txt).
 The default configuration reads it at startup. The effective system prompt also
 includes the current role, response format, available helpers, task context,
-memory and promises, assembled by [xiaoyou.py](../../runtime/xiaoyou_runtime/xiaoyou.py)
-and [proactive.py](../../runtime/xiaoyou_runtime/proactive.py). A custom
+memory and promises, assembled by [xiaoyou.py](../../runtime/xiaoyou_runtime/loop/xiaoyou.py)
+and [proactive.py](../../runtime/xiaoyou_runtime/loop/proactive.py). A custom
 `persona_file` replaces the base prompt; it does not inherit this file automatically.
 
 ## Reference and adaptation

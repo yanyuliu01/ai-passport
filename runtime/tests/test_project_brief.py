@@ -18,7 +18,7 @@ sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import TempDirCase  # noqa: E402
-from xiaoyou_runtime import project_brief as pb  # noqa: E402
+from xiaoyou_runtime.loop import project_brief as pb  # noqa: E402
 
 
 def _git(repo: Path, *args: str) -> None:

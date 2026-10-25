@@ -7,10 +7,11 @@ import unittest
 from unittest import mock
 
 from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.agents import AgentError, Outcome
-from xiaoyou_runtime import proactive, world
-from xiaoyou_runtime.proactive import Pulse
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.helpers.agents import AgentError, Outcome
+from xiaoyou_runtime.loop import proactive
+from xiaoyou_runtime.world import world
+from xiaoyou_runtime.loop.proactive import Pulse
+from xiaoyou_runtime.api.service import Service
 
 
 class ProgressWakeTests(TempDirCase):

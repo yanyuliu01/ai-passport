@@ -15,10 +15,10 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime import agents, codex_app, desktop_handoff
+from xiaoyou_runtime.helpers import agents, codex_app, desktop_handoff
 from xiaoyou_runtime.config import AgentSpec, ConfigError, load
-from xiaoyou_runtime.tasks import Task, Tasks
-from xiaoyou_runtime.store import Store
+from xiaoyou_runtime.helpers.tasks import Task, Tasks
+from xiaoyou_runtime.world.store import Store
 from test_runtime import FAKE_CODEX_APP, write_config
 
 export_session = desktop_handoff.export_session

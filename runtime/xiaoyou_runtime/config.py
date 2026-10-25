@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from . import model_gateway
+from .helpers import model_gateway
 from .iterate import settings as iterate_settings
 
 
@@ -266,7 +266,7 @@ def _env_files(value: Any, env: Dict[str, str], base: Path, where: str) -> Dict[
 
 def _extras(raw: Dict[str, Any], kind: str, base: Path, where: str) -> Dict[str, Any]:
     """这个帮手的 skill 目录（见 helper_extras.py）。哪个 harness 带不上就报错，不悄悄丢掉。"""
-    from . import helper_extras
+    from .helpers import helper_extras
     if "mcp_servers" in raw:
         raise ConfigError("%s.mcp_servers 不再按帮手配置：MCP 服务登记在 capabilities.mcp_servers，"
                           "再用 capabilities.grants 决定哪些帮手能用" % where)
@@ -861,7 +861,7 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         models = model_gateway.parse(raw.get("models"), base, env)
     except model_gateway.GatewayConfigError as error:
         raise ConfigError(str(error))
-    from . import capabilities as capabilities_module
+    from .helpers import capabilities as capabilities_module
     try:
         helper_names = [spec.name for spec in agents]
         try:

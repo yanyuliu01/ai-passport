@@ -8,10 +8,10 @@ from copy import deepcopy
 from unittest import mock
 
 from test_runtime import Scripted, ToolTalker, TempDirCase, make_xiaoyou, start, until
-from xiaoyou_runtime.agents import AgentError
-from xiaoyou_runtime.effects import Effects, EffectFenceError, EffectUncertain
-from xiaoyou_runtime.ledger import current
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.helpers.agents import AgentError
+from xiaoyou_runtime.loop.effects import Effects, EffectFenceError, EffectUncertain
+from xiaoyou_runtime.events.ledger import current
+from xiaoyou_runtime.api.service import Service
 
 
 class EffectBoundaryTests(unittest.TestCase):

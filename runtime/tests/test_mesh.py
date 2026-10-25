@@ -17,14 +17,14 @@ from pathlib import Path
 
 from test_runtime import TOKEN, Scripted, TempDirCase, free_port, make_xiaoyou, until, write_config
 
-from xiaoyou_runtime import agents as agents_module
+from xiaoyou_runtime.helpers import agents as agents_module
 from xiaoyou_runtime import config as config_module
-from xiaoyou_runtime import shared_history
-from xiaoyou_runtime.mesh import Mesh, local_id, subject_for
-from xiaoyou_runtime.server import make_server
-from xiaoyou_runtime.service import Service
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime.xiaoyou import Xiaoyou
+from xiaoyou_runtime.api import shared_history
+from xiaoyou_runtime.delivery.mesh import Mesh, local_id, subject_for
+from xiaoyou_runtime.api.server import make_server
+from xiaoyou_runtime.api.service import Service
+from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
 
 SECRET = "mesh-secret-for-tests-0123456789"
 

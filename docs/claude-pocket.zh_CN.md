@@ -263,8 +263,8 @@ App 0.10.0 将只有通知的请求作为文字摘要发送，不发送其可操
 
 Runtime HTTP 和附件字段见 [HTTP 接口](../runtime/README.zh_CN.md#http-接口)和
 [任务输出说明](../runtime/README.zh_CN.md#任务图片和可下载文件)。HTTP 处理器位于
-`runtime/xiaoyou_runtime/server.py`；代理回复的 schema 是
-`runtime/xiaoyou_runtime/xiaoyou.py` 中的 `reply_schema()` 和 `lane_schema()`。
+`runtime/xiaoyou_runtime/api/server.py`；代理回复的 schema 是
+`runtime/xiaoyou_runtime/loop/xiaoyou.py` 中的 `reply_schema()` 和 `lane_schema()`。
 设备继续显示文字和状态；全屏图片、附件下载、安卓文件保存和其他应用打开由手机负责。
 
 ### 设备上留着什么

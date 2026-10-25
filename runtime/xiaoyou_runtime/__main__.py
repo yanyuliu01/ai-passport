@@ -16,22 +16,24 @@ import sys
 import time
 from pathlib import Path
 
-from . import reports as reports_module
-from . import (__version__, agents as agent_module, app_release, firmware_cli, router as router_module, stt,
-               workspace as workspace_module)
-from .agents import AgentError
+from .events import reports as reports_module
+from . import __version__, app_release, firmware_cli
+from .helpers import agents as agent_module
+from .loop import router as router_module, workspace as workspace_module
+from .events import stt
+from .helpers.agents import AgentError
 from .config import ConfigError, load
-from .identity import IdentityError
-from .desktop_sync import DesktopSync
-from . import desktop_handoff, model_gateway
+from .world.identity import IdentityError
+from .events.desktop_sync import DesktopSync
+from .helpers import desktop_handoff, model_gateway
 from .iterate import cli as iterate_cli
 from .firmware import FirmwareStore
-from .mesh import Mesh
-from .server import make_server
-from .service import Service
-from .store import Store
-from .usage import EFFORT_NAMES, Usage
-from .xiaoyou import Turn, Xiaoyou
+from .delivery.mesh import Mesh
+from .api.server import make_server
+from .api.service import Service
+from .world.store import Store
+from .world.usage import EFFORT_NAMES, Usage
+from .loop.xiaoyou import Turn, Xiaoyou
 
 
 def _once_turn(config, args, xiaoyou, store):
@@ -125,7 +127,7 @@ def main(argv=None) -> int:
     app_release.add_arguments(commands)
     reports_module.add_arguments(commands)
     desktop_handoff.add_arguments(commands)
-    from . import conversation_cli
+    from .api import conversation_cli
     conversation_cli.add_arguments(commands)
     iterate_cli.add_arguments(commands)
     iterate_cli.add_event_arguments(commands)

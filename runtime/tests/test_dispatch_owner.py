@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.agents import Outcome
+from xiaoyou_runtime.helpers.agents import Outcome
 
 
 class Blocking(Scripted):

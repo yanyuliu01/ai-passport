@@ -12,11 +12,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime, write_config
-from xiaoyou_runtime import conformance, reports
+from xiaoyou_runtime.api import conformance
+from xiaoyou_runtime.events import reports
 from xiaoyou_runtime.__main__ import main
-from xiaoyou_runtime.desktop_sync import DesktopSync
-from xiaoyou_runtime.message_log import DESKTOP_CONVERSATION
-from xiaoyou_runtime.service import RequestError, Service
+from xiaoyou_runtime.events.desktop_sync import DesktopSync
+from xiaoyou_runtime.events.message_log import DESKTOP_CONVERSATION
+from xiaoyou_runtime.api.service import RequestError, Service
 
 
 class ReportsTest(TempDirCase):

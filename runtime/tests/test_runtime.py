@@ -29,24 +29,24 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime import agents as agents_module  # noqa: E402
-from xiaoyou_runtime import approvals as approvals_module  # noqa: E402
-from xiaoyou_runtime import permission_mcp  # noqa: E402
-from xiaoyou_runtime import cards as cards_module  # noqa: E402
-from xiaoyou_runtime import codex_app as codex_app_module  # noqa: E402
+from xiaoyou_runtime.helpers import agents as agents_module  # noqa: E402
+from xiaoyou_runtime.world import approvals as approvals_module  # noqa: E402
+from xiaoyou_runtime.helpers import permission_mcp  # noqa: E402
+from xiaoyou_runtime.world import cards as cards_module  # noqa: E402
+from xiaoyou_runtime.helpers import codex_app as codex_app_module  # noqa: E402
 from xiaoyou_runtime import config as config_module  # noqa: E402
-from xiaoyou_runtime import router as router_module  # noqa: E402
-from xiaoyou_runtime import stt as stt_module  # noqa: E402
-from xiaoyou_runtime import tasks as tasks_module  # noqa: E402
-from xiaoyou_runtime import workspace as workspace_module  # noqa: E402
-from xiaoyou_runtime import usage as usage_module  # noqa: E402
-from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
+from xiaoyou_runtime.loop import router as router_module  # noqa: E402
+from xiaoyou_runtime.events import stt as stt_module  # noqa: E402
+from xiaoyou_runtime.helpers import tasks as tasks_module  # noqa: E402
+from xiaoyou_runtime.loop import workspace as workspace_module  # noqa: E402
+from xiaoyou_runtime.world import usage as usage_module  # noqa: E402
+from xiaoyou_runtime.loop import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
-from xiaoyou_runtime.agents import AgentError, Job, Outcome  # noqa: E402
-from xiaoyou_runtime.server import make_server  # noqa: E402
-from xiaoyou_runtime.service import RequestError, Service  # noqa: E402
-from xiaoyou_runtime.store import Store  # noqa: E402
-from xiaoyou_runtime.xiaoyou import Xiaoyou  # noqa: E402
+from xiaoyou_runtime.helpers.agents import AgentError, Job, Outcome  # noqa: E402
+from xiaoyou_runtime.api.server import make_server  # noqa: E402
+from xiaoyou_runtime.api.service import RequestError, Service  # noqa: E402
+from xiaoyou_runtime.world.store import Store  # noqa: E402
+from xiaoyou_runtime.loop.xiaoyou import Xiaoyou  # noqa: E402
 
 TOKEN = "unit-test-token-0123456789"
 OTHER_TOKEN = "other-runtime-token-0123456789"
@@ -757,7 +757,7 @@ class ShapeTests(unittest.TestCase):
     def test_owner_memory_keeps_notes_in_a_plain_file(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.memory import OwnerMemory, prompt_section
+        from xiaoyou_runtime.world.memory import OwnerMemory, prompt_section
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         memory = OwnerMemory(folder / "memory" / "owner.md")
@@ -780,7 +780,7 @@ class ShapeTests(unittest.TestCase):
     def test_memory_keeps_provenance_corrections_and_a_log(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.memory import OwnerMemory
+        from xiaoyou_runtime.world.memory import OwnerMemory
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         memory = OwnerMemory(folder / "owner.md")
@@ -798,7 +798,7 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(len(memory.notes()), 1)
 
     def test_recall_finds_old_words_with_or_without_full_text_search(self):
-        from xiaoyou_runtime import recall
+        from xiaoyou_runtime.loop import recall
         records = [("聊天", "", 100.0, "主人：短信网关那个方案怎么样\n小幽：备用安卓手机最合适"),
                    ("聊天", "", 200.0, "主人：今天有点累"),
                    ("记忆", "2026-10-20", 150.0, "- 10:00 记：回复短一点")]
@@ -812,8 +812,8 @@ class ShapeTests(unittest.TestCase):
     def test_promises_are_tracked_due_and_resolved(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.promises import Promises
-        from xiaoyou_runtime.voice_tools import Toolbox
+        from xiaoyou_runtime.world.promises import Promises
+        from xiaoyou_runtime.loop.voice_tools import Toolbox
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         promises = Promises(folder / "promises.json")
@@ -833,8 +833,8 @@ class ShapeTests(unittest.TestCase):
     def test_daily_promises_move_to_the_next_day_and_questions_are_not_promises(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.promises import Promises
-        from xiaoyou_runtime.voice_tools import Toolbox
+        from xiaoyou_runtime.world.promises import Promises
+        from xiaoyou_runtime.loop.voice_tools import Toolbox
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         promises = Promises(folder / "promises.json")
@@ -1259,7 +1259,7 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
 
         # The DeepSeek binding accepts a key that only lives in a file named in env_files.
-        from xiaoyou_runtime import claude_gateway
+        from xiaoyou_runtime.helpers import claude_gateway
         deepseek = config_module.load(write_config(self.folder, agents={"deepseek": {
             "type": "claude_code", "command": [sys.executable], "model": "deepseek-v4-pro",
             "env": {"ANTHROPIC_BASE_URL": claude_gateway.DEEPSEEK_BASE_URL},
@@ -2345,7 +2345,7 @@ class ApprovalTests(TempDirCase):
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("XIAOYOU_GATE")}
         done = subprocess.run(
-            [sys.executable, "-m", "xiaoyou_runtime.permission_mcp"], input=text.encode(),
+            [sys.executable, "-m", "xiaoyou_runtime.helpers.permission_mcp"], input=text.encode(),
             stdout=subprocess.PIPE, cwd=str(RUNTIME), env=environment, timeout=20)
         replies = [json.loads(line) for line in done.stdout.decode().splitlines()]
         self.assertEqual((done.returncode, [reply["id"] for reply in replies]), (0, [1, 2]))
@@ -2679,7 +2679,7 @@ class XiaoyouTests(TempDirCase):
         return [(entry["role"], entry["text"]) for entry in self.xiaoyou.cards.get(card_id)["entries"]]
 
     def test_the_gate_wakes_her_on_progress_and_she_decides_whether_to_speak(self):
-        from xiaoyou_runtime import proactive
+        from xiaoyou_runtime.loop import proactive
         voice = GateTalker()
         xiaoyou, _ = make_xiaoyou(self.folder / "gate", [voice, self.codex])
         self.addCleanup(xiaoyou.close)
@@ -2715,7 +2715,7 @@ class XiaoyouTests(TempDirCase):
         self.assertIn("到点了", voice.gate_jobs[0].text)
 
     def test_upkeep_only_looks_at_new_quiet_turns(self):
-        from xiaoyou_runtime import proactive
+        from xiaoyou_runtime.loop import proactive
         voice = GateTalker()
         xiaoyou, store = make_xiaoyou(self.folder / "upkeep", [voice, self.codex])
         self.addCleanup(xiaoyou.close)
@@ -3416,7 +3416,7 @@ class ServiceTests(TempDirCase):
                           ("tiered", "gpt-a", "medium", ["low", "medium"], ["gpt-b"])])
 
     def test_the_feed_carries_usage_and_returns_when_it_changes(self):
-        import xiaoyou_runtime.service as service_module
+        import xiaoyou_runtime.api.service as service_module
         tiered = Scripted("tiered", speaks=False, kind="codex")
         xiaoyou, store = make_xiaoyou(self.folder / "t", [Scripted("claude"), tiered])
         service = Service(xiaoyou, store)
@@ -3554,7 +3554,7 @@ class ServiceTests(TempDirCase):
         self.assertEqual(len([entry for entry in again["entries"] if entry["kind"] == "summary"]), 1)
 
     def test_the_cancel_endpoint_names_the_end_that_asked(self):
-        from xiaoyou_runtime.server import _cancel_actor
+        from xiaoyou_runtime.api.server import _cancel_actor
         self.assertEqual(_cancel_actor({"actor": "desktop"}, "Dalvik/2.1.0"), "desktop")
         self.assertEqual(_cancel_actor({}, "Dalvik/2.1.0 (Linux; U; Android 14)"), "app")
         self.assertEqual(_cancel_actor(None, "node"), "desktop")

@@ -18,9 +18,9 @@ from unittest.mock import patch
 RUNTIME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.server import make_server
+from xiaoyou_runtime.world.artifacts import ArtifactError, ArtifactStore, COPY_CHUNK
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.api.server import make_server
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1sAAAAASUVORK5CYII=")
 
@@ -158,7 +158,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(list(self.store._blobs.iterdir()), [])
 
     def test_storage_quota_rejects_partial_copy_and_is_per_store(self):
-        with patch("xiaoyou_runtime.artifacts.MAX_STORE_BYTES", 7):
+        with patch("xiaoyou_runtime.world.artifacts.MAX_STORE_BYTES", 7):
             self.store.save_text("c1", "12345")
             with self.assertRaises(ArtifactError):
                 self.store.save_text("c1", "1234", name="second.txt")
@@ -181,7 +181,7 @@ class ArtifactTests(unittest.TestCase):
             self.store.open_content(meta["id"], True)
         with self.assertRaises(ArtifactError):
             self.store.open_content("../../outside")
-        with patch("xiaoyou_runtime.artifacts.MAX_ARTIFACT_BYTES", 5):
+        with patch("xiaoyou_runtime.world.artifacts.MAX_ARTIFACT_BYTES", 5):
             with self.assertRaises(ArtifactError):
                 self.store._snapshot("c1", io.BytesIO(b"too long"), "large.txt", "cc")
         self.assertFalse(list(self.store._root.glob("copy-*")))

@@ -14,11 +14,11 @@ from unittest import mock
 import test_runtime
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
 
-import xiaoyou_runtime.desktop_sync as desktop_sync
-import xiaoyou_runtime.ledger as ledger_module
-import xiaoyou_runtime.service as service_module
-from xiaoyou_runtime.service import ConflictError, RESTART_NOTE, Service, UnavailableError
-from xiaoyou_runtime.tasks import MAX_PENDING, Task, Tasks
+import xiaoyou_runtime.events.desktop_sync as desktop_sync
+import xiaoyou_runtime.events.ledger as ledger_module
+import xiaoyou_runtime.api.service as service_module
+from xiaoyou_runtime.api.service import ConflictError, RESTART_NOTE, Service, UnavailableError
+from xiaoyou_runtime.helpers.tasks import MAX_PENDING, Task, Tasks
 
 
 class MessageLedgerTests(TempDirCase):
@@ -334,7 +334,7 @@ class FeedMessagesTests(TempDirCase):
 class SequenceReservationTests(TempDirCase):
     def test_a_failed_write_does_not_count_as_reserving_numbers(self):
         from unittest import mock as _mock
-        import xiaoyou_runtime.cards as cards_module
+        import xiaoyou_runtime.world.cards as cards_module
         cards = cards_module.Cards(self.folder / "cards.json")
         on_disk = json.loads((self.folder / "cards.json").read_text(encoding="utf-8"))["seq"]
         with _mock.patch.object(cards_module.world, "durable_write", side_effect=OSError("disk full")):
@@ -398,7 +398,7 @@ class QuickFixTests(TempDirCase):
 
     def test_desktop_tool_changes_are_published_within_three_seconds(self):
         from pathlib import Path
-        from xiaoyou_runtime.cards import Cards
+        from xiaoyou_runtime.world.cards import Cards
         cards = Cards(self.folder / "observed.json")
         sync = desktop_sync.DesktopSync(cards, self.folder, home=self.folder, clock=lambda: 100)
         session = desktop_sync.Session("codex", "s1", cwd=str(self.folder), status="idle",

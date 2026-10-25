@@ -37,8 +37,8 @@
 
 | 删除 | 位置 |
 | --- | --- |
-| 追问提示词 `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/voice_tools.py` |
-| 工具循环里的 `nudged` 分支和对它的特殊处理 | `runtime/xiaoyou_runtime/dsh_stream.py` 约 280～325 行 |
+| 追问提示词 `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/loop/voice_tools.py` |
+| 工具循环里的 `nudged` 分支和对它的特殊处理 | `runtime/xiaoyou_runtime/helpers/dsh_stream.py` 约 280～325 行 |
 | 测试里对追问的断言 | `runtime/tests/test_decision.py` |
 
 保留：`promised()` 正则只作计数（`xiaoyou.py` 已经这样用）；`promises.mark_nudged` 是到点提醒，与追问无关，不动。

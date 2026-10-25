@@ -7,11 +7,11 @@ import unittest
 from unittest import mock
 
 from test_runtime import GateTalker, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.agents import AgentError
-from xiaoyou_runtime.effects import EffectUncertain, SavedWake
-from xiaoyou_runtime.proactive import Pulse
-from xiaoyou_runtime.promises import wake_source
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.helpers.agents import AgentError
+from xiaoyou_runtime.loop.effects import EffectUncertain, SavedWake
+from xiaoyou_runtime.loop.proactive import Pulse
+from xiaoyou_runtime.world.promises import wake_source
+from xiaoyou_runtime.api.service import Service
 
 
 class TimerEffectTests(TempDirCase):
@@ -309,7 +309,7 @@ class TimerEffectTests(TempDirCase):
 
     def test_a_committed_marker_receipt_error_does_not_repeat_memory_work(self):
         self.upkeep()
-        from xiaoyou_runtime import proactive
+        from xiaoyou_runtime.loop import proactive
         write = proactive.durable_write
         def save(path, state):
             write(path, state)

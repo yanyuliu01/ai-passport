@@ -34,26 +34,26 @@
 
 | 编号／优先级 | 问题与影响 | 代码证据／验证 |
 | --- | --- | --- |
-| R1／P0 | 已接收消息、client ID 去重和待执行队列只存在内存。重启后相同 ID 会生成新消息；丢失接收确认后重试，可能再次执行。会话／聊天 JSON 的持久化并不等于请求已可靠落盘。 | [service.py](../../runtime/xiaoyou_runtime/service.py)：`Service.__init__` L63-74、`_enqueue` L161-218、`_trim` L385-394。`Cards.__init__` L69-85 只把被中断的托管卡标失败，没有恢复已接收意图。**已复现**：进程内去重有效；重建 Service 后 ID 改变，已接收问题也未落盘。GitHub 与本地均存在。 |
-| R2／P0 | 第九条排队的 `after` 追加要求被静默丢弃，`Tasks.amend` 仍返回 `after`。小幽可能告诉主人“已经追加”，实际上指令已经丢失。 | [tasks.py](../../runtime/xiaoyou_runtime/tasks.py)：`MAX_PENDING` L22；`amend` L122-125。**已复现**：9 次成功返回，队列只保留 8 条。GitHub HEAD 已存在；本地新增 `run_id` 和桌面交接没有修复它。 |
+| R1／P0 | 已接收消息、client ID 去重和待执行队列只存在内存。重启后相同 ID 会生成新消息；丢失接收确认后重试，可能再次执行。会话／聊天 JSON 的持久化并不等于请求已可靠落盘。 | [service.py](../../runtime/xiaoyou_runtime/api/service.py)：`Service.__init__` L63-74、`_enqueue` L161-218、`_trim` L385-394。`Cards.__init__` L69-85 只把被中断的托管卡标失败，没有恢复已接收意图。**已复现**：进程内去重有效；重建 Service 后 ID 改变，已接收问题也未落盘。GitHub 与本地均存在。 |
+| R2／P0 | 第九条排队的 `after` 追加要求被静默丢弃，`Tasks.amend` 仍返回 `after`。小幽可能告诉主人“已经追加”，实际上指令已经丢失。 | [tasks.py](../../runtime/xiaoyou_runtime/helpers/tasks.py)：`MAX_PENDING` L22；`amend` L122-125。**已复现**：9 次成功返回，队列只保留 8 条。GitHub HEAD 已存在；本地新增 `run_id` 和桌面交接没有修复它。 |
 | R3／P1 | 去重键只有 `client_id`，未检查会话和请求内容。另一个会话复用 ID 会收到原会话消息，而非冲突错误。历史消息淘汰也会结束去重保护。 | `Service._enqueue` L164-165、`_trim` L393-394。**已复现**：B 会话用 A 的 ID，返回 A。手机正常生成 UUID，意外碰撞概率很低，但重试内容冲突仍属于 API 契约缺口。 |
 | R4／P1 | 原生桌面卡明确拒绝续聊。目前功能是观察，加上可选的独立审批通道，并非普遍控制原生会话的实时执行。 | `Service._enqueue` L148-150；[RuntimeClient.java](../../companion/android/app/src/main/java/com/yanyuliu/pockethub/RuntimeClient.java)：`send` L584-586；`test_service_refuses_desktop_control`。这是已确认的能力缺口，不能当作网络故障处理。 |
-| R5／P1 | 会话 `idle` 被投影为卡片 `done`，混用了“一轮回复结束”和“整个任务完成”。桌面专用标签已经写“本轮结束”，部分 UI 是准确的，但通用状态及其消费者仍可能过度解读。 | [desktop_sync.py](../../runtime/xiaoyou_runtime/desktop_sync.py)：`STATES` L38-41；Codex 完成处理 L292-296；Claude 结束处理 L331-354；`_publish` L512。**已复现**：idle 输出 done。 |
+| R5／P1 | 会话 `idle` 被投影为卡片 `done`，混用了“一轮回复结束”和“整个任务完成”。桌面专用标签已经写“本轮结束”，部分 UI 是准确的，但通用状态及其消费者仍可能过度解读。 | [desktop_sync.py](../../runtime/xiaoyou_runtime/events/desktop_sync.py)：`STATES` L38-41；Codex 完成处理 L292-296；Claude 结束处理 L331-354；`_publish` L512。**已复现**：idle 输出 done。 |
 | R6／P1 | 新转录来源发现周期可达 10 秒；已有来源每 2 秒轮询；仅工具／进度变化最多延后到 10 秒发布。无法据此满足所有已提交变化 3 秒内传播的要求。 | `desktop_sync.py` L26-36、`_discover` L222-243、`_publish` L489-492。**已复现**：工具变化在 +1 秒被抑制，到 +10 秒发布。状态和消息变化绕过轻微变化限流，不能把所有延迟都归因于它。 |
-| R7／P1 | Hook 为每个 Agent／Session 覆盖一个最新快照，不保存事件日志。一个轮询间隔内的多次转换可能被压缩。Feed 也提供最新卡片快照，不是完整生命周期事件。适合状态看板，但不足以支撑审批审计、准确 Run 生命周期和可重放控制。 | [desktop_hook.py](../../runtime/xiaoyou_runtime/desktop_hook.py)：`record` L142-148；[cards.py](../../runtime/xiaoyou_runtime/cards.py)：`_touch` L162-168、`changed` L320-345。转录适配器能补部分内容，无法补回任意遗漏的审批转换。 |
+| R7／P1 | Hook 为每个 Agent／Session 覆盖一个最新快照，不保存事件日志。一个轮询间隔内的多次转换可能被压缩。Feed 也提供最新卡片快照，不是完整生命周期事件。适合状态看板，但不足以支撑审批审计、准确 Run 生命周期和可重放控制。 | [desktop_hook.py](../../runtime/xiaoyou_runtime/desktop_hook.py)：`record` L142-148；[cards.py](../../runtime/xiaoyou_runtime/world/cards.py)：`_touch` L162-168、`changed` L320-345。转录适配器能补部分内容，无法补回任意遗漏的审批转换。 |
 | R8／P1 | 桌面状态依赖特定版本的本地转录格式，只观察最近 32 个来源，300 秒无活动后变 unknown。安静的模型／工具与已经退出的进程可能难以区分。当前保守标 unknown 的策略应保留。 | `desktop_sync.py` L28-36、`_discover` L238-242、`_event` L245-354、`_publish` L469-471。代码局限已确认；主人遇到的状态错误具体由哪个格式差异或缺失 Hook 引起，尚未验证。 |
-| R9／P1 | 消息内存 revision、卡片持久化 sequence、会话文件、聊天文件相互独立。卡片变化在条件锁内重写保留的卡片集合。没有事务共同覆盖接收、最终结果、请求身份和投递。 | `Service._report` L404-430；`Cards._touch` L162-168；[store.py](../../runtime/xiaoyou_runtime/store.py)：`_write` L27-31；`Xiaoyou._converse` L710。磁盘竞争与崩溃窗口存在，是否造成实际延迟仍需测量。 |
+| R9／P1 | 消息内存 revision、卡片持久化 sequence、会话文件、聊天文件相互独立。卡片变化在条件锁内重写保留的卡片集合。没有事务共同覆盖接收、最终结果、请求身份和投递。 | `Service._report` L404-430；`Cards._touch` L162-168；[store.py](../../runtime/xiaoyou_runtime/world/store.py)：`_write` L27-31；`Xiaoyou._converse` L710。磁盘竞争与崩溃窗口存在，是否造成实际延迟仍需测量。 |
 | R10／P1 | Android 在单一 worker 上串行发送，并在新消息提交前上传历史；该历史请求可等待 15 秒。Runtime 同会话也串行处理。上一轮缓慢、历史上传阻塞，都可能让下一条消息在到达模型前等待。 | `RuntimeClient.java` L36、L596-624；`Service._drain` L432-445。未提交版本 L595 已有本地乐观消息。串行化承担正确性职责，不能直接删掉而破坏同会话顺序。 |
-| R11／P1 | 首段正文没有统一的 3 秒验收计时器。普通聊天可使用 60 秒，结构化计划错误后会再次调用模型，fallback 也可能增加尝试。本地修改改善总时限和 SSE，但不能证明端到端 TTFT 达标。 | [agents.py](../../runtime/xiaoyou_runtime/agents.py)：`DshAgent.run` L965-988；[dsh_stream.py](../../runtime/xiaoyou_runtime/dsh_stream.py) L140-207；[xiaoyou.py](../../runtime/xiaoyou_runtime/xiaoyou.py)：`_converse` L638-645、`_speak` L804-814。无输入／仅心跳流的总时限修复目前在本地未提交改动中。 |
+| R11／P1 | 首段正文没有统一的 3 秒验收计时器。普通聊天可使用 60 秒，结构化计划错误后会再次调用模型，fallback 也可能增加尝试。本地修改改善总时限和 SSE，但不能证明端到端 TTFT 达标。 | [agents.py](../../runtime/xiaoyou_runtime/helpers/agents.py)：`DshAgent.run` L965-988；[dsh_stream.py](../../runtime/xiaoyou_runtime/helpers/dsh_stream.py) L140-207；[xiaoyou.py](../../runtime/xiaoyou_runtime/loop/xiaoyou.py)：`_converse` L638-645、`_speak` L804-814。无输入／仅心跳流的总时限修复目前在本地未提交改动中。 |
 
 当前本地 DSH 配置可正常解析：`deepseek` 使用 `dsh`、启用流式、模型为 `deepseek-v4-pro`，聊天超时 60 秒。`cc` 和 `tailor` 解析后的 AgentSpec 没有显式模型。历史上 `claude-opus-5-5` 的失败只证明当时那些运行失败，不能证明当前仍选了它，或该模型普遍不可用。实际生效的模型、provider、配置来源和账号可用性，应由有界预检及真实冒烟确认。本次未修改模型或凭据。
 
 ### 值得保留的现有机制
 
 - `Agent.run(Job)`、`Outcome`、`Control`、watchdog、进程树取消、任务独立会话、`after`／`redo`／原生 steer、后台结果转述，已经提供大量成熟 harness 能力。
-- [codex_app.py](../../runtime/xiaoyou_runtime/codex_app.py) L306-363 已支持 Runtime 托管线程恢复、带 `expectedTurnId` 的 `turn/steer`、中断一轮。这些执行控制值得保留，但不能推导为可控制另一个桌面进程。
-- [dsh_app.py](../../runtime/xiaoyou_runtime/dsh_app.py) L192-214、L245-285 已实现 ACP 握手、resume／new、prompt、cancel。L254 对任意 `AgentError` 都会从 resume 回退新会话；承诺上下文连续性前，应区分“不支持／不存在”与临时故障。
-- 桌面审批已有 request／session／turn／tool 身份、操作指纹、过期、进程存活、心跳及授权范围检查：[desktop_approvals.py](../../runtime/xiaoyou_runtime/desktop_approvals.py) L97-137、L289-298。应扩展这个边界。
+- [codex_app.py](../../runtime/xiaoyou_runtime/helpers/codex_app.py) L306-363 已支持 Runtime 托管线程恢复、带 `expectedTurnId` 的 `turn/steer`、中断一轮。这些执行控制值得保留，但不能推导为可控制另一个桌面进程。
+- [dsh_app.py](../../runtime/xiaoyou_runtime/helpers/dsh_app.py) L192-214、L245-285 已实现 ACP 握手、resume／new、prompt、cancel。L254 对任意 `AgentError` 都会从 resume 回退新会话；承诺上下文连续性前，应区分“不支持／不存在”与临时故障。
+- 桌面审批已有 request／session／turn／tool 身份、操作指纹、过期、进程存活、心跳及授权范围检查：[desktop_approvals.py](../../runtime/xiaoyou_runtime/events/desktop_approvals.py) L97-137、L289-298。应扩展这个边界。
 - Feed 使用条件变量唤醒，long poll 的最大等待时间不等于固有延迟。48 KiB 是分页预算，单个超大卡片可超过预算。保留 `more`、游标及老客户端行为。
 - Android 已有 feed 来源 epoch、旧卡 sequence 拒绝、游标倒退重置：`RuntimeClient.fetchFeed` L215-245、`HubStore.applyFeed` L427-455。本地 SSE／重试修改应补集成验证，避免再重写一套传输层。
 - 完成会话导出到桌面属于本地未提交的 `desktop_handoff.py`。它明确只导出完成转录；导出／打开成功不代表已经附着原生实时会话。

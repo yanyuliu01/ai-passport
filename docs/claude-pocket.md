@@ -354,8 +354,8 @@ prompt read-only.
 Runtime HTTP and attachment fields are documented in the
 [HTTP interface](../runtime/README.md#http-interface) and
 [task output guide](../runtime/README.md#task-images-and-downloadable-files).
-HTTP handlers live in `runtime/xiaoyou_runtime/server.py`; agent reply schemas
-are `reply_schema()` and `lane_schema()` in `runtime/xiaoyou_runtime/xiaoyou.py`.
+HTTP handlers live in `runtime/xiaoyou_runtime/api/server.py`; agent reply schemas
+are `reply_schema()` and `lane_schema()` in `runtime/xiaoyou_runtime/loop/xiaoyou.py`.
 The wearable remains a text and state display; full-screen images, attachment
 downloads, Android file saving, and opening in other apps belong to the phone.
 

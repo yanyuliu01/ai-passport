@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from test_streaming import FakeOpener, dsh_spec, sse, tool_sse
 from test_runtime import TempDirCase, Scripted, make_xiaoyou, write_config
-from xiaoyou_runtime import config, decision, dsh_stream
-from xiaoyou_runtime.agents import DshAgent, Job
-from xiaoyou_runtime.voice_tools import Toolbox
+from xiaoyou_runtime import config
+from xiaoyou_runtime.loop import decision
+from xiaoyou_runtime.helpers import dsh_stream
+from xiaoyou_runtime.helpers.agents import DshAgent, Job
+from xiaoyou_runtime.loop.voice_tools import Toolbox
 
 
 def selected(name="just_reply", args=None, count=1):

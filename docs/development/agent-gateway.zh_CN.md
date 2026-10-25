@@ -35,7 +35,7 @@ mesh、授权、记录、任务与同步服务。首版不需要再启动独立�
 
 ## 已有基础与缺口
 
-`runtime/xiaoyou_runtime/agents.py` 已有 `Agent`、`Job`、`Outcome` 和 `Control`；
+`runtime/xiaoyou_runtime/helpers/agents.py` 已有 `Agent`、`Job`、`Outcome` 和 `Control`；
 `config.py` 定义 `AgentSpec`。现有传输包括 Claude 的流式 JSON、Codex app-server、
 DeepSeek ACP、普通命令和远端 Runtime。`tasks.py` 管取消／追加，`record.py` 是记录写入口，
 `approvals.py` 管授权，`identity.py` 声明能力；`mesh.py` 已区分电脑身份并转交工作。

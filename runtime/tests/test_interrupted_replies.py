@@ -2,9 +2,9 @@
 import unittest
 
 from test_runtime import TempDirCase, ToolTalker, make_xiaoyou
-from xiaoyou_runtime import presentation
-from xiaoyou_runtime.agents import Cut, Outcome, stopped_early
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.delivery import presentation
+from xiaoyou_runtime.helpers.agents import Cut, Outcome, stopped_early
+from xiaoyou_runtime.api.service import Service
 
 
 class CutTalker(ToolTalker):

@@ -44,7 +44,7 @@ chat still addresses Xiaoyou; it does not gain a model/helper/effort picker.
 
 ## Existing foundations and gaps
 
-`runtime/xiaoyou_runtime/agents.py` exposes `Agent`, `Job`, `Outcome`, and
+`runtime/xiaoyou_runtime/helpers/agents.py` exposes `Agent`, `Job`, `Outcome`, and
 `Control`; `config.py` defines `AgentSpec`. Current transports include Claude
 stream JSON, Codex app-server, DeepSeek ACP, plain commands and remote Runtime.
 `tasks.py` owns cancellation/steering; `record.py` owns record writes;

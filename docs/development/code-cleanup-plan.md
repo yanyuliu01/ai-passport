@@ -53,8 +53,8 @@ the baseline is recorded.
 
 | Remove | Where |
 | --- | --- |
-| The nudge prompt `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/voice_tools.py` |
-| The `nudged` branch of the tool loop and its special handling | `runtime/xiaoyou_runtime/dsh_stream.py`, around lines 280-325 |
+| The nudge prompt `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/loop/voice_tools.py` |
+| The `nudged` branch of the tool loop and its special handling | `runtime/xiaoyou_runtime/helpers/dsh_stream.py`, around lines 280-325 |
 | Test assertions about the nudge | `runtime/tests/test_decision.py` |
 
 Keep: the `promised()` regex as a counter only (as `xiaoyou.py` already uses it);

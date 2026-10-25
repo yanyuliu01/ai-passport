@@ -21,12 +21,12 @@ sys.path.insert(0, str(TESTS))
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, write_config  # noqa: E402
 from xiaoyou_runtime import config as config_module  # noqa: E402
-from xiaoyou_runtime import dsh_stream  # noqa: E402
-from xiaoyou_runtime import xiaoyou as xiaoyou_module  # noqa: E402
-from xiaoyou_runtime.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
-from xiaoyou_runtime.service import Service  # noqa: E402
-from xiaoyou_runtime.server import make_server  # noqa: E402
-from xiaoyou_runtime.xiaoyou import reply_so_far  # noqa: E402
+from xiaoyou_runtime.helpers import dsh_stream  # noqa: E402
+from xiaoyou_runtime.loop import xiaoyou as xiaoyou_module  # noqa: E402
+from xiaoyou_runtime.helpers.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
+from xiaoyou_runtime.api.service import Service  # noqa: E402
+from xiaoyou_runtime.api.server import make_server  # noqa: E402
+from xiaoyou_runtime.loop.xiaoyou import reply_so_far  # noqa: E402
 
 
 def sse(*chunks, stop=True):
@@ -193,7 +193,7 @@ class ToolTalkTests(TempDirCase):
     """说的话直接写、做事调工具：一轮里可以说话、调工具、看结果、接着说。"""
 
     def toolbox(self, problem=None):
-        from xiaoyou_runtime.voice_tools import Toolbox
+        from xiaoyou_runtime.loop.voice_tools import Toolbox
         return Toolbox(["codex"], [], [], lambda fields: problem,
                        lambda card: "c3 · 正在做" if card == "c3" else None)
 
@@ -298,8 +298,8 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual(saved[-1], {"role": "assistant", "content": "还在做。"})
 
     def test_saying_she_will_remember_without_remembering_is_counted(self):
-        from xiaoyou_runtime.memory import OwnerMemory
-        from xiaoyou_runtime.voice_tools import Toolbox
+        from xiaoyou_runtime.world.memory import OwnerMemory
+        from xiaoyou_runtime.loop.voice_tools import Toolbox
         memory = OwnerMemory(self.folder / "owner.md")
         tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
         self.assertTrue(tools.promised("明白，这个我记下了，后面按这个来。"))
@@ -315,8 +315,8 @@ class ToolTalkTests(TempDirCase):
 
     def test_she_can_remember_and_forget_through_tools(self):
         opener = FakeOpener(tool_sse("", "remember", {"note": "回复别太长"}), sse("好，记住了。"))
-        from xiaoyou_runtime.memory import OwnerMemory
-        from xiaoyou_runtime.voice_tools import Toolbox
+        from xiaoyou_runtime.world.memory import OwnerMemory
+        from xiaoyou_runtime.loop.voice_tools import Toolbox
         memory = OwnerMemory(self.folder / "owner.md")
         tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
         names = [tool["name"] for tool in tools.definitions()]

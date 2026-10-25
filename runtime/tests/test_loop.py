@@ -9,11 +9,11 @@ import unittest
 from unittest import mock
 
 from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.agents import AgentError, Outcome
-from xiaoyou_runtime.effects import EffectFenceError
-from xiaoyou_runtime.loop import ConversationLoop
-from xiaoyou_runtime.proactive import GATE_RULES, UPKEEP_RULES
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.helpers.agents import AgentError, Outcome
+from xiaoyou_runtime.loop.effects import EffectFenceError
+from xiaoyou_runtime.loop.loop import ConversationLoop
+from xiaoyou_runtime.loop.proactive import GATE_RULES, UPKEEP_RULES
+from xiaoyou_runtime.api.service import Service
 
 
 class LoopTests(unittest.TestCase):

@@ -5,9 +5,9 @@ import unittest
 from unittest import mock
 
 from test_runtime import AgentError, Recorder, Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.tasks import Task, Tasks
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime import world
+from xiaoyou_runtime.helpers.tasks import Task, Tasks
+from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.world import world
 
 
 class DispatchSafetyTests(TempDirCase):
@@ -130,7 +130,7 @@ class DispatchSafetyTests(TempDirCase):
         finished = threading.Event()
         tasks = Tasks(store, lambda *args: finished.set())
         self.addCleanup(tasks.close)
-        with mock.patch("xiaoyou_runtime.tasks.threading.Thread.start",
+        with mock.patch("xiaoyou_runtime.helpers.tasks.threading.Thread.start",
                         side_effect=RuntimeError("no thread available")):
             with self.assertRaises(RuntimeError):
                 tasks.start(Task("c1", "default", agent, "first"))

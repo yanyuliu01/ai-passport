@@ -17,7 +17,7 @@ from xiaoyou_runtime.iterate.scheduler import Scheduler
 from xiaoyou_runtime.iterate.settings import IterateConfigError, parse
 from xiaoyou_runtime.iterate.events import EventError, EventStore, EventType, Types, flat
 from xiaoyou_runtime.iterate.store import IssueBook, Lock, Busy, Runs
-from xiaoyou_runtime.model_gateway import Completion, GatewayError
+from xiaoyou_runtime.helpers.model_gateway import Completion, GatewayError
 
 NOW = 1_800_000_000.0
 JAVA = "companion/android/app/src/main/java/com/yanyuliu/pockethub/MainActivity.java"

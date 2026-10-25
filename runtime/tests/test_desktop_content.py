@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
+from xiaoyou_runtime.events.desktop_content import MAX_MESSAGE_CHARS, message_text, visible_text
 
 
 class DesktopContentTests(unittest.TestCase):

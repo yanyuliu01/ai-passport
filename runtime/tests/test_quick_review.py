@@ -11,8 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.approvals import Approvals
-from xiaoyou_runtime.quick_review import QuickReview, ReviewConflict
+from xiaoyou_runtime.world.approvals import Approvals
+from xiaoyou_runtime.world.quick_review import QuickReview, ReviewConflict
 
 
 class QuickReviewTests(unittest.TestCase):
@@ -158,7 +158,7 @@ class QuickReviewTests(unittest.TestCase):
 
     def test_failed_durable_write_cannot_restore_previous_grant_after_restart(self):
         self.mode(seconds=0)
-        with patch("xiaoyou_runtime.quick_review.os.replace", side_effect=OSError("disk full")):
+        with patch("xiaoyou_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
             aid = self.ask()
         self.assertIsNone(self.approvals.get(aid)["decision"])
         self.assertTrue((self.folder / "approval-review.disabled").exists())
@@ -273,7 +273,7 @@ class QuickReviewTests(unittest.TestCase):
         self.ask(context=dict(source="desktop", remote_actionable=True, expires_at=2000),
                  responder=lambda decision: self.fail("must record intent before allowing"))
         snapshot = self.review.snapshot("default")
-        with patch("xiaoyou_runtime.quick_review.os.replace", side_effect=OSError("disk full")):
+        with patch("xiaoyou_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
             with self.assertRaises(OSError): self.batch(snapshot)
         self.assertEqual(self.review.snapshot("default")["mode"], "manual")
 
@@ -309,7 +309,7 @@ class QuickReviewTests(unittest.TestCase):
 
     def test_service_restores_policy_before_recovered_work_can_ask_for_a_tool(self):
         from test_runtime import make_xiaoyou, Scripted
-        from xiaoyou_runtime.service import Service
+        from xiaoyou_runtime.api.service import Service
         xiaoyou, store = make_xiaoyou(self.folder / "startup", [Scripted("helper")])
         grant = QuickReview(xiaoyou.approvals, store.state_dir)
         snap = grant.snapshot("default")
@@ -332,7 +332,7 @@ class QuickReviewTests(unittest.TestCase):
 class QuickReviewHttpTests(unittest.TestCase):
     def setUp(self):
         from test_runtime import write_config, config_module, agents_module, Xiaoyou, Store, Service, TOKEN
-        from xiaoyou_runtime.server import make_server
+        from xiaoyou_runtime.api.server import make_server
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.config = config_module.load(write_config(Path(self.temp.name)), {"XIAOYOU_PORT": "8765"})
@@ -419,7 +419,7 @@ class QuickReviewHttpTests(unittest.TestCase):
         self.assertIn("review", [kind["name"] for kind in self.call("/v1/info")[1]["events"]["types"]])
 
     def test_permission_gate_passes_a_typed_read_without_changing_manual_gate_protocol(self):
-        from xiaoyou_runtime.approvals import Gate
+        from xiaoyou_runtime.world.approvals import Gate
         gate = Gate(self.approvals)
         self.addCleanup(gate.close)
         env = gate.open("c-read", "default", "claude")

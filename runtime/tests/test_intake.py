@@ -22,9 +22,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime import world  # noqa: E402
-from xiaoyou_runtime.intake import Intake, Writer, WRITES  # noqa: E402
-from xiaoyou_runtime.service import Service  # noqa: E402
+from xiaoyou_runtime.world import world  # noqa: E402
+from xiaoyou_runtime.events.intake import Intake, Writer, WRITES  # noqa: E402
+from xiaoyou_runtime.api.service import Service  # noqa: E402
 
 GOLDEN = Path(__file__).resolve().parent / "intake_golden.json"
 VOLATILE = re.compile(r"[0-9a-f]{12,32}")
@@ -253,7 +253,7 @@ class IntakeBoundaryTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_record_mutator_is_wrapped(self):
-        from xiaoyou_runtime.record import Record
+        from xiaoyou_runtime.events.record import Record
         methods = {name for name, value in vars(Record).items()
                    if not name.startswith("_") and callable(value)}
         self.assertEqual(methods - {"opening"}, set(WRITES))

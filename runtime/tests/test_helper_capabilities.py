@@ -9,11 +9,11 @@ import unittest
 
 from test_runtime import TempDirCase
 
-import xiaoyou_runtime.agents as agents_module
-import xiaoyou_runtime.approvals as approvals_module
+import xiaoyou_runtime.helpers.agents as agents_module
+import xiaoyou_runtime.world.approvals as approvals_module
 import xiaoyou_runtime.config as config_module
-from xiaoyou_runtime import capabilities, helper_extras, mcp_client, permission_mcp
-from xiaoyou_runtime.agents import Job
+from xiaoyou_runtime.helpers import capabilities, helper_extras, mcp_client, permission_mcp
+from xiaoyou_runtime.helpers.agents import Job
 
 # 一个最小的 stdio MCP 服务：两个工具，echo 原样返回参数，boom 报错。
 FAKE_SERVER = r'''
@@ -200,7 +200,7 @@ class HarnessTests(TempDirCase):
         claude = agents_module.ClaudeCodeAgent.mcp_config(self.gate)["mcpServers"]["xiaoyou"]
         self.assertEqual(claude["env"]["XIAOYOU_GATE_APPROVE"], "1")
         codex = helper_extras.codex_overrides(self.gate)
-        self.assertIn('mcp_servers.xiaoyou.args=["-m","xiaoyou_runtime.permission_mcp"]', codex)
+        self.assertIn('mcp_servers.xiaoyou.args=["-m","xiaoyou_runtime.helpers.permission_mcp"]', codex)
         self.assertEqual(helper_extras.codex_overrides(None), [])
         acp = helper_extras.acp_servers(self.gate)[0]
         self.assertEqual((acp["name"], {"name": "XIAOYOU_GATE_KEY", "value": "k"} in acp["env"]), ("xiaoyou", True))

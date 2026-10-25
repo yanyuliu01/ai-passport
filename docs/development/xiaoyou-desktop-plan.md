@@ -46,7 +46,7 @@ need verification; retained reports of test success are not new test evidence.
 
 | Existing component | Reuse and required work |
 | --- | --- |
-| `runtime/xiaoyou_runtime/record.py`, `message_log.py`, `ledger.py` | Preserve the single record writer, message identities, durable acceptance and retry deduplication; add a subject-level conversation projection |
+| `runtime/xiaoyou_runtime/events/record.py`, `message_log.py`, `ledger.py` | Preserve the single record writer, message identities, durable acceptance and retry deduplication; add a subject-level conversation projection |
 | `identity.py`, `mesh.py`, `mesh_share.py` | Preserve origin identity, single-writer records and remote task commands; add authenticated transport and bind the existing subject to space membership |
 | `/v1/info`, `/v1/sync`, message HTTP/SSE APIs | Keep existing wire contracts and capability negotiation; add the new transport alongside them |
 | Android `RuntimeClient.java`, `SyncCache.java`, `HubStore` | Replace ordinary computer selection with a space view; persist sync state and route through a transport adapter |

@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest import mock
 
 from test_runtime import TempDirCase, Scripted, make_xiaoyou
-from xiaoyou_runtime.conversation_directory import uid, project, DirectoryMetadata
-from xiaoyou_runtime.service import Service, RequestError
-from xiaoyou_runtime.message_history import page
+from xiaoyou_runtime.world.conversation_directory import uid, project, DirectoryMetadata
+from xiaoyou_runtime.api.service import Service, RequestError
+from xiaoyou_runtime.events.message_history import page
 
 
 class DirectoryCase(TempDirCase):
@@ -78,7 +78,7 @@ class DirectoryTests(DirectoryCase):
         for i in range(8):
             self.x.record.reply(card['id'], 'message %s' % i, turn_id='history-%s' % i)
         path = self.x.cards._log._path
-        with mock.patch('xiaoyou_runtime.message_log.MAX_MESSAGES', 3):
+        with mock.patch('xiaoyou_runtime.events.message_log.MAX_MESSAGES', 3):
             self.x.cards._log.retain([])
         collected, cursor = {}, None
         for _ in range(30):
@@ -154,14 +154,14 @@ class DirectoryBoundaryTests(DirectoryCase):
         self.x.record.reply(card['id'],'retained public result',turn_id='retained-result')
         row=self.row(card)
         self.service.directory_edit(row['uid'],{'revision':0,'fields':{'title':'owner alias','archived':True}})
-        with mock.patch('xiaoyou_runtime.cards.MAX_CARDS',2),mock.patch('xiaoyou_runtime.cards.MAX_HISTORY',0):
+        with mock.patch('xiaoyou_runtime.world.cards.MAX_CARDS',2),mock.patch('xiaoyou_runtime.world.cards.MAX_HISTORY',0):
             for i in range(5):self.x.record.task_open('default','new %s'%i,'done','codex')
         self.assertIsNone(self.x.cards.get(card['id']))
         retained=next(r for r in self.service.directory()['entries'] if r['uid']==row['uid'])
         self.assertEqual('owner alias',retained['title']);self.assertTrue(retained['retained_only'])
         self.assertTrue(retained['archived'])
         self.assertIn('retained public result',str(self.service.directory_history(row['uid'])))
-        from xiaoyou_runtime.cards import Cards
+        from xiaoyou_runtime.world.cards import Cards
         reopened=Cards(self.store.state_dir/'cards.json')
         self.assertTrue(any(c['id']==card['id'] for c in reopened.retained()))
 
@@ -193,7 +193,7 @@ class DirectoryBoundaryTests(DirectoryCase):
         self.assertEqual({},self.x.cards.directory.generated_snapshot())
 
     def test_source_upserts_follow_authentic_writer_and_replay_revision(self):
-        from xiaoyou_runtime.conversation_directory import home_scope
+        from xiaoyou_runtime.world.conversation_directory import home_scope
         source={'uid':uid('native','peer','codex','home-test','session'),'kind':'native','authority':'peer','agent':'codex','native_scope':'home-test','native_session_id':'session','title':'first','original_title':'first','observed_at':1,'updated_at':1,'source_revision':2}
         store=self.x.cards.directory
         self.assertFalse(store.observe_sources([source],'impostor'))
@@ -211,7 +211,7 @@ class DirectoryBoundaryTests(DirectoryCase):
             with self.assertRaises(RequestError):self.service.directory_open(source['uid'])
 
     def test_source_rename_and_disappearance_do_not_create_a_task_or_change_owner_alias(self):
-        from xiaoyou_runtime.directory_discovery import Discovery
+        from xiaoyou_runtime.events.directory_discovery import Discovery
         home=self.folder/'codex-directory'
         path=home/'sessions'/'rollout-discovery-id.jsonl';path.parent.mkdir(parents=True)
         path.write_text(json.dumps({'type':'session_meta','payload':{'id':'discovery-id','cwd':str(self.folder),'source':'cli'}})+'\n'+json.dumps({'type':'event_msg','payload':{'type':'task_complete'}})+'\n')
@@ -230,7 +230,7 @@ class DirectoryBoundaryTests(DirectoryCase):
 
     def test_http_directory_requires_auth_and_rejects_control_fields(self):
         import threading,urllib.request,urllib.error
-        from xiaoyou_runtime.server import make_server
+        from xiaoyou_runtime.api.server import make_server
         server=make_server(dataclasses.replace(self.x._config,host='127.0.0.1',port=0),self.service)
         self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
         threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -251,7 +251,7 @@ class DirectoryBoundaryTests(DirectoryCase):
         self.assertEqual('{broken',path.read_text())
 
     def test_gateway_failure_keeps_extract_and_owner_name(self):
-        from xiaoyou_runtime.model_gateway import GatewayError
+        from xiaoyou_runtime.helpers.model_gateway import GatewayError
         card=self.x.record.task_open('default','keep title','done','codex')
         self.x.record.reply(card['id'],'verified result',turn_id='gateway-fallback')
         self.service.metadata.gateway.settings.routes['conversation.metadata']=[('synthetic','non-astra')]

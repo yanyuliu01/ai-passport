@@ -8,8 +8,8 @@ import urllib.request
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.agents import STOP, Control, Outcome
-from xiaoyou_runtime.tasks import Task
+from xiaoyou_runtime.helpers.agents import STOP, Control, Outcome
+from xiaoyou_runtime.helpers.tasks import Task
 
 
 class CallbackFenceTests(TempDirCase):

@@ -11,7 +11,7 @@ owner can go back to the computer. A turn still running on the computer is never
 import unittest
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: F401
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.api.service import Service
 
 
 class DesktopContinueTests(TempDirCase):

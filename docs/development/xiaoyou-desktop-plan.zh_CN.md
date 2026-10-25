@@ -41,7 +41,7 @@ Runtime 源码为 **0.20.0**；Android 源码为 **0.27.0 / code 50**。
 
 | 现有组件 | 复用方式与所需工作 |
 | --- | --- |
-| `runtime/xiaoyou_runtime/record.py`、`message_log.py`、`ledger.py` | 保留唯一记录写入口、消息身份、落盘确认和重试去重；增加主体级会话投影 |
+| `runtime/xiaoyou_runtime/events/record.py`、`message_log.py`、`ledger.py` | 保留唯一记录写入口、消息身份、落盘确认和重试去重；增加主体级会话投影 |
 | `identity.py`、`mesh.py`、`mesh_share.py` | 保留来源身份、记录单写者和远程任务指令；增加认证传输，把已有主体绑定到空间成员关系 |
 | `/v1/info`、`/v1/sync`、消息 HTTP/SSE 接口 | 保持现有协议与能力协商，旁路增加新传输 |
 | Android `RuntimeClient.java`、`SyncCache.java`、`HubStore` | 普通入口从电脑切换改为空间视图；同步状态持久化，经传输适配器访问 |

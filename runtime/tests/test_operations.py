@@ -17,9 +17,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime import ledger as ledger_module, operations, world  # noqa: E402
-from xiaoyou_runtime.ledger import Ledger, dedupe_key  # noqa: E402
-from xiaoyou_runtime.service import RESTART_NOTE, Service  # noqa: E402
+from xiaoyou_runtime.events import ledger as ledger_module, operations
+from xiaoyou_runtime.world import world  # noqa: E402
+from xiaoyou_runtime.events.ledger import Ledger, dedupe_key  # noqa: E402
+from xiaoyou_runtime.api.service import RESTART_NOTE, Service  # noqa: E402
 
 SEEDS = range(10)
 STATUSES = ("queued", "running", "done", "failed")

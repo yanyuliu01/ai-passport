@@ -9,10 +9,10 @@ from dataclasses import replace
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime import native_history
+from xiaoyou_runtime.events import native_history
 from xiaoyou_runtime.config import AgentSpec
-from xiaoyou_runtime.conversation_directory import home_scope
-from xiaoyou_runtime.service import ConflictError, RequestError, Service
+from xiaoyou_runtime.world.conversation_directory import home_scope
+from xiaoyou_runtime.api.service import ConflictError, RequestError, Service
 
 
 def event(kind, **payload):
@@ -364,7 +364,7 @@ class NativeRecoveryTests(TempDirCase):
         self.assertEqual([], helper.started)
 
     def test_long_result_keeps_the_complete_text_in_a_saved_attachment(self):
-        from xiaoyou_runtime.agents import MAX_OUTPUT_CHARS
+        from xiaoyou_runtime.helpers.agents import MAX_OUTPUT_CHARS
         text = "x" * (MAX_OUTPUT_CHARS + 100) + "tail"
         card, run_id, path = self.stage(text)
         self.complete(path, text)
@@ -404,7 +404,7 @@ class NativeRecoveryTests(TempDirCase):
     def test_http_query_requires_authentication_and_original_run_identity(self):
         import urllib.error
         import urllib.request
-        from xiaoyou_runtime.server import make_server
+        from xiaoyou_runtime.api.server import make_server
         card, run_id, path = self.stage()
         service, x, helper = self.service()
         server = make_server(replace(x._config, host="127.0.0.1", port=0), service)

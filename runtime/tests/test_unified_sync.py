@@ -11,11 +11,11 @@ import unittest
 import test_runtime
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
 
-import xiaoyou_runtime.message_log as message_log
-from xiaoyou_runtime import conformance
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.desktop_sync import CONVERSATION, DesktopSync, Session
-from xiaoyou_runtime.service import RequestError, Service
+import xiaoyou_runtime.events.message_log as message_log
+from xiaoyou_runtime.api import conformance
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.desktop_sync import CONVERSATION, DesktopSync, Session
+from xiaoyou_runtime.api.service import RequestError, Service
 
 
 class ConformanceTests(TempDirCase):

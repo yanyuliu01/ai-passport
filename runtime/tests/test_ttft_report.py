@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.api.service import Service
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "ttft_report.py"
 spec = importlib.util.spec_from_file_location("ttft_report", TOOL)

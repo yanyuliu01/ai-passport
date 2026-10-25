@@ -10,8 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from xiaoyou_runtime import shared_history as history
-from xiaoyou_runtime.desktop_content import visible_text
+from xiaoyou_runtime.api import shared_history as history
+from xiaoyou_runtime.events.desktop_content import visible_text
 
 
 class SharedHistoryTests(unittest.TestCase):
@@ -144,7 +144,7 @@ class SharedHistoryTests(unittest.TestCase):
                          [("user", "what changed?"), ("assistant", "the sync view")])
 
     def test_desktop_history_export_keeps_more_than_the_phone_window(self):
-        from xiaoyou_runtime import desktop_history
+        from xiaoyou_runtime.events import desktop_history
         events = []
         for index in range(30):
             events.append({"timestamp": "1970-01-01T00:01:%02dZ" % index, "sessionId": "long", "cwd": str(self.repo),

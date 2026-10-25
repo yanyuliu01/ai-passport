@@ -8,8 +8,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou  # noqa: E402
-import xiaoyou_runtime.service as service_module  # noqa: E402
-from xiaoyou_runtime.service import Service  # noqa: E402
+import xiaoyou_runtime.api.service as service_module  # noqa: E402
+from xiaoyou_runtime.api.service import Service  # noqa: E402
 
 
 class SyncWindowTests(TempDirCase):

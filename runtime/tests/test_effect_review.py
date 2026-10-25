@@ -10,9 +10,9 @@ import urllib.error
 import urllib.request
 
 from test_runtime import TempDirCase, ToolTalker, Scripted, make_xiaoyou
-from xiaoyou_runtime.effects import EffectUncertain, valid_review, review_record
-from xiaoyou_runtime.ledger import current
-from xiaoyou_runtime.service import Service, ConflictError, RequestError, UnavailableError
+from xiaoyou_runtime.loop.effects import EffectUncertain, valid_review, review_record
+from xiaoyou_runtime.events.ledger import current
+from xiaoyou_runtime.api.service import Service, ConflictError, RequestError, UnavailableError
 
 
 class EffectReviewTests(TempDirCase):
@@ -331,7 +331,7 @@ class EffectReviewTests(TempDirCase):
         self.assertIsNotNone(self.busy(service))
 
     def test_http_requires_auth_binds_actor_and_rejects_revoked_devices(self):
-        from xiaoyou_runtime.server import make_server
+        from xiaoyou_runtime.api.server import make_server
         service, x, _, _, _ = self.runtime()
         mid = self.unknown(service, x)
         server = make_server(replace(x._config, host="127.0.0.1", port=0), service)
@@ -366,7 +366,7 @@ class EffectReviewTests(TempDirCase):
         self.assertEqual(401, request(body, credential)[0])
 
     def test_manual_request_review_cannot_settle_an_unknown_helper_execution(self):
-        from xiaoyou_runtime.tasks import Task
+        from xiaoyou_runtime.helpers.tasks import Task
         service, x, _, helper, _ = self.runtime()
         mid = self.unknown(service, x)
         card = x._writer.task_open("side-review", "unknown helper result")

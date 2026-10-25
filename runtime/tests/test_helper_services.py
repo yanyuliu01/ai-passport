@@ -12,8 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from test_runtime import TempDirCase, Scripted, make_xiaoyou, write_config, start_runtime, TOKEN
-from xiaoyou_runtime import capabilities, config, helper_models, helpers, mcp_client, agents
-from xiaoyou_runtime.service import Service, UnavailableError, RequestError
+from xiaoyou_runtime.helpers import capabilities, helper_models, helpers, mcp_client, agents
+from xiaoyou_runtime import config
+from xiaoyou_runtime.api.service import Service, UnavailableError, RequestError
 
 
 class LocalModels(TempDirCase):

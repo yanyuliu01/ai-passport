@@ -3,10 +3,10 @@ import json
 import unittest
 
 from test_runtime import TempDirCase, Scripted, make_xiaoyou
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.record import Record
-from xiaoyou_runtime.service import Service, RequestError
-from xiaoyou_runtime.conversations import ConversationCatalog
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.record import Record
+from xiaoyou_runtime.api.service import Service, RequestError
+from xiaoyou_runtime.world.conversations import ConversationCatalog
 
 
 class ConversationTests(TempDirCase):
@@ -80,7 +80,7 @@ class ConversationTests(TempDirCase):
 
     def test_supplement_intent_is_durable_before_a_worker_queue_accepts_it(self):
         import threading
-        from xiaoyou_runtime.tasks import Tasks, Task
+        from xiaoyou_runtime.helpers.tasks import Tasks, Task
         worker = Scripted('codex', speaks=False)
         worker.gate.clear()
         background = Tasks(self.store, lambda *args: None)

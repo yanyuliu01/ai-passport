@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mesh import Network, SECRET  # noqa: E402
 from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime import ownership  # noqa: E402
-from xiaoyou_runtime.mesh import Mesh  # noqa: E402
-from xiaoyou_runtime.service import Service  # noqa: E402
+from xiaoyou_runtime.world import ownership  # noqa: E402
+from xiaoyou_runtime.delivery.mesh import Mesh  # noqa: E402
+from xiaoyou_runtime.api.service import Service  # noqa: E402
 
 MAC, WIN, OTHER = "a" * 32, "b" * 32, "c" * 32
 

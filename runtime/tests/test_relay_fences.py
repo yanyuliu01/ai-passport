@@ -3,9 +3,9 @@ import unittest
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.agents import AgentError, Outcome
-from xiaoyou_runtime.effects import EffectFenceError
-from xiaoyou_runtime.tasks import Task
+from xiaoyou_runtime.helpers.agents import AgentError, Outcome
+from xiaoyou_runtime.loop.effects import EffectFenceError
+from xiaoyou_runtime.helpers.tasks import Task
 
 
 class RelayFenceTests(TempDirCase):
@@ -154,7 +154,7 @@ class RelayFenceTests(TempDirCase):
         self.assertEqual("", self.x.cards.get(self.task.card)["summary_partial"])
 
     def test_formatting_cannot_cross_an_owner_change_before_publication(self):
-        from xiaoyou_runtime import xiaoyou as module
+        from xiaoyou_runtime.loop import xiaoyou as module
         shape = module.shape
         def format_text(*args, **kwargs):
             self.change_owner()

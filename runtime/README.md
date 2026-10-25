@@ -1054,7 +1054,7 @@ The order is fixed:
 2. The owner named one at the start of the sentence: that one. Two forms are
    recognized: `@codex look at this`, and a Chinese "let / ask / use / hand to"
    word followed by a name or alias (the words are `ASK_WORDS` in
-   [`xiaoyou_runtime/router.py`](xiaoyou_runtime/router.py); the Chinese version
+   [`xiaoyou_runtime/loop/router.py`](xiaoyou_runtime/loop/router.py); the Chinese version
    of this page lists them).
 3. The router has an opinion: its choice.
 4. Otherwise: the default agent.
@@ -1062,7 +1062,7 @@ The order is fixed:
 Right after the name the owner may say which effort this one job runs at
 (since 0.6.0): `@codex high look at this error`. The words are `low`,
 `medium`, `high`, `xhigh`, `max`, `minimal` and their Chinese counterparts
-(`EFFORT_WORDS` in [`xiaoyou_runtime/router.py`](xiaoyou_runtime/router.py);
+(`EFFORT_WORDS` in [`xiaoyou_runtime/loop/router.py`](xiaoyou_runtime/loop/router.py);
 the Chinese version of this page lists them, with the spoken form that puts a
 "use" word in between). Only a word directly after the name counts, and it is
 removed from what is handed to the helper. A level the helper may not use
@@ -1360,7 +1360,7 @@ pasted into a task is written too, so keep secrets out of tasks.
 Setup: create an internal integration in Notion and copy its token; share the
 page that holds the two databases with that integration. The column and
 option names in Notion are Chinese and must match exactly; they are listed in
-[README.zh_CN.md](README.zh_CN.md) and in `xiaoyou_runtime/workspace.py`.
+[README.zh_CN.md](README.zh_CN.md) and in `xiaoyou_runtime/loop/workspace.py`.
 
 Other agents read and write the same record through Notion directly (Notion
 MCP where they support MCP); they do not go through the runtime.
@@ -1462,7 +1462,7 @@ The default is a read-only sandbox with `approval_policy: "on-request"`: it
 may read anywhere, and every change and every command that has to leave the
 sandbox is asked about. `tool` is the helper's name with a short Chinese label
 for a command, a file change or permissions (the labels are in
-[`xiaoyou_runtime/codex_app.py`](xiaoyou_runtime/codex_app.py); the Chinese
+[`xiaoyou_runtime/helpers/codex_app.py`](xiaoyou_runtime/helpers/codex_app.py); the Chinese
 version of this page lists them), and `detail` is the command
 and its directory, each file's path and diff, or the permissions it wants as
 they are, followed by the reason Codex itself gave. Anything else it asks

@@ -6,8 +6,8 @@
 
 维护入口是 [runtime/persona.txt](../../runtime/persona.txt)。默认配置在启动时读取它。
 实际系统提示还包含本轮职责、回复格式、可用帮手、任务上下文、记忆和约定，由
-[xiaoyou.py](../../runtime/xiaoyou_runtime/xiaoyou.py) 和
-[proactive.py](../../runtime/xiaoyou_runtime/proactive.py) 组装。
+[xiaoyou.py](../../runtime/xiaoyou_runtime/loop/xiaoyou.py) 和
+[proactive.py](../../runtime/xiaoyou_runtime/loop/proactive.py) 组装。
 自定义 `persona_file` 会替换基础提示，不会自动继承这个文件。
 
 ## 参考与适配

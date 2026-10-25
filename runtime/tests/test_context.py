@@ -5,9 +5,9 @@ import unittest
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.intake import Intake
-from xiaoyou_runtime.store import Store
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.intake import Intake
+from xiaoyou_runtime.world.store import Store
 
 
 class ContextTests(TempDirCase):
@@ -104,14 +104,14 @@ class ContextTests(TempDirCase):
 
     def test_reset_persistence_failure_does_not_claim_history_was_forgotten(self):
         self.exchange()
-        with mock.patch("xiaoyou_runtime.context.durable_write", side_effect=OSError("disk full")):
+        with mock.patch("xiaoyou_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.context.clear("side")
         self.assertEqual(["a"], [turn["id"] for turn in self.context.turns("side")])
 
     def test_receipt_failure_keeps_saved_answer_available(self):
         self.exchange()
-        with mock.patch("xiaoyou_runtime.context.durable_write", side_effect=OSError("disk full")):
+        with mock.patch("xiaoyou_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
             self.context.delivered("side", "a", ["speaker"])
         self.assertEqual("saved answer", self.context.turns("side")[0]["reply"])
 
@@ -139,7 +139,7 @@ class ContextTests(TempDirCase):
             Store(self.state).bind_context(self.cards)
 
     def test_decision_and_speaker_frames_read_current_task_and_conversation_commitments(self):
-        from xiaoyou_runtime.promises import Promises
+        from xiaoyou_runtime.world.promises import Promises
         promises = Promises(self.state / "promises.json")
         context = self.store.bind_context(self.cards, promises=promises)
         promises.track("side commitment", conversation="side")
@@ -259,7 +259,7 @@ class ContextTests(TempDirCase):
                 self.context.window("side", "reader", **fields)
 
     def test_retained_history_before_the_recent_window_is_recallable_and_resettable(self):
-        from xiaoyou_runtime.store import MAX_TURNS
+        from xiaoyou_runtime.world.store import MAX_TURNS
         voice = Scripted("speaker")
         x, store = make_xiaoyou(self.folder / "archive", [voice])
         self.addCleanup(x.close)
@@ -277,7 +277,7 @@ class ContextTests(TempDirCase):
         self.assertTrue(x.recall("default", "quartz-old-anchor").startswith("没找到"))
 
     def test_provider_failure_and_decision_only_do_not_mark_the_window_seen(self):
-        from xiaoyou_runtime.agents import AgentError
+        from xiaoyou_runtime.helpers.agents import AgentError
         voice = Scripted("speaker")
         x, _ = make_xiaoyou(self.folder / "receipt-boundary", [voice])
         self.addCleanup(x.close)

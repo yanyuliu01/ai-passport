@@ -14,14 +14,14 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.agents import create
-from xiaoyou_runtime.cards import Cards
+from xiaoyou_runtime.helpers.agents import create
+from xiaoyou_runtime.world.cards import Cards
 from xiaoyou_runtime.config import load
-from xiaoyou_runtime.desktop_hook import record
-from xiaoyou_runtime.desktop_sync import DesktopSync, MAX_LINE_BYTES, STALE_SECONDS
-from xiaoyou_runtime.service import RequestError, Service
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime.xiaoyou import Xiaoyou
+from xiaoyou_runtime.events.desktop_hook import record
+from xiaoyou_runtime.events.desktop_sync import DesktopSync, MAX_LINE_BYTES, STALE_SECONDS
+from xiaoyou_runtime.api.service import RequestError, Service
+from xiaoyou_runtime.world.store import Store
+from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
 
 
 class DesktopTests(unittest.TestCase):
@@ -363,7 +363,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual([card["session_id"] for card in self.observed()], ["yes"])
 
     def test_recap_context_is_not_imported_as_a_human_message(self):
-        from xiaoyou_runtime.project_brief import recap_text
+        from xiaoyou_runtime.loop.project_brief import recap_text
         recap = recap_text({"when": self.now, "turns": [{"role": "user", "text": "private recap"}]}, now=self.now)
         path = self.codex()
         self.append(path, [self.message("user", recap), self.message("user", "real request")])

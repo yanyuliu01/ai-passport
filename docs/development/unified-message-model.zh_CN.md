@@ -243,7 +243,7 @@ Runtime 没有能力去读。方案是开一个上报接口，让对方主动报
 主人面对的都是同一个小幽、同一套对话。上面“多台 Runtime”那一节只是让手机能同时连几台电脑，
 每台各有各的记录；统一主体要的是“几台电脑上的小幽，是同一个小幽”。
 
-已经做成小幽网络（`runtime/xiaoyou_runtime/mesh.py`，怎么配见 Runtime README 的“小幽网络”）。
+已经做成小幽网络（`runtime/xiaoyou_runtime/delivery/mesh.py`，怎么配见 Runtime README 的“小幽网络”）。
 下面这些预留让它不用迁移数据、不用改 App 就接上了，以后也要保持：
 
 | 预留 | 现在怎么做 | 为什么 |

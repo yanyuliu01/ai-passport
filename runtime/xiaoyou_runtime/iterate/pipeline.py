@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .. import model_gateway
+from ..helpers import model_gateway
 from .objects import FORMAT, Issue, Signal
 from .plugins import Context, Plugin, PluginError, Registry, Skip, builtin_registry
 from .settings import IterateSettings, parse

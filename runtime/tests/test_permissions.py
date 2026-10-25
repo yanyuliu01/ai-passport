@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mesh import Network, SECRET  # noqa: E402
 from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime, until  # noqa: E402
-from xiaoyou_runtime import identity  # noqa: E402
-from xiaoyou_runtime.devices import Devices, hash_secret, new_credential  # noqa: E402
-from xiaoyou_runtime.mesh import Mesh, MeshError, scope_of  # noqa: E402
-from xiaoyou_runtime.service import Service  # noqa: E402
+from xiaoyou_runtime.world import identity  # noqa: E402
+from xiaoyou_runtime.world.devices import Devices, hash_secret, new_credential  # noqa: E402
+from xiaoyou_runtime.delivery.mesh import Mesh, MeshError, scope_of  # noqa: E402
+from xiaoyou_runtime.api.service import Service  # noqa: E402
 
 
 class IdentityTests(TempDirCase):

@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..objects import Signal
 from ..events import EventStore, flat
 from ..releases import phase, timeline
-from ... import ledger, world
+from ...events import ledger
+from ...world import world
 
 MAX_TEXT = 200
 # 0.21 及以前的 App 把每条弹出提示都记成 error。读起来像失败的才算错误，其余当普通提示。

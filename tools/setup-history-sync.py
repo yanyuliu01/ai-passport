@@ -13,7 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "runtime"))
-from xiaoyou_runtime.shared_history import hook_config, _write_private
+from xiaoyou_runtime.api.shared_history import hook_config, _write_private
 
 
 def merge(existing, addition, project):

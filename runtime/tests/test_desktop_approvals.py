@@ -14,13 +14,14 @@ from types import SimpleNamespace
 RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.approvals import Approvals
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.desktop_approvals import (
-    DesktopApprovals, _read, _write, create_request, hook_output, wait_for_decision)
-from xiaoyou_runtime.desktop_hook import configuration, normalize, record
-from xiaoyou_runtime.desktop_sync import DesktopSync
-from xiaoyou_runtime.service import Service
+from xiaoyou_runtime.world.approvals import Approvals
+from xiaoyou_runtime.world.cards import Cards
+from xiaoyou_runtime.events.desktop_approvals import (
+    DesktopApprovals, _read, _write, create_request, hook_output, wait_for_decision
+)
+from xiaoyou_runtime.events.desktop_hook import configuration, normalize, record
+from xiaoyou_runtime.events.desktop_sync import DesktopSync
+from xiaoyou_runtime.api.service import Service
 
 
 class DesktopApprovalTests(unittest.TestCase):
@@ -48,7 +49,7 @@ class DesktopApprovalTests(unittest.TestCase):
                 cards = Cards(self.state / (agent + "-cards.json"))
                 approvals = Approvals(lambda card, aid: cards.update(card, approval=aid))
                 sync = DesktopSync(cards, self.state, home=Path(self.temp.name), approvals=approvals)
-                proc = subprocess.Popen([sys.executable, "-m", "xiaoyou_runtime.desktop_hook",
+                proc = subprocess.Popen([sys.executable, "-m", "xiaoyou_runtime.events.desktop_hook",
                     "--state-dir", str(self.state), "--agent", agent, "--approval-bridge",
                     "--approval-timeout", "5"], cwd=str(RUNTIME), stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
