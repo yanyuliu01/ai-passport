@@ -45,6 +45,8 @@ final class RuntimeClient {
     }
     /** 回答授权、取消一件事：不排在正在等结果的那句话后面。 */
     private static final ExecutorService QUICK = Executors.newCachedThreadPool();
+    private static long reviewGeneration;
+    private static ReviewRecovery reviewRecovery;
     private static final int FEED_WAIT_SECONDS = 50;
     private static Thread watcher;
     /** 正在等卡变化的那条连接：换 Runtime 时断开它，不用等它自己超时。 */
@@ -97,7 +99,8 @@ final class RuntimeClient {
         return list;
     }
 
-    private static void store(Context context, List<Target> list, String selected) {
+    private static synchronized void store(Context context, List<Target> list, String selected) {
+        ++reviewGeneration;
         SharedPreferences.Editor editor = prefs(context).edit();
         editor.putInt(KEY_COUNT, list.size());
         for (int index = 0; index < list.size(); index++) {
@@ -220,10 +223,15 @@ final class RuntimeClient {
             HubStore.get().pairingProblem(false);
             HubStore.get().capabilities(abilities);
             String id = Json.string(info, "runtime_id");
-            if (!id.isEmpty()) prefs(context).edit().putString("rid:" + target.url, id).apply();
             // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
             String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
-            prefs(context).edit().putString("sid:" + target.url, subject).apply();
+            synchronized (RuntimeClient.class) {
+                if ((!id.isEmpty() && !id.equals(runtimeId(context, target.url))) || !subject.equals(subjectId(context, target.url)))
+                    ++reviewGeneration;
+                SharedPreferences.Editor identity = prefs(context).edit().putString("sid:" + target.url, subject);
+                if (!id.isEmpty()) identity.putString("rid:" + target.url, id);
+                identity.apply();
+            }
             String owner = Json.string(info, "subject_id");
             if (direct && abilities.contains("devices") && !HostProof.device(target.token) && !owner.isEmpty())
                 upgradeCredential(context, target, owner);
@@ -1001,43 +1009,68 @@ final class RuntimeClient {
 
     interface ReviewResult { void done(Map<String, Object> view, int status, String error); }
 
+    static synchronized ReviewRecovery.Source reviewSource(Context context) {
+        Target target = selected(context);
+        return target == null ? null : new ReviewRecovery.Source(target.url, target.token, runtimeId(context, target.url),
+                subjectId(context, target.url), reviewGeneration);
+    }
+
+    static synchronized boolean reviewCurrent(Context context, ReviewRecovery.Source source) {
+        return source != null && source.sameSession(reviewSource(context));
+    }
+
+    private static synchronized ReviewRecovery reviews(Context context) {
+        if (reviewRecovery == null) {
+            Context app = context.getApplicationContext();
+            reviewRecovery = new ReviewRecovery(new ReviewStorage(app), RuntimeClient::effectRequest,
+                    source -> reviewCurrent(app, source));
+        }
+        return reviewRecovery;
+    }
+
+    private static Map<String, Object> effectRequest(ReviewRecovery.Source source, String record, String body) throws IOException {
+        if (!record.matches("(messages|timers)/[^/]+")) throw new IOException("核对编号无效");
+        int slash = record.indexOf('/');
+        String path = source.url + "/v1/" + record.substring(0, slash + 1)
+                + java.net.URLEncoder.encode(record.substring(slash + 1), "UTF-8") + "/effects";
+        return Json.parseObject(body == null ? requestText("GET", path, source.token, null, null, 15)
+                : requestText("POST", path, source.token, body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 30));
+    }
+
+    interface ReviewViewResult { void done(ReviewRecovery.View view, String error); }
+
     /**
-     * 请求结果不明时的人工核对（request_effect_review）：body 为 null 是读取原操作，否则提交主人的确认。
-     * status 是 HTTP 状态码（成功 200；503 用同一请求体重试，409 重新读取），出错时 error 是原话。
+     * Read or submit on the captured connection. Durable identity/body and retries belong to ReviewRecovery.
      */
-    static void effects(Context context, String record, String body, ReviewResult callback) {
-        Target target = selected(context); if (target == null) { callback.done(null, 0, "连不上小幽"); return; }
+    static void effects(Context context, ReviewRecovery.Source source, String record, EffectReview shown,
+                        Map<String, String> outcomes, ReviewViewResult callback) {
+        if (source == null) { callback.done(null, "连不上小幽"); return; }
+        Map<String, String> choices = outcomes == null ? null : new java.util.LinkedHashMap<>(outcomes);
         QUICK.execute(() -> {
-            Map<String, Object> view = null; String error = null; int status = 200;
+            ReviewRecovery.View view = null; String error = null;
             try {
-                // record 是 "messages/<请求编号>" 或 "timers/<定时编号>"：两种核对的读取和提交完全相同。
-                int slash = record.indexOf('/');
-                String path = target.url + "/v1/" + record.substring(0, slash + 1)
-                        + java.net.URLEncoder.encode(record.substring(slash + 1), "UTF-8") + "/effects";
-                view = Json.parseObject(body == null ? requestText("GET", path, target.token, null, null, 15)
-                        : requestText("POST", path, target.token, body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 30));
+                view = shown == null ? reviews(context).load(source, record) : reviews(context).submit(source, record, shown, choices);
             } catch (Exception problem) {
                 error = String.valueOf(problem.getMessage());
-                java.util.regex.Matcher code = java.util.regex.Pattern.compile("Runtime 返回 (\\d{3})").matcher(error);
-                status = code.find() ? Integer.parseInt(code.group(1)) : 0;
                 error = error.replaceFirst("^Runtime 返回 \\d{3}：?", "");
             }
-            Map<String, Object> out = view; String issue = error; int code = status;
+            ReviewRecovery.View out = view; String issue = error;
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                Target selected = selected(context);
-                if (selected != null && selected.url.equals(target.url)) callback.done(out, code, issue);
+                if (reviewCurrent(context, source)) callback.done(out, issue);
+                else callback.done(null, "连接已变化，请重新打开核对；原确认仍保留");
             });
         });
     }
 
     /** 等主人核对的定时操作（timer_effect_review）：一页摘要；列表变了（409）从第一页重新取。 */
     static void timerReviews(Context context, String cursor, ReviewResult callback) {
-        Target target = selected(context); if (target == null) { callback.done(null, 0, "连不上小幽"); return; }
+        ReviewRecovery.Source source = reviewSource(context);
+        if (source == null) { callback.done(null, 0, "连不上小幽"); return; }
         QUICK.execute(() -> {
             Map<String, Object> view = null; String error = null; int status = 200;
             try {
-                view = Json.parseObject(requestText("GET", target.url + "/v1/timers/effects?limit=50"
-                        + (cursor == null ? "" : "&cursor=" + java.net.URLEncoder.encode(cursor, "UTF-8")), target.token, null, null, 15));
+                view = Json.parseObject(requestText("GET", source.url + "/v1/timers/effects?limit=50"
+                        + (cursor == null ? "" : "&cursor=" + java.net.URLEncoder.encode(cursor, "UTF-8")), source.token, null, null, 15));
             } catch (Exception problem) {
                 error = String.valueOf(problem.getMessage());
                 java.util.regex.Matcher code = java.util.regex.Pattern.compile("Runtime 返回 (\\d{3})").matcher(error);
@@ -1045,8 +1078,7 @@ final class RuntimeClient {
             }
             Map<String, Object> out = view; String issue = error; int code = status;
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                Target selected = selected(context);
-                if (selected != null && selected.url.equals(target.url)) callback.done(out, code, issue);
+                if (reviewCurrent(context, source)) callback.done(out, code, issue);
             });
         });
     }

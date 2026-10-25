@@ -48,7 +48,18 @@ final class Presentation {
         return java.util.Collections.emptyList();
     }
     static int compare(Presentation a, Presentation b) {
-        List<Object> left = Json.list(a.raw, "order"), right = Json.list(b.raw, "order");
+        return compareOrder(order(a, 0, "", ""), order(b, 0, "", ""));
+    }
+    /** One typed tuple per record, including legacy/local rows. Pair-dependent fallback is not transitive. */
+    static List<Object> order(Presentation view, double at, String role, String id) {
+        List<Object> value = view == null ? java.util.Collections.emptyList() : Json.list(view.raw, "order");
+        if (view != null && view.supported && value.size() == 4
+                && value.get(0) instanceof Number && Double.isFinite(((Number)value.get(0)).doubleValue())
+                && value.get(1) instanceof String && value.get(2) instanceof Number
+                && Double.isFinite(((Number)value.get(2)).doubleValue()) && value.get(3) instanceof String) return value;
+        return java.util.Arrays.asList(Double.isFinite(at) ? at : 0, "", role.equals("you") ? 0 : 1, id);
+    }
+    static int compareOrder(List<Object> left, List<Object> right) {
         for (int i = 0; i < Math.min(left.size(), right.size()); i++) {
             Object x = left.get(i), y = right.get(i);
             int result = x instanceof Number && y instanceof Number

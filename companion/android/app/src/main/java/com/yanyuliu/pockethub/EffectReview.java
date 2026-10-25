@@ -23,14 +23,15 @@ final class EffectReview {
         boolean canApply() { return !state.equals("pending"); }
     }
 
-    final String messageId, operationId, status;
+    final String messageId, operationId, status, runtimeId;
     /** Opaque: sent back exactly as received. */
     final Object revision;
     final List<Item> items = new ArrayList<>();
     final Map<String, String> recorded = new LinkedHashMap<>();
 
-    private EffectReview(String messageId, String operationId, String status, Object revision) {
+    private EffectReview(String messageId, String operationId, String status, Object revision, String runtimeId) {
         this.messageId = messageId; this.operationId = operationId; this.status = status; this.revision = revision;
+        this.runtimeId = runtimeId;
     }
 
     static EffectReview from(Map<String, Object> view) {
@@ -38,7 +39,7 @@ final class EffectReview {
         String status = Json.string(view, "status");
         if (!status.equals("needs_review") && !status.equals("recorded") && !status.equals("reviewed")) return null;
         EffectReview review = new EffectReview(Json.string(view, "message_id"), Json.string(view, "operation_id"),
-                status, view.get("revision"));
+                status, view.get("revision"), Json.string(view, "runtime_id"));
         for (Object value : Json.list(view, "effects")) {
             Map<String, Object> effect = Json.object(value);
             String state = Json.string(effect, "state");

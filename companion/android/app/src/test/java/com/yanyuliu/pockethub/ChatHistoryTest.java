@@ -5,6 +5,34 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class ChatHistoryTest {
+    private static java.util.Map<String,Object> mixedMessage(String id, double at, Double projectedAt) {
+        java.util.Map<String,Object> message = new java.util.LinkedHashMap<>(java.util.Map.of(
+                "id", id, "at", at, "role", "xiaoyou", "scope", "main", "status", "done", "text", id));
+        if (projectedAt != null) message.put("presentation", java.util.Map.of("version", 1, "placement", "chat",
+                "order", java.util.List.of(projectedAt, id, 1, id)));
+        return message;
+    }
+    @Test public void mixedLegacyAndProjectedMessagesHaveOneOrderForEveryArrivalSequence() {
+        var a=mixedMessage("a",30,10.0); var b=mixedMessage("b",20,null); var c=mixedMessage("c",10,30.0);
+        for (var permutation : List.of(List.of(a,b,c),List.of(a,c,b),List.of(b,a,c),List.of(b,c,a),List.of(c,a,b),List.of(c,b,a))) {
+            ChatHistory history=ChatHistory.restore(UsageEvents.json(java.util.Map.of("messages",permutation)));
+            assertEquals(List.of("a","b","c"),history.main().stream().map(m->m.id).collect(java.util.stream.Collectors.toList()));
+            assertEquals(history.json(),ChatHistory.restore(history.json()).json());
+        }
+    }
+    @Test public void longMixedHistoryDoesNotCrashOrLoseMessagesOnRestore() {
+        var records=new java.util.ArrayList<java.util.Map<String,Object>>();
+        for(int i=0;i<1200;i++)records.add(mixedMessage("m"+i,1200-i,i%3==0?null:(double)i));
+        List<String> expected=null;
+        for(int seed=0;seed<12;seed++) {
+            java.util.Collections.shuffle(records,new java.util.Random(seed));
+            var history=ChatHistory.restore(UsageEvents.json(java.util.Map.of("messages",records)));
+            var ids=history.main().stream().map(m->m.id).collect(java.util.stream.Collectors.toList());
+            assertEquals(1200,ids.size());assertEquals(1200,new java.util.HashSet<>(ids).size());
+            if(expected==null)expected=ids;else assertEquals(expected,ids);
+        }
+    }
+
     @Test public void finishedMainTurnsAreWhatGoesToAnotherComputer() {
         ChatHistory history = new ChatHistory();
         history.begin("l1", null, "第一句", 10); history.accepted("l1", "m1"); history.finish("m1", "c1", "第一句的回答", false, null);

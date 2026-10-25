@@ -286,12 +286,9 @@ final class ChatHistory {
             }
         }
         result.sort((a, b) -> {
-            if (a.presentation != null && a.presentation.supported && b.presentation != null && b.presentation.supported)
-                return Presentation.compare(a.presentation, b.presentation);
-            int at = Double.compare(a.at, b.at);
-            if (at != 0) return at;
-            int role = Integer.compare(a.role.equals("you") ? 0 : 1, b.role.equals("you") ? 0 : 1);
-            return role != 0 ? role : a.id.compareTo(b.id);
+            int order = Presentation.compareOrder(Presentation.order(a.presentation, a.at, a.role, a.id),
+                    Presentation.order(b.presentation, b.at, b.role, b.id));
+            return order != 0 ? order : a.id.compareTo(b.id);
         });
         return result;
     }

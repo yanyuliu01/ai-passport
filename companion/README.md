@@ -38,6 +38,35 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Restoring mixed history (App 0.32.2)
+
+Cached legacy messages, local pending messages and Runtime display projections
+use one typed ordering key. Projected rows retain the Runtime order; older rows
+use their timestamp, role and stable ID. Mixed histories no longer switch sort
+rules depending on the other row, which could crash the App at startup. History
+and pairing are preserved; clearing App data is not required.
+
+## Recovering an operation review (App 0.32.1)
+
+When a Runtime advertises `request_effect_review` or `timer_effect_review`, the
+phone can record the owner's disposition of uncertain message or timer effects.
+Before sending, it durably seals the exact confirmation and original credential
+with Android Keystore. Reopening the App or upgrading a connection credential
+keeps the same confirmation ID, answers and original identity on retry. This
+records the owner's answers; it does not repeat or undo an operation.
+
+The sheet shows saved answers and checks its original Runtime, connection and
+revision before submitting. Switching away and back invalidates an old sheet;
+late receipts cannot erase a newer confirmation. A conflict or unavailable
+secure store preserves the pending record. A recorded confirmation without its
+original local identity, including old body-only records, remains read-only;
+retry on the device that retained that identity. Use “Read review again” to
+refresh a changed operation and choose its answers again. The phone never
+silently resubmits under another identity. Direct and relay connections keep
+their existing capability gates; a relay retry also needs the originating
+desktop's retained identity. Real phone lifecycle, Keystore and connection
+recovery still require device validation.
+
 ## Shared display rules (App 0.31.1 / Runtime 0.23.0)
 
 When the Runtime supplies `presentation_v1`, the phone uses its message/block
