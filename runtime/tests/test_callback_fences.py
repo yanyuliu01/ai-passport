@@ -1,10 +1,14 @@
 """Late helper callbacks from a replaced run cannot write onto the card's current run."""
 import dataclasses
+import json
+import threading
+import time
 import unittest
+import urllib.request
 from unittest import mock
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.agents import Control
+from xiaoyou_runtime.agents import STOP, Control, Outcome
 from xiaoyou_runtime.tasks import Task
 
 
@@ -92,6 +96,58 @@ class CallbackFenceTests(TempDirCase):
             self.assertTrue(self.x.cards.get(self.card)["queued"])
             self.x._begun(new)
         self.assertFalse(self.x.cards.get(self.card)["queued"])
+
+    def test_replaced_run_cannot_ask_the_owner(self):
+        self.relaunch()
+        before = len(self.x._approvals._items)
+        self.assertFalse(self.old_control.ask("old tool", "detail"))
+        self.assertEqual(STOP, self.old_control.stalled(600, "step", lambda: False))
+        self.assertEqual(before, len(self.x._approvals._items))
+
+    def test_result_racing_a_relaunch_is_not_saved_on_the_new_run(self):
+        register = self.x.artifacts.register_task
+        def relaunching(*args, **kwargs):
+            self.relaunch()
+            return register(*args, **kwargs)
+        with mock.patch.object(self.x.artifacts, "register_task", side_effect=relaunching):
+            self.x._finished(self.old, Outcome("old result", "old-session"), None)
+        self.assertIsNone(self.x.cards.message("old-run-result:reply"))
+        card = self.x.cards.get(self.card)
+        self.assertEqual("new-session", card["worker_session"])
+        self.assertFalse(card.get("result_ready"))
+
+    def gate(self, current, path, body):
+        env = self.x._gate.open(self.card, "default", "worker", current=current,
+                                asked=self.old_control.approvals.append)
+        self.addCleanup(self.x._gate.shut, env)
+        url = env["XIAOYOU_GATE_URL"].rsplit("/", 1)[0] + path
+        request = urllib.request.Request(url, json.dumps(body).encode(), method="POST", headers={
+            "X-Xiaoyou-Key": env["XIAOYOU_GATE_KEY"], "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read())
+
+    def test_gate_refuses_questions_and_tools_from_a_replaced_run(self):
+        before = len(self.x._approvals._items)
+        answer = self.gate(lambda: False, "/approve", {"tool_name": "Bash", "input": {"command": "ls"}})
+        self.assertEqual("deny", answer["decision"])
+        self.assertEqual(before, len(self.x._approvals._items))
+        called = self.gate(lambda: False, "/mcp/call", {
+            "server": "s", "tool": "t", "config_version": "1", "grant_version": "1", "arguments": {}})
+        self.assertTrue(called["isError"])
+
+    def test_gate_questions_from_the_current_run_belong_to_that_round(self):
+        answers = []
+        thread = threading.Thread(target=lambda: answers.append(self.gate(
+            lambda: True, "/approve", {"tool_name": "Bash", "input": {"command": "ls"}})))
+        thread.start()
+        for _ in range(200):
+            if self.old_control.approvals:
+                break
+            time.sleep(0.01)
+        self.assertEqual(1, len(self.old_control.approvals))
+        self.x._approvals.answer(self.old_control.approvals[0], "allow")
+        thread.join(10)
+        self.assertEqual("allow", answers[0]["decision"])
 
 
 if __name__ == "__main__":

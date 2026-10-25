@@ -312,13 +312,19 @@ class Gate:
         """能力库里有没有这个帮手可能用到的服务。"""
         return self.capabilities is not None and self.capabilities.offers(agent)
 
-    def open(self, card: str, conversation: str, agent: str) -> Dict[str, str]:
-        """为一件事开一把钥匙；返回能力网关入口（权限询问、能力库工具）需要的环境变量。"""
+    def open(self, card: str, conversation: str, agent: str,
+             current: Optional[Callable[[], bool]] = None,
+             asked: Optional[Callable[[str], None]] = None) -> Dict[str, str]:
+        """为一件事开一把钥匙；返回能力网关入口（权限询问、能力库工具）需要的环境变量。
+
+        current 说这一轮是否还算数：停掉或被新一轮替换后，钥匙在作废前也不能再问主人、
+        不能再调工具。asked 收下经这把钥匙问出的授权编号，好让这一轮结束时只收回它自己的。"""
         with self._lock:
             if self._server is None:
                 self._server = self._start()
             key = secrets.token_urlsafe(32)
-            self._keys[key] = {"card": card, "conversation": conversation, "agent": agent}
+            self._keys[key] = {"card": card, "conversation": conversation, "agent": agent,
+                               "current": current, "asked": asked}
             port = self._server.server_address[1]
         return {"XIAOYOU_GATE_URL": "http://127.0.0.1:%d/approve" % port, "XIAOYOU_GATE_KEY": key}
 
@@ -336,12 +342,17 @@ class Gate:
             server.shutdown()
             server.server_close()
 
-    def _holder(self, key: str) -> Optional[Dict[str, str]]:
+    def _holder(self, key: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             for known, holder in self._keys.items():
                 if hmac.compare_digest(known.encode(), key.encode()):
                     return dict(holder)
         return None
+
+    @staticmethod
+    def _live(holder: Dict[str, Any]) -> bool:
+        current = holder.get("current")
+        return current is None or bool(current())
 
     def _start(self) -> ThreadingHTTPServer:
         gate = self
@@ -366,7 +377,7 @@ class Gate:
                 if self.path != "/mcp/tools" or holder is None:
                     self._send(403, {"error": "钥匙不对"})
                     return
-                if gate.capabilities is None:
+                if gate.capabilities is None or not gate._live(holder):
                     self._send(200, {"tools": [], "unavailable": []})
                     return
                 self._send(200, gate.capabilities.tools(holder["agent"]))
@@ -386,6 +397,9 @@ class Gate:
                     return
                 if gate.capabilities is None:
                     self._send(200, {"content": [{"type": "text", "text": "这台电脑没有能力库"}], "isError": True})
+                    return
+                if not gate._live(holder):
+                    self._send(200, {"content": [{"type": "text", "text": "这一轮已停止，未调用"}], "isError": True})
                     return
                 try:
                     result = gate.capabilities.call(holder["agent"], body["server"], body["tool"],
@@ -418,10 +432,15 @@ class Gate:
                 except (ValueError, UnicodeDecodeError):
                     self._send(400, {"error": "请求看不懂"})
                     return
+                if not gate._live(holder):
+                    self._send(200, {"decision": DENY, "message": GONE})
+                    return
                 tool, detail = describe(holder["agent"], body["tool_name"], body.get("input"))
                 approval_id = gate._approvals.ask(
                     holder["card"], holder["conversation"], holder["agent"], tool, detail,
                     context={"operation": body["tool_name"]})
+                if holder.get("asked") is not None:
+                    holder["asked"](approval_id)
                 decision = gate._approvals.wait(approval_id)
                 item = gate._approvals.get(approval_id) or {}
                 try:

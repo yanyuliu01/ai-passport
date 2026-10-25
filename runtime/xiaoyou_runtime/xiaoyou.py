@@ -2014,16 +2014,25 @@ class Xiaoyou:
         control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
         # 这一轮开始：记下额度现在剩多少（太久没问过就先问一次），做完好算花了多少。
         self._runs[control] = self._usage.begin(name, task.model)
-        if task.agent.type == "claude_code" or (
-                task.agent.type in ("codex", "dsh") and self._gate.offers(task.agent.name)):
-            # 能力网关入口 由另一个进程送进来（Claude Code 的询问、能力库工具），要一把钥匙。
-            control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
-
         # This round's own approvals: a late release withdraws only these.
         control.approvals = []
 
+        def current(task: Task = task) -> bool:
+            """Still this card's live run: a stopped or replaced round may not ask or act."""
+            card = self._cards.get(task.card)
+            return (not control.cancelled and card is not None
+                    and card.get("run_id") == task.run_id and card["state"] in ACTIVE)
+
+        if task.agent.type == "claude_code" or (
+                task.agent.type in ("codex", "dsh") and self._gate.offers(task.agent.name)):
+            # 能力网关入口 由另一个进程送进来（Claude Code 的询问、能力库工具），要一把钥匙。
+            control.gate = self._gate.open(task.card, task.conversation, task.agent.name,
+                                           current=current, asked=control.approvals.append)
+
         def ask(tool: str, detail: str, task: Task = task) -> bool:
             # 代理自己收到询问的（Codex 的 app-server）直接从这里问。
+            if not current():
+                return False
             approval = self._approvals.ask(
                 task.card, task.conversation, task.agent.name, tool, detail)
             control.approvals.append(approval)
@@ -2035,6 +2044,8 @@ class Xiaoyou:
 
         def stalled(idle: float, step: str, moot: Callable[[], bool], task: Task = task) -> str:
             # 很久没动静了：不直接停（误杀一件做了很久的事代价大），先问主人还等不等。
+            if not current():
+                return STOP  # 这一轮已经停掉或被替换：不再问主人
             name = task.agent.name
             detail = "%s 已经 %s没有动静了，接着等吗？\n最后一步：%s\n可以 = 接着等\n不行 = 停掉。%s" % (
                 name, span(idle), clip(step, 200) if step else "（还没有做过操作）", RESUME_HINT)
@@ -2100,9 +2111,11 @@ class Xiaoyou:
         if current is None or current["state"] == "cancelled" or current.get("run_id") != task.run_id:
             return
         if outcome is not None:
+            # The check above is not atomic: each write below compares the run again.
             if outcome.session_id:
                 writer.task(task.card, worker_session=outcome.session_id,
-                                  worker_cwd=task.cwd or str(task.agent.spec.workdir or ""), worker_agent=name, worker_scope=self._worker_scope(task.agent))
+                                  worker_cwd=task.cwd or str(task.agent.spec.workdir or ""), worker_agent=name, worker_scope=self._worker_scope(task.agent),
+                                  expected_run_id=task.run_id)
             if not outcome.fields:
                 # JSON 前后多了一句话、或者包在 ``` 里也认得出来（fields_from_text）。
                 parsed = fields_from_text(outcome.text or "")
@@ -2123,7 +2136,8 @@ class Xiaoyou:
             original = full if not note else full[:MAX_ENTRY_CHARS - len(note)] + note
             writer.reply(task.card, say=original, turn_id=task.run_id + "-result",
                                scope="task", kind="worker_result", author=name,
-                               result_ready=True, attachments=task.artifacts)
+                               result_ready=True, attachments=task.artifacts,
+                               expected_active_run=task.run_id)
         card = self._cards.get(task.card)
         if card is not None and card["state"] != "cancelled":
             # 代理交回的原样记一条，不管之后小幽怎么转述。
