@@ -10,8 +10,8 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 64
-        versionName "0.32.4"
+        versionCode 65
+        versionName "0.32.5"
     }
 
     // The speech models are no longer packaged: they are published as the "speech" resource

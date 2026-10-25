@@ -190,6 +190,23 @@ public class ChatHistoryTest {
         history.finish("remote", "c1", "reply", false, card); history.ingest(card);
         assertEquals(10, history.main().get(0).at, 0);
     }
+    @Test public void aFinalReplyArrivingBySyncKeepsTheLocalSendKey() {
+        ChatHistory history = new ChatHistory(); history.begin("client", null, "hello", 10);
+        history.accepted("client", "server");
+        SyncCache.Pending reply = new SyncCache.Pending("server:reply", "", "main", "xiaoyou", "OK", "final", 11);
+        reply.presentation = Presentation.restore("{\"version\":1,\"complete\":true,\"status\":\"final\",\"placement\":\"chat\","
+                + "\"blocks\":[{\"text\":\"OK\",\"complete\":true}]}");
+        assertTrue(history.pending(reply));
+        ChatHistory.Message shown = history.main().get(1);
+        assertEquals("server:reply", shown.id);
+        assertEquals("client", shown.clientId);  // Same chat row; the reply is not drawn as a new one.
+        assertEquals("done", shown.status);
+    }
+    @Test public void anotherClientsMessageHasNoLocalSendKey() {
+        ChatHistory history = new ChatHistory();
+        assertTrue(history.pending(new SyncCache.Pending("other:you", "", "main", "you", "hi", "final", 11)));
+        assertEquals("", history.main().get(0).clientId);
+    }
     @Test public void delayedStreamCannotReplaceAlreadySyncedFinalReply() {
         ChatHistory history = new ChatHistory(); history.begin("remote", null, "hello", 10);
         history.ingest(card("[{\"role\":\"xiaoyou\",\"text\":\"complete\",\"at\":11,"

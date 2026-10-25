@@ -10,8 +10,30 @@ import static org.junit.Assert.*;
 public class TurnTimingTest {
     private final List<String> lines = new ArrayList<>();
 
-    @Before public void capture() { TurnTiming.reset(); TurnTiming.sink = lines::add; }
-    @After public void release() { TurnTiming.reset(); TurnTiming.sink = line -> {}; }
+    private long now;
+
+    @Before public void capture() { TurnTiming.reset(); TurnTiming.sink = lines::add; TurnTiming.clock = () -> now; }
+    @After public void release() { TurnTiming.reset(); TurnTiming.sink = line -> {}; TurnTiming.clock = () -> 0; }
+
+    @Test public void arrivalIsReportedOnceBetweenSendAndBubble() {
+        TurnTiming.sent("k1", 1000);
+        now = 1800; TurnTiming.received("k1");
+        now = 1900; TurnTiming.received("k1");  // Stream and sync may both deliver it.
+        TurnTiming.firstBubble("k1", 2100);
+        assertEquals(List.of("send key=k1 t=1000", "final key=k1 t=1800 elapsed_ms=800",
+                "bubble key=k1 t=2100 elapsed_ms=1100"), lines);
+    }
+
+    @Test public void aSyncDeliveredReplyReportsArrivalUnderTheSendKey() {
+        ChatHistory history = new ChatHistory(); history.begin("k2", null, "hello", 10);
+        TurnTiming.sent("k2", 100);
+        history.accepted("k2", "server");
+        SyncCache.Pending reply = new SyncCache.Pending("server:reply", "", "main", "xiaoyou", "OK", "final", 11);
+        reply.presentation = Presentation.restore("{\"version\":1,\"complete\":true,\"status\":\"final\",\"placement\":\"chat\","
+                + "\"blocks\":[{\"text\":\"OK\",\"complete\":true}]}");
+        now = 700; history.pending(reply);
+        assertEquals("final key=k2 t=700 elapsed_ms=600", lines.get(lines.size() - 1));
+    }
 
     @Test public void firstBubbleReportsElapsedOnceWithKeyAndTimesOnly() {
         TurnTiming.sent("k1", 1000);

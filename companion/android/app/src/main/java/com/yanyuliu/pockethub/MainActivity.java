@@ -260,6 +260,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         UsageEvents.init(getFilesDir(), versionName, "android-" + android.os.Build.VERSION.SDK_INT);
         UsageEvents.installCrashHandler();
         TurnTiming.sink = line -> android.util.Log.i(TurnTiming.TAG, line);
+        TurnTiming.clock = android.os.SystemClock::uptimeMillis;
         rageTap = new UsageEvents.RageTap(dp(48));
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);

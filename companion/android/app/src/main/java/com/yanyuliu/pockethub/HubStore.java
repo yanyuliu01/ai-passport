@@ -212,7 +212,16 @@ public final class HubStore {
     }
 
     private void saveHistory() {
-        if (historyPrefs != null) historyPrefs.edit().putString(ArtifactDownload.key(historyRuntime), history.json()).apply();
+        if (historyPrefs == null) return;
+        long began = android.os.SystemClock.uptimeMillis();
+        String json = history.json();
+        long built = android.os.SystemClock.uptimeMillis();
+        historyPrefs.edit().putString(ArtifactDownload.key(historyRuntime), json).apply();
+        long stored = android.os.SystemClock.uptimeMillis() - built;
+        // Diagnostics for main-thread stalls: sizes and times only, never content.
+        if (built - began + stored >= 16)
+            TurnTiming.sink.accept("history_save t=" + began + " build_ms=" + (built - began) + " apply_ms=" + stored
+                    + " chars=" + json.length() + " main=" + (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()));
     }
 
     private void historyChanged() {

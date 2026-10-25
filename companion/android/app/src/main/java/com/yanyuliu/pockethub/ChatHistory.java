@@ -90,12 +90,14 @@ final class ChatHistory {
         if (message == null || value == null) return;
         if (message.presentation != null && message.presentation.complete() && !value.complete()) return;
         message.presentation = value;
+        if (value.complete()) TurnTiming.received(message.clientId);
     }
 
     void finish(String id, String card, String text, boolean failed, Card snapshot) {
         Message user = messages.get(id + ":you"), reply = messages.get(id + ":reply");
         if (user != null) { user.status = failed ? "failed" : "done"; user.card = card == null ? user.card : card; }
         if (reply != null) { reply.text = text; reply.status = failed ? "failed" : "done"; reply.card = card == null ? reply.card : card; }
+        if (reply != null && !failed) TurnTiming.received(reply.clientId);
         if (snapshot == null || failed) return;
         // Runtimes that number card entries use the message ids themselves: ingest matches by id.
         for (Card.Entry entry : snapshot.entries)
@@ -209,8 +211,10 @@ final class ChatHistory {
         next.conversation = item.conversation;
         next.attachments = item.attachments;
         next.presentation = item.presentation;
-        next.clientId = "";
+        // A local send keeps its client key (its chat row); another client's message has none.
+        next.clientId = known != null ? known.clientId : "";
         put(next);
+        if (!you && status.equals("done")) TurnTiming.received(next.clientId);
         if (summary(next)) messages.remove(next.card + ":summary-live");
         return true;
     }

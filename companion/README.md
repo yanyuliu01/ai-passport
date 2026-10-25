@@ -38,7 +38,16 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
-## First-response timing log (App 0.32.4)
+## First-response timing log (App 0.32.4, 0.32.5)
+
+Since 0.32.5 a third line, `final key=<client id> t=<uptime ms> elapsed_ms=<n>`,
+marks when the complete reply reached the phone (stream, polling or sync), so
+delivery and drawing can be told apart. A `history_save` line reports chat
+history saves that took at least 16 ms (build and store times, size, whether on
+the main thread). 0.32.5 also keeps a reply that arrives by sync in the chat row
+of the message that was sent, instead of drawing it as a new row.
+
+### 0.32.4
 
 For the 3-second first-response check, the App writes one logcat line per turn
 under the tag `XiaoyouTiming`: `send key=<client id> t=<uptime ms>` when a
