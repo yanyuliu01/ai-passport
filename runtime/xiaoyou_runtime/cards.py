@@ -456,11 +456,14 @@ class Cards:
             self._log.request(message)
             self._changed.notify_all()
 
-    def activity(self, card_id: str, author: str, phase: str, text: str, event_id: str) -> None:
+    def activity(self, card_id: str, author: str, phase: str, text: str, event_id: str,
+                 run_id: Optional[str] = None) -> None:
         with self._changed:
             card = self._cards.get(card_id)
             if card is None or card.get("mesh_origin"):
                 return
+            if run_id is not None and card.get("run_id") != run_id:
+                return  # A replaced run's late output is not this card's activity.
             if not self._log.activity(card, author, phase, text, event_id, time.time(), self.current_provenance()):
                 return
             event = self._log.get(event_id)
@@ -743,12 +746,16 @@ class Cards:
                turn_id: Optional[str] = None, scope: str = "main", kind: str = "reply",
                author: str = "xiaoyou",
                expected_run=None, expected_execution=None, expected_active_run=None,
+               expected_run_id=None,
                **fields: Any) -> Optional[Dict[str, Any]]:
         """改一张卡。said 是主人说的一句，say 是小幽说的一句，progress 是一行进展；
-        fresh 表示新的一轮开始了，之前的进展清掉。"""
+        fresh 表示新的一轮开始了，之前的进展清掉。expected_run_id 只要求卡还是这次派发
+        （停掉了也算），用来记这次派发自己的事实。"""
         with self._changed:
             card = self._cards.get(card_id)
             if card is None:
+                return None
+            if expected_run_id is not None and card.get("run_id") != expected_run_id:
                 return None
             if expected_active_run is not None and (
                     card.get("run_id") != expected_active_run or card["state"] not in ACTIVE):

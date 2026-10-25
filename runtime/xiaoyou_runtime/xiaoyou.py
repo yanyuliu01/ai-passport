@@ -1942,7 +1942,8 @@ class Xiaoyou:
     def _begun(self, task: Task) -> None:
         """轮到这件事了（设了并行上限时，前面可能排过队）。"""
         if self._config.max_parallel > 0:
-            self._writer.task(task.card, queued=False, started_at=time.time())
+            self._writer.task(task.card, queued=False, started_at=time.time(),
+                              expected_active_run=task.run_id)
 
     @staticmethod
     def _worker_scope(agent):
@@ -1969,15 +1970,18 @@ class Xiaoyou:
 
         def activity(phase: str, text: str, key: Optional[str] = None) -> None:
             event_id = "%s-activity-%s-%s" % (round_id, phase, key or uuid.uuid4().hex)
-            writer.activity(task.card, task.agent.name, phase, text, event_id)
+            writer.activity(task.card, task.agent.name, phase, text, event_id, run_id=task.run_id)
 
+        # Helper callbacks can arrive after a cancel; once the card belongs to another
+        # run they only describe the old one and must not land on the new run.
         original_session = control.session
         def session_bound(session_id):
             original_session(session_id)
             writer.execution_binding(task.card, round_id, native_session_id=session_id)
             writer.task(task.card, worker_session=session_id,
                               worker_cwd=task.cwd or str(task.agent.spec.workdir or ""),
-                              worker_agent=task.agent.name, worker_scope=self._worker_scope(task.agent))
+                              worker_agent=task.agent.name, worker_scope=self._worker_scope(task.agent),
+                              expected_run_id=task.run_id)
         control.session = session_bound
         control.activity = activity
         current = self._cards.get(task.card) or {}
@@ -1987,7 +1991,8 @@ class Xiaoyou:
                 if item.get("state") == "queued":
                     item["state"] = "relayed"
                     break
-        writer.task(task.card, relay_state="relay_queued" if any(i.get("state") == "queued" for i in additions) else "relayed", supplements=additions)
+        writer.task(task.card, relay_state="relay_queued" if any(i.get("state") == "queued" for i in additions) else "relayed", supplements=additions,
+                    expected_active_run=task.run_id)
         def progress(line: str) -> None:
             # 投递闸（proactive.Pulse）记下这一步；要不要跟主人说由它叫醒她来定。
             self._pulse.progress(task.card, task.run_id, task.agent.name, line)
@@ -2003,7 +2008,7 @@ class Xiaoyou:
             self._usage.saw_model(task.agent.name, seen, usual=task.model is None)
             card = self._cards.get(task.card)
             if card is not None and card["model"] != seen:
-                writer.task(task.card, model=seen)
+                writer.task(task.card, model=seen, expected_run_id=task.run_id)
 
         control.model = model
         control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
@@ -2014,10 +2019,14 @@ class Xiaoyou:
             # 能力网关入口 由另一个进程送进来（Claude Code 的询问、能力库工具），要一把钥匙。
             control.gate = self._gate.open(task.card, task.conversation, task.agent.name)
 
+        # This round's own approvals: a late release withdraws only these.
+        control.approvals = []
+
         def ask(tool: str, detail: str, task: Task = task) -> bool:
             # 代理自己收到询问的（Codex 的 app-server）直接从这里问。
             approval = self._approvals.ask(
                 task.card, task.conversation, task.agent.name, tool, detail)
+            control.approvals.append(approval)
             return self._approvals.wait(approval) == "allow"
 
         control.ask = ask
@@ -2031,6 +2040,7 @@ class Xiaoyou:
                 name, span(idle), clip(step, 200) if step else "（还没有做过操作）", RESUME_HINT)
             approval = self._approvals.ask(
                 task.card, task.conversation, name, "%s · 没动静" % name, detail, kind=STALL)
+            control.approvals.append(approval)
             decision = self._approvals.wait(
                 approval, self._config.idle_answer_seconds or None, moot)
             if decision is None:
@@ -2047,7 +2057,12 @@ class Xiaoyou:
         if getattr(control, 'binding_attempt', None):
             writer.execution_binding(task.card, control.binding_attempt, ended_at=time.time())
         self._gate.shut(control.gate)
-        self._approvals.drop(task.card)
+        if (self._cards.get(task.card) or {}).get("run_id") == task.run_id:
+            self._approvals.drop(task.card)
+        else:
+            # The card was started again: its new run's questions stay open.
+            for approval in getattr(control, "approvals", ()):
+                self._approvals.withdraw(approval, reason="gone")
         run = self._runs.pop(control, None)
         if run is None:
             return

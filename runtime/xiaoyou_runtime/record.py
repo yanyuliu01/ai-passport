@@ -115,13 +115,14 @@ class Record:
                                 **dict(getattr(self._local, "fields", {}), **fields))
 
     def task(self, card_id: str, *, expected_run=None, expected_active_run=None,
-             **fields: Any) -> Optional[Dict[str, Any]]:
+             expected_run_id=None, **fields: Any) -> Optional[Dict[str, Any]]:
         """一件事的状态、谁在做、用量、授权这些字段变了。不含说的话。"""
         unknown = set(fields) - TASK_FIELDS
         if unknown:
             raise RecordError("task() 不改这些字段：%s（说的话走 exchange / reply）" % sorted(unknown))
         return self._cards.update(card_id, expected_run=expected_run,
-                                  expected_active_run=expected_active_run, **fields)
+                                  expected_active_run=expected_active_run,
+                                  expected_run_id=expected_run_id, **fields)
 
     def execution_binding(self, card_id, attempt, *, required=False, **fields):
         allowed = {'run_id','agent','native_scope','native_session_id','native_turn_id','range_state','started_at','ended_at'}
@@ -151,7 +152,7 @@ class Record:
         return self._cards.checkpoint_watch(card_id, run_id, previous, current)
 
     def activity(self, card_id: str, author: str, phase: str, text: str,
-                 event_id: str) -> None:
+                 event_id: str, run_id: Optional[str] = None) -> None:
         """Persist a public task event separately from conversation messages."""
         if phase not in ("dispatch", "message", "tool_start", "tool_result", "completed", "failed", "cancelled", "supplement_received", "relay_queued", "relayed"):
             raise RecordError("Unknown activity phase: %s" % phase)
@@ -160,7 +161,7 @@ class Record:
             return
         if len(text) > 4000:
             text = text[:4000] + "\n[内容较长，已截取前 4000 字]"
-        self._cards.activity(card_id, author, phase, text, event_id)
+        self._cards.activity(card_id, author, phase, text, event_id, run_id)
 
     def attach(self, card_id: str, attachments: List[Dict[str, Any]],
                entry_index: Optional[int] = None) -> Optional[Dict[str, Any]]:
