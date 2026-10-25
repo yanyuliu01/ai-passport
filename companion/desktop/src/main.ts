@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   ipc('effect-review', value => { const input = object(value); return client.effectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140)); });
   ipc('submit-effect-review', value => { const input = object(value), outcomes = object(input.outcomes);
     if (!Object.values(outcomes).every(item => item === 'applied' || item === 'not_applied')) throw new Error('核对选项无效');
-    return client.submitEffectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140), outcomes as Record<string, 'applied' | 'not_applied'>); });
+    return client.submitEffectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140), outcomes as Record<string, 'applied' | 'not_applied'>, requiredString(input.revision, 128)); });
   ipc('timer-reviews', value => client.timerReviews(requiredString(object(value).space, 100)));
   ipc('reconcile', value => { const input = object(value); return client.reconcileTask(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100), requiredString(input.run, 128)); });
   ipc('login-start', value => {

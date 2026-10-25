@@ -221,7 +221,7 @@ test('relay allows a read-only reconcile with only the original run id', () => {
   assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', {}), false);
   assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: '../x y' }), false);
 });
-const reviewView = { message_id: 'm1', operation_id: 'op-1', revision: 'rev-7', status: 'needs_review', effects: [
+const reviewView = { runtime_id: runtime, message_id: 'm1', operation_id: 'op-1', revision: 'rev-7', status: 'needs_review', effects: [
   { id: 'm1:0', name: 'remember', args: { text: 'note' }, state: 'succeeded' },
   { id: 'm1:1', name: 'remind', args: { at: '9:00' }, state: 'unknown' },
   { id: 'm1:2', name: 'forget', args: {}, state: 'pending' }], review: null };
@@ -259,18 +259,64 @@ test('a lost review receipt resends the same body; a conflict drops it so the ow
   t.after(() => client.stop());
   client.add({ ...endpoint, capabilities: [...endpoint.capabilities, 'request_effect_review'] });
   const outcomes = { 'm1:1': 'applied', 'm1:2': 'not_applied' } as const;
-  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes));
-  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', { 'm1:1': 'not_applied', 'm1:2': 'not_applied' }));
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes, reviewView.revision));
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', { 'm1:1': 'not_applied', 'm1:2': 'not_applied' }, reviewView.revision));
   assert.equal(posts.length, 2); assert.deepEqual(posts[0], posts[1]);  // retried with the saved body, not the new choice
   assert.equal((await client.effectReview(space, runtime, 'messages/m1')).saved, true);
   answer = 'conflict';
-  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes), /记录已变化/);
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes, reviewView.revision), /记录已变化/);
   assert.equal((await client.effectReview(space, runtime, 'messages/m1')).saved, false);
   answer = 'reviewed';
-  assert.equal((await client.submitEffectReview(space, runtime, 'messages/m1', outcomes)).status, 'reviewed');
+  assert.equal((await client.submitEffectReview(space, runtime, 'messages/m1', outcomes, reviewView.revision)).status, 'reviewed');
   assert.notEqual(posts.at(-1)?.review_id, posts[0].review_id);  // a fresh review after the conflict
   await assert.rejects(() => new DesktopClient(db, { async request() { return {}; } }, secrets, () => {}).effectReview(space, runtime, 'm1'));
 });
+for (const record of ['messages/m1', 'timers/t1']) test(`${record}: changed operations require fresh owner confirmation`, async t => {
+  const { db, secrets } = fixture(t);
+  let current = reviewView;
+  const posts: Json[] = [];
+  const client = new DesktopClient(db, { async request(_target, method, path, body, signal) {
+    if (!path.endsWith('/effects')) {
+      await new Promise(resolve => signal?.addEventListener('abort', () => resolve(undefined), { once: true })); return {};
+    }
+    if (method === 'GET') return current;
+    posts.push(body as Json);
+    return { ...current, status: 'reviewed' };
+  } }, secrets, () => {});
+  t.after(() => client.stop());
+  client.add({ ...endpoint, capabilities: [...endpoint.capabilities, 'request_effect_review', 'timer_effect_review'] });
+  const shown = await client.effectReview(space, runtime, record);
+  current = { ...reviewView, revision: 'rev-8', effects: reviewView.effects.map(item =>
+    item.id === 'm1:1' ? { ...item, args: { at: '18:00' } } : item) };
+  await assert.rejects(() => client.submitEffectReview(space, runtime, record, { 'm1:1': 'applied', 'm1:2': 'not_applied' }, String(shown.revision)), /记录已变化/);
+  assert.equal(posts.length, 0, 'Never attach old owner answers to a newly fetched selection');
+  assert.equal(db.get('effect-review:' + runtime + '/' + record, null), null);
+  const refreshed = await client.effectReview(space, runtime, record);
+  assert.equal((await client.submitEffectReview(space, runtime, record,
+    { 'm1:1': 'not_applied', 'm1:2': 'not_applied' }, String(refreshed.revision))).status, 'reviewed');
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].revision, 'rev-8');
+  assert.deepEqual(posts[0].outcomes, { 'm1:1': 'not_applied', 'm1:2': 'not_applied' });
+});
+
+test('an existing recorded review cannot be replaced when this device has no saved retry', async t => {
+  const { db, secrets } = fixture(t);
+  let posts = 0;
+  const client = new DesktopClient(db, { async request(_target, method, path, _body, signal) {
+    if (!path.endsWith('/effects')) {
+      await new Promise(resolve => signal?.addEventListener('abort', () => resolve(undefined), { once: true })); return {};
+    }
+    if (method === 'POST') posts++;
+    return { ...reviewView, status: 'recorded', review: { id: 'original-review', outcomes: { 'm1:1': 'applied', 'm1:2': 'not_applied' } } };
+  } }, secrets, () => {});
+  t.after(() => client.stop());
+  client.add({ ...endpoint, capabilities: [...endpoint.capabilities, 'request_effect_review'] });
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1',
+    { 'm1:1': 'applied', 'm1:2': 'not_applied' }, reviewView.revision), /保留原确认的设备/);
+  assert.equal(posts, 0);
+  assert.equal(db.get('effect-review:' + runtime + '/messages/m1', null), null);
+});
+
 test('desktop switches to its own credential only after it authenticates and proves the same subject', async t => {
   const { db, secrets } = fixture(t);
   const credential = 'dev.0123456789abcdef.' + 'cd'.repeat(32);

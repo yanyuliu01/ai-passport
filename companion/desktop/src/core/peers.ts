@@ -226,10 +226,11 @@ export class PeerNetwork implements RuntimeTransport {
       } else if (packet.kind === 'request') {
         if (this.executing.size >= 64) throw new Error('远程请求过多');
         // Long polls run independently; they must not block responses, approvals or mesh traffic.
-        void this.respond(packet.from, packet.id, body).catch(async () => {
+        void this.respond(packet.from, packet.id, body).catch(async error => {
           const peer = this.trusted.get(packet.from);
           if (peer && typeof body.request === 'string') await this.send(peer, this.space, 'response',
-            { request: body.request, error: '远程请求与授权或已有记录不匹配，操作未重复执行', status: 409 });
+            { request: body.request, error: '远程请求与授权或已有记录不匹配，操作未重复执行',
+              status: error instanceof RuntimeError ? error.status : 409 });
         }).catch(() => {});
       }
       else if (packet.kind === 'response') {
@@ -268,9 +269,34 @@ export class PeerNetwork implements RuntimeTransport {
       signal?.addEventListener('abort', cancel, { once: true });
       this.waiters.set(request, { peer: peerId,
         resolve(value) { finish(); resolve(value); }, reject(error) { finish(); reject(error); } });
-      void this.send(peer, this.space, 'request', { request, method, path, ...(body === undefined ? {} : { body }) })
+      void this.send(peer, this.space, 'request', { request, runtime_id: endpoint.runtimeId, method, path, ...(body === undefined ? {} : { body }) })
         .catch(error => { finish(); reject(error); });
     });
+  }
+  /** Review retries use the same local HTTP actor even if this relay upgrades its credential. */
+  private reviewTarget(peer: string, endpoint: Endpoint, path: string, payload: Json): Endpoint {
+    const key = 'relay-review:' + peer + '/' + endpoint.runtimeId + '/' + path + '/' + payload.review_id;
+    const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    type Origin = { digest: string; endpoint: Pick<Endpoint, 'runtimeId' | 'spaceId' | 'url' | 'token'> };
+    let origin: Origin | undefined;
+    try { origin = this.secrets.load<Origin>(key); }
+    catch { throw new RuntimeError('原核对身份暂不可用，请恢复原安全存储后重试', 503); }
+    const savedDigest = this.db.get<string>(key, '');
+    if (savedDigest && !origin) throw new RuntimeError('原核对身份暂不可用，请恢复原安全存储后重试', 503);
+    if (savedDigest && savedDigest !== digest || origin && origin.digest !== digest)
+      throw new RuntimeError('核对编号已用于另一份确认', 409);
+    if (!origin) {
+      const { runtimeId, spaceId, url, token } = endpoint;
+      origin = { digest, endpoint: { runtimeId, spaceId, url, token } };
+      try { this.secrets.save(key, origin); }
+      catch { throw new RuntimeError('核对身份未能保存，请稍后重试', 503); }
+    }
+    if (!origin.endpoint || origin.endpoint.runtimeId !== endpoint.runtimeId || origin.endpoint.spaceId !== endpoint.spaceId
+      || origin.endpoint.url !== endpoint.url || typeof origin.endpoint.token !== 'string')
+      throw new RuntimeError('原核对连接已变化，请恢复原连接后重试', 503);
+    try { this.db.set(key, digest); }
+    catch { throw new RuntimeError('核对身份未能保存，请稍后重试', 503); }
+    return { ...endpoint, token: origin.endpoint.token };
   }
   private async respond(peerId: string, packetId: string, body: Json): Promise<void> {
     const endpoint = this.getLocal(), method = String(body.method), path = String(body.path);
@@ -299,7 +325,9 @@ export class PeerNetwork implements RuntimeTransport {
     } else {
       // Persist an uncertain receipt before side effects. Only message writes have durable retry IDs.
       this.db.saveReceipt(key, hash, { request, error: '请求结果尚未核实，请查询原任务', status: 409 });
-      const work = this.local.request(endpoint, method, path, payload)
+      const target = method === 'POST' && /^\/v1\/(?:messages|timers)\/[a-zA-Z0-9._:-]+\/effects$/.test(path)
+        ? this.reviewTarget(peerId, endpoint, path, payload!) : endpoint;
+      const work = this.local.request(target, method, path, payload)
         .then(value => ({ request, value } as Json))
         .catch(error => ({ request, error: error instanceof Error ? error.message : '远程请求失败',
           status: error instanceof RuntimeError ? error.status : 0 }));

@@ -7,6 +7,7 @@ import { conversationID, runtimeConversation, newerConversation, helperViews, un
 import { asSyncPage, isDeviceCredential, proofMatches, RuntimeError, syncPath, type RuntimeTransport } from './runtime-client.js';
 
 interface Link { connected: boolean; catchingUp: boolean; error: string }
+interface ReviewIdentity { version: 1; endpoint: Pick<Endpoint, 'runtimeId' | 'spaceId' | 'url' | 'token'>; body: Json }
 export interface SecretStore { load<T>(key: string): T | undefined; save(key: string, value: unknown): void }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -26,6 +27,7 @@ export class DesktopClient {
   private watching = new Set<string>();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private retryFailures = new Map<string, number>();
+  private submittingReviews = new Set<string>();
   private stopped = false;
   runtime = { state: 'disconnected', message: '正在查找本机小幽' };
   pairing: ClientView['pairing'] = { invitation: undefined, joined: 0, relayState: '未设置跨网入口',
@@ -438,10 +440,38 @@ export class DesktopClient {
     await this.transport.request(endpoint, 'POST', '/v1/approvals/' + encodeURIComponent(id), { decision });
   }
   private reviewEndpoint(space: string, runtime: string, capability: string): Endpoint {
+    if (this.stopped) throw new Error('客户端已停止，请重新连接后核对');
     const endpoint = this.endpoints.get(runtime);
     if (!endpoint || endpoint.spaceId !== space) throw new Error('找不到处理这项操作的电脑');
     if (!endpoint.capabilities.includes(capability)) throw new Error('这台电脑的小幽还不支持核对，请先更新');
     return endpoint;
+  }
+  /** A connection generation, including its credential, owns each asynchronous review read/write. */
+  private reviewConnection(source: Endpoint) {
+    const endpoint = { ...source }, signal = this.loops.get(source.runtimeId + '/default')?.signal;
+    const check = () => {
+      if (this.stopped || signal?.aborted || this.endpoints.get(endpoint.runtimeId) !== source
+        || source.spaceId !== endpoint.spaceId || source.url !== endpoint.url || source.token !== endpoint.token)
+        throw new Error('连接已变化，请重新读取核对记录；原确认仍保留');
+    };
+    return { endpoint, signal, check };
+  }
+  private reviewIdentity(key: string, endpoint: Endpoint, body: Json): ReviewIdentity {
+    const identity = this.secrets.load<ReviewIdentity>(key + ':identity');
+    if (identity?.version !== 1 || !identity.endpoint || typeof identity.endpoint.token !== 'string'
+      || JSON.stringify(identity.body) !== JSON.stringify(body))
+      throw new Error('原确认的身份信息不可用，请恢复原客户端安全存储后重试；原确认仍保留');
+    if (identity.endpoint.runtimeId !== endpoint.runtimeId || identity.endpoint.spaceId !== endpoint.spaceId
+      || identity.endpoint.url !== endpoint.url)
+      throw new Error('原确认的连接已变化，请恢复原连接后重试；原确认仍保留');
+    return identity;
+  }
+  private reviewSource(view: Json, endpoint: Endpoint): void {
+    if (view.runtime_id !== endpoint.runtimeId) throw new Error('核对记录来源不匹配，请重新连接原电脑');
+  }
+  private clearReview(key: string, body: Json | null): void {
+    if (JSON.stringify(this.db.get(key, null)) !== JSON.stringify(body)) return;
+    this.db.set(key, null); this.secrets.save(key + ':identity', null);
   }
   /** "messages/<request id>" or "timers/<timer id>": both reviews read and submit the same way. */
   private reviewPath(record: string): string {
@@ -452,17 +482,26 @@ export class DesktopClient {
   /** Read the original operations whose result is unknown (owner review only, never automatic). */
   async effectReview(space: string, runtime: string, record: string): Promise<Json> {
     const capability = record.startsWith('timers/') ? 'timer_effect_review' : 'request_effect_review';
-    const view = await this.transport.request(this.reviewEndpoint(space, runtime, capability), 'GET', this.reviewPath(record));
-    if (view.status === 'reviewed') this.db.set('effect-review:' + runtime + '/' + record, null);
-    return { ...view, saved: Boolean(this.db.get('effect-review:' + runtime + '/' + record, null)) };
+    const connection = this.reviewConnection(this.reviewEndpoint(space, runtime, capability));
+    const key = 'effect-review:' + runtime + '/' + record, before = this.db.get<Json | null>(key, null);
+    const view = await this.transport.request(connection.endpoint, 'GET', this.reviewPath(record), undefined, connection.signal);
+    connection.check(); this.reviewSource(view, connection.endpoint);
+    if (view.status === 'reviewed') this.clearReview(key, before);
+    const saved = this.db.get<Json | null>(key, null);
+    let retryProblem = '';
+    if (saved) { try { this.reviewIdentity(key, connection.endpoint, saved); }
+      catch (error) { retryProblem = (error as Error).message; } }
+    return { ...view, saved: Boolean(saved), saved_outcomes: saved?.outcomes, retry_problem: retryProblem };
   }
   /** Timer operations waiting for the owner's word, from every computer in the space that offers it. */
   async timerReviews(space: string): Promise<Json[]> {
     const rows: Json[] = [];
-    for (const endpoint of this.endpoints.values()) {
+    for (const endpoint of [...this.endpoints.values()]) {
       if (endpoint.spaceId !== space || !endpoint.capabilities.includes('timer_effect_review')) continue;
       try {
-        const page = await this.transport.request(endpoint, 'GET', '/v1/timers/effects?limit=50');
+        const connection = this.reviewConnection(endpoint);
+        const page = await this.transport.request(connection.endpoint, 'GET', '/v1/timers/effects?limit=50', undefined, connection.signal);
+        connection.check();
         for (const row of Array.isArray(page.timers) ? page.timers as Json[] : [])
           if (row && row.status !== 'reviewed') rows.push({ ...row, _runtimeId: endpoint.runtimeId, more: typeof page.next_cursor === 'string' });
       } catch { /* A computer that cannot answer keeps its timers out of this list; nothing is assumed. */ }
@@ -473,24 +512,46 @@ export class DesktopClient {
    * Submit the owner's answers. The body is saved before sending and reused unchanged after a lost receipt
    * or a 503; a 409 drops it so the owner re-reads. It records a disposition only; nothing is re-run.
    */
-  async submitEffectReview(space: string, runtime: string, record: string, outcomes: Record<string, 'applied' | 'not_applied'>): Promise<Json> {
+  async submitEffectReview(space: string, runtime: string, record: string, outcomes: Record<string, 'applied' | 'not_applied'>, revision: string): Promise<Json> {
     const capability = record.startsWith('timers/') ? 'timer_effect_review' : 'request_effect_review';
     const endpoint = this.reviewEndpoint(space, runtime, capability), key = 'effect-review:' + runtime + '/' + record, path = this.reviewPath(record);
-    let body = this.db.get<Json | null>(key, null);
-    if (!body) {
-      const view = await this.transport.request(endpoint, 'GET', path);
-      if (view.status === 'reviewed') return view;  // Already settled: nothing to send.
-      body = reviewBody(view, 'review-' + randomUUID().replaceAll('-', ''), outcomes);
-      this.db.set(key, body);
-    }
+    if (this.submittingReviews.has(key)) throw new Error('这份确认正在提交，请等待原回执');
+    this.submittingReviews.add(key);
+    const connection = this.reviewConnection(endpoint);
     try {
-      const result = await this.transport.request(endpoint, 'POST', path, body);
-      if (result.status === 'reviewed') this.db.set(key, null);
-      return result;
-    } catch (error) {
-      if (error instanceof RuntimeError && error.status === 409) { this.db.set(key, null); throw new Error('记录已变化，请重新核对：' + error.message); }
-      throw error;
-    }
+      let body = this.db.get<Json | null>(key, null);
+      if (!body) {
+        if (typeof revision !== 'string' || !revision) throw new Error('记录已变化，请重新核对');
+        const view = await this.transport.request(connection.endpoint, 'GET', path, undefined, connection.signal);
+        connection.check(); this.reviewSource(view, connection.endpoint);
+        if (view.status === 'reviewed') return view;
+        if (view.revision !== revision) throw new Error('记录已变化，请重新核对');
+        if (view.status === 'recorded') throw new Error('这份确认已保存，请在保留原确认的设备上重试发出说明');
+        if (view.status !== 'needs_review') throw new Error('记录已变化，请重新核对');
+        body = reviewBody(view, 'review-' + randomUUID().replaceAll('-', ''), outcomes);
+        const { runtimeId, spaceId, url, token } = connection.endpoint;
+        // Vault first, body second, then HTTP: any storage failure prevents the POST.
+        this.secrets.save(key + ':identity', { version: 1, endpoint: { runtimeId, spaceId, url, token }, body });
+        this.db.set(key, body);
+      }
+      const identity = this.reviewIdentity(key, connection.endpoint, body);
+      connection.check();
+      try {
+        // Retry with the original credential even after an automatic upgrade. Never fall back on 401.
+        const result = await this.transport.request({ ...connection.endpoint, token: identity.endpoint.token }, 'POST', path, body, connection.signal);
+        connection.check(); this.reviewSource(result, connection.endpoint);
+        if (result.operation_id !== body.operation_id || result.revision !== body.revision)
+          throw new Error('核对回执与原确认不匹配；原确认仍保留');
+        if (result.status === 'reviewed') this.clearReview(key, body);
+        return result;
+      } catch (error) {
+        connection.check();
+        if (error instanceof RuntimeError && error.status === 409) {
+          this.clearReview(key, body); throw new Error('记录已变化，请重新核对：' + error.message);
+        }
+        throw error;
+      }
+    } finally { this.submittingReviews.delete(key); }
   }
   async cancel(space: string, id: string, runtime: string): Promise<void> {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);

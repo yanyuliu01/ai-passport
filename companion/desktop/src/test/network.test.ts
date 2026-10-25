@@ -8,7 +8,7 @@ import { ClientDatabase } from '../core/database.js';
 import { PeerNetwork, type PeerEvents } from '../core/peers.js';
 import type { SecretStore } from '../core/client.js';
 import type { Endpoint, Json } from '../shared.js';
-import type { RuntimeTransport } from '../core/runtime-client.js';
+import { RuntimeError, type RuntimeTransport } from '../core/runtime-client.js';
 
 const space = 'a'.repeat(32), token = 'test-only-relay-token-for-loopback-0123456789';
 function memory(): SecretStore {
@@ -31,12 +31,19 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   const a: Endpoint = { runtimeId: '1'.repeat(32), spaceId: space, name: 'Mac', url: 'http://127.0.0.1:1', token: 'private-a', capabilities: ['sync'] };
   const b: Endpoint = { ...a, runtimeId: '2'.repeat(32), name: 'Windows', token: 'private-b' };
   let posts = 0, release: (() => void) | undefined;
-  const local: RuntimeTransport = { async request(endpoint, method, path): Promise<Json> {
+  const reviewPosts: { token: string; body: unknown }[] = [];
+  const local: RuntimeTransport = { async request(endpoint, method, path, payload): Promise<Json> {
+    if (method === 'POST' && path.endsWith('/effects')) {
+      reviewPosts.push({ token: endpoint.token, body: structuredClone(payload) });
+      if (reviewPosts.length === 1) throw new RuntimeError('synthetic lost review receipt', 503);
+      return { runtime_id: endpoint.runtimeId, status: 'reviewed' };
+    }
     if (method === 'POST') { posts++; return { id: 'accepted-once', status: 'queued' }; }
     if (path.includes('wait-test')) await new Promise<void>(resolve => { release = resolve; });
     return { runtime_id: endpoint.runtimeId, subject_id: space, answer: 'private-result' };
   } };
-  const networkA = new PeerNetwork(dbA, memory(), local, () => a,
+  const secretsA = memory();
+  let networkA = new PeerNetwork(dbA, secretsA, local, () => a,
     { changed: state => changesA.push(state), endpoint: endpoint => remoteA.push(endpoint) }, 'Mac');
   const networkB = new PeerNetwork(dbB, memory(), local, () => b,
     { changed: state => changesB.push(state), endpoint: endpoint => remoteB.push(endpoint) }, 'Windows');
@@ -70,4 +77,33 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/messages', body)).id, 'accepted-once');
   assert.equal(posts, 1, 'A new transport RPC ID must not execute the same client submission twice');
   await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages', { ...body, text: 'changed payload' }));
+  const review = { operation_id: 'op-1', revision: 'rev-1', review_id: 'review-1', outcomes: { e1: 'applied' } };
+  await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects', review), (error: unknown) => error instanceof RuntimeError && error.status === 503);
+  a.token = 'private-a-upgraded';
+  networkA.stop(); changesA.length = 0;
+  networkA = new PeerNetwork(dbA, secretsA, local, () => a,
+    { changed: state => changesA.push(state), endpoint: endpoint => remoteA.push(endpoint) }, 'Mac');
+  await networkA.start();
+  await until(() => changesA.at(-1)?.relayState === '加密通信入口已连接');
+  assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects', review)).status, 'reviewed');
+  assert.deepEqual(reviewPosts[1], reviewPosts[0], 'Relay retries must keep the original HTTP actor and body');
+  const identityKey = String(dbA.db.prepare("SELECT key FROM settings WHERE key LIKE 'relay-review:%'").get()!.key);
+  const savedIdentity = secretsA.load(identityKey);
+  secretsA.save(identityKey, null);
+  await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects', review),
+    (error: unknown) => error instanceof RuntimeError && error.status === 503);
+  assert.equal(reviewPosts.length, 2, 'A missing vault entry cannot silently adopt the upgraded credential');
+  secretsA.save(identityKey, savedIdentity);
+  await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects',
+    { ...review, outcomes: { e1: 'not_applied' } }));
+  assert.equal(reviewPosts.length, 2, 'The same review id cannot change its original answers');
+  a.url = 'http://127.0.0.1:2';
+  await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects', review),
+    (error: unknown) => error instanceof RuntimeError && error.status === 503);
+  assert.equal(reviewPosts.length, 2, 'No original credential is forwarded to a replacement route');
+  a.url = 'http://127.0.0.1:1';
+  const before = posts;
+  await assert.rejects(() => networkB.request({ ...remoteB[0], runtimeId: '9'.repeat(32) }, 'POST', '/v1/messages',
+    { ...body, client_id: '5'.repeat(32) }));
+  assert.equal(posts, before, 'A request for a different Runtime cannot use the relay current local target');
 });

@@ -207,22 +207,26 @@ function Bubble({ message, task, onTask, onBranch, onReview, canBranch, highligh
 function EffectReview({ space, target, onClose }: { space: string; target: { runtime: string; record: string }; onClose(): void }) {
   const [view, setView] = useState<Json>(), [problem, setProblem] = useState(''), [busy, setBusy] = useState(false);
   const [chosen, setChosen] = useState<Record<string, ReviewOutcome | undefined>>({});
-  const load = () => { setProblem(''); void window.xiaoyou.effectReview({ space, ...target }).then(value => {
-    setView(value); const recorded = (value.review as Json | undefined)?.outcomes as Record<string, ReviewOutcome> | undefined; if (recorded) setChosen(recorded);
-  }).catch(error => setProblem(clean(error))); };
-  useEffect(load, [space, target.runtime, target.record]);
+  const load = async (message = '') => {
+    setView(undefined); setChosen({}); setProblem(message);
+    try {
+      const value = await window.xiaoyou.effectReview({ space, ...target });
+      setView(value); setChosen((value.saved_outcomes || (value.review as Json | undefined)?.outcomes || {}) as Record<string, ReviewOutcome>);
+    } catch (error) { setProblem([message, clean(error)].filter(Boolean).join('。')); }
+  };
+  useEffect(() => { void load(); }, [space, target.runtime, target.record]);
   const items = view ? reviewItems(view) : [], saved = Boolean(view?.saved), editable = view?.status === 'needs_review' && !saved;
-  const missing = editable ? reviewMissing(items, chosen) : '';
+  const missing = typeof view?.retry_problem === 'string' && view.retry_problem
+    ? view.retry_problem : editable ? reviewMissing(items, chosen) : '';
   async function submit() {
     setBusy(true); setProblem('');
     try {
-      const result = await window.xiaoyou.submitEffectReview({ space, ...target, outcomes: chosen as Record<string, ReviewOutcome> });
+      const result = await window.xiaoyou.submitEffectReview({ space, ...target, revision: String(view?.revision || ''), outcomes: chosen as Record<string, ReviewOutcome> });
       if (result.status === 'reviewed') { onClose(); return; }
       setView({ ...result, saved: true });
     } catch (error) {
       const text = clean(error);
-      if (text.startsWith('记录已变化')) { setProblem(text + '。已重新读取。'); load(); }
-      else setProblem('已保存，说明还没发出：' + text + '。再点一次会用同一份确认重试。');
+      await load(text.startsWith('记录已变化') ? text + '。请查看最新操作并重新选择。' : '提交未完成：' + text);
     } finally { setBusy(false); }
   }
   return <div className="modal-shade" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section className="usage-modal review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
@@ -232,7 +236,8 @@ function EffectReview({ space, target, onClose }: { space: string; target: { run
       {items.map(item => <div className="review-item" key={item.id}><strong>{item.name || '一项操作'}</strong>{item.detail && <code>{item.detail}</code>}{!item.canApply && <small>还没开始执行，只能确认为未生效</small>}
         <div className="review-choices">{(['applied', 'not_applied'] as const).map(value => <button key={value} className={chosen[item.id] === value ? 'chosen' : ''}
           disabled={!editable || busy || (value === 'applied' && !item.canApply)} onClick={() => setChosen(current => ({ ...current, [item.id]: value }))}>{value === 'applied' ? '已生效' : '未生效'}</button>)}</div></div>)}
-      {view.status !== 'reviewed' && <footer><small>{missing}</small><button className="primary" disabled={busy || Boolean(missing)} onClick={() => void submit()}>{editable ? '提交确认' : '重试发出说明'}</button></footer>}</>}
+      {view.status === 'recorded' && !saved && <p>请在保留原确认的设备上重试发出说明。</p>}
+      {(editable || saved) && view.status !== 'reviewed' && <footer><small>{missing}</small><button className="primary" disabled={busy || Boolean(missing)} onClick={() => void submit()}>{editable ? '提交确认' : '重试发出说明'}</button></footer>}</>}
     {problem && <p role="alert" className="review-problem">{problem}</p>}
   </section></div>;
 }

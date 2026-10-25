@@ -12,6 +12,35 @@ increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
 
+## Owner review version checks (0.1.8 source)
+
+Request and timer confirmations carry the exact revision displayed to the owner.
+If the selection changes before submission, the desktop sends no confirmation,
+reloads the operations and clears the old answers. A saved confirmation keeps its
+original body and answers for a lost-receipt retry; it never adopts a newer selection.
+When a review is already recorded but this client has no saved retry, the page
+directs the owner to the device retaining that confirmation instead of issuing a
+new review identity. These source checks do not establish phone or live multi-end
+acceptance; the Runtime API and stored confirmation body remain unchanged.
+
+The desktop also retains each pending review's original route and credential in
+the existing encrypted client vault before any POST. Reopening the client or
+upgrading its device credential does not change the actor used for that retry.
+Revoked credentials are refused without trying a different actor. Missing vault
+data or a changed route leaves the confirmation saved and asks for restoration;
+older pending bodies without identity metadata are not silently reassigned.
+Keep the client database and its OS-protected vault together for recovery. A
+rollback to older client code does not enforce these additional retry checks.
+
+Connection replacement or shutdown cancels the associated review request, and
+late responses cannot clear the saved confirmation. Concurrent submissions are
+rejected while the first is pending. The peer relay retains the same originating
+HTTP credential across its own restart/upgrade and pins requests to the requested
+Runtime. No credential is included in peer packets or plaintext cache fields.
+Relay identity metadata is retained for later repeats; old relay versions do not
+provide this protection. Source tests use synthetic state; installed-client and
+Android recovery remain separate acceptance work.
+
 ## Current reply delivery (0.1.7 / Runtime 0.23.1)
 
 An accepted request remains pending until its assistant reply reaches a terminal

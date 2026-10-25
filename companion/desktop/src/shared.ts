@@ -166,7 +166,7 @@ export interface DesktopAPI {
   cancel(input: { space: string; id: string; runtime: string }): Promise<void>;
   effectReview(input: { space: string; runtime: string; record: string }): Promise<Json>;
   timerReviews(input: { space: string }): Promise<Json[]>;
-  submitEffectReview(input: { space: string; runtime: string; record: string; outcomes: Record<string, 'applied' | 'not_applied'> }): Promise<Json>;
+  submitEffectReview(input: { space: string; runtime: string; record: string; revision: string; outcomes: Record<string, 'applied' | 'not_applied'> }): Promise<Json>;
   reconcile(input: { space: string; id: string; runtime: string; run: string }): Promise<'confirmed' | 'unconfirmed'>;
   invite(): Promise<string>;
   join(invitation: string): Promise<void>;
