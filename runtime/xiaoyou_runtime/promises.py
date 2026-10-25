@@ -11,11 +11,19 @@ import tempfile
 import threading
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .effects import EffectUncertain
+
 MAX_OPEN = 30
 REPEAT = {"day": 86400, "week": 7 * 86400}
+
+
+def wake_source(item):
+    return {key: item.get(key) for key in (
+        "id", "title", "detail", "due", "nudged", "conversation", "every", "created")}
 
 
 class Promises:
@@ -67,13 +75,66 @@ class Promises:
         return [item for item in self.open() if item.get("due") and item["due"] <= now
                 and (not item.get("nudged") or now - item["nudged"] >= quiet)]
 
-    def mark_nudged(self, item_id: str, now: Optional[float] = None) -> None:
+    def wakes(self):
+        # A resolve tool may have closed the original reminder before its
+        # result was saved. Such wakes still need their original receipt.
+        with self._lock:
+            return [item for item in self._read() if item.get("wake")]
+
+    def effect_records(self):
+        with self._lock:
+            return [item for item in self._read() if item.get("wake") or item.get("wake_reviews")]
+
+    def archive_wake_review(self, source, wake):
+        with self._lock:
+            items = self._read()
+            item = next((item for item in items if item["id"] == source["id"]), None)
+            if (item is None or wake_source(item) != wake_source(source) or item.get("wake") != wake
+                    or (wake.get("review") or {}).get("published") is not True):
+                raise EffectUncertain("提醒的核对投递进度已经改变。")
+            history = item.setdefault("wake_reviews", [])
+            if not isinstance(history, list) or any(value.get("id") == wake["id"] for value in history):
+                raise EffectUncertain("提醒的核对归档有冲突。")
+            history.append(deepcopy(wake))
+            item.pop("wake")
+            now = time.time()
+            item["nudged"] = now
+            step = REPEAT.get(item.get("every") or "")
+            if step and item.get("due"):
+                while item["due"] <= now:
+                    item["due"] += step
+                item["nudged"] = None
+            try:
+                self._write(items)
+            except OSError:
+                if not any(value["id"] == source["id"] and wake in value.get("wake_reviews", [])
+                           and not value.get("wake") for value in self._read()):
+                    raise
+
+    def checkpoint_wake(self, source, before, after):
+        with self._lock:
+            items = self._read()
+            item = next((item for item in items if item["id"] == source["id"]), None)
+            if (item is None or wake_source(item) != wake_source(source)
+                    or item.get("wake") != before
+                    or before is None and item.get("status") != "active"):
+                raise EffectUncertain("原提醒或操作领取已改变，不能继续。")
+            item["wake"] = deepcopy(after)
+            try:
+                self._write(items)
+            except OSError:
+                if not any(value["id"] == source["id"] and value.get("wake") == after for value in self._read()):
+                    raise
+
+    def mark_nudged(self, item_id: str, now: Optional[float] = None, *, expected_wake=None) -> None:
         """为它叫过她了。重复的（每天、每周）把到点时间挪到下一次，不再算到点。"""
         now = now if now is not None else time.time()
         with self._lock:
             items = self._read()
             for item in items:
                 if item["id"] == item_id:
+                    if expected_wake is not None and item.get("wake") != expected_wake:
+                        raise EffectUncertain("提醒的投递进度已经改变。")
                     item.pop("wake", None)
                     item["nudged"] = now
                     step = REPEAT.get(item.get("every") or "")
@@ -109,7 +170,9 @@ class Promises:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle, name = tempfile.mkstemp(prefix=".promises-", dir=str(self._path.parent))
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(items[-200:], stream, ensure_ascii=False, indent=1)
+            recent = {item["id"] for item in items[-200:]}
+            json.dump([item for item in items if item["id"] in recent or item.get("wake") or item.get("wake_reviews")],
+                      stream, ensure_ascii=False, indent=1)
             if durable:
                 stream.flush()
                 os.fsync(stream.fileno())

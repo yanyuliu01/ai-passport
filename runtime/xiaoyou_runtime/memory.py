@@ -10,6 +10,8 @@
 内容不记（需要的话只记“它存在哪”）。条数和总字数有上限，满了丢最旧的。
 """
 
+import hashlib
+import json
 import os
 import re
 import tempfile
@@ -17,6 +19,8 @@ import threading
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from .effects import EffectUncertain
 
 MAX_NOTES = 60
 MAX_NOTE_CHARS = 200
@@ -65,6 +69,14 @@ class OwnerMemory:
         with self._lock:
             return [note.shown() for note in self._read()]
 
+    @staticmethod
+    def _revision(notes):
+        return hashlib.sha256(json.dumps([note.shown() for note in notes], ensure_ascii=False).encode()).hexdigest()
+
+    def revision(self):
+        with self._lock:
+            return self._revision(self._read())
+
     def texts(self) -> List[str]:
         """现行的记忆，只有内容（后台整理去重用）。"""
         with self._lock:
@@ -91,7 +103,7 @@ class OwnerMemory:
                 self._log("满了丢掉", gone.text, "", day)
         return "记下了：%s" % text
 
-    def replace(self, number: int, note: str, today: Optional[str] = None, quote: str = "") -> str:
+    def replace(self, number: int, note: str, today: Optional[str] = None, quote: str = "", *, expected=None) -> str:
         """第 number 条（从 1 数）改成新的说法：旧的从注入层拿掉，日志里记下“取代”。"""
         cleaned, problem = _checked(note, quote)
         if problem:
@@ -100,6 +112,8 @@ class OwnerMemory:
         day = today or time.strftime("%Y-%m-%d")
         with self._lock:
             notes = self._read()
+            if expected is not None and expected != self._revision(notes):
+                raise EffectUncertain("记忆正文已改变，不能沿用旧编号修改。")
             if not 1 <= number <= len(notes):
                 return "没有第 %d 条" % number
             old = notes[number - 1]
@@ -108,11 +122,13 @@ class OwnerMemory:
             self._log("改", "%s（取代：%s）" % (text, old.text), said, day)
         return "改好了：%s（原来是：%s）" % (text, old.text)
 
-    def forget(self, number: int, today: Optional[str] = None) -> str:
+    def forget(self, number: int, today: Optional[str] = None, *, expected=None) -> str:
         """删掉第 number 条（从 1 数，跟提示里的编号一致）。日志里留着记录。"""
         day = today or time.strftime("%Y-%m-%d")
         with self._lock:
             notes = self._read()
+            if expected is not None and expected != self._revision(notes):
+                raise EffectUncertain("记忆正文已改变，不能沿用旧编号删除。")
             if not 1 <= number <= len(notes):
                 return "没有第 %d 条" % number
             gone = notes.pop(number - 1)

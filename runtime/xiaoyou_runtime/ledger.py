@@ -103,6 +103,12 @@ class Ledger:
             return None
         return deepcopy(self._journal._last.get("m:" + message_id, {}).get("_effects"))
 
+    def saved_effect_review(self, message_id):
+        if self._journal is None:
+            return None
+        owner = self._journal._last.get("m:" + message_id, {}).get("_effect_owner")
+        return deepcopy(owner.get("review")) if isinstance(owner, dict) else None
+
     def load(self) -> Tuple["OrderedDict[str, Dict[str, Any]]", "OrderedDict[str, Dict[str, Any]]", int]:
         """读回（消息, 去重表, 见过的最大序号）。没有文件是第一次启动；文件坏了不拒绝启动，
         但把坏文件留在旁边（.broken），方便以后查。"""

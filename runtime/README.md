@@ -78,6 +78,98 @@ This is a backend query endpoint, not an App review screen or manual override of
 uncertain request effects. Unsupported harnesses, missing/ambiguous/forked or
 malformed sources, and native files larger than 16 MiB remain unknown.
 
+## Helper-result summary fencing (source)
+
+A saved helper result is independent from its model-generated summary. Queued
+summaries keep the owner generation captured before queueing, and reject a
+changed run, cancelled task, changed conversation, unavailable/conflicting owner,
+interruption or shutdown. The same guard surrounds the summary model call,
+stream callbacks, native-session/context receipts, formatting and publication.
+Old text callbacks close when the summary finishes. The final task write also
+compares the active run under the existing card lock; stale summaries cannot
+complete a replacement run. Delegated tasks preserve their source conversation
+owner while returning results from their executing Runtime.
+
+If a summary becomes obsolete, its original worker result stays saved. The
+original running dispatch becomes `unknown` with a pending-delivery explanation,
+unless it has already been cancelled or replaced. The existing reconciliation
+endpoint or restart recovery can publish that saved result without another model
+call or repeated action. A failed pending-delivery checkpoint retains the result
+for restart recovery. A read-only summary-provider error still permits the
+existing factual fallback while the original guard remains valid. This adds no
+client API, saved format, scheduler or automatic takeover; it does not finish
+fencing every helper callback or external execution boundary.
+
+## Owner review of uncertain request effects (source)
+
+`request_effect_review` in `/v1/info` advertises an authenticated review endpoint
+on the Runtime that processed the original request. `GET /v1/messages/<id>/effects`
+returns its original `operation_id`, opaque `revision`, selected effects and any
+saved review. These private inputs are not included in general feed/sync responses.
+This endpoint is for an explicit owner review screen, never an automatic model/tool retry.
+
+After inspecting the actual state, the owner can submit
+`POST /v1/messages/<id>/effects` with `{operation_id, revision, review_id, outcomes}`.
+`outcomes` maps every non-succeeded effect id to `applied` or `not_applied`;
+unclaimed `pending` effects can only be marked `not_applied`. Keep the same
+`review_id` and body after a lost receipt. The authenticated device identity is
+recorded by the server, not supplied by the body. Legacy credentials remain usable.
+
+The review and its publication receipt use the existing request journal, nested
+in the private owner metadata that the baseline already hides from clients. One
+stable note follows the original request's main/task reply scope, including
+pinned supplements explicitly addressed to main chat,
+explicitly identifying the result as the owner's confirmation. No model or effect
+is invoked, replayed or rolled back; original effect claims, results and request
+uncertainty remain unchanged for audit. A durably published review releases that
+request's idle-handoff block; unknown helper executions still need their own
+reconciliation. A publication receipt survives ordinary chat-history retention.
+
+An active/foreign request, changed operation/revision/owner generation, conflicting
+review or unavailable permission authority is refused (`409`); malformed inputs
+return `400`. Storage/publication failure returns `503` with the original review
+identity retained if its append committed. A retry repairs publication without
+redoing effects. `status` distinguishes `needs_review`, `recorded` (publication
+pending), and `reviewed`. This is backend source only; the client screen and real
+cross-end acceptance remain pending. The `96c7c2b` baseline ignores the review
+field and conservatively keeps uncertain work blocked; rollback must preserve the state copy.
+
+## Owner review of uncertain timer effects (source)
+
+`timer_effect_review` advertises the authenticated timer counterpart. It uses
+the same explicit owner confirmation and never invokes a model, repeats a tool
+or rolls one back. `GET /v1/timers/effects` lists outstanding timer sources;
+optional `conversation`, `limit` (1-100, default 50) and opaque `cursor` bound
+the page. A changed list invalidates the cursor with `409`; reload the first
+page. Summaries contain no selected arguments. Legacy or damaged sources
+without provable operation details are visible as `reviewable: false` with a
+reason; this endpoint cannot invent a disposition for them.
+
+`GET /v1/timers/<id>/effects` exposes the original selection, source, owner-bound
+`revision` and any review. `POST` on that path accepts
+`{operation_id, revision, review_id, outcomes}`, with the same rules as message
+reviews: cover every non-succeeded effect, and mark unclaimed pending inputs
+only `not_applied`. The authenticated device supplies the actor. After a lost
+receipt, keep the same body, review id and credential identity. `503` needs a
+retry; `409` needs a refresh. Busy original conversations, unavailable permission
+authority and changed owner generations refuse new confirmation/publication.
+
+`needs_review` becomes `recorded` when saved, then `reviewed` only after a stable
+owner-confirmation note reaches the original main conversation and its durable
+publication/archive receipt is saved. The delivery card stays waiting before
+the note is saved. Until completion, the source blocks handoff and never
+resumes its old mutation. Retries and restarts repair only that same note and
+receipt. Completed reviews leave the outstanding list but remain queryable by
+their original id even after note retention.
+
+Original claims/results stay unchanged in private `wake_reviews` on promises
+and `reviews` on upkeep markers. A completed promise review advances the normal
+nudge/periodic schedule once; later upkeep preserves its prior review archive.
+General feed/sync/Mesh projections never include private review inputs. No new
+database or scheduler is added. The client screen, real cross-end acceptance
+and live upgrade/rollback remain pending; preserve the candidate state copy as
+described below before using an older binary.
+
 ## Model context and conversation queue (R6.2 source)
 
 New local conversation history is read from canonical messages; chat, helper
@@ -91,6 +183,19 @@ changed commitments keeps an unconfirmed wake instead of repeating its tools.
 See the [source handoff](../docs/development/runtime-refactor-design.md#2026-10-24-review-and-continuation-order)
 for remaining decision migration and acceptance. This source is not deployed.
 
+Readable retained conversation turns now form derived pages of 32 turns. Page
+identities include the conversation and canonical revisions; a changed or reset
+page cannot be fetched under its old identity. `recall` searches this retained
+range, including turns older than the 200-turn compatibility view. These pages
+are not an eternal archive or a new client paging API, and reading them does not
+write another history file or call a model to generate summaries.
+
+Catch-up quotes keep the existing 8,000-character budget and label excerpts and
+coverage. Only complete turns actually quoted to a successful speaking call get
+delivery receipts; omitted turns, excerpts, failed calls and decision-only calls
+do not. Reset boundaries and legacy import compatibility still apply. Current
+task and commitment facts are read separately from current state.
+
 Progress wake ids, original inputs, claims, saved replies, counts and cooldowns
 now live in the existing task journal. Pending/saved results for the still-active
 original run return through its conversation queue; replay itself calls no model
@@ -98,6 +203,37 @@ or tool. An interrupted claim with no saved reply stays unconfirmed. A full
 Runtime restart does not revive an interrupted helper to deliver an old progress
 update. Changed runs/owners and completed tasks do not publish stale notifications;
 private watch data stays off client/Mesh projections.
+
+Background wake calls retain their original owner generation through model
+phases, tool calls, native-session/context receipts and note/nudge/upkeep
+checkpoints. Owner changes, interruption and Pulse shutdown invalidate the
+call; returning to the same Runtime under a new generation does not revive it.
+Callbacks retained after completion cannot read or mutate through the old
+toolbox, and decision-stage mutation callbacks close before speaking starts.
+An effect already applied before invalidation is kept; an uncertain reminder
+claim is not cleared or automatically replayed. These checks reuse the existing
+conversation queue and storage, without changing client APIs or saved formats.
+
+Reminder and upkeep mutations now use the same `Effects` runner as owner
+requests: save the selected input, compare-and-save its claim, invoke it, then
+save its result. Private details stay in the existing promise `wake` and upkeep
+marker. Pending selections resume without another model decision; saved results
+and replies repair delivery, including after `resolve` closes the original
+reminder. Running/unknown claims and legacy claims without saved inputs never
+replay automatically. Unconfirmed timer work blocks owner handoff in its own
+conversation. Ordinary promise retention keeps these unresolved records.
+
+Numbered memory replacement/deletion saves the memory revision with the effect;
+the actual edit checks it under the memory lock. Changed memory, source history,
+reminder inputs or owner generation require reconciliation. The legacy outer
+reminder claim remains `unknown`, and the upkeep marker advances before a tool
+can run, so the previous binary does not regenerate that selected window. Keep
+a state-directory copy before rollback: an old binary doing later upkeep can
+overwrite marker extensions; preserve and restore the candidate copy rather
+than merging old cleanup writes into pending work. The host compatibility probe
+checks idle rollback/return only, not live upgrade acceptance. The message-effect
+review endpoint covers messages only; use the separate timer endpoint above for
+timer claims that retain their original selections.
 
 ## Saved request effects (R6 source)
 
@@ -1430,6 +1566,8 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
 | `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. Since 0.7.0 the record survives a runtime restart (the latest 200 are kept). |
 | `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
+| `GET /v1/timers/effects?conversation=<name>&limit=50&cursor=<cursor>` | Bounded outstanding timer-review summaries, without selected arguments; list changes invalidate the opaque cursor. Advertised by `timer_effect_review`. |
+| `GET/POST /v1/timers/<id>/effects` | Inspect or explicitly confirm the original timer selections with the same identity/revision/outcome rules as message effects. No replay or rollback. See the timer-review contract above. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. Since 0.7.0, `messages=1` adds `messages`: the message records of this conversation with a sequence above `after` (the same sequence as cards, including queued messages and replies still being written), so another phone sees what was just said; without it the response is unchanged. `epoch` identifies the record set: when it differs from the one last seen, the records were replaced and the client must resync from 0. |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}` (since 0.8.0): the runtime's fixed id, the record set id, the sync protocol version and capabilities. See the [unified message model](../docs/development/unified-message-model.md). |
 | `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>&states=unavailable` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. Since 0.8.2 a desktop session that finished its turn has `state` `turn_ended` here (`/v1/feed` and the card still say `done`). Since 0.9.0 `approvals` are the approval changes with a sequence above `after`, each with `status` (`pending`, `allowed`, `denied`, `withdrawn`) and `seq`, answered ones with `by` (`phone`, `computer`) and withdrawn ones with `reason`; the response also carries `subject_id` (the id of Xiaoyou as one subject, kept apart from `runtime_id`). `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. Since 0.9.1 a client that sends `states=unavailable` gets `state` `unavailable` for an observed or reported session that has not updated for a while and has not ended (its state cannot be seen now; it is not finished); other clients keep getting the card's state with `stale: true`, as before. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
