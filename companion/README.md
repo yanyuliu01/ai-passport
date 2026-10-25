@@ -38,6 +38,16 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## First-response timing log (App 0.32.4)
+
+For the 3-second first-response check, the App writes one logcat line per turn
+under the tag `XiaoyouTiming`: `send key=<client id> t=<uptime ms>` when a
+message is sent and `bubble key=<client id> t=<uptime ms> elapsed_ms=<n>` when
+the first complete reply bubble is added. Both use the phone's uptime clock; a
+retry keeps the original start. Lines carry only the random client id and
+times, never message text. Read them with
+`adb logcat -s XiaoyouTiming`. The bubble's pop-in animation is not included.
+
 ## Replies cut short (App 0.32.3)
 
 When the owner sends a message while Xiaoyou is still replying, the part she

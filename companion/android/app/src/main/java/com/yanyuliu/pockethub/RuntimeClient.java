@@ -1126,6 +1126,7 @@ final class RuntimeClient {
             return;
         }
         final String clientId = retryId == null ? UUID.randomUUID().toString().replace("-", "") : retryId;
+        TurnTiming.sent(clientId, android.os.SystemClock.uptimeMillis());
         store.selectedRuntime(url, historyKey(app, target));
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);

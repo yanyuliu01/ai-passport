@@ -259,6 +259,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         try { versionName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
         UsageEvents.init(getFilesDir(), versionName, "android-" + android.os.Build.VERSION.SDK_INT);
         UsageEvents.installCrashHandler();
+        TurnTiming.sink = line -> android.util.Log.i(TurnTiming.TAG, line);
         rageTap = new UsageEvents.RageTap(dp(48));
         getWindow().setStatusBarColor(BACKGROUND);
         getWindow().setNavigationBarColor(BACKGROUND);
@@ -2095,6 +2096,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             LinearLayout group = chatGroups.get(rowKey(message));
             if (group != null) {
                 changed |= setBubbles(group, shownBubbles(message), animate && !redrawn.contains(rowKey(message)), message.presentation);
+                if (group.getChildCount() > 0) TurnTiming.firstBubble(message.clientId, android.os.SystemClock.uptimeMillis());
                 changed |= showStatus(chatStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
                 continue;
             }
