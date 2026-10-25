@@ -40,7 +40,7 @@ from .intake import Intake
 from .cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from .config import EFFORT_LEVELS, Config
 from .store import Store
-from .tasks import StartError, Task, Tasks
+from .tasks import Deferred, StartError, Task, Tasks
 from . import recall as recall_search
 from .memory import OwnerMemory
 from .memory import prompt_section as memory_section
@@ -834,11 +834,8 @@ class Xiaoyou:
                     continue
                 if intent["state"] != "pending":
                     continue
-                if self.mesh is not None and not intent["input"]["hop"]:
-                    owner = self.mesh.owner_of(card["conversation"])
-                    if owner.get("unresolved") or owner.get("conflict") or owner.get("owner") not in (
-                            None, self.mesh.runtime_id):
-                        continue
+                if not self._may_dispatch(card["conversation"], intent["input"]["hop"]):
+                    continue
                 with self._agents_lock:
                     agent = self._agents.get(intent["agent"])
                 if agent is None or fingerprint(agent) != intent["fingerprint"]:
@@ -907,9 +904,13 @@ class Xiaoyou:
             return False
         if self.mesh is None:
             return not self._config.mesh_secret
-        if intent["input"]["hop"]:
-            return True  # The source Runtime still owns this delegated run.
-        view = self.mesh.owner_of(card["conversation"])
+        return self._may_dispatch(card["conversation"], intent["input"]["hop"])
+
+    def _may_dispatch(self, conversation, hop):
+        """This Runtime may begin a helper for the conversation now."""
+        if self.mesh is None or hop:
+            return True  # No mesh ownership, or the source Runtime owns this delegated run.
+        view = self.mesh.owner_of(conversation)
         return not (view.get("unresolved") or view.get("conflict")) and view.get("owner") in (
             None, self.mesh.runtime_id)
 
@@ -1949,6 +1950,17 @@ class Xiaoyou:
 
     def _begun(self, task: Task) -> None:
         """轮到这件事了（设了并行上限时，前面可能排过队）。"""
+        # A queued task may wait while its conversation passes to another computer
+        # (the first owner binding, or a resolved conflict). Before the claim, the
+        # helper must not start here; the saved input stays pending until this
+        # Runtime owns the conversation again.
+        if not self._may_dispatch(task.conversation, task.hop):
+            try:
+                self._writer.task(task.card, expected_run=(task.run_id, "pending"), queued=True,
+                                  brief="排队中：对话已归别的电脑负责，未启动帮手")
+            except OSError:
+                sys.stderr.write("帮手未启动；排队说明暂无法保存。\n")
+            raise Deferred("Conversation owner changed before the helper started")
         if self._config.max_parallel > 0:
             self._writer.task(task.card, queued=False, started_at=time.time(),
                               expected_active_run=task.run_id)

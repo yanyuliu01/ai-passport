@@ -659,6 +659,8 @@ class Mesh:
                 self._task(origin, epoch, stored)
         if owners:
             self._service.retry_parked()  # 负责人变了：在等它的话再看一次
+            # 交回这台的对话：没启动的帮手任务照原输入接着做（恢复就绪前不会启动）。
+            self._xiaoyou.recover_tasks()
 
     def _peer_name(self, origin: str) -> str:
         with self._lock:

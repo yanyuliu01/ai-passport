@@ -32,6 +32,10 @@ class StartError(RuntimeError):
     """Admission completed, but no worker thread could be started."""
 
 
+class Deferred(RuntimeError):
+    """The saved input may not begin here now; it stays pending for recovery."""
+
+
 def fingerprint(agent: Agent) -> str:
     """Bind recovery to the configured helper without storing its credentials."""
     data = json.dumps(asdict(agent.spec), sort_keys=True, default=str)
@@ -228,6 +232,13 @@ class Tasks:
             if not gone:
                 try:
                     self._started(task)
+                except Deferred:
+                    # Nothing was claimed or invoked: release the card without a
+                    # terminal result, so recovery can start the same input later.
+                    with self._lock:
+                        if self._active.get(task.card) is task:
+                            self._active.pop(task.card, None)
+                    return
                 except Exception as failure:
                     with self._lock:
                         if self._active.get(task.card) is task:
