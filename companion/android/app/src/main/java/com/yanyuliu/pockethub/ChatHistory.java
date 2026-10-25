@@ -257,6 +257,29 @@ final class ChatHistory {
         return result;
     }
 
+    /** Whether a synced message is final enough to store; reply fragments still being written are not. */
+    static boolean settled(SyncCache.Pending item) {
+        if (item.role.equals("you")) return true;
+        if (item.presentation != null) return item.presentation.complete();
+        return item.status.equals("final") || item.status.equals("failed") || item.status.equals("cancelled");
+    }
+
+    /**
+     * An independent copy for storing off the lock. Messages are copied field by field; attachment
+     * lists and presentations are replaced, never changed in place, so they are shared.
+     */
+    ChatHistory copy() {
+        ChatHistory result = new ChatHistory();
+        for (Message message : messages.values()) {
+            Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
+                    message.status, message.kind, message.at, message.synced);
+            copy.clientId = message.clientId; copy.conversation = message.conversation;
+            copy.attachments = message.attachments; copy.presentation = message.presentation;
+            result.put(copy);
+        }
+        return result;
+    }
+
     /** Adds the other history's messages this one does not have (same id = same message). */
     boolean absorb(ChatHistory other) {
         boolean added = false;

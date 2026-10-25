@@ -40,6 +40,12 @@ display label, and more can be added in the app.
 
 ## First-response timing log (App 0.32.4, 0.32.5)
 
+Since 0.32.6 the chat history is stored on a background writer from a cheap
+snapshot, so the main thread no longer builds the multi-megabyte history JSON.
+Sending does not store synchronously, and reply fragments arriving by sync are
+not stored until their final form. The stored format is unchanged; switching
+Runtime still stores synchronously before the old history is replaced.
+
 Since 0.32.5 a third line, `final key=<client id> t=<uptime ms> elapsed_ms=<n>`,
 marks when the complete reply reached the phone (stream, polling or sync), so
 delivery and drawing can be told apart. A `history_save` line reports chat

@@ -173,6 +173,10 @@ public final class HubStore {
     private boolean historyLoaded;
     private String historyRuntime = "", messageKey = "";
     private final Runnable historySave = () -> { synchronized (this) { saveHistory(); } };
+    /** One writer keeps stores in order; building a multi-megabyte JSON never runs on the main thread. */
+    private static final java.util.concurrent.ExecutorService HISTORY_WRITER =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private boolean saveQueued;
 
     public synchronized void initializeHistory(Context context, String runtime, List<ChatTurn> legacy) {
         if (historyPrefs != null && historyRuntime.equals(runtime == null ? "" : runtime)) return;
@@ -190,7 +194,7 @@ public final class HubStore {
 
     private void loadHistory(String runtime) {
         main.removeCallbacks(historySave);
-        if (historyLoaded) saveHistory();
+        if (historyLoaded) saveHistoryNow();  // Switching Runtime: the old key must be written first.
         historyRuntime = runtime == null ? "" : runtime;
         history = historyPrefs == null ? new ChatHistory() : ChatHistory.restore(
                 historyPrefs.getString(ArtifactDownload.key(historyRuntime), "{}"));
@@ -207,21 +211,46 @@ public final class HubStore {
         String stored = historyPrefs.getString(alias, null);
         if (stored == null) return;
         history.absorb(ChatHistory.restore(stored));
-        saveHistory();
+        saveHistoryNow();  // The alias is dropped next: the merged history must be stored first.
         historyPrefs.edit().remove(alias).apply();
     }
 
+    /**
+     * Ask for the history to be stored. A cheap snapshot is taken on the writer thread under this
+     * lock; building the JSON and storing it happen off the lock and off the main thread. Requests
+     * made while one is queued are covered by it; the newest snapshot is always written last.
+     */
     private void saveHistory() {
-        if (historyPrefs == null) return;
+        if (historyPrefs == null || saveQueued) return;
+        saveQueued = true;
+        HISTORY_WRITER.execute(this::writeHistory);
+    }
+
+    private void writeHistory() {
+        ChatHistory snapshot; String key; SharedPreferences prefs;
+        synchronized (this) {
+            saveQueued = false;
+            if (historyPrefs == null) return;
+            snapshot = history.copy(); key = ArtifactDownload.key(historyRuntime); prefs = historyPrefs;
+        }
+        store(prefs, key, snapshot);
+    }
+
+    /** Synchronous store for the rare Runtime switch, where ordering against other edits matters. */
+    private void saveHistoryNow() {
+        if (historyPrefs != null) store(historyPrefs, ArtifactDownload.key(historyRuntime), history);
+    }
+
+    private static void store(SharedPreferences prefs, String key, ChatHistory value) {
         long began = android.os.SystemClock.uptimeMillis();
-        String json = history.json();
+        String json = value.json();
         long built = android.os.SystemClock.uptimeMillis();
-        historyPrefs.edit().putString(ArtifactDownload.key(historyRuntime), json).apply();
+        prefs.edit().putString(key, json).apply();
         long stored = android.os.SystemClock.uptimeMillis() - built;
         // Diagnostics for main-thread stalls: sizes and times only, never content.
         if (built - began + stored >= 16)
             TurnTiming.sink.accept("history_save t=" + began + " build_ms=" + (built - began) + " apply_ms=" + stored
-                    + " chars=" + json.length() + " main=" + (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()));
+                    + " chars=" + json.length() + " main=" + (Looper.myLooper() == Looper.getMainLooper()));
     }
 
     private void historyChanged() {
@@ -489,10 +518,15 @@ public final class HubStore {
 
     /** /v1/sync 给的、还没上卡的消息（别的手机刚发的话、小幽正在写的回复）：画在聊天里。 */
     public void applyPending(List<SyncCache.Pending> items) {
-        boolean dirty = false;
+        boolean dirty = false, settled = false;
         synchronized (this) {
-            for (SyncCache.Pending item : items) dirty |= history.pending(item);
-            if (dirty) historyChanged();
+            for (SyncCache.Pending item : items) {
+                boolean changed = history.pending(item);
+                dirty |= changed;
+                // A reply still being written is not stored on every fragment; its final form is.
+                settled |= changed && ChatHistory.settled(item);
+            }
+            if (settled) historyChanged();
         }
         if (dirty) notifyChanged();
     }

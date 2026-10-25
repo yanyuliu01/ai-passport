@@ -202,6 +202,27 @@ public class ChatHistoryTest {
         assertEquals("client", shown.clientId);  // Same chat row; the reply is not drawn as a new one.
         assertEquals("done", shown.status);
     }
+    @Test public void aCopyStoresTheSameJsonAndLaterChangesDoNotReachIt() {
+        ChatHistory history = new ChatHistory(); history.begin("client", null, "hello", 10);
+        history.accepted("client", "server"); history.finish("server", null, "OK", false, null);
+        ChatHistory copy = history.copy();
+        assertEquals(history.json(), copy.json());
+        history.begin("next", null, "again", 20); history.streaming("server", "changed");
+        assertEquals(2, copy.main().size());
+        assertEquals("OK", copy.main().get(1).text);
+        assertEquals("client", ChatHistory.restore(copy.json()).main().get(1).clientId);
+    }
+    @Test public void onlySettledSyncMessagesAreWorthStoring() {
+        SyncCache.Pending fragment = new SyncCache.Pending("s:reply", "", "main", "xiaoyou", "half", "streaming", 1);
+        fragment.presentation = Presentation.restore("{\"version\":1,\"complete\":false,\"status\":\"streaming\",\"blocks\":[]}");
+        assertFalse(ChatHistory.settled(fragment));
+        SyncCache.Pending done = new SyncCache.Pending("s:reply", "", "main", "xiaoyou", "all", "final", 1);
+        done.presentation = Presentation.restore("{\"version\":1,\"complete\":true,\"status\":\"final\",\"blocks\":[]}");
+        assertTrue(ChatHistory.settled(done));
+        assertTrue(ChatHistory.settled(new SyncCache.Pending("o:you", "", "main", "you", "hi", "queued", 1)));
+        assertFalse(ChatHistory.settled(new SyncCache.Pending("l:reply", "", "main", "xiaoyou", "x", "streaming", 1)));
+        assertTrue(ChatHistory.settled(new SyncCache.Pending("l:reply", "", "main", "xiaoyou", "x", "failed", 1)));
+    }
     @Test public void anotherClientsMessageHasNoLocalSendKey() {
         ChatHistory history = new ChatHistory();
         assertTrue(history.pending(new SyncCache.Pending("other:you", "", "main", "you", "hi", "final", 11)));
