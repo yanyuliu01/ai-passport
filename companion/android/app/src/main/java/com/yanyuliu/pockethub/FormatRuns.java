@@ -32,6 +32,7 @@ final class FormatRuns {
         List<Span> spans = new ArrayList<>();
         for (Object value : runs) {
             Map<String, Object> run = Json.object(value);
+            if (run == null) continue;
             String piece = Json.string(run, "text");
             int start = out.length();
             out.append(piece);

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, PhoneConnection } from '../shared';
-import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress } from '../core/presentation';
+import { activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, type ReviewOutcome } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -21,6 +21,7 @@ function App() {
   const [text, setText] = useState(''), [problem, setProblem] = useState(''), [working, setWorking] = useState(false), [sending, setSending] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskRef>(), [target, setTarget] = useState<TaskRef & { legacy: boolean }>();
   const [historyLimit, setHistoryLimit] = useState(100), [completedOpen, setCompletedOpen] = useState(false), [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const [review, setReview] = useState<{ runtime: string; record: string }>(), [timerRows, setTimerRows] = useState<Json[]>([]);
   const [stopping, setStopping] = useState(''), [reconcileNote, setReconcileNote] = useState('');
   const [usage, setUsage] = useState<string>(), [detail, setDetail] = useState<Json>(), [detailError, setDetailError] = useState(''), [allSteps, setAllSteps] = useState(false), [highlight, setHighlight] = useState('');
   const detailGeneration = useRef(0), selection = useRef('');
@@ -105,6 +106,17 @@ function App() {
     if (!space) return;
     await run(() => window.xiaoyou.createConversation({ space: space.id, title: '', message: message.id, runtime: String(message._runtimeId) })); setTarget(undefined); go('chat');
   }
+  function loadTimers() {
+    if (!space || !space.connections?.some(item => item.capabilities.includes('timer_effect_review'))) { setTimerRows([]); return; }
+    void window.xiaoyou.timerReviews({ space: space.id }).then(setTimerRows).catch(() => setTimerRows([]));
+  }
+  useEffect(() => { if (page === 'work') loadTimers(); }, [page, space?.id]);
+  function reviewable(message: Message): boolean {
+    const failed = message.status === 'failed' || projection(message)?.status === 'failed';
+    // One link per request: on the reply, or on your message when no reply came back.
+    if (message.id.endsWith(':you') && messages.some(item => item.id === requestOf(message.id) + ':reply' && item._runtimeId === message._runtimeId)) return false;
+    return failed && Boolean(requestOf(message.id)) && Boolean(space?.connections?.find(item => item.runtime === message._runtimeId)?.capabilities.includes('request_effect_review'));
+  }
   const latestTaskMessage = new Map<string, string>();
   for (const message of messages) if (message.task && message.author?.kind !== 'owner') latestTaskMessage.set(String(message._runtimeId) + '/' + message.task, message.id);
   if (!loaded) return <main className="app-loading" role="status">{problem || '正在读取本机设置…'}</main>;
@@ -135,7 +147,8 @@ function App() {
           {messages.slice(-historyLimit).map(message => {
             const task = tasks.find(task => task.id === message.task && task._runtimeId === message._runtimeId);
             const showTask = task && activeTask(task) && latestTaskMessage.get(taskKey(task)) === message.id;
-            return <Bubble key={String(message._canonical || message.id)} message={message} task={showTask ? task : undefined} onTask={openTask} onBranch={() => void branch(message)} highlight={highlight === message.id || highlight + ':you' === message.id} canBranch={Boolean(space?.connections?.find(item => item.runtime === message._runtimeId)?.capabilities.includes('side_chats'))} />;
+            return <Bubble key={String(message._canonical || message.id)} message={message} task={showTask ? task : undefined} onTask={openTask} onBranch={() => void branch(message)} highlight={highlight === message.id || highlight + ':you' === message.id}
+              onReview={reviewable(message) ? () => setReview({ runtime: String(message._runtimeId), record: 'messages/' + requestOf(message.id) }) : undefined} canBranch={Boolean(space?.connections?.find(item => item.runtime === message._runtimeId)?.capabilities.includes('side_chats'))} />;
           })}
           {pending.map(item => <article className="message-row mine" key={item.clientId}><div className="message-bubble"><p>{item.payload.text}</p><small>{item.state === 'accepted' ? '已接收，等待回复' : item.state === 'blocked' ? item.error : item.error || '已存本机，等待发送'}</small></div></article>)}
           {waiting && <div className="thinking" role="status"><span className="working-dot" />{waitingProblem ? '回复状态待确认：' + waitingProblem : space?.connected ? '正在等待小幽回复…' : '连接恢复中，回复状态待确认…'}</div>}
@@ -149,7 +162,11 @@ function App() {
             <button className="send" type="submit" aria-label="发送" disabled={!space || !text.trim() || sending}><Icon name="up" /></button>
           </form><p className="compose-hint">{space?.connected ? 'Enter 发送 · Shift + Enter 换行' : '连不上，消息先存在本机，连上后自动发送'}</p></div>
       </>}
-      {page === 'work' && <section className="work-page"><div className="work-list">{awaiting.length > 0 && <h2>等你确认</h2>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+      {page === 'work' && <section className="work-page"><div className="work-list">{timerRows.length > 0 && <><h2>需要你核对</h2>{timerRows.map(row => <button key={String(row._runtimeId) + String(row.timer_id || row.source_id)} className="task-row timer-review" disabled={!row.reviewable || !row.timer_id}
+          title={row.reviewable ? '' : String(row.reason || '暂时不能核对')} onClick={() => setReview({ runtime: String(row._runtimeId), record: 'timers/' + String(row.timer_id) })}>
+          <Icon name="clock" /><span>{row.kind === 'promise' ? '提醒' : '记忆整理'}结果不明</span><small>{row.reviewable ? reviewLabel(row.status) : String(row.reason || '暂时不能核对')}</small></button>)}
+        {timerRows.some(row => row.more) && <p className="quiet-empty">还有更多，处理完这些后会接着列出</p>}</>}
+        {awaiting.length > 0 && <h2>等你确认</h2>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
         {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小幽会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
         {completed.length > 0 && <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已结束 {completed.length}</button>}{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
         <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一件事')}</h2></div>
@@ -173,14 +190,51 @@ function App() {
       {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyou.select(id))} onDirectory={() => setDirectoryOpen(true)} />}
     </main>
     {directoryOpen && space && <Directory key={space.id} space={space} onClose={()=>setDirectoryOpen(false)}/>}
+    {review && space && <EffectReview key={review.runtime + '/' + review.record} space={space.id} target={review} onClose={() => { setReview(undefined); loadTimers(); }} />}
     {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyou.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
   </div>;
 }
-function Bubble({ message, task, onTask, onBranch, canBranch, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onBranch(): void; canBranch: boolean; highlight: boolean }) {
+function Bubble({ message, task, onTask, onBranch, onReview, canBranch, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onBranch(): void; onReview?: () => void; canBranch: boolean; highlight: boolean }) {
   const mine = message.author?.kind === 'owner' || message.kind === 'user';
   const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message);
   if (!mine && !blocks.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
-  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{(issue || view && (!view.complete || ['failed', 'cancelled'].includes(view.status))) && <small role="status">{issue || view?.status_label}</small>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
+  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{(issue || view && (!view.complete || ['failed', 'cancelled'].includes(view.status))) && <small role="status">{issue || view?.status_label}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
+}
+/**
+ * The owner's word on a request whose operations ended unknown. Records a disposition only: nothing
+ * is re-run, retried or rolled back. The saved body is resent unchanged after a 503 or a lost receipt.
+ */
+function EffectReview({ space, target, onClose }: { space: string; target: { runtime: string; record: string }; onClose(): void }) {
+  const [view, setView] = useState<Json>(), [problem, setProblem] = useState(''), [busy, setBusy] = useState(false);
+  const [chosen, setChosen] = useState<Record<string, ReviewOutcome | undefined>>({});
+  const load = () => { setProblem(''); void window.xiaoyou.effectReview({ space, ...target }).then(value => {
+    setView(value); const recorded = (value.review as Json | undefined)?.outcomes as Record<string, ReviewOutcome> | undefined; if (recorded) setChosen(recorded);
+  }).catch(error => setProblem(clean(error))); };
+  useEffect(load, [space, target.runtime, target.record]);
+  const items = view ? reviewItems(view) : [], saved = Boolean(view?.saved), editable = view?.status === 'needs_review' && !saved;
+  const missing = editable ? reviewMissing(items, chosen) : '';
+  async function submit() {
+    setBusy(true); setProblem('');
+    try {
+      const result = await window.xiaoyou.submitEffectReview({ space, ...target, outcomes: chosen as Record<string, ReviewOutcome> });
+      if (result.status === 'reviewed') { onClose(); return; }
+      setView({ ...result, saved: true });
+    } catch (error) {
+      const text = clean(error);
+      if (text.startsWith('记录已变化')) { setProblem(text + '。已重新读取。'); load(); }
+      else setProblem('已保存，说明还没发出：' + text + '。再点一次会用同一份确认重试。');
+    } finally { setBusy(false); }
+  }
+  return <div className="modal-shade" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section className="usage-modal review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
+    <header><h2 id="review-title">核对这次操作</h2><button className="icon-button" aria-label="关闭核对" onClick={onClose}><Icon name="close" /></button></header>
+    {!view && !problem && <p className="quiet-empty">正在读取原操作…</p>}
+    {view && <><p className="review-state">{reviewLabel(view.status)}</p><p className="review-note">这是你的人工确认，记录在原对话里；不会重做、重试或撤销任何操作。</p>
+      {items.map(item => <div className="review-item" key={item.id}><strong>{item.name || '一项操作'}</strong>{item.detail && <code>{item.detail}</code>}{!item.canApply && <small>还没开始执行，只能确认为未生效</small>}
+        <div className="review-choices">{(['applied', 'not_applied'] as const).map(value => <button key={value} className={chosen[item.id] === value ? 'chosen' : ''}
+          disabled={!editable || busy || (value === 'applied' && !item.canApply)} onClick={() => setChosen(current => ({ ...current, [item.id]: value }))}>{value === 'applied' ? '已生效' : '未生效'}</button>)}</div></div>)}
+      {view.status !== 'reviewed' && <footer><small>{missing}</small><button className="primary" disabled={busy || Boolean(missing)} onClick={() => void submit()}>{editable ? '提交确认' : '重试发出说明'}</button></footer>}</>}
+    {problem && <p role="alert" className="review-problem">{problem}</p>}
+  </section></div>;
 }
 function Decision({ approval, disabled, onDecision }: { approval: Json; disabled: boolean; onDecision(decision: 'allow' | 'deny'): void }) {
   return <div className="decision"><strong>等你确认</strong><p>{String(approval.detail || approval.tool || '请查看操作内容')}</p>{approval.remote_actionable !== false && !approval._staleEpoch ? <div><button disabled={disabled} onClick={() => onDecision('deny')}>拒绝</button><button className="primary" disabled={disabled} onClick={() => onDecision('allow')}>允许这次</button></div> : <small>{approval._staleEpoch ? '状态待确认' : '请在电脑上确认'}</small>}</div>;

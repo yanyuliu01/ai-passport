@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
-import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection, taskProgress } from '../core/presentation.js';
-import { credentialHash, proofMatches } from '../core/runtime-client.js';
+import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewBody } from '../core/presentation.js';
+import { RuntimeError } from '../core/runtime-client.js';
+import { credentialHash, proofMatches, hostProof } from '../core/runtime-client.js';
 import { allowedRPC } from '../core/peers.js';
 import type { Endpoint, Json, Message, SyncPage } from '../shared.js';
 const runtime = '1'.repeat(32), space = '2'.repeat(32);
@@ -204,6 +205,9 @@ test('host proofs match the Runtime golden values for device and legacy credenti
   assert.equal(proofMatches(legacy, host, nonce, '421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba'), false);
   assert.equal(proofMatches(device, 'b'.repeat(32), nonce, '421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba'), false);
   assert.equal(proofMatches(device, host, nonce, undefined), false);
+  assert.equal(proofMatches(device, host, nonce, 'é'.repeat(64)), false);
+  assert.equal(proofMatches(device, host, nonce, 'z'.repeat(64)), false);
+  assert.equal(proofMatches(device, host, nonce, '421A98A146B626BC626FAD23A1788E10FD14365E162993BF11EF8AD7CD22B2BA'), false);
 });
 test('task detail uses the Gateway progress sentence before raw fields', () => {
   assert.equal(taskProgress({ progress: '**raw** step', presentation: { version: 1, progress: 'raw step' } }), 'raw step');
@@ -216,6 +220,89 @@ test('relay allows a read-only reconcile with only the original run id', () => {
   assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: 'run-abc', text: 'do it again' }), false);
   assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', {}), false);
   assert.equal(allowedRPC('POST', '/v1/cards/c12/reconcile', { run_id: '../x y' }), false);
+});
+const reviewView = { message_id: 'm1', operation_id: 'op-1', revision: 'rev-7', status: 'needs_review', effects: [
+  { id: 'm1:0', name: 'remember', args: { text: 'note' }, state: 'succeeded' },
+  { id: 'm1:1', name: 'remind', args: { at: '9:00' }, state: 'unknown' },
+  { id: 'm1:2', name: 'forget', args: {}, state: 'pending' }], review: null };
+test('effect review asks only unfinished operations and pending ones can only be not applied', () => {
+  const items = reviewItems(reviewView);
+  assert.deepEqual(items.map(item => [item.id, item.canApply]), [['m1:1', true], ['m1:2', false]]);
+  assert.notEqual(reviewMissing(items, { 'm1:1': 'applied' }), '');
+  assert.notEqual(reviewMissing(items, { 'm1:1': 'applied', 'm1:2': 'applied' }), '');
+  assert.equal(reviewMissing(items, { 'm1:1': 'applied', 'm1:2': 'not_applied' }), '');
+  assert.deepEqual(reviewBody(reviewView, 'review-1', { 'm1:1': 'applied', 'm1:2': 'not_applied' }),
+    { operation_id: 'op-1', revision: 'rev-7', review_id: 'review-1', outcomes: { 'm1:1': 'applied', 'm1:2': 'not_applied' } });
+  assert.equal(requestOf('m1:you'), 'm1'); assert.equal(requestOf('m1:reply'), 'm1'); assert.equal(requestOf('c3'), '');
+  assert.equal(allowedRPC('GET', '/v1/messages/m1/effects'), true);
+  assert.equal(allowedRPC('GET', '/v1/timers/effects?limit=50&cursor=abc:2'), true);
+  assert.equal(allowedRPC('GET', '/v1/timers/t1-due-abc/effects'), true);
+  assert.equal(allowedRPC('POST', '/v1/timers/t1/effects', { operation_id: 't1', revision: 'v', review_id: 'review-2', outcomes: { 't1:0': 'not_applied' } }), true);
+  assert.equal(allowedRPC('POST', '/v1/timers/effects', { operation_id: 't1', revision: 'v', review_id: 'r', outcomes: {} }), false);
+  assert.equal(allowedRPC('POST', '/v1/messages/m1/effects', { operation_id: 'op-1', revision: 'rev-7', review_id: 'review-1', outcomes: { 'm1:1': 'applied' } }), true);
+  assert.equal(allowedRPC('POST', '/v1/messages/m1/effects', { operation_id: 'op-1', revision: 'rev-7', review_id: 'review-1', outcomes: { 'm1:1': 'redo' } }), false);
+  assert.equal(allowedRPC('POST', '/v1/messages/m1/effects', { operation_id: 'op-1', revision: 'rev-7', review_id: 'review-1', outcomes: {}, text: 'x' }), false);
+});
+test('a lost review receipt resends the same body; a conflict drops it so the owner re-reads', async t => {
+  const { db, secrets } = fixture(t);
+  const posts: Json[] = []; let answer: 'unavailable' | 'conflict' | 'reviewed' = 'unavailable';
+  const client = new DesktopClient(db, { async request(_target, method, path, body, signal) {
+    if (path.startsWith('/v1/sync') || path.startsWith('/v1/info') || path.startsWith('/v1/agents') || path.startsWith('/v1/usage')) {
+      await new Promise(resolve => signal?.addEventListener('abort', () => resolve(undefined), { once: true })); return {};
+    }
+    if (method === 'GET') return reviewView;
+    posts.push(body as Json);
+    if (answer === 'unavailable') throw new RuntimeError('核对已保存，说明暂未发布', 503);
+    if (answer === 'conflict') throw new RuntimeError('操作记录已变化', 409);
+    return { ...reviewView, status: 'reviewed' };
+  } }, secrets, () => {});
+  t.after(() => client.stop());
+  client.add({ ...endpoint, capabilities: [...endpoint.capabilities, 'request_effect_review'] });
+  const outcomes = { 'm1:1': 'applied', 'm1:2': 'not_applied' } as const;
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes));
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', { 'm1:1': 'not_applied', 'm1:2': 'not_applied' }));
+  assert.equal(posts.length, 2); assert.deepEqual(posts[0], posts[1]);  // retried with the saved body, not the new choice
+  assert.equal((await client.effectReview(space, runtime, 'messages/m1')).saved, true);
+  answer = 'conflict';
+  await assert.rejects(() => client.submitEffectReview(space, runtime, 'messages/m1', outcomes), /记录已变化/);
+  assert.equal((await client.effectReview(space, runtime, 'messages/m1')).saved, false);
+  answer = 'reviewed';
+  assert.equal((await client.submitEffectReview(space, runtime, 'messages/m1', outcomes)).status, 'reviewed');
+  assert.notEqual(posts.at(-1)?.review_id, posts[0].review_id);  // a fresh review after the conflict
+  await assert.rejects(() => new DesktopClient(db, { async request() { return {}; } }, secrets, () => {}).effectReview(space, runtime, 'm1'));
+});
+test('desktop switches to its own credential only after it authenticates and proves the same subject', async t => {
+  const { db, secrets } = fixture(t);
+  const credential = 'dev.0123456789abcdef.' + 'cd'.repeat(32);
+  let issued = 0, accept = false, subject = space, refuse = false;
+  const client = new DesktopClient(db, { async request(target, method, path, _body, signal) {
+    if (path.startsWith('/v1/sync') || path.startsWith('/v1/agents') || path.startsWith('/v1/usage') || path.startsWith('/v1/messages') && method === 'GET') {
+      await new Promise(resolve => signal?.addEventListener('abort', () => resolve(undefined), { once: true })); return {};
+    }
+    if (path === '/v1/devices') { issued++; return refuse ? { status: 'refused', reason: 'authority offline' } : { status: 'applied', credential }; }
+    if (path.startsWith('/v1/info?nonce=')) {
+      if (target.token === credential && !accept) throw new RuntimeError('令牌不对', 401);
+      const nonce = path.slice('/v1/info?nonce='.length);
+      return { runtime_id: runtime, subject_id: subject, capabilities: ['sync'], host: { id: runtime, proof: hostProof(target.token, runtime, nonce) } };
+    }
+    return {};
+  } }, secrets, () => {});
+  t.after(() => client.stop());
+  const legacy = { ...endpoint, capabilities: [...endpoint.capabilities, 'devices'] };
+  refuse = true; client.add(legacy);  // add() also starts an attempt; the explicit call joins it
+  assert.equal(await client.upgradeCredential(legacy), false);
+  assert.equal(client.endpoints.get(runtime)?.token, 'synthetic-token');
+  refuse = false;
+  assert.equal(await client.upgradeCredential(legacy), false);  // issued, but not yet accepted on this route
+  assert.equal(await client.upgradeCredential(legacy), false);
+  assert.equal(issued, 3 - 1);  // one refusal, then one issue reused across retries
+  subject = 'other-subject'; accept = true;
+  assert.equal(await client.upgradeCredential(legacy), false);  // a different subject never takes it
+  subject = space;
+  assert.equal(await client.upgradeCredential(legacy), true);
+  assert.equal(client.endpoints.get(runtime)?.token, credential);
+  assert.equal(secrets.load('dev-cred:' + space), credential);
+  assert.equal(issued, 2);
 });
 test('metadata and native navigation RPC cannot carry execution input', () => {
   assert.equal(allowedRPC('POST','/v1/directory/native-id/metadata',{}),true);

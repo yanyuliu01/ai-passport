@@ -90,7 +90,40 @@ export function taskProgress(task: Json): string {
   }
   return '';
 }
-export type WorkSection ='waiting' | 'running' | 'ended';
+/** The request id behind a chat message id ("<id>:you" / "<id>:reply"); empty when it is not one. */
+export function requestOf(messageId: string): string {
+  const match = /^(.+):(you|reply)$/.exec(messageId);
+  return match ? match[1] : '';
+}
+export interface ReviewItem { id: string; name: string; state: string; detail: string; canApply: boolean }
+export type ReviewOutcome = 'applied' | 'not_applied';
+/** Operations the owner must answer: every one that did not succeed; a pending one can only be not applied. */
+export function reviewItems(view: Json): ReviewItem[] {
+  const effects = Array.isArray(view.effects) ? view.effects as Json[] : [];
+  return effects.filter(item => item && typeof item.id === 'string' && item.state !== 'succeeded').map(item => ({
+    id: String(item.id), name: String(item.name || ''), state: String(item.state || ''),
+    detail: item.args === undefined ? '' : JSON.stringify(item.args).slice(0, 200), canApply: item.state !== 'pending' }));
+}
+/** Why the owner cannot submit yet, or '' when every operation has a valid answer. */
+export function reviewMissing(items: ReviewItem[], outcomes: Record<string, ReviewOutcome | undefined>): string {
+  if (!items.length) return '没有需要核对的操作';
+  for (const item of items) {
+    const value = outcomes[item.id];
+    if (!value) return '每一项都要选：已生效还是未生效';
+    if (value === 'applied' && !item.canApply) return '还没开始的操作只能确认为未生效';
+  }
+  return '';
+}
+/** The exact POST body, revision passed back unchanged; reused as is for retries. */
+export function reviewBody(view: Json, reviewId: string, outcomes: Record<string, ReviewOutcome | undefined>): Json {
+  const items = reviewItems(view), problem = reviewMissing(items, outcomes);
+  if (problem) throw new Error(problem);
+  return { operation_id: view.operation_id, revision: view.revision, review_id: reviewId,
+    outcomes: Object.fromEntries(items.map(item => [item.id, outcomes[item.id]])) };
+}
+export const reviewLabel = (status: unknown) => status === 'reviewed' ? '已核对，说明已回到原对话'
+  : status === 'recorded' ? '核对已保存，说明还没发出，可以重试' : '这次操作结果不明，请你确认';
+export type WorkSection = 'waiting' | 'running' | 'ended';
 /** Three groups; a task whose state is unconfirmed has not ended, so it stays with the running ones. */
 export function workSection(task: Json): WorkSection {
   if (activeTask(task)) return task.state === 'waiting' || (task.presentation as Json)?.group === 'waiting' ? 'waiting' : 'running';

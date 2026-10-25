@@ -72,6 +72,7 @@ export class HTTPRuntimeTransport implements RuntimeTransport {
 }
 
 const DEVICE_CREDENTIAL = /^dev\.([0-9a-f]{16})\.([0-9a-f]{64})$/;
+export const isDeviceCredential = (token: unknown): token is string => typeof token === 'string' && DEVICE_CREDENTIAL.test(token);
 /** Runtime devices.hash_secret: the secret of a device credential, or the whole legacy shared token. */
 export function credentialHash(token: string): string {
   const secret = DEVICE_CREDENTIAL.exec(token)?.[2] ?? token;
@@ -82,7 +83,8 @@ export function hostProof(token: string, host: string, nonce: string): string {
   return createHmac('sha256', Buffer.from(credentialHash(token), 'utf8')).update('xiaoyou-host-proof\0' + host + '\0' + nonce, 'utf8').digest('hex');
 }
 export function proofMatches(token: string, host: unknown, nonce: string, answer: unknown): boolean {
-  if (typeof host !== 'string' || !host || typeof answer !== 'string' || answer.length !== 64) return false;
+  // A malformed answer (wrong length, non-hex, non-ASCII) is simply not a proof; never let it throw.
+  if (typeof host !== 'string' || !host || typeof answer !== 'string' || !/^[0-9a-f]{64}$/.test(answer)) return false;
   return timingSafeEqual(Buffer.from(hostProof(token, host, nonce)), Buffer.from(answer));
 }
 

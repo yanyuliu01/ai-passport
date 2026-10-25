@@ -3806,6 +3806,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** 点一条消息：开旁聊；回复里有链接时，链接也列在这里打开（气泡要能选字，不直接响应点链接）。 */
     private void showMessageActions(String id, CharSequence shown) {
         Sheet sheet = new Sheet(this, "消息", false).option("开旁聊", "引用这句话，主对话保持不变", false, () -> createSideChat(id));
+        String request = EffectReview.requestId(id);
+        if (!request.isEmpty() && HubStore.get().can("request_effect_review") && requestFailed(request))
+            sheet.option("核对这次操作", "结果不明时，由你确认它到底有没有生效", false, () -> reviewEffects("messages/" + request));
         if (shown instanceof android.text.Spanned) {
             android.text.Spanned text = (android.text.Spanned) shown;
             for (android.text.style.URLSpan link : text.getSpans(0, text.length(), android.text.style.URLSpan.class)) {
@@ -3819,6 +3822,103 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         sheet.show();
     }
+
+    /** 这轮请求在聊天里是没成的（你的话或回复标着失败）：只有这时才可能有结果不明的操作。 */
+    private boolean requestFailed(String request) {
+        for (ChatHistory.Message message : HubStore.get().mainMessages(currentConversation))
+            if (request.equals(EffectReview.requestId(message.id)) && message.status.equals("failed")) return true;
+        return false;
+    }
+
+    /** record 是 "messages/<请求编号>" 或 "timers/<定时编号>"。 */
+    private String reviewKey(String record) { return "effect_review:" + runtimeUrl() + ":" + record; }
+
+    /**
+     * 人工核对：先读原操作，主人逐项选“已生效 / 未生效”再提交。提交的请求体存下来，回执丢了或 503
+     * 时用同一份重试；409 说明记录变了，重新读取。这只记下主人的确认，不重做、不撤销任何操作。
+     */
+    private void reviewEffects(String request) {
+        RuntimeClient.effects(this, request, null, (view, status, error) -> {
+            EffectReview review = EffectReview.from(view);
+            if (review == null) { fail(error == null ? "这轮请求没有可核对的操作" : error); return; }
+            showEffectReview(request, review);
+        });
+    }
+
+    private void showEffectReview(String request, EffectReview review) {
+        android.content.SharedPreferences prefs = getSharedPreferences("ds_ui", MODE_PRIVATE);
+        if (review.status.equals("reviewed")) prefs.edit().remove(reviewKey(request)).apply();
+        String saved = prefs.getString(reviewKey(request), null);
+        Sheet sheet = new Sheet(this, "核对这次操作", false);
+        LinearLayout page = column(); page.setPadding(0, dp(4), 0, dp(8));
+        TextView state = text(EffectReview.label(review.status), 14, true); page.addView(state);
+        TextView note = text("这是你的人工确认，记录在原对话里；不会重做、重试或撤销任何操作。", 12, false);
+        note.setPadding(0, dp(4), 0, dp(10)); page.addView(note);
+        Map<String, String> chosen = new HashMap<>(review.recorded);
+        Button submit = button(review.status.equals("needs_review") && saved == null ? "提交确认" : "重试发出说明", null);
+        submit.setBackground(pressable(BLUE, 12)); submit.setTextColor(Color.WHITE);
+        boolean editable = review.status.equals("needs_review") && saved == null;
+        for (EffectReview.Item item : review.items) {
+            LinearLayout row = column(); row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            row.setBackground(surface(Color.WHITE, 0xffe6ebf2, 14));
+            row.addView(text(item.name.isEmpty() ? "一项操作" : item.name, 14, true));
+            if (!item.detail.isEmpty()) { TextView detail = text(item.detail, 12, false); detail.setTypeface(Typeface.MONOSPACE); row.addView(detail); }
+            if (!item.canApply()) row.addView(text("还没开始执行，只能确认为未生效", 12, false));
+            LinearLayout choices = new LinearLayout(this);
+            Button applied = button("已生效", null), notApplied = button("未生效", null);
+            Runnable paint = () -> {
+                String value = chosen.get(item.id);
+                applied.setBackground(pressable(EffectReview.APPLIED.equals(value) ? 0xffe9f1ff : Color.WHITE, 12, 0xffe6ebf2));
+                notApplied.setBackground(pressable(EffectReview.NOT_APPLIED.equals(value) ? 0xffe9f1ff : Color.WHITE, 12, 0xffe6ebf2));
+                submit.setEnabled(!editable || review.missing(chosen) == null);
+            };
+            applied.setEnabled(editable && item.canApply()); notApplied.setEnabled(editable);
+            applied.setOnClickListener(v -> { chosen.put(item.id, EffectReview.APPLIED); paint.run(); });
+            notApplied.setOnClickListener(v -> { chosen.put(item.id, EffectReview.NOT_APPLIED); paint.run(); });
+            LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, dp(44), 1); left.setMargins(0, 0, dp(6), 0);
+            LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, dp(44), 1); right.setMargins(dp(6), 0, 0, 0);
+            choices.addView(applied, left); choices.addView(notApplied, right); row.addView(choices);
+            paint.run();
+            LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-1, -2); gap.setMargins(0, 0, 0, dp(8));
+            page.addView(row, gap);
+        }
+        TextView problem = text("", 12, false); problem.setTextColor(DANGER); problem.setVisibility(View.GONE);
+        if (!review.status.equals("reviewed")) { page.addView(submit); page.addView(problem); }
+        submit.setOnClickListener(v -> {
+            String body = prefs.getString(reviewKey(request), null);
+            if (body == null) {
+                try { body = review.body(reviewId(), chosen); }
+                catch (IllegalArgumentException missing) { problem.setText(missing.getMessage()); problem.setVisibility(View.VISIBLE); return; }
+                prefs.edit().putString(reviewKey(request), body).apply();
+            }
+            submit.setEnabled(false); problem.setVisibility(View.GONE);
+            String sent = body;
+            RuntimeClient.effects(this, request, sent, (view, status, error) -> {
+                EffectReview next = EffectReview.from(view);
+                if (next != null) {
+                    sheet.dismiss();
+                    if (next.status.equals("reviewed")) {
+                        prefs.edit().remove(reviewKey(request)).apply(); toast("已记下你的确认，说明已回到原对话");
+                        if (request.startsWith("timers/")) loadTimerReviews();
+                    }
+                    else showEffectReview(request, next);
+                    return;
+                }
+                if (status == 409) {
+                    // 原操作或负责人变了：这份确认作废，重新读取后再决定。
+                    prefs.edit().remove(reviewKey(request)).apply(); sheet.dismiss();
+                    fail(error == null ? "记录已变化，请重新核对" : error); reviewEffects(request); return;
+                }
+                problem.setText((status == 503 ? "已保存，说明还没发出：" : "没提交成：") + (error == null ? "请重试" : error)
+                        + "。再点一次会用同一份确认重试。");
+                problem.setVisibility(View.VISIBLE); submit.setText("重试发出说明"); submit.setEnabled(true);
+            });
+        });
+        ScrollView reader = new ScrollView(this); reader.addView(page);
+        sheet.add(reader); sheet.show();
+    }
+
+    private static String reviewId() { return "review-" + java.util.UUID.randomUUID().toString().replace("-", ""); }
 
     private void createSideChat(String message) {
         RuntimeClient.Target original = RuntimeClient.selected(this);
@@ -3835,6 +3935,41 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void topWork() {
         navigation.clear(); setDrawer(false); workKey = ""; show(TAB_WORK);
+        loadTimerReviews();
+    }
+
+    /** 等主人核对的定时操作摘要（timer_effect_review）；只在打开「在做的事」和核对之后读一次。 */
+    private List<Map<String, Object>> timerReviews = new ArrayList<>();
+    private boolean timerReviewsMore;
+
+    private void loadTimerReviews() {
+        if (!HubStore.get().can("timer_effect_review")) { timerReviews = new ArrayList<>(); return; }
+        RuntimeClient.timerReviews(this, null, (view, status, error) -> {
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Object row : Json.list(view, "timers")) {
+                Map<String, Object> item = Json.object(row);
+                if (item != null && !Json.string(item, "status").equals("reviewed")) rows.add(item);
+            }
+            timerReviews = rows; timerReviewsMore = view != null && view.get("next_cursor") instanceof String;
+            workKey = ""; refreshWork(HubStore.get().cards());
+        });
+    }
+
+    private View timerReviewRow(Map<String, Object> row) {
+        boolean reviewable = Json.flag(row, "reviewable");
+        String kind = Json.string(row, "kind").equals("promise") ? "提醒" : "记忆整理";
+        String detail = reviewable ? EffectReview.label(Json.string(row, "status")) : Json.string(row, "reason");
+        LinearLayout box = column(); box.setPadding(dp(14), dp(12), dp(14), dp(12));
+        box.setBackground(pressable(0xfffff4e0, 18));
+        box.addView(text(kind + "结果不明", 14, true));
+        TextView sub = text(detail.isEmpty() ? "暂时不能核对" : detail, 12, false); sub.setTextColor(0xff8a5413); box.addView(sub);
+        String timer = Json.string(row, "timer_id");
+        if (reviewable && !timer.isEmpty()) {
+            box.setFocusable(true); ctl(box, "work:timer-review");
+            box.setOnClickListener(v -> reviewEffects("timers/" + timer));
+        }
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(0, 0, 0, dp(8)); box.setLayoutParams(p);
+        return box;
     }
 
     private void openNative(Card card) {
@@ -3869,7 +4004,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void refreshWork(List<Card> cards) {
         if (tab != TAB_WORK) return;
-        String key = HubStore.get().runtimeConnected() + ":" + showCompletedWork;
+        String key = HubStore.get().runtimeConnected() + ":" + showCompletedWork + ":" + timerReviews;
         for (Card card : cards) key += ":" + card.id + ":" + card.seq + ":" + progressAge(card);
         for (Card.Approval approval : HubStore.get().approvals()) key += ":" + approval.id;
         if (key.equals(workKey)) return; workKey = key;
@@ -3887,6 +4022,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Set<String> pinned = marks("pinned");
         java.util.Comparator<Card> order = java.util.Comparator.comparing((Card c) -> !pinned.contains(c.id)).thenComparing(java.util.Comparator.comparingDouble((Card c) -> c.createdAt).reversed());
         waiting.sort(order); running.sort(order); done.sort(order);
+        if (!timerReviews.isEmpty()) {
+            // 结果不明的定时操作也是“等你确认”的一种：同一页里先列出来，不另开入口。
+            workPane.addView(groupHeading("需要你核对"));
+            for (Map<String, Object> row : timerReviews) workPane.addView(timerReviewRow(row));
+            if (timerReviewsMore) { TextView more = text("还有更多，处理完这些后会接着列出", 12, false); more.setTextColor(HINT); workPane.addView(more); }
+        }
         if (!waiting.isEmpty()) {
             workPane.addView(groupHeading("等你确认"));
             for (Card card : waiting) workPane.addView(decisionCard(card));

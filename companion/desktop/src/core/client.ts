@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { ClientView, Conversation, Endpoint, Json, Message, Pending, SpaceView } from '../shared.js';
 import { ClientDatabase } from './database.js';
 import { orderMessages } from './message-order.js';
-import { conversationID, runtimeConversation, newerConversation, helperViews, unifiedHelpers } from './presentation.js';
-import { asSyncPage, RuntimeError, syncPath, type RuntimeTransport } from './runtime-client.js';
+import { conversationID, runtimeConversation, newerConversation, helperViews, unifiedHelpers, reviewBody } from './presentation.js';
+import { asSyncPage, isDeviceCredential, proofMatches, RuntimeError, syncPath, type RuntimeTransport } from './runtime-client.js';
 
 interface Link { connected: boolean; catchingUp: boolean; error: string }
 export interface SecretStore { load<T>(key: string): T | undefined; save(key: string, value: unknown): void }
@@ -55,6 +56,47 @@ export class DesktopClient {
     const selected = this.selectedConversation(endpoint.spaceId);
     if (selected !== 'default') this.startSync(endpoint, selected);
     this.changed();
+    if (lifetime && this.upgradable(endpoint)) void this.upgradeCredential(endpoint).catch(() => { /* keep the working token */ });
+  }
+  private upgradable(endpoint: Endpoint): boolean {
+    return !endpoint.url.startsWith('peer://') && endpoint.capabilities.includes('devices') && !isDeviceCredential(endpoint.token);
+  }
+  /**
+   * Switch a direct route from the shared token to this desktop's own credential. One credential per
+   * confirmed subject, kept in the client's secure store (never written to the Runtime config): reuse it
+   * when present, otherwise ask once (POST /v1/devices kind=desktop) and keep the pending one for retries.
+   * The route switches only after the credential authenticates there, answers a host proof and the
+   * Runtime is still the same subject; until then the working token stays.
+   */
+  private upgrading = new Map<string, Promise<boolean>>();
+  /** One attempt per subject at a time, so concurrent callers never ask for two credentials. */
+  upgradeCredential(endpoint: Endpoint): Promise<boolean> {
+    const running = this.upgrading.get(endpoint.spaceId);
+    if (running) return running;
+    const attempt = this.upgradeOnce(endpoint).finally(() => this.upgrading.delete(endpoint.spaceId));
+    this.upgrading.set(endpoint.spaceId, attempt);
+    return attempt;
+  }
+  private async upgradeOnce(endpoint: Endpoint): Promise<boolean> {
+    const verifiedKey = 'dev-cred:' + endpoint.spaceId, pendingKey = 'pending-dev:' + endpoint.spaceId;
+    let credential = this.secrets.load<string>(verifiedKey);
+    const verified = Boolean(credential);
+    if (!credential) credential = this.secrets.load<string>(pendingKey);
+    if (!credential) {
+      const issued = await this.transport.request(endpoint, 'POST', '/v1/devices', { name: (hostname() || '电脑').slice(0, 40), kind: 'desktop' });
+      if (!isDeviceCredential(issued.credential)) return false;  // Refused (authority offline): keep the shared token.
+      credential = String(issued.credential); this.secrets.save(pendingKey, credential);
+    }
+    const nonce = randomBytes(16).toString('hex'), candidate = { ...endpoint, token: credential };
+    let info: Json;
+    try { info = await this.transport.request(candidate, 'GET', '/v1/info?nonce=' + nonce); }
+    catch (error) { if (error instanceof RuntimeError && error.status === 401) return false; throw error; }
+    const host = info.host as Json | undefined;
+    if (info.subject_id !== endpoint.spaceId || !proofMatches(credential, host?.id, nonce, host?.proof)) return false;
+    if (!verified) { this.secrets.save(verifiedKey, credential); this.secrets.save(pendingKey, null); }
+    if (this.endpoints.get(endpoint.runtimeId)?.token !== endpoint.token) return true;  // Replaced meanwhile.
+    this.add(candidate);
+    return true;
   }
   select(space: string): void {
     if (![...this.endpoints.values()].some(item => item.spaceId === space)) throw new Error('空间不存在');
@@ -394,6 +436,61 @@ export class DesktopClient {
     if (!['allow', 'deny'].includes(decision)) throw new Error('审批答案无效');
     const endpoint = this.endpointForRecord(space, 'approval', id, runtime);
     await this.transport.request(endpoint, 'POST', '/v1/approvals/' + encodeURIComponent(id), { decision });
+  }
+  private reviewEndpoint(space: string, runtime: string, capability: string): Endpoint {
+    const endpoint = this.endpoints.get(runtime);
+    if (!endpoint || endpoint.spaceId !== space) throw new Error('找不到处理这项操作的电脑');
+    if (!endpoint.capabilities.includes(capability)) throw new Error('这台电脑的小幽还不支持核对，请先更新');
+    return endpoint;
+  }
+  /** "messages/<request id>" or "timers/<timer id>": both reviews read and submit the same way. */
+  private reviewPath(record: string): string {
+    const match = /^(messages|timers)\/([A-Za-z0-9._:-]{1,128})$/.exec(record);
+    if (!match) throw new Error('核对对象无效');
+    return '/v1/' + match[1] + '/' + encodeURIComponent(match[2]) + '/effects';
+  }
+  /** Read the original operations whose result is unknown (owner review only, never automatic). */
+  async effectReview(space: string, runtime: string, record: string): Promise<Json> {
+    const capability = record.startsWith('timers/') ? 'timer_effect_review' : 'request_effect_review';
+    const view = await this.transport.request(this.reviewEndpoint(space, runtime, capability), 'GET', this.reviewPath(record));
+    if (view.status === 'reviewed') this.db.set('effect-review:' + runtime + '/' + record, null);
+    return { ...view, saved: Boolean(this.db.get('effect-review:' + runtime + '/' + record, null)) };
+  }
+  /** Timer operations waiting for the owner's word, from every computer in the space that offers it. */
+  async timerReviews(space: string): Promise<Json[]> {
+    const rows: Json[] = [];
+    for (const endpoint of this.endpoints.values()) {
+      if (endpoint.spaceId !== space || !endpoint.capabilities.includes('timer_effect_review')) continue;
+      try {
+        const page = await this.transport.request(endpoint, 'GET', '/v1/timers/effects?limit=50');
+        for (const row of Array.isArray(page.timers) ? page.timers as Json[] : [])
+          if (row && row.status !== 'reviewed') rows.push({ ...row, _runtimeId: endpoint.runtimeId, more: typeof page.next_cursor === 'string' });
+      } catch { /* A computer that cannot answer keeps its timers out of this list; nothing is assumed. */ }
+    }
+    return rows;
+  }
+  /**
+   * Submit the owner's answers. The body is saved before sending and reused unchanged after a lost receipt
+   * or a 503; a 409 drops it so the owner re-reads. It records a disposition only; nothing is re-run.
+   */
+  async submitEffectReview(space: string, runtime: string, record: string, outcomes: Record<string, 'applied' | 'not_applied'>): Promise<Json> {
+    const capability = record.startsWith('timers/') ? 'timer_effect_review' : 'request_effect_review';
+    const endpoint = this.reviewEndpoint(space, runtime, capability), key = 'effect-review:' + runtime + '/' + record, path = this.reviewPath(record);
+    let body = this.db.get<Json | null>(key, null);
+    if (!body) {
+      const view = await this.transport.request(endpoint, 'GET', path);
+      if (view.status === 'reviewed') return view;  // Already settled: nothing to send.
+      body = reviewBody(view, 'review-' + randomUUID().replaceAll('-', ''), outcomes);
+      this.db.set(key, body);
+    }
+    try {
+      const result = await this.transport.request(endpoint, 'POST', path, body);
+      if (result.status === 'reviewed') this.db.set(key, null);
+      return result;
+    } catch (error) {
+      if (error instanceof RuntimeError && error.status === 409) { this.db.set(key, null); throw new Error('记录已变化，请重新核对：' + error.message); }
+      throw error;
+    }
   }
   async cancel(space: string, id: string, runtime: string): Promise<void> {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);

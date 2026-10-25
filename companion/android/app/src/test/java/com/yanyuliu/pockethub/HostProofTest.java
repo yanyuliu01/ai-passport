@@ -23,6 +23,8 @@ public class HostProofTest {
         assertFalse(HostProof.matches(LEGACY, HOST, NONCE, "421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba"));
         assertFalse(HostProof.matches(DEVICE, "b".repeat(32), NONCE, "421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba"));
         assertFalse(HostProof.matches(DEVICE, HOST, NONCE, ""));
+        assertFalse(HostProof.matches(DEVICE, HOST, NONCE, "é".repeat(64)));
+        assertFalse(HostProof.matches(DEVICE, HOST, NONCE, "z".repeat(64)));
         assertFalse(HostProof.matches(DEVICE, "", NONCE, "421a98a146b626bc626fad23a1788e10fd14365e162993bf11ef8ad7cd22b2ba"));
     }
 

@@ -224,21 +224,26 @@ final class RuntimeClient {
             // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
             String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
             prefs(context).edit().putString("sid:" + target.url, subject).apply();
-            if (direct && abilities.contains("devices") && !HostProof.device(target.token)) upgradeCredential(context, target);
+            String owner = Json.string(info, "subject_id");
+            if (direct && abilities.contains("devices") && !HostProof.device(target.token) && !owner.isEmpty())
+                upgradeCredential(context, target, owner);
         }
         return abilities;
     }
 
     /**
-     * 还在用旧的共享令牌：向这台电脑要一份这部手机自己的凭据（POST /v1/devices），确认它能用、
-     * 也答得出 host_proof 之后才换上；没换成就继续用旧令牌，下次再试。要到但还不能用的凭据
-     * （权限权威那台还没同步过来）先记着，下次接着核对，不重复要新的。
+     * 还在用旧的共享令牌：换成这部手机自己的凭据。同一个小幽（同一主体）只要一份凭据，各条线路共用：
+     * 已有就拿来在这条线路上核对；没有才向这台电脑要（POST /v1/devices），要到但还不能用的先记着，
+     * 下次接着核对，不重复要新的。只有这份凭据在这条线路上通过认证、答对 host_proof、而且还是
+     * 同一主体，才替换这条线路的令牌；别的电脑还没同步到凭据时，这条线路继续用原来的认证。
      */
-    private static void upgradeCredential(Context context, Target target) {
+    private static void upgradeCredential(Context context, Target target, String subject) {
         SharedPreferences prefs = prefs(context);
-        String pendingKey = "pending_dev:" + target.url;
+        String verifiedKey = "dev_cred:" + subject, pendingKey = "pending_dev:" + subject;
         try {
-            String credential = prefs.getString(pendingKey, null);
+            String credential = prefs.getString(verifiedKey, null);
+            boolean verified = credential != null;
+            if (!verified) credential = prefs.getString(pendingKey, null);
             if (credential == null) {
                 String body = "{\"name\":" + jsonString(android.os.Build.MODEL == null ? "手机" : android.os.Build.MODEL) + ",\"kind\":\"phone\"}";
                 Map<String, Object> issued = Json.parseObject(requestText("POST", target.url + "/v1/devices", target.token,
@@ -247,11 +252,8 @@ final class RuntimeClient {
                 if (!HostProof.device(credential)) return;  // 权威不在线等原因拒绝：照旧用共享令牌
                 prefs.edit().putString(pendingKey, credential).apply();
             }
-            String nonce = HostProof.nonce();
-            Map<String, Object> info = Json.parseObject(requestText("GET", target.url + "/v1/info?nonce=" + nonce,
-                    credential, null, null, 10));
-            Map<String, Object> host = info == null ? null : Json.object(info.get("host"));
-            if (host == null || !HostProof.matches(credential, Json.string(host, "id"), nonce, Json.string(host, "proof"))) return;
+            if (!credentialWorks(target, credential, subject)) return;
+            if (!verified) prefs.edit().putString(verifiedKey, credential).remove(pendingKey).apply();
             synchronized (RuntimeClient.class) {
                 List<Target> list = targets(context), updated = new ArrayList<>();
                 Target chosen = selected(context);
@@ -259,11 +261,25 @@ final class RuntimeClient {
                     updated.add(item.url.equals(target.url) ? new Target(item.name, item.url, credential) : item);
                 store(context, updated, chosen == null ? target.url : chosen.url);
             }
-            prefs.edit().remove(pendingKey).apply();
-            HubStore.get().log("这部手机已换成自己的凭据");
+            HubStore.get().log("这条线路已换成这部手机自己的凭据");
         } catch (IOException | RuntimeException error) {
             HubStore.get().log("这次没换成自己的凭据，继续用原来的：" + error.getMessage());
         }
+    }
+
+    /** 用这份凭据走这条线路：认证通过、host_proof 对得上、而且仍是同一主体。 */
+    private static boolean credentialWorks(Target target, String credential, String subject) throws IOException {
+        String nonce = HostProof.nonce();
+        Map<String, Object> info;
+        try {
+            info = Json.parseObject(requestText("GET", target.url + "/v1/info?nonce=" + nonce, credential, null, null, 10));
+        } catch (IOException error) {
+            if (String.valueOf(error.getMessage()).contains("401")) return false;  // 这台还没同步到凭据：下次再试
+            throw error;
+        }
+        Map<String, Object> host = info == null ? null : Json.object(info.get("host"));
+        return host != null && subject.equals(Json.string(info, "subject_id"))
+                && HostProof.matches(credential, Json.string(host, "id"), nonce, Json.string(host, "proof"));
     }
 
     private static String jsonString(String value) {
@@ -979,6 +995,58 @@ final class RuntimeClient {
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
                 Target selected = selected(context);
                 if (selected != null && selected.url.equals(target.url)) callback.done(out, issue);
+            });
+        });
+    }
+
+    interface ReviewResult { void done(Map<String, Object> view, int status, String error); }
+
+    /**
+     * 请求结果不明时的人工核对（request_effect_review）：body 为 null 是读取原操作，否则提交主人的确认。
+     * status 是 HTTP 状态码（成功 200；503 用同一请求体重试，409 重新读取），出错时 error 是原话。
+     */
+    static void effects(Context context, String record, String body, ReviewResult callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, 0, "连不上小幽"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> view = null; String error = null; int status = 200;
+            try {
+                // record 是 "messages/<请求编号>" 或 "timers/<定时编号>"：两种核对的读取和提交完全相同。
+                int slash = record.indexOf('/');
+                String path = target.url + "/v1/" + record.substring(0, slash + 1)
+                        + java.net.URLEncoder.encode(record.substring(slash + 1), "UTF-8") + "/effects";
+                view = Json.parseObject(body == null ? requestText("GET", path, target.token, null, null, 15)
+                        : requestText("POST", path, target.token, body.getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 30));
+            } catch (Exception problem) {
+                error = String.valueOf(problem.getMessage());
+                java.util.regex.Matcher code = java.util.regex.Pattern.compile("Runtime 返回 (\\d{3})").matcher(error);
+                status = code.find() ? Integer.parseInt(code.group(1)) : 0;
+                error = error.replaceFirst("^Runtime 返回 \\d{3}：?", "");
+            }
+            Map<String, Object> out = view; String issue = error; int code = status;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target selected = selected(context);
+                if (selected != null && selected.url.equals(target.url)) callback.done(out, code, issue);
+            });
+        });
+    }
+
+    /** 等主人核对的定时操作（timer_effect_review）：一页摘要；列表变了（409）从第一页重新取。 */
+    static void timerReviews(Context context, String cursor, ReviewResult callback) {
+        Target target = selected(context); if (target == null) { callback.done(null, 0, "连不上小幽"); return; }
+        QUICK.execute(() -> {
+            Map<String, Object> view = null; String error = null; int status = 200;
+            try {
+                view = Json.parseObject(requestText("GET", target.url + "/v1/timers/effects?limit=50"
+                        + (cursor == null ? "" : "&cursor=" + java.net.URLEncoder.encode(cursor, "UTF-8")), target.token, null, null, 15));
+            } catch (Exception problem) {
+                error = String.valueOf(problem.getMessage());
+                java.util.regex.Matcher code = java.util.regex.Pattern.compile("Runtime 返回 (\\d{3})").matcher(error);
+                status = code.find() ? Integer.parseInt(code.group(1)) : 0;
+            }
+            Map<String, Object> out = view; String issue = error; int code = status;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target selected = selected(context);
+                if (selected != null && selected.url.equals(target.url)) callback.done(out, code, issue);
             });
         });
     }

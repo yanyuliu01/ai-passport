@@ -36,7 +36,8 @@ final class HostProof {
     }
 
     static boolean matches(String token, String host, String nonce, String answer) {
-        if (host == null || host.isEmpty() || answer == null || answer.isEmpty()) return false;
+        // A malformed answer (wrong length, non-hex, non-ASCII) is simply not a proof.
+        if (host == null || host.isEmpty() || answer == null || !answer.matches("[0-9a-f]{64}")) return false;
         return MessageDigest.isEqual(proof(keyHash(token), host, nonce).getBytes(StandardCharsets.UTF_8),
                 answer.getBytes(StandardCharsets.UTF_8));
     }

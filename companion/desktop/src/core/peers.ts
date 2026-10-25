@@ -27,7 +27,8 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     || /^\/v1\/directory\/(?:[A-Za-z0-9._:-]+(?:\/history)?|operations\/[A-Za-z0-9._:-]+)$/.test(url.pathname)
     || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
     || /^\/v1\/tasks\/[a-zA-Z0-9._:-]+\/activity$/.test(url.pathname)
-    || /^\/v1\/messages\/[a-zA-Z0-9._:-]+$/.test(url.pathname);
+    || /^\/v1\/messages\/[a-zA-Z0-9._:-]+(?:\/effects)?$/.test(url.pathname)
+    || /^\/v1\/timers\/(?:[a-zA-Z0-9._:-]+\/)?effects$/.test(url.pathname);
   if (method !== 'POST') return false;
   if (url.pathname === '/v1/voice' || url.pathname === '/v1/images') {
     const binary = body?._relay_binary, type = body?.content_type;
@@ -56,6 +57,13 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     && Object.keys(body).every(key => ['text', 'client_id', 'conversation', 'card', 'pin', 'reply_scope', 'agent', 'effort', 'model', 'attachments'].includes(key))
     && (body.reply_scope === undefined || body.reply_scope === 'main'));
   if (/^\/v1\/approvals\/[a-zA-Z0-9._:-]+$/.test(url.pathname)) return ['allow', 'deny'].includes(String(body?.decision));
+  // The owner's review of an unknown request: exactly the four fields, each answer applied or not_applied.
+  if (/^\/v1\/(?:messages|timers)\/[a-zA-Z0-9._:-]+\/effects$/.test(url.pathname)) {
+    const outcomes = body?.outcomes as Json | undefined;
+    return Boolean(body && Object.keys(body).length === 4 && typeof body.operation_id === 'string' && 'revision' in body
+      && typeof body.review_id === 'string' && body.review_id.length <= 128 && outcomes && typeof outcomes === 'object' && !Array.isArray(outcomes)
+      && Object.values(outcomes).every(value => value === 'applied' || value === 'not_applied'));
+  }
   // Read-only recheck of an unknown execution: only the original run id, never new execution input.
   if (/^\/v1\/cards\/[a-zA-Z0-9._:-]+\/reconcile$/.test(url.pathname)) return Boolean(body && Object.keys(body).length === 1
     && typeof body.run_id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(body.run_id));
