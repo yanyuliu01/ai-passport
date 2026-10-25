@@ -10,6 +10,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 
 - [xiaoyou-system-prompt.md](xiaoyou-system-prompt.md): base prompt, full Grok Bot reference mapping, capability adaptations and acceptance boundaries.
 - [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
+- [first-response-measurement.md](first-response-measurement.md): how to measure and record the 3-second first response on a real phone before the default-flow cutover.
 - [unified-message-model.md](unified-message-model.md): the unified message structure: one message log, id rules, the sync interface, and how a new runtime or agent connects.
 - [conversation-presentation.md](conversation-presentation.md): proposed shared project/conversation presentation, source and directory bindings, title repair, event authorship and native-client boundaries.
 - [app-runtime-simplification.md](app-runtime-simplification.md): confirmed issue list for simplifying App and Runtime interaction across code, experience and interaction, with root causes, targets and open decisions.

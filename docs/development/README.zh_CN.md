@@ -19,6 +19,7 @@
 
 - [xiaoyou-system-prompt.zh_CN.md](xiaoyou-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
+- [first-response-measurement.zh_CN.md](first-response-measurement.zh_CN.md)：默认流程切换前，在真实手机上测量并记录 3 秒首响应的方法。
 - [unified-message-model.zh_CN.md](unified-message-model.zh_CN.md)：统一消息结构——唯一的消息日志、编号规则、同步接口，以及新的 Runtime 或 agent 怎么接入。
 - [conversation-presentation.zh_CN.md](conversation-presentation.zh_CN.md)：项目／会话统一展示方案，包含来源与目录绑定、标题修复、事件署名与原生客户端边界。
 - [app-runtime-simplification.zh_CN.md](app-runtime-simplification.zh_CN.md)：App 与 Runtime 交互简化的问题清单，覆盖代码、体验、交互三层，含根因、目标指标与待决定事项。

@@ -176,6 +176,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_dispatch_safety.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_dispatch_recovery.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_dispatch_owner.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_ttft_report.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_native_recovery.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_context.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_loop.py
