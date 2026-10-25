@@ -53,6 +53,9 @@ history saves that took at least 16 ms (build and store times, size, whether on
 the main thread). 0.32.5 also keeps a reply that arrives by sync in the chat row
 of the message that was sent, instead of drawing it as a new row.
 
+Since 0.32.8 the sync loop serializes its saved sync cache after releasing the
+store lock, so the main thread no longer waits for it on every sync page.
+
 Since 0.32.7, `adb shell setprop debug.xiaoyou.slowmain 1` (then restart the App)
 also logs `slow_main ms=<n> at=<handler and callback class>` for every main-thread
 message of 100 ms or more. It is off by default and records class names and

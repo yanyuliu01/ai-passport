@@ -471,7 +471,7 @@ final class RuntimeClient {
         }
         // 核对“还是这台电脑”和写进去在同一把锁里：中间换了电脑，这一页就整页不要，
         // 不会把上一台的卡写到下一台的显示里。
-        String document = null;
+        SyncCache toSave = null;
         boolean more;
         synchronized (store) {
             if (store.cardsEpoch() != epoch) {
@@ -492,12 +492,14 @@ final class RuntimeClient {
             store.runtimeConnected(true);
             store.catchingUp(result.more);
             more = result.more;
-            // 记录和游标在同一把锁里取出，存下的总是“应用到哪一页、游标就在哪一页”。
             // 换了一份记录时 resetCards 已换上空的进度：存它，下次从头取，不放回旧记录。
-            if (result.replaced) document = store.syncCache().save();
+            if (result.replaced) toSave = store.syncCache();
             else if (!before.equals(cache.cursor()) || !Json.list(page, "messages").isEmpty()
-                    || !Json.list(page, "tasks").isEmpty()) document = cache.save();
+                    || !Json.list(page, "tasks").isEmpty()) toSave = cache;
         }
+        // 只有这个同步线程改这份缓存：出了锁再序列化，存下的仍是“应用到哪一页、游标就在哪一页”，
+        // 主线程不用等这一步（整份缓存的序列化要上百毫秒）。
+        String document = toSave == null ? null : toSave.save();
         if (document != null && key != null && !key.isEmpty()) saveSync(app, key, document);
         return more;
     }
