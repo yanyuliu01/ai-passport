@@ -183,6 +183,8 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_loop.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_progress_wakes.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_effects.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_executor.py
+    PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_speaker.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_effect_review.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_timer_effects.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_timer_review.py

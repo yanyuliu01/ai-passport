@@ -72,6 +72,44 @@ client migration and an agreed, enforced minimum-version policy. Default
 Source and host-test availability do not establish rendered three-second response,
 live reconnection or cross-device acceptance.
 
+## Model-selected task execution boundary (R6 source)
+
+`loop/executor.py` owns the existing `task_action` selection, claim, saved result
+and recovery checks. Normal conversation actions and recovered pending actions
+use the same Executor execution branches and explicit action ports. The private request journal keeps its
+existing format, operation id, helper fingerprints and target revision; this
+adds no store, HTTP endpoint or model call. A failed selection/claim save never
+enters the adapter. Running/unknown work is not repeated, while a saved success
+is returned without invoking the action again, even if the helper later changes.
+
+Pending recovery still verifies the original request/conversation, helper
+configuration and target revision. Owner guards remain in the existing effect
+boundary. Display interruption is excluded from saved selections/results, and a
+remote action receipt still does not establish remote execution. Direct named
+helper assignments and supplements also pass through Executor. Conversation
+context stays outside: prepare it after saving the handoff, or only when a
+supplement resumes an idle task. Existing task-manager, native-session and
+remote-control adapters retain admission and execution mechanics. Decision-mode
+cutover and the remaining R6 migration still require separate acceptance.
+
+## Speaker provider boundary (R6 source)
+
+`loop/speaker.py` now runs conversation provider phases, decision/speaking phases,
+helper-result summaries and timer speech through their existing caller entry.
+It owns streamed text replacement/throttling, native-session use and quoted
+history receipts. Original owner/effect guards are captured before the provider
+call and checked on streamed callbacks and returned output; stale output cannot
+save its native session or mark history through this path. Ephemeral calls skip
+the shared model-history window/session/receipts; decision-only calls do not
+mark speaking history as delivered. Existing caller-supplied tools, interrupts,
+formatting, quote budgets and remaining timeouts are preserved.
+
+The conversation controller still chooses the flow and publishes replies; the
+legacy mutation-capable toolbox remains until decision-mode cutover. This
+extraction adds no model call, fallback, storage format or permission. Source
+availability and warm reply tests do not establish full cold-start, voice or
+real-helper fault acceptance.
+
 ## Helper restart recovery (R6.1 source)
 
 Saved helper inputs that were not yet claimed resume after startup policy and
@@ -231,6 +269,13 @@ or tool. An interrupted claim with no saved reply stays unconfirmed. A full
 Runtime restart does not revive an interrupted helper to deliver an old progress
 update. Changed runs/owners and completed tasks do not publish stale notifications;
 private watch data stays off client/Mesh projections.
+
+`loop/progress_wakes.py` now owns progress admission, claim/retry limits, saved
+reply recovery and completion checkpoints through explicit ports. Pulse supplies
+the clock, configured policy, owner/model/publication adapters and shared queue;
+the rules do not import Pulse or Xiaoyou. This preserves the existing task journal,
+watch identities, prompts, timing policy and client formats. Reminder and memory
+upkeep rules still reside in Pulse; this is a partial wake-rule migration.
 
 Background wake calls retain their original owner generation through model
 phases, tool calls, native-session/context receipts and note/nudge/upkeep

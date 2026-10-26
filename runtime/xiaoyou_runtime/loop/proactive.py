@@ -28,7 +28,7 @@ from .effects import EffectFenceError, EffectUncertain, SavedWake
 from ..world.promises import wake_source
 from .voice_tools import Toolbox
 from ..world.world import durable_write
-from ..events.operations import valid_watch
+from .progress_wakes import ProgressPorts, ProgressWakes
 
 TICK = 20
 WATCH_AFTER = 90
@@ -63,6 +63,21 @@ class Pulse:
         self._pending = set()
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._progress = ProgressWakes(
+            lambda: self._xiaoyou.cards,
+            lambda cause: self._xiaoyou.intake.writer("timer", actor="xiaoyou", cause=cause),
+            ProgressPorts(
+                owner=lambda conversation: self._owner(conversation),
+                stopped=self._stop.is_set,
+                pending=self._progress_pending,
+                available=lambda: self._voice() is not None,
+                policy=lambda: (WATCH_AFTER, WATCH_EVERY, WATCH_MAX),
+                ask=lambda event, conversation, owner: self._ask(
+                    event, ["task_detail", "recall"], GATE_RULES, conversation, owner=owner),
+                say=lambda *args, **kwargs: self._say(*args, **kwargs),
+                text=lambda text: self._xiaoyou.chat_text(text),
+                silent=lambda text: not text or SILENT.match(text)
+                    or text.startswith(("（不说", "(不说"))))
         # 整理到哪一轮（编号），存在记忆旁边：重启后不把整段历史再整理一遍。
         self._marker = xiaoyou.memory.log_dir.parent / "upkeep.json"
         self._marker_lock = threading.RLock()
@@ -200,77 +215,19 @@ class Pulse:
             with self._lock:
                 self._pending.discard(key)
 
+    def _progress_pending(self, conversation, run_id, event_id):
+        with self._lock:
+            return (conversation, ("watch", run_id, event_id)) in self._pending
+
     def _checkpoint_watch(self, card, before, after):
-        event_id = after["event"]["id"]
-        return self._xiaoyou.intake.writer("timer", actor="xiaoyou", cause=event_id).progress_checkpoint(
-            card["id"], card["run_id"], before, after) is not None
+        return self._progress.checkpoint(card, before, after)
 
     @staticmethod
     def _watch_state(watch, state, **fields):
-        result = deepcopy(watch)
-        result["event"].update(state=state, **fields)
-        if state in ("done", "unknown"):
-            result["event"].pop("reply", None)
-        return result
+        return ProgressWakes.state(watch, state, **fields)
 
-    def _watch_reply(self, card, watch):
-        message = self._xiaoyou.cards.message(watch["event"]["id"] + ":reply")
-        return message if (message and message.get("status") == "final" and message.get("task") == card["id"]
-                and message.get("conversation") == card["conversation"] and message.get("kind") == "note") else None
-
-    def _due_watches(self, now: float) -> List[Any]:
-        due = []
-        for card, watch in self._xiaoyou.cards.watches():
-            run_id, owner = card["run_id"], self._owner(card["conversation"])
-            if owner is None or self._stop.is_set():
-                continue
-            if watch is not None:
-                if not valid_watch(watch) or watch["run_id"] != run_id:
-                    continue  # Preserve malformed claims rather than reset their counters.
-                event = watch["event"]
-                if event["owner"] != list(owner):
-                    continue
-                with self._lock:
-                    active = (card["conversation"], ("watch", run_id, event["id"])) in self._pending
-                if active:
-                    continue
-                final = self._watch_reply(card, watch)
-                if event["state"] != "done" and final:
-                    if not any(item.get("id") == final["id"] for item in card["entries"]):
-                        if not self._say(card["id"], final["text"], event["id"], "后台的事有新进展",
-                                         active_run=run_id, owner=owner):
-                            continue
-                    done = self._watch_state(watch, "done")
-                    if not self._checkpoint_watch(card, watch, done):
-                        continue
-                    watch, event = done, done["event"]
-                elif event["state"] == "running":
-                    unknown = self._watch_state(watch, "unknown")
-                    if not self._checkpoint_watch(card, watch, unknown):
-                        continue
-                    watch, event = unknown, unknown["event"]
-                if event["state"] in ("pending", "ready"):
-                    if event["state"] == "ready" or now >= event.get("retry_at", 0):
-                        due.append((run_id, {"card": card["id"], "watch": watch}))
-                    continue
-            lines = card.get("progress", [])[-6:]
-            if not lines or self._voice() is None:
-                continue
-            signature = hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode()).hexdigest()
-            started = card.get("started_at") or card.get("created_at") or now
-            wakes = watch["wakes"] if watch else 0
-            if (now - started < WATCH_AFTER or wakes >= WATCH_MAX or watch and (
-                    watch["attempts"] >= WATCH_MAX or watch["seen"] == signature
-                    or now - watch["woke_at"] < WATCH_EVERY)):
-                continue
-            current = {"version": 1, "run_id": run_id, "seen": signature, "wakes": wakes + 1,
-                       "attempts": watch["attempts"] if watch else 0,
-                       "woke_at": now, "event": {"id": "%s-gate-%d" % (run_id, wakes + 1),
-                       "state": "pending", "progress": signature, "lines": lines[-4:],
-                       "owner": list(owner), "created_at": now, "started_at": started}}
-            if self._checkpoint_watch(card, watch, current):
-                due.append((run_id, {"card": card["id"], "watch": current}))
-        return due
+    def _due_watches(self, now):
+        return self._progress.due(now)
 
     # ---- 叫醒她 ----
 
@@ -360,50 +317,8 @@ class Pulse:
         xiaoyou.context.delivered(card["conversation"], turn_id, [xiaoyou.voice_name()], xiaoyou.voice_name())
         return True
 
-    def _wake_for_task(self, run_id: str, entry: Dict[str, Any]) -> None:
-        card = self._xiaoyou.cards.get(entry["card"])
-        if card is None or card.get("run_id") != run_id or card["state"] not in ("working", "waiting"):
-            return
-        watch = entry["watch"]
-        owner = tuple(watch["event"]["owner"])
-        if self._stop.is_set() or self._owner(card["conversation"]) != owner:
-            return
-        if watch["event"]["state"] == "pending":
-            if self._voice() is None or watch["attempts"] >= WATCH_MAX:
-                return
-            running = self._watch_state(watch, "running")
-            running["attempts"] += 1
-            running["woke_at"] = time.time()
-            if not self._checkpoint_watch(card, watch, running):
-                return
-            steps = "；".join(watch["event"]["lines"])
-            minutes = max(0, int((time.time() - watch["event"]["started_at"]) // 60))
-            event = "后台那件事 %s「%s」做了 %d 分钟了，最近几步：%s" % (card["id"], card.get("title", ""), minutes, steps)
-            text = self._ask(event, ["task_detail", "recall"], GATE_RULES, card["conversation"], owner=owner)
-            if self._stop.is_set() or self._owner(card["conversation"]) != owner:
-                return
-            if text is None:
-                state = "unknown" if running["attempts"] >= WATCH_MAX else "pending"
-                self._checkpoint_watch(card, running, self._watch_state(running, state, retry_at=time.time() + WATCH_EVERY))
-                return
-            text = self._xiaoyou.chat_text(text)
-            text.encode("utf-8")
-            ready = self._watch_state(running, "ready", reply=text)
-            if not self._checkpoint_watch(card, running, ready):
-                return
-            watch = ready
-        if watch["event"]["state"] != "ready":
-            return
-        current = self._xiaoyou.cards.get(card["id"])
-        if current is None or current.get("run_id") != run_id or current["state"] not in ("working", "waiting"):
-            return
-        text, turn_id = watch["event"]["reply"], watch["event"]["id"]
-        silent = not text or SILENT.match(text) or text.startswith(("（不说", "(不说"))
-        if not silent and not self._watch_reply(card, watch):
-            if not self._say(card["id"], text, turn_id, "后台的事有新进展", active_run=run_id, owner=owner):
-                return
-        if not self._stop.is_set() and self._owner(card["conversation"]) == owner:
-            self._checkpoint_watch(card, watch, self._watch_state(watch, "done"))
+    def _wake_for_task(self, run_id, entry):
+        return self._progress.run(run_id, entry)
 
     def _wake_for_promise(self, item: Dict[str, Any]) -> None:
         promises = self._xiaoyou.promises
