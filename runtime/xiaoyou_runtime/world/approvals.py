@@ -383,7 +383,7 @@ class Gate:
                 self._send(200, gate.capabilities.tools(holder["agent"]))
 
             def _capability_call(self, holder: Dict[str, str]) -> None:
-                from ..helpers.capabilities import CapabilityError
+                from ..errors import CapabilityError
                 try:
                     length = int(self.headers.get("Content-Length", ""))
                     if not 0 < length <= MAX_GATE_BODY_BYTES:

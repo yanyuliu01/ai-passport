@@ -3,18 +3,12 @@ import hashlib
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from ..helpers.model_gateway import Gateway, GatewayError, Settings
+from ..errors import GatewayError
 
 
 class ConversationMetadata:
-    def __init__(self, config, record):
-        settings = config.models or Settings()
-        routes = {purpose:[(provider,model) for provider,model in candidates if 'astra' not in model.lower()][:2]
-                  for purpose,candidates in settings.routes.items() if purpose == 'conversation' or purpose.startswith('conversation.')}
-        routes = {key:value for key,value in routes.items() if value}
-        providers = {key:replace(value,timeout_seconds=min(value.timeout_seconds,8)) for key,value in settings.providers.items()}
-        self.gateway = Gateway(replace(settings,routes=routes,providers=providers), config.state_dir)
+    def __init__(self, record, gateway):
+        self.gateway = gateway
         self.writer = record
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='conversation-title')
         self.lock = threading.Lock()

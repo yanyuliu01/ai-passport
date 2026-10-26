@@ -52,6 +52,16 @@ final class RuntimeClient {
     /** 正在等卡变化的那条连接：换 Runtime 时断开它，不用等它自己超时。 */
     private static volatile HttpURLConnection feedConnection;
     private static volatile MessageStream activeMessageStream;
+    private static final RequestSync requestSync = new RequestSync();
+    private static volatile long syncWake;
+    private static final ThreadLocal<Long> syncReadWake = new ThreadLocal<>();
+
+    private static synchronized void wakeSync() {
+        ++syncWake;
+        HttpURLConnection pending = feedConnection;
+        if (pending != null) pending.disconnect();
+        RelayManager.cancelSyncReads();
+    }
     /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小幽回话，不能排在它后面。 */
     private static final ExecutorService FIRMWARE_WORKER = Executors.newSingleThreadExecutor();
     private static final ExecutorService AGENTS_WORKER = Executors.newSingleThreadExecutor();
@@ -192,12 +202,16 @@ final class RuntimeClient {
     }
 
     /** 问一次这个地址上的 Runtime 是谁（记下 runtime_id、小幽网络的主体）；问不到就算了。 */
-    static void learn(Context context, Target target) {
-        try { identify(context, target); } catch (IOException | RuntimeException ignored) { }
+    static void learn(Context context, Target target) throws IOException {
+        identify(context, target, false);
     }
 
     /** 问这个地址上的 Runtime 是谁、会什么（/v1/info）。 */
     private static java.util.Set<String> identify(Context context, Target target) throws IOException {
+        return identify(context, target, true);
+    }
+
+    private static java.util.Set<String> identify(Context context, Target target, boolean display) throws IOException {
         java.util.Set<String> abilities = new java.util.HashSet<>();
         // 经中继的线路由中继自己的钉住密钥核对身份，令牌也不经这里；直连才带随机数要 host_proof。
         boolean direct = !target.url.startsWith("relay://");
@@ -207,7 +221,7 @@ final class RuntimeClient {
             info = Json.parseObject(requestText("GET", target.url + "/v1/info" + (direct ? "?nonce=" + nonce : ""),
                     target.token, null, null, 10, true));
         } catch (IOException error) {
-            if (String.valueOf(error.getMessage()).contains("401")) HubStore.get().pairingProblem(true);
+            if (display && String.valueOf(error.getMessage()).contains("401")) HubStore.get().pairingProblem(true);
             throw error;
         }
         if (info != null) {
@@ -216,13 +230,22 @@ final class RuntimeClient {
                 Map<String, Object> host = Json.object(info.get("host"));
                 if (!HostProof.matches(target.token, Json.string(host, "id"), nonce, Json.string(host, "proof"))) {
                     // 答不出证明：不是持有这部手机凭据的小幽。不再往下发请求，等主人重新配对。
-                    HubStore.get().pairingProblem(true);
+                    if (display) HubStore.get().pairingProblem(true);
                     throw new IOException("需要重新配对：这个地址上的电脑没能证明自己是你配对的小幽");
                 }
             }
-            HubStore.get().pairingProblem(false);
-            HubStore.get().capabilities(abilities);
+            Target selected = selected(context);
+            boolean current = display && selected != null && selected.url.equals(target.url) && selected.token.equals(target.token);
             String id = Json.string(info, "runtime_id");
+            String knownId = runtimeId(context, target.url);
+            if (!knownId.isEmpty() && !knownId.equals(id)) {
+                if (current) HubStore.get().pairingProblem(true);
+                throw new IOException("Runtime 身份已改变，需要重新配对；原记录保留");
+            }
+            if (current) {
+                HubStore.get().pairingProblem(false);
+                HubStore.get().capabilities(abilities);
+            }
             // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
             String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
             synchronized (RuntimeClient.class) {
@@ -233,7 +256,7 @@ final class RuntimeClient {
                 identity.apply();
             }
             String owner = Json.string(info, "subject_id");
-            if (direct && abilities.contains("devices") && !HostProof.device(target.token) && !owner.isEmpty())
+            if (current && direct && abilities.contains("devices") && !HostProof.device(target.token) && !owner.isEmpty())
                 upgradeCredential(context, target, owner);
         }
         return abilities;
@@ -336,6 +359,7 @@ final class RuntimeClient {
         int failures = 0;
         boolean more = false;
         while (true) {
+            long wake = syncWake;
             Target target = selected(app);
             if (target == null) {
                 watched = null;
@@ -362,6 +386,7 @@ final class RuntimeClient {
                 failures = 0;
                 complained = null;
             } catch (IOException | RuntimeException error) {
+                if (wake != syncWake) continue;
                 more = false;
                 Target now = selected(app);
                 if (now != null && !now.url.equals(watched)) {
@@ -458,13 +483,23 @@ final class RuntimeClient {
         HubStore store = HubStore.get();
         long epoch = store.cardsEpoch();
         long usageRev = store.usageRev();
-        String body = requestText("GET", target.url + "/v1/sync?conversation=default&all_conversations=1&after="
+        String expectedRuntime = runtimeId(app, target.url), expectedSubject = subjectId(app, target.url);
+        List<String> requested;
+        synchronized (RuntimeClient.class) {
+            syncReadWake.set(syncWake);
+            requested = requestSync.ids(epoch);
+        }
+        if (requestSync.more(epoch)) wait = 0;
+        String body;
+        try { body = requestText("GET", target.url + "/v1/sync?conversation=default&all_conversations=1&after="
                         + java.net.URLEncoder.encode(cache.cursor(), "UTF-8") + "&wait=" + wait
                         + (cache.epoch().isEmpty() ? "" : "&epoch=" + java.net.URLEncoder.encode(cache.epoch(), "UTF-8"))
                         + (usageRev >= 0 ? "&usage=" + usageRev : "")
                         // 认得 unavailable（看不到状态的电脑会话、上报）：见 Card.from。
-                        + "&states=unavailable",
+                        + "&states=unavailable"
+                        + (requested.isEmpty() ? "" : "&requests=" + java.net.URLEncoder.encode(String.join(",", requested), "UTF-8")),
                 target.token, null, null, wait + 15, interruptible);
+        } finally { syncReadWake.remove(); }
         Map<String, Object> page = Json.parseObject(body);
         if (page == null) {
             throw new IOException("Runtime 返回的内容看不懂");
@@ -477,6 +512,8 @@ final class RuntimeClient {
             if (store.cardsEpoch() != epoch) {
                 return false;  // 等的时候换了 Runtime：这是上一台的回答
             }
+            RequestSync.verifySource(page, expectedRuntime, expectedSubject);
+            if (!requested.isEmpty()) requestSync.apply(page, requested, epoch);
             if (page.containsKey("conversations")) store.conversations(Json.list(page, "conversations"));
             String before = cache.cursor();
             SyncCache.Result result = cache.apply(page);
@@ -491,7 +528,7 @@ final class RuntimeClient {
             if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
             store.runtimeConnected(true);
             store.catchingUp(result.more);
-            more = result.more;
+            more = result.more || !Json.list(page, "requests_more").isEmpty();
             // 换了一份记录时 resetCards 已换上空的进度：存它，下次从头取，不放回旧记录。
             if (result.replaced) toSave = store.syncCache();
             else if (!before.equals(cache.cursor()) || !Json.list(page, "messages").isEmpty()
@@ -1138,6 +1175,8 @@ final class RuntimeClient {
         final String[] key = {clientId};
         CHAT.execute(() -> {
             MessageStream events = null;
+            String watchedRequest = null;
+            boolean unified = false;
             try {
                 // 别处的对话在连上时已经在后台带过去了（shareHistory），这里不再等它。
                 Map<String, String> message;
@@ -1159,47 +1198,63 @@ final class RuntimeClient {
                 if (store.cardsEpoch() != epoch) return;
                 store.chatAccepted(clientId, id);
                 key[0] = id;  // 聊天记录里这句话从此按 Runtime 给的编号记
+                unified = store.can("sync_requests_v1");
+                if (unified) {
+                    watchedRequest = id;
+                    requestSync.open(id, conversation, epoch, message);
+                    wakeSync();
+                }
                 long deadline = System.currentTimeMillis() + GIVE_UP_MS;
                 boolean heard = wav == null;
                 boolean streamTried = false;
                 while (true) {
-                    if (store.cardsEpoch() != epoch) return;
-                    String status = message.get("status");
-                    store.chatPresentation(key[0], message.get("presentation_json"));
-                    String recognized = message.get("text");
-                    if (!heard && recognized != null && !recognized.isEmpty()) {
-                        heard = true;
-                        store.chatHeard(key[0], VOICE_PLACEHOLDER, recognized);
-                    }
-                    if ("done".equals(status)) {
-                        String reply = message.get("reply");
-                        String brief = message.get("brief");
-                        String filed = message.get("card");
-                        store.chatAnswered(key[0], brief == null ? "" : brief, reply == null ? "" : reply,
-                                message.get("mood"), filed);
-                        if (!pin && reply != null && !reply.isEmpty()) {
-                            // 这一轮记在聊天记录里，带给别的电脑时从那里算（HubStore.recentTurns）；
-                            // 这台本来就有，不用再带。
-                            sharedWith(url).add(id);
+                    String rev;
+                    synchronized (store) {
+                        if (store.cardsEpoch() != epoch) return;
+                        String status = message.get("status");
+                        store.chatPresentation(key[0], message.get("presentation_json"));
+                        String recognized = message.get("text");
+                        if (!heard && recognized != null && !recognized.isEmpty()) {
+                            heard = true;
+                            store.chatHeard(key[0], VOICE_PLACEHOLDER, recognized);
                         }
-                        return;
+                        if ("done".equals(status)) {
+                            String reply = message.get("reply");
+                            String brief = message.get("brief");
+                            String filed = message.get("card");
+                            store.chatAnswered(key[0], brief == null ? "" : brief, reply == null ? "" : reply,
+                                    message.get("mood"), filed);
+                            if (!pin && reply != null && !reply.isEmpty()) {
+                                // 这一轮记在聊天记录里，带给别的电脑时从那里算（HubStore.recentTurns）；
+                                // 这台本来就有，不用再带。
+                                sharedWith(url).add(id);
+                            }
+                            return;
+                        }
+                        if ("failed".equals(status)) {
+                            String error = message.get("error");
+                            store.chatFailed(key[0], null, error == null ? "Runtime 没有说明原因" : error);
+                            return;
+                        }
+                        if (System.currentTimeMillis() > deadline) {
+                            throw new IOException("等了太久还没有结果");
+                        }
+                        // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
+                        store.chatProgress(message.get("helper"), "transcribing".equals(status) ? "正在识别语音…" : message.get("stage"));
+                        // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
+                        // 旧版 Runtime 没有这一项，就照旧等整段。
+                        store.chatStreaming(key[0], message.get("partial"));
+                        // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
+                        // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
+                        rev = message.get("rev");
                     }
-                    if ("failed".equals(status)) {
-                        String error = message.get("error");
-                        store.chatFailed(key[0], null, error == null ? "Runtime 没有说明原因" : error);
-                        return;
+                    if (unified) {
+                        Map<String, String> next = requestSync.next(id, epoch, rev, 2000);
+                        if (next == null) continue;
+                        if (!"true".equals(next.get("legacy"))) { message = next; continue; }
+                        requestSync.close(id, epoch);
+                        unified = false; // The same Runtime was rolled back to the compatible older protocol.
                     }
-                    if (System.currentTimeMillis() > deadline) {
-                        throw new IOException("等了太久还没有结果");
-                    }
-                    // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
-                    store.chatProgress(message.get("helper"), "transcribing".equals(status) ? "正在识别语音…" : message.get("stage"));
-                    // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
-                    // 旧版 Runtime 没有这一项，就照旧等整段。
-                    store.chatStreaming(key[0], message.get("partial"));
-                    // 带上这条记录的版本号去等：记录一有变化 Runtime 就返回。旧版 Runtime
-                    // 没有版本号，语音还没识别出来时改用短轮询，好让“我说了什么”尽快显示出来。
-                    String rev = message.get("rev");
                     if (!streamTried && "true".equals(message.get("event_stream"))) {
                         streamTried = true;
                         try {
@@ -1230,6 +1285,7 @@ final class RuntimeClient {
                 String detail = error.getMessage();
                 store.chatFailed(key[0], null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
             } finally {
+                if (watchedRequest != null) requestSync.close(watchedRequest, epoch);
                 if (events != null) {
                     events.close();
                     if (activeMessageStream == events) activeMessageStream = null;
@@ -1413,14 +1469,20 @@ final class RuntimeClient {
                                       boolean feed, UploadProgress progress) throws IOException {
         if (address.startsWith("relay://")) {
             if (progress != null && body != null) progress.sent(0, body.length);
-            String result = RelayManager.request(method, address, body, contentType, timeoutSeconds);
+            Long wake = feed ? syncReadWake.get() : null;
+            String result = RelayManager.request(method, address, body, contentType, timeoutSeconds,
+                    wake == null ? null : () -> wake == syncWake);
             if (progress != null && body != null) progress.sent(body.length, body.length);
             return result;
         }
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setInstanceFollowRedirects(false);
         if (feed) {
-            feedConnection = connection;
+            synchronized (RuntimeClient.class) {
+                Long wake = syncReadWake.get();
+                if (wake != null && wake != syncWake) { connection.disconnect(); throw new IOException("同步订阅已改变"); }
+                feedConnection = connection;
+            }
         }
         try {
             if (progress != null) progress.connection(connection);

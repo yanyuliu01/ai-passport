@@ -2,6 +2,7 @@
 
 import http.server
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -61,7 +62,7 @@ class ConfigTests(TempDirCase):
 
     def test_skills_only_where_the_harness_can_take_them(self):
         spec = self.agent({"type": "dsh", "skills": ["skills/notes"]})
-        self.assertEqual(spec.skills, [self.folder / "skills" / "notes"])
+        self.assertEqual(spec.skills, [(self.folder / "skills" / "notes").resolve()])
         with self.assertRaisesRegex(config_module.ConfigError, "Codex"):
             self.agent({"type": "codex", "skills": ["skills/notes"]})
         with self.assertRaisesRegex(config_module.ConfigError, "同名"):
@@ -113,9 +114,23 @@ class LibraryTests(TempDirCase):
         self.assertIn("还没有连接", library.tools("claude")["unavailable"][0]["reason"])
         (self.folder / "secrets").mkdir()
         (self.folder / "secrets" / "fake.json").write_text(json.dumps({"env": {"FAKE_TOKEN": "t0p"}}), "utf-8")
+        if os.name == "posix":
+            (self.folder / "secrets" / "fake.json").chmod(0o600)
         tool = library.tools("claude")["tools"][0]
         result = library.call("claude", "fake", "echo", {}, tool["config_version"], tool["grant_version"])
         self.assertEqual(json.loads(result["content"][0]["text"])["token"], "t0p")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX connection-file permissions")
+    def test_a_readable_connection_is_refused_before_starting_the_server(self):
+        library = self.library(env=["FAKE_TOKEN"])
+        folder = self.folder / "secrets"
+        folder.mkdir()
+        connection = folder / "fake.json"
+        connection.write_text(json.dumps({"env": {"FAKE_TOKEN": "t0p"}}), "utf-8")
+        connection.chmod(0o644)
+        result = library.tools("claude")
+        self.assertEqual(result["tools"], [])
+        self.assertIn("chmod 600", result["unavailable"][0]["reason"])
 
     def test_tool_names_are_prefixed_safe_and_unique(self):
         taken = {}

@@ -20,7 +20,7 @@ described in the [firmware documentation](../docs/claude-pocket.md#the-conversat
 The app also has a chat box for talking to DS. A message typed there goes
 to the [Runtime](../runtime/README.md) over HTTP. Every request you
 make is one thing with a card on the runtime; the app keeps waiting for the
-runtime to say which cards changed (`/v1/feed`), shows them, and reports them
+runtime to synchronize messages and task state (`/v1/sync`), shows them, and reports them
 to the device: what DS is doing right now, the card of every thing, the
 things being worked on and their two latest steps. When a helper wants to do
 something that needs your consent, the app shows a banner under the top bar and full
@@ -37,6 +37,27 @@ it, and the app passes that on to the runtime unchanged.
 The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
+
+## Unified reply synchronization (App 0.33.0)
+
+With Runtime 0.24.0's `sync_requests_v1`, accepted text and voice requests share
+the foreground sync subscription instead of opening a stream or long poll for
+each message. Voice transcription, partial replacement, final replies, device
+briefs and moods keep their existing behavior. Adding a request wakes an idle
+subscription, including through the encrypted relay, without cancelling an
+operation-review read. Old Runtime versions retain the compatible read path.
+Request watches bind to the original connection generation and conversation;
+source changes, duplicate revisions and late partials cannot overwrite a final reply.
+A missing accepted request is reported without a second submission.
+
+Independent approval watches also use sync. An empty delta keeps other pending
+approvals; answered or withdrawn approvals are removed, and a replacement epoch
+rebuilds the pending list. Observing another computer no longer replaces the
+selected computer's capability state. Identity mismatches preserve cached history
+and require reconfirmation instead of applying the foreign page.
+
+Pairing, history, drafts, update transport and stored sync format are retained.
+Installed-client and real timing/recovery checks remain separate from build tests.
 
 ## First-response timing log (App 0.32.4, 0.32.5)
 

@@ -30,7 +30,7 @@ final class RelayConnection implements AutoCloseable {
     private long lastReplay;
     private long nextConnect; private int failures;
     private volatile String state="正在连接加密入口";
-    private static final class Waiter { final CompletableFuture<Map<String,Object>> answer=new CompletableFuture<>(); String packet; boolean read; }
+    private static final class Waiter { final CompletableFuture<Map<String,Object>> answer=new CompletableFuture<>(); String packet; boolean read, sync; }
     @SuppressWarnings("unchecked")
     RelayConnection(Map<String,Object> saved,Observer observer) throws Exception {
         config=new LinkedHashMap<>(saved);this.observer=observer;
@@ -126,13 +126,19 @@ final class RelayConnection implements AutoCloseable {
         send("ack",RelayCrypto.map("id",id),false);
     }
     Map<String,Object> request(String method,String path,Map<String,Object> body,int seconds) throws IOException {
+        return request(method,path,body,seconds,null);
+    }
+    Map<String,Object> request(String method,String path,Map<String,Object> body,int seconds,
+                               java.util.function.BooleanSupplier current) throws IOException {
         if(!paired || closed || identityMismatch)throw new IOException(state);
         if(waiters.size()>=32)throw new IOException("连接繁忙，请稍后再试");
         // Desktop RPC has a 30s deadline. The phone's former 50s long polls must fit that budget.
         java.util.regex.Matcher waits=java.util.regex.Pattern.compile("([?&]wait=)([0-9]+)").matcher(path);
         StringBuffer clamped=new StringBuffer();while(waits.find())waits.appendReplacement(clamped,waits.group(1)+Math.min(20,Integer.parseInt(waits.group(2))));waits.appendTail(clamped);path=clamped.toString();
-        String id=UUID.randomUUID().toString().replace("-","");Waiter waiting=new Waiter();waiting.read="GET".equals(method);waiters.put(id,waiting);
+        String id=UUID.randomUUID().toString().replace("-","");Waiter waiting=new Waiter();waiting.read="GET".equals(method);
+        waiting.sync=current!=null && waiting.read && (path.equals("/v1/sync") || path.startsWith("/v1/sync?"));waiters.put(id,waiting);
         try{
+            if(current!=null && !current.getAsBoolean())throw new IOException("同步订阅已改变");
             Map<String,Object> payload=RelayCrypto.map("request",id,"method",method,"path",path,"runtime_id",config.get("runtime_id"));if(body!=null)payload.put("body",body);
             if("POST".equals(method)){
                 if(durableWrites.size()>=16)throw new IOException("仍有未核实请求，请等待连接恢复");
@@ -150,5 +156,6 @@ final class RelayConnection implements AutoCloseable {
         finally{waiters.remove(id);if(waiting.packet!=null)packets.remove(waiting.packet);}
     }
     void cancelReads(){for(Waiter waiting:waiters.values())if(waiting.read)waiting.answer.completeExceptionally(new IOException("已切换服务"));}
+    void cancelSyncReads(){for(Waiter waiting:waiters.values())if(waiting.sync)waiting.answer.completeExceptionally(new IOException("同步订阅已改变"));}
     @Override public synchronized void close(){closed=true;if(socket!=null)socket.cancel();socket=null;timer.shutdownNow();incoming.shutdownNow();for(Waiter waiter:waiters.values())waiter.answer.completeExceptionally(new IOException("连接已关闭"));http.dispatcher().executorService().shutdown();http.connectionPool().evictAll();}
 }

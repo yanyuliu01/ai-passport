@@ -44,6 +44,34 @@ Status: verification stage, intended to run on your own computer. The same
 code is meant to move to a virtual machine later; nothing in it assumes a
 particular host. See [What is and is not verified](#what-is-and-is-not-verified).
 
+## Unified request synchronization (0.24.0)
+
+Android 0.33.0 and desktop 0.1.9 can receive the current accepted requests through
+`/v1/sync`, alongside canonical messages, tasks and approvals. The Runtime advertises
+`sync_requests_v1`; accepted message responses also carry this flag for remote
+Runtime helpers. A compatible client sends `requests=<id>,<id>` (at most 32 ids).
+The optional `requests` projection preserves transcription text, stage, partial
+replacement, final reply, brief, mood, failure and the existing canonical
+`message_snapshot`. It exposes only named public fields; private recovery inputs
+are never included. A scoped sync cannot read another conversation's request.
+
+Current request snapshots do not advance the history cursor. Request-only stage
+changes wake the same subscription. Responses bound request projections to 512 KiB,
+allowing one oversized item to make progress; `requests_more` lists deferred ids.
+Clients rotate bounded watches and continue immediately for deferred work.
+`requests_missing` keeps acceptance uncertain without resubmitting a write.
+The phone's independent approval subscriptions also use `/v1/sync`, merging
+pending/answered/withdrawn deltas instead of replacing the pending list with each page.
+
+Older installed clients remain supported by the existing feed, per-message wait
+and stream adapters. New clients retain their negotiated older-Runtime read path;
+a confirmed rollback preserves the accepted id and never repeats the POST.
+These adapters have **not** been removed: R8 cutover still requires installed
+client migration and an agreed, enforced minimum-version policy. Default
+`decide_first` remains unchanged pending the separate live response acceptance.
+Source and host-test availability do not establish rendered three-second response,
+live reconnection or cross-device acceptance.
+
 ## Helper restart recovery (R6.1 source)
 
 Saved helper inputs that were not yet claimed resume after startup policy and

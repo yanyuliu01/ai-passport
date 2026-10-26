@@ -9,7 +9,7 @@ Credential scrubbing covers recognizable forms, not arbitrary private prose.
 import re
 import unicodedata
 
-from ..loop.project_brief import is_recap
+from ..context_markers import is_recap
 
 MAX_MESSAGE_CHARS = 4000
 TEXT_BLOCK_TYPES = frozenset({"text", "input_text", "output_text"})

@@ -61,6 +61,10 @@ final class RelayManager {
     }
     static boolean hasConnections(){return links.values().stream().anyMatch(RelayConnection::isActive);}
     static String request(String method,String address,byte[] bytes,String contentType,int seconds) throws IOException {
+        return request(method,address,bytes,contentType,seconds,null);
+    }
+    static String request(String method,String address,byte[] bytes,String contentType,int seconds,
+                          java.util.function.BooleanSupplier current) throws IOException {
         URI uri=URI.create(address);RelayConnection link=links.get("relay://"+uri.getHost());if(link==null)throw new IOException("加密连接尚未恢复，请重新打开 App");
         Map<String,Object> body=null;
         if(bytes!=null){
@@ -68,13 +72,14 @@ final class RelayManager {
             else {if(bytes.length>2_800_000)throw new IOException("语音或图片超过加密通道单次上限，请缩短或压缩后重试");body=RelayCrypto.map("_relay_binary",RelayCrypto.encode(bytes),"content_type",contentType);}
         }
         String path=uri.getRawPath()+(uri.getRawQuery()==null?"":"?"+uri.getRawQuery());
-        return RelayCrypto.json(link.request(method,path,body,seconds));
+        return RelayCrypto.json(link.request(method,path,body,seconds,current));
     }
     static byte[] binary(String address) throws Exception {
         Map<String,Object> response=Json.parseObject(request("GET",address,null,null,30));
         return RelayCrypto.decode(Json.string(response,"_relay_binary"),-1);
     }
     static void cancelReads(){for(RelayConnection link:links.values())link.cancelReads();}
+    static void cancelSyncReads(){for(RelayConnection link:links.values())link.cancelSyncReads();}
     static void remove(String url){RelayConnection link=links.remove(url);if(link!=null){link.close();storage.edit().remove("peer:"+URI.create(url).getHost()).commit();}}
     private static void toast(String text){new Handler(Looper.getMainLooper()).post(()->Toast.makeText(app,text,Toast.LENGTH_LONG).show());}
     private static SecretKey key() throws Exception {

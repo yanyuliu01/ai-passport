@@ -40,6 +40,7 @@ from xiaoyou_runtime.loop import router as router_module  # noqa: E402
 from xiaoyou_runtime.events import stt as stt_module  # noqa: E402
 from xiaoyou_runtime.helpers import tasks as tasks_module  # noqa: E402
 from xiaoyou_runtime.loop import workspace as workspace_module  # noqa: E402
+from xiaoyou_runtime.helpers.usage import create_usage
 from xiaoyou_runtime.world import usage as usage_module  # noqa: E402
 from xiaoyou_runtime.loop import xiaoyou as xiaoyou_module  # noqa: E402
 from xiaoyou_runtime.__main__ import main  # noqa: E402
@@ -3628,6 +3629,24 @@ def codex_limits(short_used, week_used=12, short_resets=2000000000):
 class UsageTests(TempDirCase):
     """What is left of each subscription, and which model and effort each helper runs on."""
 
+    def test_projection_accepts_injected_probes_without_starting_helpers(self):
+        self.meter()
+        called = []
+
+        def fetch(spec):
+            called.append(spec.name)
+            return {"5h": {"left": 42, "resets_at": 2000000000}}, None, None
+
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("unexpected process")), \
+                mock.patch.object(codex_app_module, "AppServer", side_effect=AssertionError("unexpected server")):
+            meter = usage_module.Usage(self.config, enabled=True, clock=lambda: NOW,
+                                       fetchers={"claude": fetch, "codex": fetch})
+            meter.refresh()
+        self.assertEqual(called, ["claude", "codex"])
+        self.assertEqual([a["windows"][0]["left"] for a in meter.snapshot()["accounts"]], [42, 42])
+        with self.assertRaisesRegex(ValueError, "injected fetchers"):
+            usage_module.Usage(self.config, enabled=True)
+
     def meter(self, enabled=False, **agents):
         agents = agents or {
             "claude": {"type": "claude_code", "config_dir": str(self.folder / "login")},
@@ -3640,7 +3659,7 @@ class UsageTests(TempDirCase):
         }
         self.config = config_module.load(write_config(self.folder, agents=agents), {})
         self.now = [NOW]
-        return usage_module.Usage(self.config, enabled=enabled, clock=lambda: self.now[0])
+        return create_usage(self.config, enabled=enabled, clock=lambda: self.now[0])
 
     def test_what_the_tools_report_becomes_two_windows(self):
         windows = usage_module.claude_event_windows
@@ -4294,6 +4313,27 @@ class HttpTests(TempDirCase):
 
 class RemoteAgentTests(TempDirCase):
     """Another computer's runtime is one more agent."""
+
+    def test_modern_remote_reads_sync_and_older_remote_keeps_its_original_protocol(self):
+        for unified in (True, False):
+            remote = self.remote()
+            accepted = {"id": "original", "status": "queued", "sync_requests_v1": unified,
+                        "message_snapshot": {"runtime_id": "remote", "subject_id": "space"}}
+            answer = {"id": "original", "conversation": "side", "status": "done", "reply": "result", "brief": "brief", "mood": "idle"}
+            page = {"runtime_id": "remote", "subject_id": "space", "seq": 1, "epoch": "e", "requests": [answer]}
+            with mock.patch.object(remote, "_call", side_effect=[accepted, page if unified else answer]) as call:
+                self.assertEqual(remote.run(Job("hi", conversation="side")).text, "result")
+            self.assertEqual(call.call_args_list[0].args[0], "POST")
+            self.assertIn("/v1/sync?" if unified else "/v1/messages/original?", call.call_args_list[1].args[1])
+
+    def test_modern_remote_never_reposts_when_the_accepted_request_is_missing_or_foreign(self):
+        for rows in ([], [{"id":"another", "conversation":"default", "status":"done", "reply":"foreign"}]):
+            remote = self.remote()
+            with mock.patch.object(remote, "_call", side_effect=[
+                    {"id":"original", "status":"queued", "sync_requests_v1":True},
+                    {"requests":rows, "seq":1, "epoch":"e"}]) as call:
+                with self.assertRaisesRegex(AgentError,"未重新提交"): remote.run(Job("hi"))
+            self.assertEqual([item.args[0] for item in call.call_args_list], ["POST","GET"])
 
     def setUp(self):
         super().setUp()

@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..errors import CapabilityError
+
 SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,23}$")
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -40,10 +42,6 @@ MAX_TOOL_NAME = 64
 MAX_CATALOG_BYTES = 512 * 1024
 # 工具列表缓存多久；改了配置（版本变了）立刻作废。
 CATALOG_SECONDS = 300
-
-
-class CapabilityError(Exception):
-    """能力库配置有问题，或者一次调用不能做；消息直接给人或帮手看。"""
 
 
 @dataclass(frozen=True)

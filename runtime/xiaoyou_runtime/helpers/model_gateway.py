@@ -27,10 +27,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
+
+from ..errors import GatewayError
 
 PROTOCOLS = ("openai", "anthropic")
 LOCALITIES = ("local", "network")
@@ -38,10 +40,6 @@ MAX_PROVIDERS = 16
 # 本机端点连不上时，这么久之内不再去试它（直接走下一个候选）。
 DOWN_SECONDS = 60.0
 ANTHROPIC_VERSION = "2023-06-01"
-
-
-class GatewayError(Exception):
-    pass
 
 
 class GatewayConfigError(ValueError):
@@ -462,3 +460,17 @@ def run(config: Any, args: Any) -> int:
             print("今天还没有调用。")
         return 0
     return 2
+
+
+def conversation_gateway(config):
+    """Build the explicitly opted-in, bounded metadata route for the service."""
+    settings = config.models or Settings()
+    routes = {
+        purpose: [(provider, model) for provider, model in candidates if 'astra' not in model.lower()][:2]
+        for purpose, candidates in settings.routes.items()
+        if purpose == 'conversation' or purpose.startswith('conversation.')
+    }
+    routes = {key: value for key, value in routes.items() if value}
+    providers = {key: replace(value, timeout_seconds=min(value.timeout_seconds, 8))
+                 for key, value in settings.providers.items()}
+    return Gateway(replace(settings, routes=routes, providers=providers), config.state_dir)

@@ -67,7 +67,7 @@ final class ApprovalMonitor {
         volatile RuntimeClient.Target target;
         volatile boolean stopped;
         volatile HttpURLConnection connection;
-        long after;
+        ApprovalSync sync = new ApprovalSync();
 
         Subscription(RuntimeClient.Target target) { super("ds-approvals-" + target.name); this.target = target; setDaemon(true); }
         void stopSubscription() { stopped = true; HttpURLConnection pending = connection; if (pending != null) pending.disconnect(); interrupt(); }
@@ -84,32 +84,34 @@ final class ApprovalMonitor {
                         RuntimeClient.learn(app, origin);
                         known = true;
                     }
-                    connection = (HttpURLConnection) new URL(origin.url + "/v1/feed?after=" + after + "&wait=50").openConnection();
+                    Map<String, Object> feed;
+                    if (origin.url.startsWith("relay://")) {
+                        feed = Json.parseObject(RelayManager.request("GET", origin.url + sync.path(), null, null, 25));
+                    } else {
+                    connection = (HttpURLConnection) new URL(origin.url + sync.path()).openConnection();
                     connection.setInstanceFollowRedirects(false);
                     connection.setRequestProperty("Authorization", "Bearer " + origin.token);
                     connection.setConnectTimeout(10000); connection.setReadTimeout(65000);
                     int code = connection.getResponseCode();
                     if (code != 200) throw new java.io.IOException("Runtime " + code);
-                    Map<String, Object> feed;
                     try (InputStream stream = connection.getInputStream()) { feed = Json.parseObject(Json.readResponse(stream)); }
-                    if (feed == null) throw new java.io.IOException("Invalid feed");
-                    if (stopped) break;
-                    long seq = (long) Json.number(feed, "seq");
-                    if (seq < after) { after = 0; continue; }
-                    after = seq;
-                    List<Card.Approval> pending = new ArrayList<>();
-                    for (Object value : Json.list(feed, "approvals")) {
-                        Card.Approval approval = Card.Approval.from(Json.object(value));
-                        if (approval != null && (approval.expiresAt <= 0 || approval.expiresAt > System.currentTimeMillis() / 1000.0)) pending.add(approval.origin(origin.url, target.name));
                     }
-                    HubStore.get().applyApprovals(origin.url, pending);
+                    if (feed == null) throw new java.io.IOException("Invalid approval sync");
+                    RequestSync.verifySource(feed, RuntimeClient.runtimeId(app, origin.url),
+                            RuntimeClient.subjectId(app, origin.url));
+                    if (stopped) break;
+                    List<Card.Approval> pending = sync.apply(feed, origin.url, target.name, System.currentTimeMillis() / 1000.0);
+                    synchronized (ApprovalMonitor.class) {
+                        if (stopped || watching.get(origin.url) != this || !target.token.equals(origin.token)) break;
+                        HubStore.get().applyApprovals(origin.url, pending);
+                    }
                     failures = 0;
                     failing.remove(origin.url);
                 } catch (Exception failure) {
                     if (!stopped) {
                         HubStore.get().dropApprovalRuntime(origin.url);
                         failing.put(origin.url, failures + 1);
-                        after = 0;
+                        sync = new ApprovalSync();
                         try { Thread.sleep(Math.min(30000, 2000L << Math.min(failures++, 4))); }
                         catch (InterruptedException interrupted) { if (stopped) break; }
                     }

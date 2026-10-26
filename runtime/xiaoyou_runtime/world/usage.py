@@ -17,9 +17,6 @@ get_usage 在 Claude Code 里标着“实验性”，事件流里的两个窗口
 """
 
 import json
-import os
-import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime
@@ -27,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..config import AgentSpec, Config
+from ..provider_binding import uses_deepseek
 from .store import _write
 
 WINDOWS = ("5h", "7d")
@@ -35,7 +33,6 @@ WINDOW_NAMES = {"5h": "5 小时", "7d": "本周"}
 WARN_BELOW = 20
 # 一件事开始前，手里的数比这新就不再去问。
 FRESH_SECONDS = 120
-FETCH_SECONDS = 20
 EFFORT_NAMES = {"minimal": "最低档", "low": "低档", "medium": "中档", "high": "高档",
                 "xhigh": "特高档", "max": "最高档"}
 STATE_NAMES = {"ok": "正常", "warn": "快用完了", "out": "用完了", "unknown": "还不知道"}
@@ -51,7 +48,6 @@ def account_of(spec: AgentSpec) -> Optional[Tuple[str, str]]:
         return "codex:%s" % (spec.config_dir or "default"), "codex"
     if spec.type != "claude_code":
         return None
-    from ..helpers.claude_gateway import uses_deepseek
     if uses_deepseek(spec) or any(key in spec.env or key in spec.env_files for key in CLAUDE_KEYS):
         return None  # 指到别的服务、或者用密钥：按量付费，没有订阅额度
     return "claude:%s" % (spec.config_dir or "default"), "claude"
@@ -259,10 +255,11 @@ def describe_tier(entry: Dict[str, Any]) -> str:
 class Usage:
     def __init__(self, config: Config, enabled: Optional[bool] = None,
                  clock: Callable[[], float] = time.time,
-                 specs: Optional[List[AgentSpec]] = None):
+                 specs: Optional[List[AgentSpec]] = None, *, fetchers=None):
         """enabled 为 False 时不主动去问（不起任何进程），帮手自己报上来的照记。
 
-        specs 是要管的帮手；不给就是配置里启用的那些。"""
+        specs 是要管的帮手；不给就是配置里启用的那些。
+        主动查询时由外层注入 fetchers；CLI 通过 helpers.usage.create_usage 组装。"""
         specs = list(config.agents) if specs is None else list(specs)
         self._config = config
         self._enabled = config.usage_enabled if enabled is None else enabled
@@ -276,8 +273,9 @@ class Usage:
         self._models: Dict[str, str] = {}  # 帮手 → 它按平时的配置跑时实际用的模型
         self._running: Dict[str, List[Dict[str, Any]]] = {}  # 帮手 → 正在做的每一轮
         self._fetching: Dict[str, threading.Lock] = {}
-        self.fetchers: Dict[str, Callable[[AgentSpec], Tuple[Windows, Optional[str], Optional[str]]]] = {
-            "claude": self._fetch_claude, "codex": self._fetch_codex}
+        if self._enabled and fetchers is None:
+            raise ValueError("Active usage requires injected fetchers")
+        self.fetchers = dict(fetchers or {})
         for spec in specs:
             found = account_of(spec)
             if found is None:
@@ -402,74 +400,6 @@ class Usage:
                 self._touch()
 
     # ---- 主动去问 ----
-
-    def _fetch_claude(self, spec: AgentSpec) -> Tuple[Windows, Optional[str], Optional[str]]:
-        from ..helpers.agents import AgentError, ClaudeCodeAgent
-        # 只问用量：不发提示，所以不调用模型；也不用把登记过的 MCP 服务都起一遍。
-        command = list(spec.command) + ["-p", "--input-format", "stream-json",
-                                        "--output-format", "stream-json", "--verbose",
-                                        "--strict-mcp-config"]
-        command[0] = shutil.which(command[0]) or command[0]
-        ask = json.dumps({"type": "control_request", "request_id": "xiaoyou-usage",
-                          "request": {"subtype": "get_usage", "skip_behaviors": True}})
-        try:
-            env = ClaudeCodeAgent(spec)._env()
-            if spec.workdir is not None:
-                spec.workdir.mkdir(parents=True, exist_ok=True)
-            done = subprocess.run(
-                command, input=ask + "\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", timeout=FETCH_SECONDS, env=env,
-                cwd=str(spec.workdir) if spec.workdir is not None else None)
-        except AgentError as error:
-            return {}, None, str(error)
-        except FileNotFoundError:
-            return {}, None, "找不到命令 %s" % command[0]
-        except subprocess.TimeoutExpired:
-            return {}, None, "Claude Code %d 秒没有回答用量" % FETCH_SECONDS
-        except OSError as error:
-            return {}, None, "启动 Claude Code 失败：%s" % error
-        for line in done.stdout.splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            reply = message.get("response") if isinstance(message, dict) else None
-            if (message.get("type") if isinstance(message, dict) else None) != "control_response" \
-                    or not isinstance(reply, dict):
-                continue
-            if reply.get("subtype") != "success":
-                return {}, None, "这个版本的 Claude Code 不能这样查用量：%s" % (
-                    str(reply.get("error") or "没有说明")[:120])
-            windows, plan, problem = claude_usage_windows(reply.get("response"))
-            if windows:
-                return windows, plan, problem
-            cached = claude_cached_usage_windows(spec.config_dir)
-            if cached:
-                return cached, plan, None
-            return windows, plan, problem
-        detail = (done.stderr.strip().splitlines() or ["没有输出"])[-1][:120]
-        return {}, None, "Claude Code 没有回答用量（退出码 %d）：%s" % (done.returncode, detail)
-
-    def _fetch_codex(self, spec: AgentSpec) -> Tuple[Windows, Optional[str], Optional[str]]:
-        from ..helpers import codex_app
-        from ..helpers.agents import AgentError, CodexAgent, Control
-        try:
-            server = codex_app.AppServer(spec, Control(), CodexAgent(spec)._env())
-        except AgentError as error:
-            return {}, None, str(error)
-        try:
-            deadline = time.monotonic() + FETCH_SECONDS
-            codex_app.handshake(server, deadline)
-            request_id = server.request("account/rateLimits/read", codex_app.LIMITS_PARAMS)
-            windows, plan = codex_windows(server.expect(request_id, deadline, "account/rateLimits/read"))
-            return windows, plan, None if windows else "Codex 这一次没有给出额度"
-        except AgentError as error:
-            return {}, None, str(error)
-        finally:
-            server.close()
 
     def refresh(self, account_id: Optional[str] = None, wait: bool = True) -> None:
         """去问一次。account_id 不写就是所有账号；wait 为 False 时放到后台。"""

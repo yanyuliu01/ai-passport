@@ -2,7 +2,7 @@
 
 # Xiaoyou desktop client
 
-Implementation in progress, version 0.1.7. Follow the
+Implementation in progress, source version 0.1.9. Follow the
 [development plan](../../docs/development/xiaoyou-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -11,6 +11,19 @@ The owner approved the v8 interaction reference on 2026-10-21. The onboarding
 increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
+
+## Unified request replies (0.1.9 source)
+
+When the Runtime advertises `sync_requests_v1`, pending accepted requests join
+the existing sync subscription. Adding a request cancels only that idle sync
+read, leaving concurrent review reads and the durable outbox intact. Current
+canonical reply snapshots retain their revisions without advancing the history
+cursor. Missing request state remains accepted and is never reposted. Older
+Runtimes keep their supported per-message reads; a Runtime rollback rechecks
+identity and capabilities before changing the read protocol. Feed/wait/stream
+server adapters remain until installed-client migration and version gates permit
+R8 removal. This source increment does not establish real-model timing or an
+installed desktop update.
 
 ## Replies cut short (0.1.8 source)
 

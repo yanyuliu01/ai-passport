@@ -3,7 +3,7 @@
 里聊过的内容。
 
 给小幽的 command 类型帮手用：标准输入里的那段话不解析，只是触发；标准输出打印一段
-文字，小幽会把这段话转述给主人。独立于 xiaoyou_runtime 包之外也能跑（只用标准库），
+文字，小幽会把这段话转述给主人。可以从检出目录直接运行，不需要安装包（只用标准库），
 所以配置里可以直接用 ["python3", "这个文件的路径"] 当作 command。
 
 只读这台电脑本地留着的东西：
@@ -22,6 +22,11 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
+
+# Preserve direct-file execution used by installed helper commands.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from xiaoyou_runtime.context_markers import is_recap
 
 # 每个来源最多摘这么多个会话，每个会话摘最后这么多轮。
 MAX_SESSIONS = 4
@@ -74,13 +79,6 @@ def _flatten_text(content: Any) -> str:
                  if isinstance(block, dict) and block.get("type") in TEXT_BLOCK_TYPES]
         return "\n".join(part.strip() for part in parts if part.strip())
     return ""
-
-
-def is_recap(text: str) -> bool:
-    """Recognize our generated context, including the legacy untagged header."""
-    head = text.lstrip()
-    return head.startswith("<xiaoyou-recap>") or (
-        head.startswith("（主人最近（") and "当时用的不是这套会话" in head[:200])
 
 
 def _is_injected(text: str) -> bool:

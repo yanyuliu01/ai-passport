@@ -2,7 +2,7 @@
 
 # Runtime 三层重构设计
 
-状态：设计已确认，2026-10-23 补齐实现契约。R1～R4 和 R5 的 Runtime 部分已提交，见第 7 节；R6 已补执行恢复、从消息构建上下文和共用对话队列，决定与副作用迁移仍未完成；R7～R8 未实现。这些是源码状态，不代表已部署。
+状态：设计已确认，2026-10-23 补齐实现契约。R1～R4 和 R5 的 Runtime 部分已提交，见第 7 节；R6 已补执行恢复、从消息构建上下文和共用对话队列，决定与副作用迁移仍未完成；R7 目录搬迁、循环导入清理及直接跨层依赖清理已实现；R8 仍待完成。这些是源码状态，不代表已部署。
 
 本文把[小幽完整方案](xiaoyou-agent-model.zh_CN.md)落到 Runtime 代码上，按三层写：**状态接收层**（东西怎么进来、存成什么）、**回复消息层**（回复怎么生成、怎么送到各端）、**agent loop**（小幽怎么决定、怎么做）。问题编号指[交互简化问题清单](app-runtime-simplification.zh_CN.md)。所有阶段都要满足[跨端可靠性规则](cross-stack-reliability.zh_CN.md)。
 
@@ -446,9 +446,40 @@ CLI `--once` 改为通过 Service 和对话循环提交，沿用相同的请求�
 
 **R7 循环导入（2026-10-26，后端源码）。**有三个循环只通过函数内的导入形成，三个都已清除；静态门禁里的 `test_import_layers.py` 连函数内导入一起检查，以后再出现循环就会失败。（1）`helpers/agents.py` 既放共用类型又放具体代理，还导入了反过来依赖这些类型的协议适配模块。共用类型（`Job`、`Outcome`、`Control`、`Watchdog`、`AgentError`、命令执行函数和 `Agent` 基类）挪到 `helpers/base.py`；`agents.py` 用原来的名字导出它们，适配模块（`codex_app`、`dsh_app`、`dsh_stream`、`claude_gateway`、`loop/decision`、`loop/effects`）改从 `base` 导入。`create()` 挪到 `helpers/factory.py`，因为它要用 `claude_gateway`，而 `claude_gateway` 继承 `ClaudeCodeAgent`。（2）`world/store.py` 自己构造 agent loop 层的 `ContextBuilder`：现在由 `loop/context.bind(store, cards, ...)` 构造，再交给 `Store.use_context`。`world/artifacts.py` 自己通过 Intake 写附件：这一步改为 `events/intake.attach_artifacts`，由 HTTP 接口调用。（3）`iterate/` 里的内置插件从加载它们的插件注册模块导入 `Skip`；`Skip` 现在放在 `iterate/objects.py`，`plugins.Skip` 仍指向它。行为、接口和存储格式都没变。
 
-还有几处低层导入高层，但不构成循环；这里只列出、没有挪动：`events/desktop_content` → `loop/project_brief`，`world/approvals` → `helpers/capabilities`，`world/conversation_metadata` → `helpers/model_gateway`，`world/memory` 和 `world/promises` → `loop/effects`，以及 `world/usage` → `helpers/agents`、`claude_gateway` 和 `codex_app`。
+在上述检查点，仍有几处低层导入高层但不构成循环（下一批已处理）：`events/desktop_content` → `loop/project_brief`，`world/approvals` → `helpers/capabilities`，`world/conversation_metadata` → `helpers/model_gateway`，`world/memory` 和 `world/promises` → `loop/effects`，以及 `world/usage` → `helpers/agents`、`claude_gateway` 和 `codex_app`。
 
 循环验证：每个模块都能导入，每个入口都能运行。循环检查在上一个提交 `cf7e243` 上能找出全部三个循环，现在一个都没有。全部 Runtime 测试文件重新跑过：失败编号与 `07f4a9b` 基线那次一致，只有 `test_runtime.py` 里同样那两个只在基线那次失败的 HTTP 测试在这里通过。第一次候选运行发现测试辅助代码还在调用 `agents.create`，现已改用 `factory.create`。`test_ttft_report` 现在先停掉 Runtime 再比较状态文件；之前 Runtime 仍在运行时出现过一次未能复现的失败。仓库检查通过。设备测试、完整门禁和部署未运行。
+
+### R7 在 macOS 上清理依赖（2026-10-26）
+
+从 Windows 提交 `d2121a8` 继续，在独立检出目录修改，没有改动运行中的 Runtime。`events/`、`world/` 对 `helpers/`、`loop/` 的八条直接导入已全部移除。`test_import_layers.py` 现在还会拒绝这两个低层直接导入 `helpers/`、`loop/`、`api/`、`delivery/`，包括函数内导入。实现前，新断言恰好报出留下的八条依赖；原有循环检查继续保留。这检查的是直接 Python 导入，不是对根目录配置模块的完整传递分层约束。
+
+共用异常契约放到 `errors.py`；原模块仍导出同一个类，保留异常身份和 `EffectUncertain` 对 `AgentError` 的继承关系。`context_markers.py` 负责摘要识别，`provider_binding.py` 负责原样保留的 DeepSeek 绑定判断。原来的帮手脚本路径仍可直接运行，不需要安装包。
+
+`world/usage.py` 保留账号归类、规范化、快照、持久化和刷新协调。`helpers/usage.py` 接管原样保留的 Claude/Codex 进程与网络查询，由 CLI 通过 `create_usage` 注入；主动查询的投影若没有注入查询函数，会明确报错，不会悄悄跳过额度检查。被动投影仍不会启动帮手。服务层在 `helpers/model_gateway.py` 构造元数据网关，再注入 `ConversationMetadata`，保留显式启用、排除 Astra、最多两个候选及八秒提供方超时。线协议、存储数据、权限和默认决定模式不变。
+
+单独复现了 macOS 基线的两项夹具失败。技能路径断言改为比较解析后的路径；连接文件夹具设置 POSIX `0600` 权限，它原来的实际失败原因是权限检查，不是临时目录别名。另加回归确认 `0644` 仍会被拒绝。注入查询函数的测试还确认额度刷新不必启动帮手进程。全部 110 个包模块可以导入，原异常身份保留，新旧项目简报脚本路径均能运行且帮助输出一致。
+
+完整 Runtime 测试 1,089 项全部通过，耗时 166.161 秒。源码版本为 Runtime `0.23.1`、`d2121a8` 加本批改动，以及 App `0.32.8`（68）；这不是已安装版本的核验。真实模型／客户端回归、首个完整气泡三秒内显示、连接恢复、多端同步和设备测试均为 NOT RUN。没有重启或部署运行中的 Runtime。本批没有数据迁移：源码可回到保留的 `d2121a8`；将来升级或回退仍须遵循前述 R6 状态目录副本要求。R6 真实验收／默认模式切换及 R8 客户端迁移仍待完成。
+
+仓库完整门禁及单独的调试归档校验均通过，包含主机 C 测试、固件更新协议互通、Runtime 检查、固件构建、合并镜像和分区校验。门禁使用 ESP-IDF `5.5.3`、JDK `17.0.20.1`，以及本机已有的 Python `3.9.6`／Pillow `11.3.0`；IDF 保留自己的 Python 环境。前两次分别停在 JDK 未选中和 IDF 环境缺少 Pillow。可选图片依赖固定的 Pillow `13.0.0` 要求 Python 3.11，本次没有安装或验证该版本，也没有更改依赖固定值。
+
+仅用于验证的固件归档为 `build/firmware/83a6c81b24f9c2d453ed1d077705616e571f01c1b63556b428918cec974cf806/`，合并镜像 SHA-256 为 `83a6c81b24f9c2d453ed1d077705616e571f01c1b63556b428918cec974cf806`，配套 ELF SHA-256 为 `2f8b6418955ea38dbe31462f05b021ba156c03dc836187d8e94f1c32cda55a30`。描述符版本为 `companion-build-66-19-gd2121a8-`，目标 ESP32-C3、IDF `v5.5.3`。固件源码未改，没有刷写设备。Build 和主机回归为 PASS；设备、真实首响应／恢复／同步验收为 NOT RUN。格式和独立脚本导入整理后的最后一轮相关测试 77 项通过（与全量测试重叠）。
+
+
+### R8 按能力协商迁移客户端（2026-10-26）
+
+Runtime `0.24.0`、Android `0.33.0`（69）、桌面 `0.1.9` 和远程帮手协商 `sync_requests_v1`。已受理请求通过最多 32 个编号的可选列表加入 `/v1/sync`。投影仅包含公开请求字段和正式消息快照，目标预算 512 KiB，明确返回缺失／延后的编号，并让单个超大项目仍能前进。当前快照保留修订号，不推进历史分页游标；只有阶段变化也会唤醒订阅。请求绑定原 Runtime 和对话，状态缺失不会重新提交已受理操作。
+
+Android 和桌面将已受理编号加入原同步连接，只打断该 sync 读取。后台审批改为合并同步增量，保留其他未决审批并移除已回答／撤回项。身份、凭据和连接代次检查阻止迟到回复污染新来源。旧 Runtime 仍走支持的逐消息读取；桌面回退协议前重新核对身份和能力。服务端 feed／wait／stream 适配器继续保留：R8 删除仍需要已安装客户端完成迁移并落实最低版本门槛。R6 摘要策略、长历史验收和默认流程切换也仍未完成，保留 `decide_first=false`。
+
+验证：完整 Runtime **1,096 项**、Android **218 项**、桌面 **87 项**测试通过，所有 ABI APK 及桌面 TypeScript／UI 构建通过，仓库／主机／ESP-IDF 完整门禁通过。新生成的冻结 Runtime 首次未能在既有八秒夹具期限内启动，原夹具重试通过；保留这次冷启动失败，不算时延验收通过。Mac arm64 包包含匹配的 Runtime `0.24.0`，属于未签名私有候选包；原安装版本核验为 `0.1.7`，没有替换。Runtime 源码摘要为 `45812d6f6d392c22c3c6eef361a971676e356b8f0c284e8ce2cb33b37ce191ca`，桌面源码摘要为 `c5196e60467c2212cd9521f018dcc0a68868978d104371b830c6016cd2f53890`。固件源码未改，没有刷机。验证镜像 SHA-256 为 `b4db812ad871b0a70efd2602402feb6a4d497c892a96cc26a4f5dd32fec25195`，配套 ELF 为 `73bc127efec4731856d280899ea9353bbbeca4af543d3b8de8870bcf955eb14a`。
+
+Mac Runtime 空闲时，在离线克隆状态目录后从 `0.23.1` 升到 `0.24.0`，保留原配置和主机身份。仓库外保留 `d2121a8` 源码归档和升级前状态副本用于恢复。回退前须核对备份后受理的工作，不能直接用旧副本覆盖现有状态。原检出目录／分支没有切换。Android 已通过 `app publish` 在本机发布；USB 重新连接后，手机原先选的是 Windows 入口，改用已配对的 Mac HTTPS 线路后，在 App 内下载 `0.33.0`。安装和真机运行验收仍待主人在系统界面确认。
+
+真实联调沿用 dsh／DeepSeek 配置和本机 HTTP 回环。两个隔离桌面核心客户端收敛到同一条真实模型最终回复，只 POST 一次、请求同步读取八次、逐消息读取零次，返回时缓存恢复 30 ms，发起端缓存收齐回复耗时 2,698 ms。打包双窗口单次实测首个完整有效气泡 2,829 ms。另一次打包窗口 **20 次连续发送**均在双窗口收敛，但 **3 次超过 3,000 ms**：3,112／3,812／3,030 ms。TTFT p50 为 2,679.5 ms，最近秩 p95 为 3,112 ms，最大 3,812 ms；全部尝试均保留，没有剔除慢样本。最慢请求在 Runtime 首段文本时已到 3,452 ms，服务端完成为 3,609 ms，排队 21 ms。桌面随后去掉收到有效同步页后固定的 80 ms 暂停；未变化的响应仍退避，新发送可打断暂停。上述 20 个样本是在此后续优化前测得。最终包另跑 20 次：p50 2,580 ms，p95 3,210 ms，最大 3,531 ms，仍有 2 次超时限（3,531／3,210 ms），双窗口最终消息全部一致；原先的失败样本继续保留。真实配置的模型是 `deepseek-v4-pro`。最终打包客户端另做三次进程重启，从进程启动到已连接并显示全部 20 条测试最终回复分别为 1,623／467／411 ms，保留原配对，无需修复；这只是此 Mac 回环路径的重启恢复，不替代公网／中继／手机恢复验收。
+
+Build 和主机回归 PASS。有限的真实模型桌面显示／收敛已测，包含上述时延失败；完整首答验收 FAIL。手机文字／语音、固件／蓝牙、长历史、公网／中继真实模型时延、各相关切换／故障场景三次重复均 NOT RUN。主机故障测试和缓存恢复探针不能证明完整真实恢复／多端契约。R6 和 R8 最终删除适配器仍未验收。
 
 ## 8. 借鉴：Raft 与 DS-Bot-App
 

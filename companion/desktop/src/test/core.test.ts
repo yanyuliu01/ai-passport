@@ -186,6 +186,72 @@ test('accepted replies bypass blocked history replay, survive restart, and retai
     reopened.close();
   }
 });
+test('modern requests use one sync channel, wake an idle subscription, and keep canonical reply revisions', async t => {
+  const { db } = fixture(t);
+  db.apply(space, runtime, page({ seq: 1 }));
+  let posts = 0, aborted = 0, state = 'queued';
+  const modern = { ...endpoint, capabilities: ['sync', 'sync_requests_v1'] };
+  const transport: RuntimeTransport = { async request(_endpoint, method, path, _body, signal) {
+    if (method === 'POST') { posts++; return { id: 'live', status: 'queued' }; }
+    if (path === '/v1/agents') return {};
+    assert.ok(path.startsWith('/v1/sync?'), 'No per-message polling or stream on the modern route');
+    const ids = new URL(path, endpoint.url).searchParams.get('requests');
+    if (!ids) {
+      await new Promise(resolve => signal?.addEventListener('abort', () => { aborted++; resolve(undefined); }, { once: true }));
+      throw new RuntimeError('subscription nudged', 499);
+    }
+    assert.equal(ids, 'live');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return page({ seq: 2, requests: [{ id: 'live', conversation: 'default', status: state, rev: state === 'done' ? 3 : 2,
+      message_snapshot: { runtime_id: runtime, subject_id: space, epoch: 'epoch-a', messages: [
+        message('live:you', 100, { status: 'final', author: { kind: 'owner' } }),
+        message('live:reply', state === 'done' ? 102 : 101, { status: state === 'done' ? 'final' : 'streaming', text: state === 'done' ? 'unified reply' : '' }),
+      ] } }], requests_missing: [], requests_more: [] });
+  } };
+  const client = new DesktopClient(db, transport, secrets(), () => {});
+  t.after(() => client.stop()); client.add(modern);
+  await client.send(space, 'one accepted turn');
+  await until(() => db.records<Message>(space, 'message').some(item => item.id === 'live:reply'));
+  assert.equal(db.pending().length, 1); assert.ok(aborted >= 1);
+  state = 'done'; await until(() => db.pending().length === 0);
+  assert.equal(posts, 1);
+  assert.equal(db.records<Message>(space, 'message').find(item => item.id === 'live:reply')?.rev, 102);
+  assert.equal(db.records<Message>(space, 'message').filter(item => item.id === 'live:reply').length, 1);
+});
+
+test('missing modern request state preserves accepted identity and never repeats the write', async t => {
+  const { db } = fixture(t), entry = db.enqueue(space, runtime, 'accepted elsewhere');
+  entry.state = 'accepted'; entry.messageId = 'missing'; db.updatePending(entry);
+  let posts = 0;
+  const modern = { ...endpoint, capabilities: ['sync', 'sync_requests_v1'] };
+  const client = new DesktopClient(db, { async request(_endpoint, method, path) {
+    if (method === 'POST') posts++;
+    if (!path.startsWith('/v1/sync')) return {};
+    return page({ requests: [], requests_missing: ['missing'], requests_more: [] });
+  } }, secrets(), () => {});
+  t.after(() => client.stop());client.add(modern);
+  await until(() => Boolean(db.pending()[0]?.error));
+  assert.equal(posts, 0);assert.equal(db.pending()[0].messageId, 'missing');
+  assert.equal(db.pending()[0].state, 'accepted');
+});
+
+test('a confirmed Runtime rollback resumes legacy reads without repeating an accepted write', async t => {
+  const { db } = fixture(t), entry = db.enqueue(space, runtime, 'retained identity');
+  entry.state = 'accepted';entry.messageId = 'retained';db.updatePending(entry);
+  let posts = 0, legacy = 0;
+  const client = new DesktopClient(db, { async request(_endpoint, method, path) {
+    if (method === 'POST') posts++;
+    if (path.startsWith('/v1/info')) return { runtime_id: runtime, subject_id: space, capabilities: ['sync'] };
+    if (path.startsWith('/v1/messages/')) { legacy++;return { id: 'retained',status:'done',message_snapshot:{
+      runtime_id: runtime,subject_id:space,epoch:'epoch-a',messages:[message('retained:reply',3,{status:'final'})] } }; }
+    if (path.startsWith('/v1/sync')) return page();
+    return {};
+  } }, secrets(), () => {});
+  t.after(() => client.stop());client.add({...endpoint,capabilities:['sync','sync_requests_v1']});
+  await until(() => db.pending().length === 0);
+  assert.equal(posts,0);assert.equal(legacy,1);
+});
+
 test('approval routing binds Runtime and current epoch, never a bare colliding card ID', async t => {
   const { db } = fixture(t);
   db.apply(space, runtime, page({ approvals: [{ id: 'a1', seq: 1, status: 'pending' }] }));

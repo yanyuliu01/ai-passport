@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..loop.effects import EffectUncertain
+from ..errors import EffectUncertain
 
 MAX_OPEN = 30
 REPEAT = {"day": 86400, "week": 7 * 86400}

@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from ..loop.effects import EffectUncertain
+from ..errors import EffectUncertain
 
 MAX_NOTES = 60
 MAX_NOTE_CHARS = 200

@@ -23,6 +23,7 @@ export class DesktopClient {
   readonly endpoints = new Map<string, Endpoint>();
   private links = new Map<string, Link>();
   private loops = new Map<string, AbortController>();
+  private syncPolls = new Map<string, AbortController>();
   private flushing = new Set<string>();
   private watching = new Set<string>();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -278,10 +279,23 @@ export class DesktopClient {
     let failures = 0, more = true;
     const all = endpoint.capabilities.includes('all_conversations');
     const cursorConversation = all ? '*' : conversation;
+    const unified = endpoint.capabilities.includes('sync_requests_v1');
+    let offset = 0;
     while (this.current(endpoint, signal)) {
       const cursor = this.db.cursor(endpoint.runtimeId, cursorConversation);
+      const accepted = this.db.pending(endpoint.spaceId).filter(item => item.runtimeId === endpoint.runtimeId
+        && item.state === 'accepted' && item.messageId && (all || item.conversation === conversation));
+      const rotated = [...accepted.slice(offset % Math.max(accepted.length, 1)), ...accepted.slice(0, offset % Math.max(accepted.length, 1))];
+      const requested = unified ? rotated.slice(0, 32) : [];
+      offset += accepted.length > 32 ? 32 : 1;
+      const poll = new AbortController(), abort = () => poll.abort();
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) poll.abort();
+      this.syncPolls.set(key, poll);
       try {
-        const page = asSyncPage(await this.transport.request(endpoint, 'GET', syncPath(cursor, more ? 0 : 20, conversation) + (all ? '&all_conversations=1' : ''), undefined, signal));
+        const requestQuery = requested.length ? '&requests=' + encodeURIComponent(requested.map(item => item.messageId).join(',')) : '';
+        const page = asSyncPage(await this.transport.request(endpoint, 'GET', syncPath(cursor,
+          more || accepted.length > 32 ? 0 : 20, conversation) + (all ? '&all_conversations=1' : '') + requestQuery, undefined, poll.signal));
         if (!this.current(endpoint, signal)) return;
         if (page.runtime_id !== endpoint.runtimeId || page.subject_id !== endpoint.spaceId)
           throw new RuntimeError('服务身份与已确认连接不符，请重新检查连接；原记录保留', 409);
@@ -293,24 +307,58 @@ export class DesktopClient {
         }
         const applied = this.db.apply(endpoint.spaceId, endpoint.runtimeId, page, cursorConversation, cursor);
         if (!applied) continue;
+        if (requested.length) {
+          if (!Array.isArray(page.requests)) {
+            const nonce = randomBytes(16).toString('hex');
+            const info = await this.transport.request(endpoint, 'GET', '/v1/info?nonce=' + nonce, undefined, signal);
+            if (!this.current(endpoint, signal)) return;
+            if (info.runtime_id !== endpoint.runtimeId || info.subject_id !== endpoint.spaceId || !Array.isArray(info.capabilities))
+              throw new RuntimeError('回复服务身份已改变，原请求保留', 409);
+            const host = info.host as Json | undefined;
+            if (info.capabilities.includes('host_proof') && !proofMatches(endpoint.token, host?.id, nonce, host?.proof))
+              throw new RuntimeError('回复服务未通过身份核对，原请求保留', 401);
+            if (info.capabilities.includes('sync_requests_v1')) throw new RuntimeError('服务的统一回复状态不可用，原请求保留', 426);
+            this.add({ ...endpoint, capabilities: info.capabilities.filter((value): value is string => typeof value === 'string') });
+            return; // A confirmed rollback resumes the older supported read protocol.
+          }
+          for (const value of page.requests) {
+            const request = value as Json;
+            const entry = requested.find(item => item.messageId === request.id);
+            if (!entry || request.conversation !== entry.conversation) throw new RuntimeError('同步请求来源不匹配', 409);
+            this.acceptMessageSnapshot(entry, endpoint, request);
+            const pending = this.db.pending(endpoint.spaceId).find(item => item.clientId === entry.clientId);
+            if (pending?.error) { pending.error = undefined; this.db.updatePending(pending); }
+          }
+          for (const id of Array.isArray(page.requests_missing) ? page.requests_missing : []) {
+            const entry = requested.find(item => item.messageId === id);
+            if (entry && this.db.pending(endpoint.spaceId).some(item => item.clientId === entry.clientId)) {
+              entry.error = '已受理请求的状态暂不可读；保留原编号，未重新提交'; this.db.updatePending(entry);
+            }
+          }
+        }
         if (Array.isArray(page.conversations)) this.mergeConversations(endpoint.spaceId, page.conversations as Conversation[]);
         if (page.usage && typeof page.usage === 'object') this.db.set('usage:' + endpoint.runtimeId, page.usage);
-        more = page.more;
+        more = page.more || Array.isArray(page.requests_more) && page.requests_more.length > 0;
         failures = 0;
         this.links.set(key, { connected: true, catchingUp: more, error: '' });
         this.reconcile(endpoint);
         this.changed();
         const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
         if (lifetime) void this.flush(endpoint, lifetime);
-        // Avoid a busy loop on an older/broken endpoint that ignores long-poll wait.
-        if (!more) await delay(80, signal);
+        // Back off only if the endpoint returned no progress. Changed pages can
+        // immediately continue the subscription; a new send can interrupt this pause.
+        if (!more && String(page.seq) === cursor.cursor) await delay(80, poll.signal);
       } catch (error) {
         if (!this.current(endpoint, signal)) return;
+        if (poll.signal.aborted) continue; // A newly accepted request changed this subscription's watch set.
         const problem = error instanceof Error ? error.message : '同步暂时中断';
         this.links.set(key, { connected: false, catchingUp: false, error: problem });
         this.changed();
         if (error instanceof RuntimeError && !error.retryable) return;
         await delay(Math.min(15_000, 500 * 2 ** Math.min(failures++, 5)) * (0.8 + Math.random() * 0.4), signal);
+      } finally {
+        signal.removeEventListener('abort', abort);
+        if (this.syncPolls.get(key) === poll) this.syncPolls.delete(key);
       }
     }
   }
@@ -357,7 +405,10 @@ export class DesktopClient {
       for (const entry of this.db.pending(endpoint.spaceId)) {
         if (!this.current(endpoint, signal)) return;
         if (entry.runtimeId !== endpoint.runtimeId || entry.state === 'blocked') continue;
-        if (entry.state === 'accepted') { void this.watch(entry, endpoint, signal); continue; }
+        if (entry.state === 'accepted') {
+          if (!endpoint.capabilities.includes('sync_requests_v1')) void this.watch(entry, endpoint, signal);
+          continue;
+        }
         try {
           const accepted = await this.transport.request(endpoint, 'POST', '/v1/messages', entry.payload, signal);
           if (!this.current(endpoint, signal)) return;
@@ -366,7 +417,9 @@ export class DesktopClient {
           this.retryFailures.set(endpoint.runtimeId, 0);
           this.db.updatePending(entry); this.changed();
           this.acceptMessageSnapshot(entry, endpoint, accepted);
-          void this.watch(entry, endpoint, signal);
+          if (endpoint.capabilities.includes('sync_requests_v1'))
+            this.syncPolls.get(endpoint.runtimeId + '/' + (endpoint.capabilities.includes('all_conversations') ? 'default' : entry.conversation))?.abort();
+          else void this.watch(entry, endpoint, signal);
         } catch (error) {
           if (!this.current(endpoint, signal)) return;
           entry.error = error instanceof Error ? error.message : '消息尚未确认，保留在本地';
@@ -615,7 +668,7 @@ export class DesktopClient {
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);
-    return { version: '0.1.8', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
+    return { version: '0.1.9', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
       background: true, runtime: this.runtime, pairing: this.pairing };
   }
   refresh(): void {

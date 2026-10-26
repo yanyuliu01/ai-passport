@@ -21,6 +21,7 @@ PROTOCOL = 1
 # sync_usage：/v1/sync 也带用量，并且接受 usage=<rev>（用量变了提前返回）
 # reports：POST /v1/reports 接受不在这台电脑上的会话上报（reports.py）
 CAPABILITIES = ("messages", "sync", "approvals", "feed", "client_id_dedupe", "sync_usage", "reports", "task_activity", "owner_images", "side_chats", "all_conversations", "task_audit", "conversation_directory_v1", "shared_history_pages", "presentation_v1")
+CAPABILITIES += ("sync_requests_v1",)
 
 
 def runtime_id(state_dir: Path) -> str:

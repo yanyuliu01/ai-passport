@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 from ..config import AgentSpec
+from ..errors import AgentError
 
 MAX_OUTPUT_CHARS = 200000
 # 看不到事件流的跑法（任意命令、codex exec、只说话的那一次）没法判断卡没卡住，只能按
@@ -39,9 +40,6 @@ PARENT_SESSION_ENV = (
     "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_PERMISSION_PROFILE",
     "CODEX_CI", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID",
 )
-
-class AgentError(Exception):
-    """这个代理这一次没有给出结果；消息可以直接给用户看。"""
 
 
 class Cancelled(AgentError):

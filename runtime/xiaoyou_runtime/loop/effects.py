@@ -10,14 +10,10 @@ import hashlib
 import json
 import time
 
-from ..helpers.base import AgentError
+from ..errors import AgentError, EffectUncertain
 
 MAX_EFFECTS = 32
 MUTATIONS = {"remember", "replace", "forget", "track", "resolve", "task_action"}
-
-
-class EffectUncertain(AgentError):
-    pass
 
 
 class EffectFenceError(EffectUncertain):

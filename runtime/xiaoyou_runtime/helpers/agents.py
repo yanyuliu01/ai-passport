@@ -25,6 +25,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -810,6 +811,9 @@ class RemoteAgent(Agent):
             "text": job.text, "conversation": job.conversation,
             "client_id": uuid.uuid4().hex, "hop": job.hop + 1,
         }, 20)
+        unified = message.get("sync_requests_v1") is True
+        source = message.get("message_snapshot") or {}
+        after, epoch = 0, ""
         while True:
             status = message.get("status")
             if status == "done":
@@ -825,7 +829,20 @@ class RemoteAgent(Agent):
             if remaining <= 0 or not isinstance(message.get("id"), str):
                 raise AgentError("%s 超过 %d 秒还没结束" % (self.name, limit))
             wait = max(1, min(self.POLL_SECONDS, int(remaining)))
-            message = self._call("GET", "/v1/messages/%s?wait=%d" % (message["id"], wait), None, wait + 15)
+            if unified:
+                key = message["id"]
+                query = urllib.parse.urlencode({"conversation": job.conversation, "after": after,
+                                                "epoch": epoch, "wait": wait, "requests": key})
+                page = self._call("GET", "/v1/sync?" + query, None, wait + 15)
+                if source and any(page.get(field) != source.get(field) for field in ("runtime_id", "subject_id")):
+                    raise AgentError("%s 的回复来源已改变，原请求未重新提交" % self.name)
+                current = next((item for item in page.get("requests", []) if isinstance(item, dict)
+                                and item.get("id") == key and item.get("conversation") == job.conversation), None)
+                if current is None:
+                    raise AgentError("%s 的已受理请求状态不可读，原请求未重新提交" % self.name)
+                message, after, epoch = current, page["seq"], page["epoch"]
+            else:
+                message = self._call("GET", "/v1/messages/%s?wait=%d" % (message["id"], wait), None, wait + 15)
 
     def check(self) -> Optional[str]:
         return None

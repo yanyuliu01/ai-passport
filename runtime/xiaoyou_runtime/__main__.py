@@ -32,7 +32,8 @@ from .delivery.mesh import Mesh
 from .api.server import make_server
 from .api.service import Service
 from .world.store import Store
-from .world.usage import EFFORT_NAMES, Usage
+from .world.usage import EFFORT_NAMES
+from .helpers.usage import create_usage
 from .loop.xiaoyou import Turn, Xiaoyou
 
 
@@ -172,7 +173,7 @@ def main(argv=None) -> int:
     if args.command == "models":
         return model_gateway.run(config, args)
     if args.command == "usage":
-        meter = Usage(config, enabled=True)
+        meter = create_usage(config, enabled=True)
         meter.refresh()
         if args.json:
             print(json.dumps(meter.snapshot(), ensure_ascii=False, indent=1))
@@ -242,7 +243,7 @@ def main(argv=None) -> int:
         return 2
     # 只说一句就走（--once）时不主动去问额度：那要多起一个进程，而这句话多半用不上。
     xiaoyou = Xiaoyou(config, agents, store, router, workspace_module.create(config),
-                      Usage(config, enabled=config.usage_enabled and args.once is None))
+                      create_usage(config, enabled=config.usage_enabled and args.once is None))
 
     if args.once is not None:
         if args.agent is not None and not xiaoyou.has(args.agent):

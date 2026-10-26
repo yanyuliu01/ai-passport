@@ -16,9 +16,9 @@ from pathlib import Path
 
 from .base import AgentError
 from .agents import ClaudeCodeAgent
+from ..provider_binding import DEEPSEEK_BASE_URL, uses_deepseek
 
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
 MODEL_VARIABLES = (
     "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -44,12 +44,6 @@ def resolve(value, env, where):
         if not value.strip():
             raise AgentError("%s 缺少环境变量 %s" % (where, match.group(1)))
     return value.strip()
-
-
-def uses_deepseek(spec):
-    # Only explicitly configured agents: never change the owner's other agents.
-    return (spec.name == "deepseek" or
-            spec.env.get("ANTHROPIC_BASE_URL", "").rstrip("/") == DEEPSEEK_BASE_URL)
 
 
 class DeepSeekClaudeCodeAgent(ClaudeCodeAgent):

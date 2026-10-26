@@ -537,7 +537,9 @@ def make_server(config: Config, service: Service,
                     body = service.sync(query.get("conversation", ["default"])[0], after,
                                         query.get("epoch", [None])[0], asked[0], seen,
                                         query.get("states", [""])[0].split(","),
-                                        all_conversations=query.get("all_conversations", [""])[0] == "1")
+                                        all_conversations=query.get("all_conversations", [""])[0] == "1",
+                                        requests=[value for value in query["requests"][0].split(",") if value]
+                                        if "requests" in query else None)
                 except RequestError as error:
                     self._fail(400, str(error))
                     return

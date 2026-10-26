@@ -204,7 +204,8 @@ class Service:
         # Recovered queued work may request a tool immediately. Restore its
         # durable policy and event sink before starting any recovery workers.
         from ..world.conversation_metadata import ConversationMetadata
-        self.metadata = ConversationMetadata(xiaoyou._config, self._reply_writer)
+        from ..helpers.model_gateway import conversation_gateway
+        self.metadata = ConversationMetadata(self._reply_writer, conversation_gateway(xiaoyou._config))
         source_seq = max([int(v.get('source_revision', 0)) for v in xiaoyou.cards.directory.source_snapshot().values() if v.get('authority') == self.runtime_id] + [xiaoyou.cards.seq])
         if source_seq > xiaoyou.cards.seq:
             self._system_writer.sequence(at_least=source_seq)
@@ -1193,7 +1194,8 @@ class Service:
         return hash_secret(token) if legacy else self.devices.key_hash(token)
 
     def sync(self, conversation: Any, after: Any = 0, epoch: Any = None,
-             wait: float = 0.0, usage: Any = None, states: Any = (), all_conversations: bool = False) -> Dict[str, Any]:
+             wait: float = 0.0, usage: Any = None, states: Any = (), all_conversations: bool = False,
+             requests: Any = None) -> Dict[str, Any]:
         """统一同步接口（见 docs/development/unified-message-model）。
 
         返回序号比 after 大的消息（messages）和事（tasks，卡去掉 entries、换成 members），
@@ -1209,6 +1211,10 @@ class Service:
         没声明的旧 App 照旧拿到卡上的状态（unknown 或最后知道的状态）和 stale，免得不认识的
         状态被当成做完了。"""
         conversation = _name(conversation, "conversation")
+        if requests is not None:
+            if not isinstance(requests, (list, tuple)) or len(requests) > 32:
+                raise RequestError("requests must contain at most 32 request ids")
+            requests = list(dict.fromkeys(_name(value, "request id") for value in requests))
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
         if usage is not None and (isinstance(usage, bool) or not isinstance(usage, int)):
@@ -1225,6 +1231,13 @@ class Service:
             after, reset = 0, True
         deadline = time.monotonic() + max(0.0, wait)
         while True:
+            # Request stage changes also allocate a shared sequence, even when
+            # they have no new chat body. Wake the single subscription for them.
+            with self._changed:
+                request_changed = bool(requests and any(
+                    value.get("seq", 0) > after
+                    for key in requests for value in [self._messages.get(key)]
+                    if value and (all_conversations or value["conversation"] == conversation)))
             seq, tasks, messages, floor = cards_store.sync_since(
                 None if all_conversations else conversation, after, unavailable="unavailable" in states)
             if after > 0 and (after < floor or len(tasks) + len(messages) > SYNC_DELTA_WINDOW):
@@ -1234,7 +1247,7 @@ class Service:
             # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
             approvals = self._xiaoyou.approvals.since(None if all_conversations else conversation, after)
             remaining = deadline - time.monotonic()
-            if (tasks or messages or approvals or reset or cards_store.catalog_seq > after or remaining <= 0
+            if (tasks or messages or approvals or reset or request_changed or cards_store.catalog_seq > after or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
                 break
             cards_store.wait_beyond(seq, remaining if usage is None
@@ -1251,6 +1264,7 @@ class Service:
             items, more = _page_items(items)
             if more:
                 seq = items[-1][1]["seq"]
+        request_page = self._sync_requests(requests, conversation, all_conversations) if requests is not None else {}
         return {
             "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
             "epoch": cards_store.epoch,
@@ -1266,7 +1280,37 @@ class Service:
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
             "removed": [],
             "usage": meter.snapshot(),
+            **request_page,
         }
+
+    def _sync_requests(self, requested, conversation, all_conversations):
+        """Current request projection alongside sync; it never advances its cursor.
+
+        Use an explicit public field list, not a private journal record. Current
+        reply snapshots retain their canonical revisions while history pages
+        continue independently. Deferred ids must be requested on the next page.
+        """
+        fields = ("id", "conversation", "status", "text", "partial", "reply", "brief", "mood",
+                  "card", "stage", "helper", "rev", "error", "operation_state", "presentation", "message_snapshot")
+        items, missing, deferred, size = [], [], [], 0
+        with self._changed:
+            for key in requested:
+                value = self._messages.get(key)
+                if value is None or not (all_conversations or value["conversation"] == conversation):
+                    missing.append(key)
+                    continue
+                if items and size >= 512 * 1024:
+                    deferred.append(key)
+                    continue
+                snapshot = self._snapshot(value)
+                item = {field: snapshot[field] for field in fields if field in snapshot}
+                cost = _size(item)
+                if items and size + cost > 512 * 1024:
+                    deferred.append(key)
+                    continue
+                items.append(item)
+                size += cost
+        return {"requests": items, "requests_missing": missing, "requests_more": deferred}
 
     def _messages_since(self, conversation: str, after: int, upto: int) -> List[Dict[str, Any]]:
         with self._changed:
@@ -1716,6 +1760,7 @@ class Service:
                          if record is not None],
         }
         snapshot["event_stream"] = True
+        snapshot["sync_requests_v1"] = True
         snapshot["events"] = [dict(event) for event in message["events"]]
         snapshot["attachments"] = [dict(item) for item in message.get("attachments", [])]
         return snapshot

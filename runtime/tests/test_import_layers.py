@@ -79,6 +79,17 @@ def cycles(edges):
 
 
 class ImportLayerTests(unittest.TestCase):
+    def test_events_and_world_do_not_import_execution_or_delivery_layers(self):
+        edges = graph()
+        violations = sorted(
+            (source, target)
+            for source, targets in edges.items()
+            if source.startswith(("xiaoyou_runtime.events.", "xiaoyou_runtime.world."))
+            for target in targets
+            if target.split(".")[1] in {"helpers", "loop", "api", "delivery"}
+        )
+        self.assertEqual([], violations)
+
     def test_no_import_cycles_including_deferred_imports(self):
         self.assertEqual([], cycles(graph()))
 
