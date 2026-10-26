@@ -44,6 +44,25 @@ public class SyncCacheTest {
         assertEquals(1, card.entries.size()); assertEquals("m1:you", card.entries.get(0).id);
     }
 
+    @Test public void unrelatedPagesDoNotReplayHistoryButRestoreKeepsEveryMessage() {
+        SyncCache cache = new SyncCache("default");
+        String asked = ASKED.replace("\"task\":\"c1\"", "\"task\":\"\"");
+        String partial = reply(5, "streaming", "", "old partial").replace("\"task\":\"c1\"", "\"task\":\"\"");
+        assertEquals(2, cache.apply(page("{\"epoch\":\"e1\",\"seq\":5,\"messages\":[" + asked + "," + partial + "]}")).pending.size());
+        // Approval, usage or unrelated task updates must not re-apply all retained chat rows.
+        assertTrue(cache.apply(page("{\"epoch\":\"e1\",\"seq\":6,\"tasks\":[" + TASK.replace("c1", "other") + "]}")).pending.isEmpty());
+        String retracted = partial.replace("old partial", "").replace("\"rev\":5", "\"rev\":7").replace("\"seq\":5", "\"seq\":7");
+        SyncCache.Result changed = cache.apply(page("{\"epoch\":\"e1\",\"seq\":7,\"messages\":[" + retracted + "]}"));
+        assertEquals(1, changed.pending.size());
+        assertEquals("m1:reply", changed.pending.get(0).id);
+        assertEquals("", changed.pending.get(0).text);
+        assertTrue(cache.apply(page("{\"epoch\":\"e1\",\"seq\":8,\"messages\":[" + partial + "]}")).pending.isEmpty());
+        SyncCache restored = SyncCache.restore(cache.save(), "default");
+        assertNotNull(restored);
+        assertEquals(2, restored.everything().pending.size());
+        assertEquals("", restored.everything().pending.stream().filter(item -> item.id.equals("m1:reply")).findFirst().get().text);
+    }
+
     private static final String ASKED = "{\"id\":\"m1:you\",\"rev\":3,\"seq\":3,\"conversation\":\"default\",\"task\":\"c1\","
             + "\"scope\":\"main\",\"author\":{\"kind\":\"owner\",\"name\":\"you\"},\"kind\":\"user\",\"text\":\"查一下\","
             + "\"status\":\"final\",\"partial\":\"\",\"created_at\":100}";

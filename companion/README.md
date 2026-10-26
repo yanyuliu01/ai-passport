@@ -38,7 +38,12 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
-## Unified reply synchronization (App 0.33.0)
+## Unified reply synchronization (App 0.33.2)
+
+App 0.33.2 no longer rewrites the stored chat history when only a desktop activity card changes. Those updates arrived about once a second and each rewrite of a 6 MB history took about 0.7 s on the phone. Conversation cards are stored as before.
+
+App 0.33.1 passes only messages changed in the current sync page to the chat view. Unrelated task, approval or quota updates no longer replay all retained standalone messages. The full cache remains persisted and is replayed when restoring a saved source, so this changes delivery work rather than history retention. Newer empty partials and terminal-state protection remain in force.
+
 
 With Runtime 0.24.0's `sync_requests_v1`, accepted text and voice requests share
 the foreground sync subscription instead of opening a stream or long poll for

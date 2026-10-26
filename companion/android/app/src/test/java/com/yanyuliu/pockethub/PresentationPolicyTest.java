@@ -54,7 +54,10 @@ public class PresentationPolicyTest {
         for (Map<String,Object> wire : List.of(streamed,retracted,ended,streamed)) {
             wire = new LinkedHashMap<>(wire); wire.put("rev",++revision);
             SyncCache.Result page=cache.apply(Json.parseObject(UsageEvents.json(Map.of("seq",revision,"messages",List.of(wire),"tasks",List.of()))));
-            history.pending(page.pending.get(0));
+            if (revision == 4) {
+                assertTrue(page.pending.isEmpty()); // The rejected late partial produces no UI work.
+                history.pending(cache.everything().pending.get(0));
+            } else history.pending(page.pending.get(0));
             if (revision==2) assertTrue(history.main().get(0).presentation.blocks().isEmpty());
         }
         assertEquals(List.of("First message","Second message"),history.main().get(0).presentation.blocks());

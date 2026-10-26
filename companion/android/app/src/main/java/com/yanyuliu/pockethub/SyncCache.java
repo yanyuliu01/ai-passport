@@ -36,6 +36,7 @@ final class SyncCache {
         final long seq;
         final boolean more;
         final List<Card> cards;
+        /** Changed standalone messages for apply(); the complete retained view for everything(). */
         final List<Pending> pending;
         final Map<String, Object> usage;
         Result(boolean replaced, long seq, boolean more, List<Card> cards, List<Pending> pending,
@@ -68,6 +69,7 @@ final class SyncCache {
         if (!next.isEmpty()) epoch = next;
         presentationVersion = (int) Json.number(Json.object(page.get("presentation_policy")), "version");
         Set<String> touched = new LinkedHashSet<>();
+        Set<String> changedMessages = new LinkedHashSet<>();
         for (Object item : Json.list(page, "messages")) {
             Map<String, Object> message = Json.object(item);
             String id = Json.string(message, "id");
@@ -77,6 +79,7 @@ final class SyncCache {
             if (known != null && Json.number(known, "rev") > Json.number(message, "rev")) continue;
             if (known != null && terminal(known) && !terminal(message)) continue;
             messages.put(id, message);
+            changedMessages.add(id);
             String task = Json.string(message, "task");
             if (!task.isEmpty()) touched.add(task);
         }
@@ -99,7 +102,7 @@ final class SyncCache {
         if (!seq.isEmpty()) cursor = seq;
         Map<String, Object> usage = page.get("usage") instanceof Map ? Json.object(page.get("usage")) : null;
         return new Result(replaced, (long) Json.number(page, "seq"), Json.flag(page, "more"), cards,
-                pending(), usage);
+                pending(changedMessages), usage);
     }
 
     /**
@@ -236,9 +239,13 @@ final class SyncCache {
      * Messages of this conversation not shown on a card yet, oldest first: still queued or being
      * written, or accepted before the Runtime filed them under a task.
      */
-    private List<Pending> pending() {
+    private List<Pending> pending() { return pending(messages.keySet()); }
+
+    private List<Pending> pending(Iterable<String> ids) {
         List<Pending> result = new ArrayList<>();
-        for (Map<String, Object> message : messages.values()) {
+        for (String id : ids) {
+            Map<String, Object> message = messages.get(id);
+            if (message == null) continue;
             if (Json.string(message, "kind").equals("activity")) continue;
             if (!conversation.equals("*") && !conversation.equals(Json.string(message, "conversation"))) continue;
             String task = Json.string(message, "task");

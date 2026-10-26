@@ -131,8 +131,9 @@ final class ChatHistory {
         return entry.id.isEmpty() ? legacyKey(card, entry, index) : entry.id;
     }
 
-    void ingest(Card card) {
-        if (card.monitoringOnly) return;
+    /** Whether the card can change the stored timeline; desktop activity updates never do. */
+    boolean ingest(Card card) {
+        if (card.monitoringOnly) return false;
         // Older phone caches lack a card id. Match complete pairs, time and one-to-one ownership.
         for (int index = 0; index + 1 < card.entries.size(); index++) {
             Card.Entry user = card.entries.get(index), reply = card.entries.get(index + 1);
@@ -188,6 +189,7 @@ final class ChatHistory {
                     "summary", previous == null ? System.currentTimeMillis() / 1000.0 : previous.at, true);
             summary.conversation = card.conversation; put(summary);
         } else messages.remove(partialId);
+        return true;
     }
 
     /**

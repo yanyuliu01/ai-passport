@@ -33,6 +33,17 @@ public class ChatHistoryTest {
         }
     }
 
+    @Test public void monitoringUpdatesDoNotRequestHistoryPersistence() {
+        ChatHistory history = new ChatHistory();
+        history.begin("local", null, "preserved", 10);
+        String before = history.json();
+        Card monitor = card("[]", "\"monitoring_only\":true,\"state\":\"working\"");
+        assertFalse(history.ingest(monitor));
+        assertEquals(before, history.json());
+        assertTrue(history.ingest(card("[{\"role\":\"xiaoyou\",\"text\":\"answer\",\"at\":20}]", "\"state\":\"done\"")));
+        assertEquals(3, ChatHistory.restore(history.json()).main().size());
+    }
+
     @Test public void finishedMainTurnsAreWhatGoesToAnotherComputer() {
         ChatHistory history = new ChatHistory();
         history.begin("l1", null, "第一句", 10); history.accepted("l1", "m1"); history.finish("m1", "c1", "第一句的回答", false, null);

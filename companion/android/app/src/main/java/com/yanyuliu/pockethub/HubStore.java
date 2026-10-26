@@ -636,8 +636,8 @@ public final class HubStore {
                 }
                 cards.put(order, card);
                 dirty = true;
-                history.ingest(card);
-                historyChanged();
+                // 桌面活动状态的更新不改聊天记录，不必把整份记录重存一遍。
+                if (history.ingest(card)) historyChanged();
                 // 后台的一件事有了结果：第一屏说这件事。正在等小幽回话时不打断那一轮。
                 if (!card.monitoringOnly && previous != null && previous.active()
                         && !card.active() && pending == 0) {
