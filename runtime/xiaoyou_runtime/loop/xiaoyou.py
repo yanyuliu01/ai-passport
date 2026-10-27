@@ -805,8 +805,27 @@ class Xiaoyou:
             sys.stderr.write("界面上加的帮手读不出来：%s\n" % error)
         for spec in self.helpers.specs() if self.helpers is not None else []:
             self.add_agent(create_agent(spec))
+        from ..helpers.model_preferences import Preferences
+        self.model_preferences = Preferences(config.state_dir)
+        for name, agent in list(self._agents.items()):
+            spec = self.model_preferences.apply(agent.spec)
+            if spec is not agent.spec:
+                self._agents[name] = create_agent(spec)
         if self._gate.capabilities is not None and self.helpers is not None:
             self._gate.capabilities.grants_for = self.helpers.policy
+
+    def helper_model(self, name: str, model: str) -> None:
+        """Replace only future dispatches; running jobs keep their original agent."""
+        from dataclasses import replace
+        from ..helpers.model_preferences import editable, valid
+        from ..helpers.factory import create
+        with self._agents_lock:
+            agent = self._agents.get(name)
+            if agent is None or not editable(agent.spec) or not valid(model):
+                raise ValueError("这个帮手不能修改模型，或模型名称不正确")
+            replacement = create(replace(agent.spec, model=model))
+            self.model_preferences.save(name, model)
+            self._agents[name] = replacement
 
     def set_remote_agents(self, agents: List[Agent]) -> None:
         """换上网络里别的 Runtime 的帮手（mesh.py 按谁在线随时更新）；本机的不动。"""

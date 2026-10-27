@@ -12,7 +12,7 @@ DESKTOP = Path(__file__).resolve().parents[1]
 PACKAGE = DESKTOP.parents[1] / 'runtime/xiaoyou_runtime'
 
 def main():
-    lock = json.loads((DESKTOP / 'tools/windows-runtime-lock.json').read_text())
+    lock = json.loads((DESKTOP / 'tools/windows-runtime-lock.json').read_text(encoding='utf-8'))
     cache = DESKTOP / '.build-cache/windows-runtime'
     cache.mkdir(parents=True, exist_ok=True)
     downloads = {}
@@ -42,11 +42,11 @@ def main():
     for path in sorted(PACKAGE.rglob('*.py')):
         digest.update(path.relative_to(PACKAGE).as_posix().encode()); digest.update(b'\0')
         digest.update(path.read_bytes()); digest.update(b'\0')
-    version = re.search(r'__version__\s*=\s*["\']([^"\']+)', (PACKAGE / '__init__.py').read_text()).group(1)
+    version = re.search(r'__version__\s*=\s*["\']([^"\']+)', (PACKAGE / '__init__.py').read_text(encoding='utf-8')).group(1)
     manifest = {'layout': 'python-embedded', 'platform': 'win32', 'architecture': 'AMD64',
         'runtime_version': version, 'python': lock['python']['version'], 'pillow': lock['pillow']['version'],
         'source_sha256': digest.hexdigest(), 'dependencies': lock, 'native_execution_verified': False}
-    (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'bundle': 'runtime-dist-win', 'python': manifest['python'], 'native_execution_verified': False}))
 
 if __name__ == '__main__': main()

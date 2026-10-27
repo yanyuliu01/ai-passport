@@ -373,6 +373,7 @@ class Service:
                 "name": agent.name, "type": agent.type, "description": agent.description,
                 "speaks": agent.speaks, "default": agent.name == self._xiaoyou.default_agent,
                 "model": tiers[agent.name]["model"] if agent.name in tiers else agent.spec.model,
+                "configured_model": agent.spec.model,
                 "effort": agent.spec.effort, "efforts": list(agent.spec.efforts),
                 "models": list(agent.spec.models),
             }
@@ -394,7 +395,26 @@ class Service:
                 grants[name][server.id] = (False if not grant.enabled else
                                           {"tools": grant.tools} if grant.tools is not None else True)
         return {"runtime_id": self.runtime_id, "harnesses": helpers.options(), "added": added,
-                "capabilities": servers, "helper_grants": grants}
+                "capabilities": servers, "helper_grants": grants,
+                "model_settings": self.helper_model_settings()}
+
+    def helper_model_settings(self) -> List[Dict[str, Any]]:
+        from ..helpers.model_preferences import editable, options
+        return [{"name": agent.name, "model": agent.spec.model or "",
+                 "models": options(agent.spec)} for agent in self._xiaoyou.agents()
+                if editable(agent.spec)]
+
+    def helper_model(self, name: str, body: Any) -> Dict[str, Any]:
+        if not isinstance(body, dict):
+            raise RequestError("请求体应为对象")
+        with self._helpers_lock:
+            try:
+                self._xiaoyou.helper_model(_name(name, "name"), body.get("model"))
+            except ValueError as error:
+                raise RequestError(str(error))
+            except OSError:
+                raise UnavailableError("模型未能保存，请重试") from None
+        return {"name": name, "model": body["model"]}
 
     def helper_models(self, body: Any) -> Dict[str, Any]:
         from ..helpers.helper_models import catalog, ModelServiceError, DEFAULT_URL

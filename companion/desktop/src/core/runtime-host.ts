@@ -3,7 +3,8 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { createConnection } from 'node:net';
 import { identify, HTTPRuntimeTransport } from './runtime-client.js';
 import type { Endpoint, Json, LocalAgent } from '../shared.js';
 
@@ -12,7 +13,7 @@ export interface RuntimeLaunch {
   args: string[];
   cwd: string;
 }
-export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string }
+export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
 export function managedAgents(dsh: string, helpers: LocalAgent[]): Record<string, Json> {
   const agents: Record<string, Json> = { deepseek: { type: 'dsh', command: [dsh],
     model: 'deepseek-v4-pro', chat_model: 'deepseek-flash', stream: true,
@@ -36,6 +37,7 @@ export class RuntimeHost {
   private awaitingAttach = false;
   private restarts: number[] = [];
   private providerKey?: string;
+  private externalConfig?: string;
   constructor(private readonly dataDir: string, private readonly launch: RuntimeLaunch,
     private readonly transport = new HTTPRuntimeTransport()) {}
 
@@ -63,6 +65,42 @@ export class RuntimeHost {
     return undefined;
   }
 
+  async configurationSpace(configPath: string): Promise<string | undefined> {
+    const config = JSON.parse(await readFile(configPath, 'utf8')) as { mesh?: Json };
+    let secret = typeof config.mesh?.secret === 'string' ? config.mesh.secret : '';
+    if (!secret && typeof config.mesh?.secret_file === 'string') {
+      const file = config.mesh.secret_file.replace(/^~(?=\/|\\)/, homedir());
+      secret = (await readFile(resolve(dirname(configPath), file), 'utf8')).trim();
+    }
+    return secret ? createHash('sha256').update('xiaoyou-subject\0' + secret).digest('hex').slice(0, 32) : undefined;
+  }
+
+  async startExisting(configPath: string, space: string): Promise<Endpoint> {
+    const file = resolve(configPath);
+    if (await this.configurationSpace(file) !== space) throw new Error('本机服务与账号空间不一致，原配置和记录保留');
+    try {
+      const endpoint = await this.attach(file);
+      if (endpoint.spaceId !== space) throw new Error('本机服务身份不一致');
+      return endpoint;
+    } catch (error) {
+      if (error instanceof Error && error.message === '本机服务身份不一致') throw error;
+    }
+    const config = JSON.parse(await readFile(file, 'utf8')) as { server: { port: number } };
+    const occupied = await new Promise<boolean>((resolve, reject) => {
+      const socket = createConnection({ host: '127.0.0.1', port: config.server.port });
+      socket.once('connect', () => { socket.destroy(); resolve(true); });
+      socket.once('error', error => { socket.destroy();
+        if ((error as NodeJS.ErrnoException).code === 'ECONNREFUSED') resolve(false); else reject(error); });
+      socket.setTimeout(1000, () => { socket.destroy(); reject(new Error('无法确认已有服务状态，原进程保留')); });
+    });
+    if (occupied) throw new Error('本机端口已有服务但身份尚未确认，未启动第二个 Runtime');
+    if (this.ownedRunning() && this.externalConfig !== file) throw new Error('另一项本机服务正在运行，原进程保留');
+    this.externalConfig = file;
+    const endpoint = await this.start();
+    if (endpoint.spaceId !== space) throw new Error('本机服务身份不一致，原配置和记录保留');
+    return endpoint;
+  }
+
   async start(options: StartOptions = {}): Promise<Endpoint> {
     if (this.starting || this.recovering) throw new Error('本机服务正在启动，请稍后重试');
     this.starting = true;
@@ -70,8 +108,8 @@ export class RuntimeHost {
   }
 
   private async startOwned(options: StartOptions): Promise<Endpoint> {
-    const configDir = join(this.dataDir, 'runtime');
-    const configFile = join(configDir, 'config.json');
+    const configFile = this.externalConfig || join(this.dataDir, 'runtime/config.json');
+    const configDir = dirname(configFile);
     if (options.deepseekKey) this.providerKey = options.deepseekKey;
     if (this.ownedRunning()) {
       const child = this.child!;
@@ -82,6 +120,7 @@ export class RuntimeHost {
     let existing = false;
     try { config = JSON.parse(await readFile(configFile, 'utf8')) as Json; existing = true; }
     catch (error) {
+      if (this.externalConfig) throw new Error('已有本机配置无法读取，未创建新身份或更改记录');
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('本机服务配置无法读取，请检查已有配置；记录未改动');
       if (!options.dsh) throw new Error('请先检测并确认启用 DeepSeek Harness');
       await mkdir(join(configDir, 'workdir'), { recursive: true });
@@ -90,6 +129,7 @@ export class RuntimeHost {
         state_dir: 'state', persona_file: 'persona.txt', desktop_sync: false,
         agents: managedAgents(options.dsh, options.helpers || []),
         xiaoyou: { default_agent: 'deepseek', voice_agent: 'deepseek' }, usage: { enabled: true },
+        ...(options.meshSecret ? { mesh: { secret: options.meshSecret } } : {}),
       };
       await writeFile(configFile, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
       await writeFile(join(configDir, 'persona.txt'),
@@ -106,9 +146,9 @@ export class RuntimeHost {
       cwd: this.launch.cwd, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XIAOYOU_'))),
         ...(this.providerKey ? { DEEPSEEK_API_KEY: this.providerKey } : {}), PYTHONUNBUFFERED: '1', XIAOYOU_CONFIG: configFile,
-        XIAOYOU_HOST: '127.0.0.1', XIAOYOU_PORT: String((config.server as Json).port),
+        XIAOYOU_HOST: this.externalConfig ? String((config.server as Json).host || '127.0.0.1') : '127.0.0.1', XIAOYOU_PORT: String((config.server as Json).port),
         XIAOYOU_TOKEN: String((config.server as Json).token),
-        XIAOYOU_STATE_DIR: join(configDir, 'state') },
+        XIAOYOU_STATE_DIR: resolve(configDir, String(config.state_dir || 'state')) },
     });
     const child = this.child;
     this.awaitingAttach = true;
@@ -135,7 +175,7 @@ export class RuntimeHost {
     if (!this.desired || this.stopping || this.recovering || this.starting) return undefined;
     this.recovering = true;
     try {
-      const configFile = join(this.dataDir, 'runtime/config.json');
+      const configFile = this.externalConfig || join(this.dataDir, 'runtime/config.json');
       if (this.ownedRunning()) {
         if (!this.awaitingAttach) return undefined;
         const child = this.child;

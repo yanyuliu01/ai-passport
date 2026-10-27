@@ -2,7 +2,7 @@
 
 # Xiaoyou desktop client
 
-Implementation in progress, source version 0.1.10. Follow the
+Implementation in progress, source version 0.1.16. Follow the
 [development plan](../../docs/development/xiaoyou-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -563,3 +563,25 @@ full_bin_sha256: 7dbbaac6a521c74956dc578228ef9c282a27d65a97f417eade45aabcacb2ea7
 elf_sha256: 93c71a2fdc1d11936a66b84512ce35b9254ab05cb8a336a9724b0db1dfac902a
 archive_verification: PASS
 ```
+
+Account-based computer discovery and the default numeric-IP relay are described in [Account discovery](deploy/accounts.md). Each computer keeps its own local Runtime.
+
+After account login or restoration, the client reuses a single known local configuration
+whose Mesh identity matches the authenticated account. Its provider settings, state
+directory and Runtime identity stay in place. An offline matching service can start
+from that same configuration; a reachable service is attached without taking process
+ownership. Ambiguous configurations and occupied ports with unverified identities
+require connection settings instead of starting a second Runtime. No model credentials
+are copied from another computer. Account shutdown drains pending peer work before
+closing its SQLite cache, including on Windows.
+
+### Helper model selection (0.1.16)
+
+Settings > Helpers > Choose model saves the local helper default for future tasks.
+Running jobs retain their original agent and model. Codex choices come from its
+local visible model catalog; Claude Code offers native aliases. Other model
+accepts an explicit provider-supported name. Saving does not invoke a model;
+availability and billing depend on the provider. Newly managed Codex helpers use
+`gpt-6.1-sol`; Astra requires an explicit choice. Older runtimes keep the read-only
+label. Preferences live in `state/helper-models.json`, separate from credentials
+and native CLI settings. Gateway helpers retain their existing setup flow.

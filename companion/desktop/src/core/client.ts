@@ -34,7 +34,8 @@ export class DesktopClient {
   pairing: ClientView['pairing'] = { invitation: undefined, joined: 0, relayState: '未设置跨网入口',
     requests: [] as { id: string; name: string; fingerprint: string }[] };
   constructor(readonly db: ClientDatabase, private transport: RuntimeTransport,
-    private secrets: SecretStore, private changed: () => void) {}
+    private secrets: SecretStore, private changed: () => void,
+    private peerState?: (endpoint: Endpoint) => string) {}
 
   restore(allowed: (endpoint: Endpoint) => boolean = () => true): void {
     for (const endpoint of this.secrets.load<Endpoint[]>('endpoints') || []) if (allowed(endpoint)) this.add(endpoint);
@@ -173,6 +174,13 @@ export class DesktopClient {
   }
   helperModels(space: string, body: Json): Promise<Json> {
     return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/models', body);
+  }
+  async helperModel(space: string, name: string, model: string): Promise<Json> {
+    const endpoint = this.localEndpoint(space);
+    const result = await this.transport.request(endpoint, 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/model', { model });
+    const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
+    if (lifetime) await this.loadAgents(endpoint, lifetime);
+    return result;
   }
   helperGrants(space: string, name: string, grants: Json): Promise<Json> {
     return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/capabilities', grants);
@@ -378,7 +386,8 @@ export class DesktopClient {
     const pending = this.db.pending(space).find(item => item.state !== 'blocked' && item.conversation === conversation);
     const endpoint = card ? this.endpointForRecord(space, 'task', card, runtime)
       : pending ? this.endpoints.get(pending.runtimeId)
-      : [...this.endpoints.values()].find(item => item.spaceId === space && this.link(item)?.connected)
+      : [...this.endpoints.values()].find(item => item.spaceId === space && !item.url.startsWith('peer://'))
+        || [...this.endpoints.values()].find(item => item.spaceId === space && this.link(item)?.connected)
         || [...this.endpoints.values()].find(item => item.spaceId === space);
     if (!endpoint) throw new Error('请先连接小幽空间');
     if (mainReply && card && !endpoint.capabilities.includes('task_audit')) throw new Error('当前服务尚不支持在来源聊天补充要求，请升级服务后再试');
@@ -635,8 +644,9 @@ export class DesktopClient {
   }
   private link(endpoint: Endpoint): Link | undefined {
     const link = this.links.get(endpoint.runtimeId + '/' + (endpoint.capabilities.includes('all_conversations') ? 'default' : this.selectedConversation(endpoint.spaceId)));
-    if (link && endpoint.url.startsWith('peer://') && this.pairing.relayState !== '加密通信入口已连接')
-      return { connected: false, catchingUp: false, error: this.pairing.relayState };
+    const state = this.peerState?.(endpoint) ?? this.pairing.relayState;
+    if (link && endpoint.url.startsWith('peer://') && state !== '加密通信入口已连接')
+      return { connected: false, catchingUp: false, error: state };
     return link;
   }
   snapshot(): ClientView {
@@ -668,7 +678,7 @@ export class DesktopClient {
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);
-    return { version: '0.1.10', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
+    return { version: '0.1.16', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
       background: true, runtime: this.runtime, pairing: this.pairing };
   }
   refresh(): void {

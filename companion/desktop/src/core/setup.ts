@@ -58,6 +58,8 @@ export class Setup {
   }
   async enable(input: { service?: string; agents: string[]; deepseekKey?: string }): Promise<Endpoint> {
     if (!this.scan) throw new Error('请先检测本机助手和服务');
+    if (this.secrets.load<string>('account-space') && !this.secrets.load<string>('account-mesh-secret'))
+      throw new Error('请先登录账号并恢复互通身份，再启用本机 Runtime');
     if (input.service) {
       const path = this.paths.get(input.service);
       if (!path) throw new Error('服务列表已更新，请重新检测');
@@ -68,10 +70,11 @@ export class Setup {
         this.secrets.save('deepseek-key', key);
       }
       const endpoint = managed ? await this.host.start({ deepseekKey: key }) : await this.host.attach(path);
+      this.checkAccountSpace(endpoint);
       this.db.set('local-service-v1', managed ? { mode: 'bundled' } : { mode: 'external', path }); this.confirm(endpoint);
       return endpoint;
     }
-    if (this.view().confirmed && !this.choice() && (this.secrets.load<Endpoint[]>('endpoints') || [])
+    if (!this.secrets.load<string>('account-mesh-secret') && this.view().confirmed && !this.choice() && (this.secrets.load<Endpoint[]>('endpoints') || [])
       .some(endpoint => this.allowed(endpoint) && endpoint.url.startsWith('peer://')))
       throw new Error('这台电脑已加入已有空间。同空间本机服务配置尚未开放，请继续使用已配对服务；不会另建无关空间');
     const dsh = this.scan.agents.find(item => item.id === 'dsh' && item.installed);
@@ -87,7 +90,9 @@ export class Setup {
     if (!key || key.length < 12 || key.length > 4096 || /[\r\n\0]/.test(key))
       throw new Error('请提供 DeepSeek API Key；它只保存在本机系统安全存储中');
     this.secrets.save('deepseek-key', key);
-    const endpoint = await this.host.start({ dsh: dsh.location, helpers: selected, deepseekKey: key });
+    const endpoint = await this.host.start({ dsh: dsh.location, helpers: selected, deepseekKey: key,
+      meshSecret: this.secrets.load<string>('account-mesh-secret') });
+    this.checkAccountSpace(endpoint);
     this.db.set('local-service-v1', { mode: 'bundled' }); this.confirm(endpoint);
     return endpoint;
   }
@@ -99,5 +104,31 @@ export class Setup {
       : await this.host.start({ deepseekKey: this.secrets.load<string>('deepseek-key') || process.env.DEEPSEEK_API_KEY });
     if (!this.allowed(endpoint)) throw new Error('本机服务身份已变化，请在连接设置中重新检测并确认；原记录保留');
     return endpoint;
+  }
+  async resumeAccount(): Promise<Endpoint | undefined> {
+    const space = this.secrets.load<string>('account-space');
+    if (!space || !this.secrets.load<string>('account-mesh-secret')) return;
+    const choice = this.choice();
+    if (choice?.mode === 'bundled') {
+      const endpoint = await this.resume();
+      if (endpoint) this.checkAccountSpace(endpoint);
+      return endpoint;
+    }
+    const matches: string[] = [];
+    for (const path of new Set(choice?.mode === 'external' ? [choice.path] : this.candidates.filter(Boolean))) {
+      try { if (await this.host.configurationSpace(path) === space) matches.push(path); }
+      catch { /* Missing or unreadable configurations cannot be activated. */ }
+    }
+    if (matches.length > 1) throw new Error('找到多个同账号本机配置，请在连接设置中选择，原服务和记录保留');
+    if (!matches.length) return;
+    const endpoint = await this.host.startExisting(matches[0], space);
+    this.checkAccountSpace(endpoint);
+    this.db.set('local-service-v1', matches[0] === this.managedConfig ? { mode: 'bundled' } : { mode: 'external', path: matches[0] });
+    this.confirm(endpoint);
+    return endpoint;
+  }
+  private checkAccountSpace(endpoint: Endpoint): void {
+    const space = this.secrets.load<string>('account-space');
+    if (space && space !== endpoint.spaceId) throw new Error('此服务属于另一空间，原配置和记录已保留；请使用已授权的同空间 Runtime');
   }
 }

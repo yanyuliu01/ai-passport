@@ -1,0 +1,28 @@
+services:
+  relay:
+    image: mirror.ccs.tencentyun.com/library/node@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+    user: '1000:1000'
+    working_dir: /app
+    command: ['node', 'start-ip.mjs']
+    restart: unless-stopped
+    environment:
+      XIAOYOU_RELAY_TOKEN: ${XIAOYOU_RELAY_TOKEN:?Missing relay master secret}
+    ports: ['443:8443']
+    volumes:
+      - ./app:/app:ro
+      - ./tls:/tls:ro
+      - ./data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: '2m', max-file: '2'}
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('https').get('https://127.0.0.1:8443/healthz',{ca:require('fs').readFileSync('/tls/server.crt')},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

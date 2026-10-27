@@ -332,7 +332,26 @@ test('bundle launch uses only fixed packaged paths and isolates embedded Python 
   assert.deepEqual(mac.args, []);
   const windows = bundledRuntimeLaunch('/bundle', 'win32', '/profile', { layout: 'python-embedded' });
   assert.equal(windows.command, join('/bundle', 'python/python.exe'));
-  assert.deepEqual(windows.args, ['-I', '-u', join('/bundle', 'app/runtime_entry.py')]);
+  assert.deepEqual(windows.args, ['-I', '-X', 'utf8', '-u', join('/bundle', 'app/runtime_entry.py')]);
   assert.throws(() => bundledRuntimeLaunch('/bundle', 'darwin', '/profile', { layout: 'python-embedded' }));
   assert.throws(() => bundledRuntimeLaunch('/bundle', 'win32', '/profile', { layout: '../untrusted-executable' }));
+});
+
+test('account peer readiness is independent of legacy relay state and losing it retains cached messages',async t=>{
+ const {db}=fixture(t);const peer={...endpoint,url:'peer://'+'d'.repeat(32),token:''};let state='加密通信入口已连接';
+ const client=new DesktopClient(db,{async request(_endpoint,_method,_path,_body,signal){
+  await new Promise(r=>{const timer=setTimeout(r,20);signal?.addEventListener('abort',()=>{clearTimeout(timer);r(undefined);},{once:true});});
+  return page({messages:[message('account-cached',1,{status:'final'})]});
+ }},secrets(),()=>{},()=>state);t.after(()=>client.stop());client.add(peer);
+ assert.notEqual(client.pairing.relayState,'加密通信入口已连接');
+ await until(()=>client.snapshot().spaces[0].connected);state='账号通信入口正在恢复';
+ assert.equal(client.snapshot().spaces[0].connected,false);assert.equal(client.snapshot().spaces[0].messages[0].id,'account-cached');
+});
+test('fresh sends prefer the local Runtime even when a remote endpoint was discovered first; pending source stays pinned',async t=>{
+ const {db}=fixture(t);const remote={...endpoint,runtimeId:'d'.repeat(32),url:'peer://'+'e'.repeat(32),token:''};
+ const client=new DesktopClient(db,{async request(_endpoint,_method,_path,_body,signal){await new Promise(r=>signal?.addEventListener('abort',()=>r(undefined),{once:true}));return{};}},secrets(),()=>{});
+ t.after(()=>client.stop());client.add(remote);client.add(endpoint);
+ await client.send(endpoint.spaceId,'fresh local turn');assert.equal(db.pending()[0].runtimeId,endpoint.runtimeId);
+ db.removePending(db.pending()[0].clientId);db.enqueue(endpoint.spaceId,remote.runtimeId,'original remote pending');
+ await client.send(endpoint.spaceId,'same pending source');assert.ok(db.pending().every(p=>p.runtimeId===remote.runtimeId));
 });

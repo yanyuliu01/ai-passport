@@ -140,3 +140,43 @@ test('explicit configuration attach cannot be redirected by inherited Runtime po
     if (oldToken === undefined) delete process.env.XIAOYOU_TOKEN; else process.env.XIAOYOU_TOKEN = oldToken;
   }
 });
+
+test('account enrollment provisions the original mesh identity into a new local Runtime, retaining helper boundaries',async t=>{
+  const {db,dir,secrets}=await fixture(t),starts:StartOptions[]=[];
+  secrets.save('account-space',endpoint.spaceId);secrets.save('account-mesh-secret','approved mesh identity for test');
+  secrets.save('endpoints',[{...endpoint,url:'peer://'+'c'.repeat(32)}]);
+  const host={async start(options:StartOptions){starts.push(options);return endpoint;}} as unknown as RuntimeHost;
+  const setup=new Setup(db,secrets,host,[],'new computer',join(dir,'owned.json'),async()=>agents);
+  setup.confirm({...endpoint,url:'peer://'+'c'.repeat(32)});await setup.discover();
+  await setup.enable({agents:['codex'],deepseekKey:'private-test-api-key'});
+  assert.equal(starts[0].meshSecret,'approved mesh identity for test');assert.equal(setup.choice()?.mode,'bundled');
+  assert.doesNotMatch(JSON.stringify(setup.view()),/approved mesh identity|private-test-api-key/);
+});
+test('an account cannot start an unrelated local subject before recovering its authenticated account identity',async t=>{
+  const {db,dir,secrets}=await fixture(t);secrets.save('account-space',endpoint.spaceId);let started=false;
+  const host={async start(){started=true;return endpoint;}} as unknown as RuntimeHost;
+  const setup=new Setup(db,secrets,host,[],'new computer',join(dir,'owned.json'),async()=>agents);await setup.discover();
+  await assert.rejects(()=>setup.enable({agents:[],deepseekKey:'private-test-api-key'}),/先登录账号/);assert.equal(started,false);
+});
+
+test('account login adopts only one existing same-space Runtime and retains its configuration path', async t => {
+  const { db, dir, secrets } = await fixture(t), existing = join(dir, 'existing.json'), calls: string[] = [];
+  secrets.save('account-space', endpoint.spaceId); secrets.save('account-mesh-secret', 'synthetic-mesh-secret');
+  const host = { async configurationSpace(path: string) { return path === existing ? endpoint.spaceId : 'other'; },
+    async startExisting(path: string, space: string) { assert.equal(space, endpoint.spaceId); calls.push(path); return endpoint; } } as unknown as RuntimeHost;
+  const setup = new Setup(db, secrets, host, [join(dir, 'unrelated.json'), existing, existing], 'Windows', join(dir, 'managed.json'));
+  assert.equal((await setup.resumeAccount())?.runtimeId, endpoint.runtimeId);
+  assert.deepEqual(calls, [existing]); assert.deepEqual(setup.choice(), { mode: 'external', path: existing });
+  assert.equal(setup.allowed(endpoint), true); assert.equal(setup.view().confirmed, true);
+});
+
+test('account login leaves different-space and ambiguous local Runtime configurations untouched', async t => {
+  const { db, dir, secrets } = await fixture(t); let starts = 0;
+  secrets.save('account-space', endpoint.spaceId); secrets.save('account-mesh-secret', 'synthetic-mesh-secret');
+  let space = 'different';
+  const host = { async configurationSpace() { return space; }, async startExisting() { starts++; return endpoint; } } as unknown as RuntimeHost;
+  const setup = new Setup(db, secrets, host, ['first.json', 'second.json'], 'Windows', join(dir, 'managed.json'));
+  assert.equal(await setup.resumeAccount(), undefined); assert.equal(starts, 0);
+  space = endpoint.spaceId; await assert.rejects(() => setup.resumeAccount(), /多个同账号/);
+  assert.equal(starts, 0); assert.equal(setup.choice(), undefined);
+});

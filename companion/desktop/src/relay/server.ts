@@ -3,15 +3,18 @@ import { createServer as createSecureServer, type ServerOptions } from 'node:htt
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { pathToFileURL } from 'node:url';
+import type { RelayAccounts } from './accounts.js';
 
 /** An authenticated, bounded byte forwarder. No model, plaintext or persistent mailbox. */
-export function createRelay(token: string, tls?: ServerOptions): Server {
+export function createRelay(token: string, tls?: ServerOptions, accounts?: RelayAccounts): Server {
   if (token.length < 32) throw new Error('Set a random relay access token of at least 32 characters');
   const handler: import('node:http').RequestListener = (request, response) => {
+    if (accounts && request.url?.startsWith('/v1/account/')) { void accounts.handle(request, response); return; }
     if (request.url === '/healthz') { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{"ok":true}'); }
     else { response.writeHead(404); response.end(); }
   };
   const server: Server = tls ? createSecureServer(tls, handler) : createServer(handler);
+  server.requestTimeout = 10_000; server.headersTimeout = 10_000;
   const sockets = new Map<string, WebSocket>();
   const websocket = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024,
     perMessageDeflate: false });
@@ -21,7 +24,10 @@ export function createRelay(token: string, tls?: ServerOptions): Server {
     let url: URL;
     try { url = new URL(request.url || '', 'http://localhost'); } catch { socket.destroy(); return; }
     const device = url.searchParams.get('device') || '', room = url.searchParams.get('room') || '';
-    if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) {
+    const legacy = auth.length === expected.length && timingSafeEqual(auth, expected);
+    const header = request.headers.authorization || '';
+    const account = header.startsWith('Bearer ') && accounts?.authorizeRelay(header.slice(7), room);
+    if (!legacy && !account) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return;
     }
     if (url.pathname !== '/v1/connect' || !/^[a-f0-9]{32}$/.test(device)

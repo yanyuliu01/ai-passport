@@ -2654,3 +2654,14 @@ real model first render <=3 seconds, physical connection recovery or live multi-
 convergence. Report those independently in delivery evidence. Preserve native
 transcripts, credentials, pairing and retained logs on rollback; old clients ignore
 the additive metadata/history files and continue using their existing APIs.
+
+### Local helper model defaults
+
+`GET /v1/helpers/options` includes `model_settings` (`name`, `model`, `models`)
+for editable local helpers. Authenticated `POST /v1/helpers/<name>/model` with
+`{"model":"gpt-6.1-sol"}` atomically persists the default and replaces the agent
+for future dispatches. Running jobs retain their original instance.
+`/v1/agents` exposes additive `configured_model`; usage reports observed models
+independently. Preferences survive restart in `state/helper-models.json`.
+No credentials or native CLI settings change. Model IDs are syntactically
+validated; provider availability is checked when the helper executes.

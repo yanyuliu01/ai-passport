@@ -107,7 +107,7 @@ try{
  await until(()=>page.locator('.thinking').count().then(n=>n===0));
  assert.equal(await page.locator('[data-message-id="live:you"]').count(),1);
  assert.equal(await page.locator('[data-message-id="live:reply"]').count(),1);
- await page.getByText('正在同步',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'正在同步',exact:true}).waitFor();
  await page.screenshot({path:join(root,'build/reply-wait-window.png')});
  historyBlocked=false;
  await app.close();[app,page]=await launch(env);
@@ -116,7 +116,7 @@ try{
  await until(()=>reply.locator('[data-block-id]').count().then(n=>n===2));
  assert.equal(await page.locator('[data-message-id="turn:reply"]').count(),1);
  assert.deepEqual(errors,[]);
- const result={desktop:'0.1.7',packaged:Boolean(process.env.XIAOYOU_SHELL_PACKAGED),provider:'synthetic-shared-wire-fixture',partialCompleteBlock:'PASS',emptyRetraction:'PASS',
+ const result={desktop:await app.evaluate(({app})=>app.getVersion()),platform:process.platform,packaged:Boolean(process.env.XIAOYOU_SHELL_PACKAGED),provider:'synthetic-shared-wire-fixture',partialCompleteBlock:'PASS',emptyRetraction:'PASS',
   finalBlockBoundaries:'PASS',canonicalOrder:'PASS',formattingRuns:'PASS',futurePolicyWarning:'PASS',restartSameMessage:'PASS',
   acceptedWait:'PASS',ownerOnlyWait:'PASS',acceptedRestart:'PASS',offlineWait:'PASS',liveReplyDuringHistoryReplay:'PASS',recoveryMs,
   nativeCodexWindow:'NOT RUN',nativeClaudeWindow:'NOT RUN',phone:'NOT RUN',realModelTTFT:'NOT RUN'};

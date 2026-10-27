@@ -109,6 +109,7 @@ export interface SetupView {
 }
 
 export interface ClientView {
+  account?: AccountView;
   version: string;
   spaces: SpaceView[];
   selectedSpace: string;
@@ -117,7 +118,13 @@ export interface ClientView {
   relayHost?: RelayHostView;
   runtime: { state: string; message: string };
   pairing: { invitation?: string; joined: number; relayState: string;
-    requests: { id: string; name: string; fingerprint: string }[] };
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] };
+}
+export interface AccountView {
+  signedIn: boolean; username: string; busy: boolean; message: string; canInvite: boolean;
+  provisioned: boolean; requiresProvisioning?: boolean;
+  pairing: { invitation?: string; joined: number; relayState: string;
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] };
 }
 
 export interface RelayHostView {
@@ -132,6 +139,9 @@ export interface PhoneConnection {
   remote: 'unavailable' | 'existing-private-network'; note: string;
 }
 export interface DesktopAPI {
+  accountLogin(input: { username: string; password: string; register: boolean }): Promise<void>;
+  accountLogout(): Promise<void>;
+  accountRefresh(): Promise<void>;
   startRelayHost(input: { port: number; publicURL: string }): Promise<void>;
   stopRelayHost(): Promise<void>;
   checkRelayHost(): Promise<void>;
@@ -159,6 +169,7 @@ export interface DesktopAPI {
   openLink(href: string): Promise<void>;
   helperOptions(input: { space: string }): Promise<Json>;
   helperModels(input: { space: string; gateway_url: string; key?: string }): Promise<Json>;
+  helperModel(input: { space: string; name: string; model: string }): Promise<Json>;
   helperGrants(input: { space: string; name: string; grants: Json }): Promise<Json>;
   addHelper(input: { space: string; helper: Json }): Promise<Json>;
   removeHelper(input: { space: string; name: string }): Promise<Json>;
