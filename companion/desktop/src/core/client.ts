@@ -668,7 +668,7 @@ export class DesktopClient {
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);
-    return { version: '0.1.9', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
+    return { version: '0.1.10', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
       background: true, runtime: this.runtime, pairing: this.pairing };
   }
   refresh(): void {

@@ -2,7 +2,7 @@
 
 # Xiaoyou desktop client
 
-Implementation in progress, source version 0.1.9. Follow the
+Implementation in progress, source version 0.1.10. Follow the
 [development plan](../../docs/development/xiaoyou-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -11,6 +11,21 @@ The owner approved the v8 interaction reference on 2026-10-21. The onboarding
 increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
+
+## Late local-service startup (0.1.10 source)
+
+If an owned Runtime is still starting when the initial startup wait expires,
+the existing supervisor keeps checking that same process. Once it is ready,
+the client reconnects only if its authenticated identity was already confirmed.
+It does not create another process, confirm a new identity, or repeatedly replace
+a healthy connection. Initial startup and recovery cannot run concurrently, and
+a response arriving after shutdown cannot reconnect the client. Signal-terminated
+children count as exited and retain the existing three-restarts-per-ten-minutes
+limit. External services remain outside the client's process ownership.
+
+The original startup wait and supervision interval remain unchanged. This fixes
+late recovery; it does not establish fast cold startup, a three-second model
+response, or acceptance of the installed desktop version.
 
 ## Unified request replies (0.1.9 source)
 

@@ -32,6 +32,8 @@ export class RuntimeHost {
   private stopping = false;
   private desired = false;
   private recovering = false;
+  private starting = false;
+  private awaitingAttach = false;
   private restarts: number[] = [];
   private providerKey?: string;
   constructor(private readonly dataDir: string, private readonly launch: RuntimeLaunch,
@@ -62,10 +64,19 @@ export class RuntimeHost {
   }
 
   async start(options: StartOptions = {}): Promise<Endpoint> {
+    if (this.starting || this.recovering) throw new Error('本机服务正在启动，请稍后重试');
+    this.starting = true;
+    try { return await this.startOwned(options); } finally { this.starting = false; }
+  }
+
+  private async startOwned(options: StartOptions): Promise<Endpoint> {
     const configDir = join(this.dataDir, 'runtime');
     const configFile = join(configDir, 'config.json');
     if (options.deepseekKey) this.providerKey = options.deepseekKey;
-    if (this.ownedRunning()) return this.attach(configFile);
+    if (this.ownedRunning()) {
+      const child = this.child!;
+      return this.finishStart(await this.attach(configFile), child);
+    }
     await mkdir(configDir, { recursive: true, mode: 0o700 });
     let config: Json;
     let existing = false;
@@ -99,26 +110,56 @@ export class RuntimeHost {
         XIAOYOU_TOKEN: String((config.server as Json).token),
         XIAOYOU_STATE_DIR: join(configDir, 'state') },
     });
+    const child = this.child;
+    this.awaitingAttach = true;
     let spawnError = false;
-    this.child.once('error', () => { spawnError = true; });
+    child.once('error', () => { spawnError = true; });
     for (let attempt = 0; attempt < 30; attempt++) {
-      if (this.stopping || spawnError || this.child.exitCode !== null)
+      if (this.stopping || spawnError || !this.ownedRunning())
         throw new Error('后台服务未能启动，已有记录未改动');
-      try { return await this.attach(configFile); } catch { await new Promise(resolve => setTimeout(resolve, 200)); }
+      try { return this.finishStart(await this.attach(configFile), child); }
+      catch { await new Promise(resolve => setTimeout(resolve, 200)); }
     }
     throw new Error('后台服务启动超时，请在连接页面重试');
   }
-  ownedRunning(): boolean { return Boolean(this.child && this.child.exitCode === null); }
-  async recover(): Promise<Endpoint | undefined> {
-    if (!this.desired || this.stopping || this.recovering || this.ownedRunning()) return undefined;
-    try { return await this.attach(join(this.dataDir, 'runtime/config.json')); }
-    catch { /* Only count actual restart attempts, not an already recovered/adopted service. */ }
-    this.restarts = this.restarts.filter(at => at > Date.now() - 10 * 60_000);
-    if (this.restarts.length >= 3) throw new Error('本机服务连续退出，已暂停自动重启，记录仍保留');
-    this.restarts.push(Date.now()); this.recovering = true;
-    try { return await this.start(); } finally { this.recovering = false; }
+  private finishStart(endpoint: Endpoint, child: ChildProcess): Endpoint {
+    if (this.stopping || this.child !== child || !this.ownedRunning())
+      throw new Error('后台服务未能启动，已有记录未改动');
+    this.awaitingAttach = false;
+    return endpoint;
   }
-  stopOwned(): void { this.desired = false; this.stopping = true; this.child?.kill('SIGTERM'); }
+  ownedRunning(): boolean {
+    return Boolean(this.child?.pid && this.child.exitCode === null && this.child.signalCode === null);
+  }
+  async recover(): Promise<Endpoint | undefined> {
+    if (!this.desired || this.stopping || this.recovering || this.starting) return undefined;
+    this.recovering = true;
+    try {
+      const configFile = join(this.dataDir, 'runtime/config.json');
+      if (this.ownedRunning()) {
+        if (!this.awaitingAttach) return undefined;
+        const child = this.child;
+        let endpoint: Endpoint;
+        try { endpoint = await this.attach(configFile); } catch { return undefined; }
+        if (!this.desired || this.stopping || this.child !== child || !this.ownedRunning()) return undefined;
+        this.awaitingAttach = false;
+        return endpoint;
+      }
+      try {
+        const endpoint = await this.attach(configFile);
+        return this.desired && !this.stopping ? endpoint : undefined;
+      }
+      catch { /* Only count actual restart attempts, not an already recovered/adopted service. */ }
+      if (!this.desired || this.stopping) return undefined;
+      this.restarts = this.restarts.filter(at => at > Date.now() - 10 * 60_000);
+      if (this.restarts.length >= 3) throw new Error('本机服务连续退出，已暂停自动重启，记录仍保留');
+      this.restarts.push(Date.now());
+      return await this.startOwned({});
+    } finally { this.recovering = false; }
+  }
+  stopOwned(): void {
+    this.desired = false; this.stopping = true; this.awaitingAttach = false; this.child?.kill('SIGTERM');
+  }
 }
 
 export async function findExecutable(name: string): Promise<string | undefined> {
