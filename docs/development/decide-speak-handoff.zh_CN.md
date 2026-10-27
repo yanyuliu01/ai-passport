@@ -111,7 +111,7 @@ python3 tools/experiments/decide_speak_compare.py review ~/xiaoyou-experiments/d
 - 决定超时率、决定的真实耗时中位数（`real_ms`）、决定正确率；
 - P 的丢弃比例和额外费用，分别按实验比例和线上比例估算；
 - 三类说做不一致的次数，以及 `must`／`must_not` 的满足情况；
-- 判定标准四条逐条给结论。第 3 条等主人盲评，第 4 条等主人给费用上限，没有结果的写“待定”；
+- 判定标准三条逐条给结论，第 3 条等主人盲评，没有结果的写“待定”；费用只报告数字，不下结论；
 - 已知局限（见第 5 节）。
 
 按[跨端可靠性规则](cross-stack-reliability.zh_CN.md)的格式交付：Build 写 NOT RUN（没有构建），

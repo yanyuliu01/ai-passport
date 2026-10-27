@@ -164,9 +164,9 @@ P is recommended only if all of these hold:
 1. **Faster**: the median `release_ms` is at least 500 ms lower, and no more samples exceed 3,000 ms than in S.
 2. **No false claims**: zero "said but not done", and no more of the other two errors than S.
 3. **No quality loss**: in the owner's blind judgment, P wins or ties at least 50% of cases.
-4. **Acceptable cost**: the extra cost at the live share is within a limit the owner sets.
-
 If any condition fails, keep S and record why in the report.
+
+Extra cost is still measured and reported, but it is not a condition and has no limit. The owner decided that model-call spending will later become part of the drive design: a resource Xiaoyou weighs herself and spends according to her goals and expected benefit (see the drive section of the [dialogue naturalness design](dialogue-naturalness-design.md)).
 
 ## 8. Steps
 
@@ -179,5 +179,4 @@ If any condition fails, keep S and record why in the report.
 ## 9. Owner decisions
 
 - Whether the case list covers the situations you care about.
-- The limit on extra cost.
 - Whether to repeat the run with a second chat model besides the live configuration.

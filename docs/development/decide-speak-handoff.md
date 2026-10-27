@@ -105,7 +105,7 @@ Write it in the measurements section of `docs/development/decide-then-speak.md` 
 - decision timeout rate, median real decision time (`real_ms`), decision accuracy;
 - P's discard share and extra cost, estimated at both the experiment share and the live share;
 - counts of the three consistency errors and how the `must` / `must_not` items held;
-- a verdict on each of the four decision-rule conditions. Condition 3 waits for the owner's blind review and condition 4 for the owner's cost limit; write "pending" where there is no result yet;
+- a verdict on each of the three decision-rule conditions. Condition 3 waits for the owner's blind review; write "pending" where there is no result yet. Report cost as numbers only, without a verdict;
 - known limits (section 5).
 
 Use the delivery format of the [cross-stack reliability rules](cross-stack-reliability.md): Build NOT RUN (nothing was built), Host tests lists the commands run, Device tests NOT RUN (these latencies exclude transport and clients and do not replace a device first reply). Show the report to the owner first; do not commit or push it yourself.

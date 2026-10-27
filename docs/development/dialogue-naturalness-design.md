@@ -175,7 +175,10 @@ Begin with activities that have observable outcomes; broader aesthetic valuation
 requires separate research and tests.
 
 The Runtime should store a drive's supporting evidence, confidence, learned
-weights, current opportunities and allocated budget. Update from recorded
+weights, current opportunities and allocated budget. Model-call spending
+belongs here as one more resource: no fixed owner-set limit; Xiaoyou weighs
+it against her goals and expected benefit (owner decision 2026-10-27, design
+pending). Update from recorded
 events and measured outcomes; elapsed time alone need not generate a new need.
 In particular, owner absence is not evidence of rejection or a reason for
 unbounded connection pressure. A goal can remain pending without asking again.
