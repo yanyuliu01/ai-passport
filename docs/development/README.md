@@ -8,6 +8,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 
 ## AI workflow
 
+- [project-status.md](project-status.md): current Windows/Mac baseline, versions, pending work, branch roles and acceptance gaps.
 - [xiaoyou-system-prompt.md](xiaoyou-system-prompt.md): base prompt, full Grok Bot reference mapping, capability adaptations and acceptance boundaries.
 - [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
 - [first-response-measurement.md](first-response-measurement.md): how to measure and record the 3-second first response on a real phone before the default-flow cutover.

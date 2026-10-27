@@ -76,7 +76,7 @@ App 和固件的文档里也叫她 DS。
 > Q 版角色是非官方的同人风格概念图。全部图稿和各自的状态见
 > [设计包](docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)。
 
-## 整体由三部分组成
+## 整体由四部分组成
 
 ```text
  设备（固件）  ──加密低功耗蓝牙──>  手机 App「DS 中枢」  ──HTTP(S)──>  小幽 Runtime（电脑上）
@@ -92,42 +92,52 @@ App 和固件的文档里也叫她 DS。
 | 部分 | 目录 | 做什么 | 说明文档 |
 | --- | --- | --- | --- |
 | 设备固件 | `main/`、`components/` | 四屏（形象 / 对话 / 任务 / 用量）、按住说话、授权弹窗、经蓝牙换固件（双槽位，没被认可自动退回） | [Claude Pocket](docs/claude-pocket.zh_CN.md) |
-| 手机 App | `companion/` | 安卓。侧边栏四处：和小幽聊天、任务、帮手、连接与设置。首页的小幽跟着状态动，按住麦克风说话（手机自己识别）；审批提醒（最多同时盯八台电脑）、任务图片和文件、用量；同时是设备和 Runtime 之间的中转；新版经 Runtime 推到手机 | [DS 中枢](companion/README.zh_CN.md) |
+| 手机 App | `companion/android/` | 聊天、任务、帮手、状态、设置五入口；语音、主人审阅、图片文件，同时中转设备与 Runtime；新版经 Runtime 更新 | [DS 中枢](companion/README.zh_CN.md) |
+| 桌面客户端 | `companion/desktop/` | Mac 和 Windows。五入口、账号登录、本地 Runtime 连接、直连/加密中继、主人审阅和帮手模型选择 | [小幽桌面端](companion/desktop/README.zh_CN.md) |
 | Runtime | `runtime/` | 小幽本身：一件事一张卡，几件事并行，补充 / 改要求 / 取消；回复流式生成；派活时看档位和订阅余量；长任务看有没有动静；任务的图片和文件可下载；同步电脑上的 Codex、Claude Code 对话，可选审批桥；给电脑端 agent 共享历史；可写进 Notion 共享工作区 | [小幽 Runtime](runtime/README.zh_CN.md) |
 
 只用 Claude 桌面端也行：同一份固件可以在开发者模式下直连 Claude 桌面端的 Hardware
 Buddy（这时没有语音和卡）。
 
-## 现在到哪了（2026-10-16）
+## 现在到哪了（2026-10-28）
 
-| 部分 | 版本 | 构建 | 真机 |
-| --- | --- | --- | --- |
-| 固件 | 预发布 `firmware-build-22`（`8220106`，鲸鱼像素大头 + 跟着状态的动作） | 通过 | 连着手机按住说话已在设备上跑通（`firmware-build-19`）；三屏用过；鲸鱼的睡脸和呼吸在设备上确认过；跟着状态的动作、第四屏、任务历史还没人在设备上确认 |
-| 手机 App | 0.11.0（版本号 17），预发布 `companion-build-26` | 通过 | 0.2.0 在手机上跑通过配对和打字；侧边栏版、手机按住说话、审批提醒、经 Runtime 更新都还没在手机上逐项验过 |
-| Runtime | 0.8.0 | 468 个测试全过 | 在作者的 Mac 上日常运行；Claude Code 的订阅用量、Codex app-server 的授权、电脑端审批桥的真实往返还没在 Mac 上实测 |
+| 部分 | 最新汇合源码 | 验证边界 |
+| --- | --- | --- |
+| 固件 | 现有固件，本次同步不改动 | 本次不刷机，不新增真机验收结论 |
+| 手机 App | **0.33.2 (71)** | 命名为 **0.33.4 (73)** 的 APK 已发布，但对应源码仍在 Mac 未提交，标签指向更旧源码；详见进度索引；本次未核对手机安装 |
+| 桌面客户端 | **0.1.16** | 账号、公网中继、帮手模型选择已提交；跨电脑重连与历史收敛仍待验收 |
+| Runtime | **0.24.0** | Windows、Mac 健康接口均报告 0.24.0；保留的真实模型证据中 R6 首回复 <=3 秒仍失败，R8 迁移未完成 |
 
-每一部分“哪些验证过、哪些没有”写在各自的文档末尾。开发主线是
-`feature/usage-history`；其余分支的用途见下表。
+[项目进展与源码同步索引](docs/development/project-status.zh_CN.md)记录本次核对的
+Windows/Mac 提交、未提交工作、分支用途和历史问题 H1-H4。源码汇合不代表发布或部署。
 
-| 分支 | 是什么 |
+开发主线是 `feature/usage-history`，也是 GitHub 默认分支：
+
+| 分支 | 用途 |
 | --- | --- |
-| `feature/usage-history` | 当前主线：上面三部分的最新代码 |
-| `feature/usage-effort`、`feature/xiaoyou-agent-router`、`feature/ble-firmware-update` | 已合进主线的前几段工作 |
-| `feature/claude-pocket` | 最早的 Claude Pocket 固件（桌面端伴侣） |
-| `main` | FoloToy 上游的硬件测试基线，不是成品应用 |
+| `feature/usage-history` | 四部分最新已提交源码 |
+| `claude/client-five-entries`、`runtime/r4-recovery-review` | 客户端/重构及恢复审查工作；检查时的远端提交已包含在集成线中 |
+| `feature/multi-end-sync` | 较早的 mesh/客户端里程碑，已包含在集成线中 |
+| `feature/usage-effort`、`feature/xiaoyou-agent-router`、`feature/ble-firmware-update`、`feature/pocket-hub-app`、`feature/claude-pocket` | 历史开发阶段 |
+| `main` | 上游硬件测试基线，不是当前产品或默认分支 |
 
-## 升级：三样一起
+## 升级与源码同步
 
-固件、App、Runtime 之间的协议是一起改的，升级时三样一起：
+升级前检查[兼容性与可靠性规则](docs/development/cross-stack-reliability.zh_CN.md)
+和各部分的交付说明。支持的客户端通过能力协商兼容，不要求更新源码时同时替换所有
+已安装组件。保留配对、历史、权限和待处理请求。
 
-1. 电脑上停掉 Runtime，拉主线，重新启动（先升 Runtime，免得新 App 碰上旧接口）：
-   `cd runtime`，`python3 -m xiaoyou_runtime --config config.json`
+1. 汇合 `feature/usage-history` 前先检查工作区，协调现有改动或使用独立 worktree。
+   不要 pull 覆盖正在进行的工作；Runtime 有任务运行时，未经主人批准不能重启。
+   启动方法见 [Runtime 指南](runtime/README.zh_CN.md)。
 2. 手机 App：0.11.0 起经 Runtime 更新。在 `runtime/` 下
    `python3 -m xiaoyou_runtime app publish <apk 路径> --note "改了什么"`，手机打开 App 或在
    「连接与设置 → App 更新」里点安装。手机上还是 0.11.0 之前的版本时，要先手动装一次
    最新的 `companion-build-N`（Releases 里的 `pocket-hub-debug.apk`）。
 3. 新固件经蓝牙推到设备：`python3 -m xiaoyou_runtime firmware fetch --push`。
    设备上还是单槽位的旧固件时，要先插线刷一次：`bash tools/flash_pocket.sh`。
+4. 桌面客户端按[各平台说明](companion/desktop/README.zh_CN.md)构建与安装。
+   同步源码不会替换已安装客户端或其内置 Runtime。
 
 换回某一版：`python3 -m xiaoyou_runtime firmware restore previous`（或 `firmware list` 里
 的编号）。
@@ -154,6 +164,7 @@ Buddy（这时没有语音和卡）。
 | --- | --- |
 | [Claude Pocket](docs/claude-pocket.zh_CN.md) | 本分支的应用：配对、按键、文字覆盖范围、验收 |
 | [小幽 Harness 审查](docs/assets/xiaoyou-harness-review.zh_CN.md) | Fork 架构审查、本地可靠性问题、接入能力边界、实验及渐进 PR 计划 |
+| [项目进展与源码同步](docs/development/project-status.zh_CN.md) | 当前 Windows/Mac 基线、版本、未提交工作、分支及验收缺口 |
 | [开发指南](docs/development/README.zh_CN.md) | AI 工作流、工程规范、CI 与发布流程 |
 | [App／Runtime／固件可靠性](docs/development/cross-stack-reliability.zh_CN.md) | 强制回归、3 秒首回复、连接恢复与多端一致性契约 |
 | [小幽桌面客户端方案](docs/development/xiaoyou-desktop-plan.zh_CN.md) | 周五前 Mac/Windows 私测交付目标、统一会话、可自建加密通信、依赖与验收 |

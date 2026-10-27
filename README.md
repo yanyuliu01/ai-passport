@@ -86,7 +86,7 @@ And as pixel heads, sized for a small screen:
 > [design pack](docs/reference/yanyuliu01/ai-companion-design.md) for every sheet
 > and its status.
 
-## Three parts
+## Four parts
 
 ```text
  Device (firmware)  ──encrypted BLE──>  Phone app "Pocket Hub" ──HTTP(S)──>  Xiaoyou Runtime (computer)
@@ -102,37 +102,47 @@ And as pixel heads, sized for a small screen:
 | Part | Directory | What it does | Docs |
 | --- | --- | --- | --- |
 | Firmware | `main/`, `components/` | Four screens (Xiaoyou / conversation / tasks / usage), push-to-talk, approval prompts, firmware updates over Bluetooth (two slots, automatic rollback if not confirmed) | [Claude Pocket](docs/claude-pocket.md) |
-| Phone app | `companion/` | Android. A sidebar with four places: chat with Xiaoyou, tasks, helpers, connection and settings. The home screen shows Xiaoyou moving with her state, with hold-to-talk on the phone (transcribed on the phone); approval alerts (watching up to eight computers), task images and files, usage; also the relay between the device and the runtime; new versions arrive through the runtime | [DS companion (Pocket Hub)](companion/README.md) |
+| Phone app | `companion/android/` | Android. Chat, tasks, helpers, status and settings; voice, owner reviews, images and files, and the device/Runtime relay; updates through Runtime | [DS companion (Pocket Hub)](companion/README.md) |
+| Desktop client | `companion/desktop/` | Mac and Windows. Five entries, account sign-in, local Runtime connection, direct/encrypted relay routes, owner reviews and helper model selection | [Xiaoyou desktop](companion/desktop/README.md) |
 | Runtime | `runtime/` | Xiaoyou herself: one card per request, several requests in parallel, add / change / cancel; streamed replies; picks effort tiers and watches subscription limits when handing work out; watches long tasks for silence; downloadable task images and files; mirrors Codex and Claude Code conversations on the computer, with an optional approval bridge; shared history for desktop agents; can write to a shared Notion workspace | [Xiaoyou Runtime](runtime/README.md) |
 
 Claude desktop alone also works: in developer mode the same firmware connects directly
 to Claude desktop's Hardware Buddy (no voice or cards in that mode).
 
-## Where things stand (2026-10-16)
+## Where things stand (2026-10-28)
 
-| Part | Version | Build | On hardware |
-| --- | --- | --- | --- |
-| Firmware | prerelease `firmware-build-22` (`8220106`, whale pixel head plus state-driven motion) | passes | Push-to-talk with the phone connected works on the device (`firmware-build-19`); the three screens have been used; the whale's sleeping face and breathing were confirmed on the device; the state-driven motion, the fourth screen and task history have not been checked on the device yet |
-| Phone app | 0.11.0 (version code 17), prerelease `companion-build-26` | passes | 0.2.0 paired and chatted on a phone; the sidebar version, phone hold-to-talk, approval alerts and updates through the runtime have not been checked item by item on a phone |
-| Runtime | 0.8.0 | all 468 tests pass | Runs daily on the author's Mac; Claude Code subscription usage, Codex app-server approvals and a real round trip through the desktop approval bridge have not been tested there yet |
+| Part | Latest integrated source | Verification boundary |
+| --- | --- | --- |
+| Firmware | Existing firmware, unchanged by this synchronization | No new flash or device acceptance in this inspection |
+| Phone app | **0.33.2 (71)** | **0.33.4 (73)** named APKs are published, but their source remains uncommitted on the Mac and their tag points to older source; see the status index; phone installation not checked here |
+| Desktop client | **0.1.16** | Accounts, public relay and helper model selection committed; cross-computer reconnect and history convergence still need acceptance |
+| Runtime | **0.24.0** | Both Windows and Mac health endpoints report 0.24.0; R6 first response <=3s remains failing in retained real-provider evidence; R8 migration is incomplete |
 
-Each part's document ends with what is and is not verified. Development happens on
-`feature/usage-history`; the other branches are:
+The [project status and source synchronization index](docs/development/project-status.md)
+records the inspected Windows/Mac commits, pending work, branch roles and open
+history issues H1-H4. Source integration is not a release or a deployment.
 
-| Branch | What it is |
+Development happens on `feature/usage-history`, which is also the GitHub default:
+
+| Branch | Role |
 | --- | --- |
-| `feature/usage-history` | The current line: the latest code for all three parts |
-| `feature/usage-effort`, `feature/xiaoyou-agent-router`, `feature/ble-firmware-update` | Earlier stages, already merged into the current line |
-| `feature/claude-pocket` | The first Claude Pocket firmware (a desktop companion) |
-| `main` | FoloToy's upstream hardware-test baseline, not a finished application |
+| `feature/usage-history` | Latest committed source for all four parts |
+| `claude/client-five-entries`, `runtime/r4-recovery-review` | Client/refactor and recovery review work; their inspected remote heads are included in the integration line |
+| `feature/multi-end-sync` | Earlier mesh/client milestone, included in the integration line |
+| `feature/usage-effort`, `feature/xiaoyou-agent-router`, `feature/ble-firmware-update`, `feature/pocket-hub-app`, `feature/claude-pocket` | Historical development milestones |
+| `main` | Upstream hardware-test baseline, not the current product/default branch |
 
-## Upgrading: all three together
+## Upgrading and source synchronization
 
-The protocol between firmware, app, and runtime changes in step, so upgrade all three:
+Check the [compatibility and reliability rules](docs/development/cross-stack-reliability.md)
+and each part's shipping instructions. Supported peers negotiate capabilities;
+updating source does not require replacing all installed parts at once.
+Preserve pairing, history, permissions and pending requests.
 
-1. On the computer, stop the runtime, pull the current line, and start it again
-   (runtime first, so a new app never meets an old API):
-   `cd runtime`, `python3 -m xiaoyou_runtime --config config.json`
+1. Inspect the checkout before integrating `feature/usage-history`. Reconcile
+   existing changes or use an isolated worktree. Do not pull over active work
+   or restart a Runtime running a task without the owner's approval. See the
+   [Runtime startup guide](runtime/README.md).
 2. The phone app updates through the runtime from 0.11.0 on. Under `runtime/`, run
    `python3 -m xiaoyou_runtime app publish <path to apk> --note "what changed"`, then
    install from the app's prompt or from Connection and settings → App update. A phone
@@ -142,6 +152,8 @@ The protocol between firmware, app, and runtime changes in step, so upgrade all 
    `python3 -m xiaoyou_runtime firmware fetch --push`.
    A device still on the old single-slot firmware needs one flash by cable first:
    `bash tools/flash_pocket.sh`.
+4. Build and install the desktop client using its [platform instructions](companion/desktop/README.md).
+   Source synchronization does not replace an installed client or its bundled Runtime.
 
 To go back to a version: `python3 -m xiaoyou_runtime firmware restore previous` (or a
 number from `firmware list`).
@@ -168,6 +180,7 @@ Engineering and contribution guides define the rules; archives and references pr
 | --- | --- |
 | [Claude Pocket](docs/claude-pocket.md) | The application on this branch: pairing, controls, text coverage, acceptance |
 | [Xiaoyou harness review](docs/assets/xiaoyou-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
+| [Project status and source synchronization](docs/development/project-status.md) | Current Windows/Mac baseline, versions, pending work, branches and acceptance gaps |
 | [Development](docs/development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
 | [App / Runtime / firmware reliability](docs/development/cross-stack-reliability.md) | Mandatory regression, 3-second first-response, connection recovery, and multi-end consistency contracts |
 | [Xiaoyou desktop client plan](docs/development/xiaoyou-desktop-plan.md) | Mac/Windows owner-test delivery target before Friday, shared conversations, encrypted self-hosted transport, dependencies and acceptance |

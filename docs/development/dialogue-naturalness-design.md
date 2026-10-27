@@ -323,9 +323,9 @@ passing runtime/device acceptance.
 | Maintain expression habits | Persona, fixed chat-style instructions and conversation context | Separate expression learner and per-reply selector | Reviewed situation/style examples, contextual selection and repetition controls |
 
 Current-checkout anchors: [persona](../../runtime/persona.txt),
-[owner memory](../../runtime/xiaoyou_runtime/memory.py),
-[conversation and reply orchestration](../../runtime/xiaoyou_runtime/xiaoyou.py),
-[background wakes](../../runtime/xiaoyou_runtime/proactive.py).
+[owner memory](../../runtime/xiaoyou_runtime/world/memory.py),
+[conversation and reply orchestration](../../runtime/xiaoyou_runtime/loop/xiaoyou.py),
+[background wakes](../../runtime/xiaoyou_runtime/loop/proactive.py).
 R7 moves the corresponding responsibilities into `loop/`, `world/` and `api/`;
 recheck the final refactor before implementing this proposal.
 

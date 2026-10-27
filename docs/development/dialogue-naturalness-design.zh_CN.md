@@ -225,9 +225,9 @@ LoRA 是一种参数适配技术；数据、目标、旧能力保留、评估和
 | 保持说话习惯 | 人设、固定聊天风格指令和对话上下文 | 独立表达学习器与逐轮选择器 | 经筛选的情境／表达示例、按语境选择和重复控制 |
 
 当前检出目录入口：[人设](../../runtime/persona.txt)、
-[主人记忆](../../runtime/xiaoyou_runtime/memory.py)、
-[对话与回复编排](../../runtime/xiaoyou_runtime/xiaoyou.py)、
-[后台唤醒](../../runtime/xiaoyou_runtime/proactive.py)。
+[主人记忆](../../runtime/xiaoyou_runtime/world/memory.py)、
+[对话与回复编排](../../runtime/xiaoyou_runtime/loop/xiaoyou.py)、
+[后台唤醒](../../runtime/xiaoyou_runtime/loop/proactive.py)。
 R7 将对应职责移到 `loop/`、`world/` 和 `api/`；实施前应重新核对最终重构结果。
 
 ## 总体逻辑框架

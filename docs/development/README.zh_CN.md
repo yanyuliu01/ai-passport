@@ -17,6 +17,7 @@
 
 ## AI 工作流
 
+- [project-status.zh_CN.md](project-status.zh_CN.md)：当前 Windows/Mac 基线、版本、未提交工作、分支用途及验收缺口。
 - [xiaoyou-system-prompt.zh_CN.md](xiaoyou-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [first-response-measurement.zh_CN.md](first-response-measurement.zh_CN.md)：默认流程切换前，在真实手机上测量并记录 3 秒首响应的方法。
