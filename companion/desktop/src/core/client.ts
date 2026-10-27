@@ -24,6 +24,8 @@ export class DesktopClient {
   private links = new Map<string, Link>();
   private loops = new Map<string, AbortController>();
   private syncPolls = new Map<string, AbortController>();
+  // Sync loops that stopped on a non-retryable error; adding the same endpoint again restarts them.
+  private stalled = new Set<string>();
   private flushing = new Set<string>();
   private watching = new Set<string>();
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -42,7 +44,10 @@ export class DesktopClient {
   }
   add(endpoint: Endpoint): void {
     const previous = this.endpoints.get(endpoint.runtimeId);
-    if (previous && JSON.stringify(previous) === JSON.stringify(endpoint)) return;
+    // A peer endpoint restored before its account link is ready fails with 403 and stops; the peer's
+    // next identical hello must restart it instead of being ignored.
+    const stalled = [...this.stalled].some(key => key.startsWith(endpoint.runtimeId + '/'));
+    if (previous && JSON.stringify(previous) === JSON.stringify(endpoint) && !stalled) return;
     for (const [key, controller] of this.loops) if (key.startsWith(endpoint.runtimeId + '/')) controller.abort();
     this.endpoints.set(endpoint.runtimeId, endpoint);
     const saved = new Map((this.secrets.load<Endpoint[]>('endpoints') || []).map(item => [item.runtimeId, item]));
@@ -275,7 +280,7 @@ export class DesktopClient {
     const key = endpoint.runtimeId + '/' + conversation;
     const old = this.loops.get(key);
     if (old && !old.signal.aborted) return;
-    const controller = new AbortController(); this.loops.set(key, controller);
+    const controller = new AbortController(); this.loops.set(key, controller); this.stalled.delete(key);
     this.links.set(key, { connected: false, catchingUp: true, error: '' });
     void this.sync(endpoint, conversation, controller.signal);
   }
@@ -362,7 +367,7 @@ export class DesktopClient {
         const problem = error instanceof Error ? error.message : '同步暂时中断';
         this.links.set(key, { connected: false, catchingUp: false, error: problem });
         this.changed();
-        if (error instanceof RuntimeError && !error.retryable) return;
+        if (error instanceof RuntimeError && !error.retryable) { this.stalled.add(key); return; }
         await delay(Math.min(15_000, 500 * 2 ** Math.min(failures++, 5)) * (0.8 + Math.random() * 0.4), signal);
       } finally {
         signal.removeEventListener('abort', abort);
