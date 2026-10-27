@@ -31,6 +31,9 @@
 - [windows-public-node-handoff.zh_CN.md](windows-public-node-handoff.zh_CN.md)：家用公网节点的 Windows Codex 交接、源码快照、网络权限问题、原生构建与异网验收。
 - [xiaoyou-desktop-plan.zh_CN.md](xiaoyou-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
 - [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小幽说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
+- [dialogue-naturalness-design.zh_CN.md](dialogue-naturalness-design.zh_CN.md)：重构后再实施的陪伴／办事上下文提议，含相处偏好、真实任务回复和表达习惯的逻辑框架图。
+- [decide-speak-experiment.zh_CN.md](decide-speak-experiment.zh_CN.md)：实验方案——先定再说的串行与推测并行对比，含 12 类 46 个用例、指标和事先定好的判定标准。
+- [decide-speak-handoff.zh_CN.md](decide-speak-handoff.zh_CN.md)：交给 Codex 跑上述实验的步骤、禁止事项和报告格式。
 - [auto-iteration.zh_CN.md](auto-iteration.zh_CN.md)：统一采集（所有客户端报给主电脑）与按版本自动迭代（本地模型优先）的设计稿。
 - [ai-guide.zh_CN.md](ai-guide.zh_CN.md)：AI 开发工作流（面向 AI 编程助手：上下文建立、需求拆解、BSP 边界、验收交付格式）。
 - [核心 AI 技能](../../skills/README.zh_CN.md)：开发、环境准备、构建、真机测试及诊断，包含安装和使用示例。
