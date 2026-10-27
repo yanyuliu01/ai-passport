@@ -252,6 +252,27 @@ test('a confirmed Runtime rollback resumes legacy reads without repeating an acc
   assert.equal(posts,0);assert.equal(legacy,1);
 });
 
+test('a restored peer stopped by 403 before its account link is ready reconnects on the same hello', async t => {
+  const { db } = fixture(t), store = secrets();
+  const peer: Endpoint = { ...endpoint, url: 'peer://' + 'c'.repeat(64), token: '', capabilities: ['sync', 'sync_requests_v1'] };
+  store.save('endpoints', [peer]);
+  let ready = false, syncs = 0;
+  const client = new DesktopClient(db, { async request(_endpoint, _method, path) {
+    if (!ready) throw new RuntimeError('设备或请求尚未获得授权', 403);
+    if (path.startsWith('/v1/sync')) { syncs++; return page({ requests: [] }); }
+    return {};
+  } }, store, () => {}, () => '加密通信入口已连接');
+  t.after(() => client.stop());
+  const connection = () => client.snapshot().spaces[0]?.connections?.find(item => item.runtime === runtime);
+  client.restore();
+  await until(() => connection()?.connected === false && syncs === 0);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  ready = true;
+  client.add({ ...peer });
+  await until(() => connection()?.connected === true);
+  assert.ok(syncs > 0);
+});
+
 test('approval routing binds Runtime and current epoch, never a bare colliding card ID', async t => {
   const { db } = fixture(t);
   db.apply(space, runtime, page({ approvals: [{ id: 'a1', seq: 1, status: 'pending' }] }));
