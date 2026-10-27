@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from ..loop import project_brief
 from ..world.approvals import progress_line
 from ..config import AgentSpec
+from .deadline import Deadline
 from .base import (  # noqa: F401  re-exported: callers use agents.<name>
     Agent, AgentError, Cancelled, claude_tokens, clip, codex_tokens, Control, Cut, fields_from_text,
     Job, kill_tree, MAX_OUTPUT_CHARS, MOVED, Outcome, PARENT_SESSION_ENV, RESUME_HINT, run_command,
@@ -516,24 +517,23 @@ class DshAgent(Agent):
             return dsh_app.run(self.spec, job, job.control, self._env(), self.tier(job))
         if job.plain and job.on_text is not None and self.spec.stream:
             # 只说话、又想边生成边看：dsh 不逐字给，直接问 DeepSeek。不成就走老路。
+            budget = Deadline(job.timeout or self.spec.timeout_seconds or 60)
             from . import dsh_stream
-            began = time.monotonic()
-            budget = job.timeout or self.spec.timeout_seconds or 60
             try:
-                return dsh_stream.run(self.spec, job, self._env(), self.tier(job)[0],
+                env = self._env()
+                return dsh_stream.run(self.spec, replace(job, timeout=budget.remaining()), env, self.tier(job)[0],
                                       job.on_text, self._open)
             except AgentError as error:
                 if job.tools is not None:
                     # 带工具的这一次退回 dsh 老路就没有工具了（要做的事会丢）：交给调用方改走 JSON。
                     raise
-                remaining = budget - (time.monotonic() - began)
-                if remaining <= 0:
-                    raise AgentError("DeepSeek 回复已达到 %d 秒总时限，不再重复等待" % budget) from error
+                budget.remaining()
                 sys.stderr.write("流式回复没成，改用 dsh：%s\n" % error)
                 job.on_text("")
-                job = replace(job, timeout=max(1, int(remaining)))
+                job = replace(job, timeout=budget.remaining())
                 if job.session_id and job.session_id.startswith(dsh_stream.SESSION_PREFIX):
                     job = replace(job, session_id=None)
+                return self._headless(job, budget=budget)
         return self._headless(job)
 
     # 只要它说话、不让它动手时（job.plain）关掉的工具插件：bash、文件读写和搜索、
@@ -585,7 +585,11 @@ class DshAgent(Agent):
                 return True
         return False
 
-    def _headless(self, job: Job) -> Outcome:
+    def _headless(self, job: Job, budget=None) -> Outcome:
+        timeout = job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS
+        # Background controls can ask the owner to keep waiting. Only speech
+        # retries are bounded here; their caller supplied the remaining budget.
+        budget = (budget or Deadline(timeout)) if job.plain else None
         model, _ = self.tier(job)
         text = job.text if job.system is None else "%s\n\n%s" % (job.system, job.text)
         if job.schema:
@@ -607,12 +611,13 @@ class DshAgent(Agent):
                 return command
 
             env = self._env()
-            timeout = job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS
-            done = run_command(build(job.session_id), text, self.spec.workdir, timeout, "dsh",
+            done = run_command(build(job.session_id), text, self.spec.workdir,
+                               budget.remaining() if budget is not None else timeout, "dsh",
                                env=env, run=self._run, control=job.control)
             if job.session_id and self._stale_session(done.stdout):
                 # 当作新对话开始，不要因为接不上旧对话就让这一轮直接失败。
-                done = run_command(build(None), text, self.spec.workdir, timeout, "dsh",
+                done = run_command(build(None), text, self.spec.workdir,
+                                   budget.remaining() if budget is not None else timeout, "dsh",
                                    env=env, run=self._run, control=job.control)
         return self.parse(done.returncode, done.stdout, done.stderr, job.system is not None)
 

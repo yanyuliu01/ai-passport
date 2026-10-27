@@ -313,7 +313,7 @@ class Job:
     # 只要它说话，不让它动手：不给任何工具。小幽这条线上的调用用这个，为的是几秒内答完
     plain: bool = False
     # 这一次最长多久；None 用代理自己配置的
-    timeout: Optional[int] = None
+    timeout: Optional[float] = None
     # 后台任务的遥控器；None 表示这一次不能中途叫停
     control: Optional[Control] = None
     # 这一次用哪一档努力程度、哪个模型；None 用这个代理平时的。代理不认的会被忽略

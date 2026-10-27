@@ -110,6 +110,21 @@ extraction adds no model call, fallback, storage format or permission. Source
 availability and warm reply tests do not establish full cold-start, voice or
 real-helper fault acceptance.
 
+Legacy tool speech, JSON fallback and format correction now share one monotonic
+`voice_timeout_seconds` deadline. Context preparation consumes that budget;
+expired or interrupted attempts cannot start another provider request. The dsh
+stream-to-CLI fallback and stale headless speech-session retry keep the remaining
+fractional timeout without rounding a sub-second remainder up to one second.
+Background helper controls retain their separate owner-approved waiting policy.
+
+Each Speaker call also closes its text/tool callbacks on success or failure.
+Tool-call guards reach the mutation boundary and combine with the original
+owner/effect guards. A mutation already saved before expiry remains authoritative;
+it is reported from saved facts rather than repeated through another model call.
+Late returned output cannot save the caller's native-session or quote receipts.
+Configuration defaults, first-response acceptance and persisted/API formats are
+unchanged: a bounded timeout or error bubble is not a three-second response pass.
+
 ## Helper restart recovery (R6.1 source)
 
 Saved helper inputs that were not yet claimed resume after startup policy and
@@ -247,7 +262,8 @@ per conversation. Side-conversation reminders return to their original conversat
 closed or stale wakes do not start another model call. A reminder that may have
 changed commitments keeps an unconfirmed wake instead of repeating its tools.
 See the [source handoff](../docs/development/runtime-refactor-design.md#2026-10-24-review-and-continuation-order)
-for remaining decision migration and acceptance. This source is not deployed.
+for remaining decision migration, exact deployed-source identities and outstanding
+acceptance.
 
 Readable retained conversation turns now form derived pages of 32 turns. Page
 identities include the conversation and canonical revisions; a changed or reset
@@ -262,6 +278,71 @@ delivery receipts; omitted turns, excerpts, failed calls and decision-only calls
 do not. Reset boundaries and legacy import compatibility still apply. Current
 task and commitment facts are read separately from current state.
 
+ContextBuilder also assembles `recall` evidence from those versioned retained
+turns, global memory logs and the existing scoped task window. Reset-hidden
+messages are excluded from identified task-entry copies as well; current task
+titles and global memory are retained. Recall selects its six most relevant
+hits before ordering them by time for display, prefers newer timestamps on equal
+relevance, and locates excerpt matches without case sensitivity. It adds no
+model call, persistent index or automatic summary.
+
+`loop/context_window.py` selects and renders recent quotes and relevant older
+conversation evidence from one retained-history snapshot. Speaker passes the
+current question to this local lookup. Up to two related turns can use at most
+one quarter of the existing character budget; the recent window keeps the rest.
+Every quote retains its versioned segment/turn attribution. Long related quotes
+show a match-centered excerpt and never receive a full-turn delivery receipt.
+Only a successful speaking call can receipt complete quotes; lookup itself
+writes no history, memory or receipts. Reset and conversation boundaries apply.
+
+The lexical lookup considers the first 1,024 query characters and at most 64
+identifier/Chinese terms. Terms found in more than a quarter of retained turns
+are ignored to avoid repeating common boilerplate. Already quoted/recently
+delivered turns are not added again. This is conservative evidence selection,
+not a semantic summary or a claim of complete relevance; the current request is
+never shortened, and the explicit `recall` tool remains available for misses.
+It adds bounded local work to context preparation, without a provider round trip.
+
+
+`loop/context_summaries.py` adds a disposable, version-bound summary cache for
+closed 32-turn segments. On the existing main-conversation background lane,
+after ten minutes without message activity and with no pending reply or uncertain
+upkeep effect, Pulse attempts at most one segment per tick. It uses the configured
+speaking provider in an isolated, tool-free call capped at ten seconds; foreground
+input interrupts it. Source text is complete and capped at 24,000 JSON characters;
+oversized segments retain raw-history/recall behavior. Each version gets at most
+three durably counted attempts, at least ten minutes apart, including after restart.
+
+Accepted summaries contain up to six short points (900 text characters total),
+each citing one to four turns from that exact segment. The cache retains at most
+64 entries in `context-summaries.json`, outside authoritative messages, memory,
+reset boundaries and delivery receipts. Corruption or write failure leaves the
+original history usable. A changed/reset/deleted source invalidates its summary;
+appending later turns does not invalidate an unchanged closed segment. Old Runtime
+versions ignore this optional file; rollback does not require deleting or replacing
+accepted messages or context-reset data.
+
+Speaker supplies cached summaries as quoted current-call background, outside the
+native user/assistant history, so the same summary does not accumulate as another
+chat message on each turn. Original quoted turns keep their normal receipts.
+
+Chat reads only already valid summaries, at most two within a quarter of the
+existing 8,000-character window. Current task/commitment facts and recent raw
+quotes remain independent, and raw related quotes plus explicit `recall` remain
+available. Summaries are labelled as fallible historical model interpretations,
+not instructions, authorization, current state or full-source delivery. Citation
+validation does not prove semantic accuracy. To verify a citation through the
+existing `recall(query)` tool, use `source:` followed by a JSON object containing
+`segment`, `turn` and an optional nonnegative integer `offset`. The response
+quotes up to 1,200 source characters, marks excerpts and supplies the exact
+`next` query for another page. Every page revalidates the current readable
+segment version and conversation; stale or malformed references return an
+unavailable result instead of searching for a different source. There is no model call on a cache
+miss, no archive substitution, and no new client API or default decision-mode
+switch. Automatic generation currently follows the main conversation's existing
+upkeep scope; side-conversation cache isolation is enforced, but automatic
+side-conversation scheduling is not included.
+
 Progress wake ids, original inputs, claims, saved replies, counts and cooldowns
 now live in the existing task journal. Pending/saved results for the still-active
 original run return through its conversation queue; replay itself calls no model
@@ -274,8 +355,15 @@ private watch data stays off client/Mesh projections.
 reply recovery and completion checkpoints through explicit ports. Pulse supplies
 the clock, configured policy, owner/model/publication adapters and shared queue;
 the rules do not import Pulse or Xiaoyou. This preserves the existing task journal,
-watch identities, prompts, timing policy and client formats. Reminder and memory
-upkeep rules still reside in Pulse; this is a partial wake-rule migration.
+watch identities, prompts, timing policy and client formats.
+
+`loop/timer_wakes.py` owns due-reminder and memory-upkeep lifecycles. Reminder
+claims and review history stay in the promise records; upkeep owns its existing
+marker, memory-revision checks, checkpoints and review archive. Pulse supplies
+the shared conversation admission and model/publication adapters. Saved inputs
+resume without another decision, saved outcomes repair delivery, and unknown
+claims are held for review. Malformed markers stay blocked. No scheduling policy,
+tool permission, prompt, client API or stored format changes with this extraction.
 
 Background wake calls retain their original owner generation through model
 phases, tool calls, native-session/context receipts and note/nudge/upkeep

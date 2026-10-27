@@ -187,7 +187,13 @@ class Toolbox:
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
         """执行一次工具调用。返回（给模型看的结果，是不是出错）。"""
-        self._guard()
+        return self.guarded_call(name, args, lambda: None)
+
+    def guarded_call(self, name: str, args: Any, guard: Callable[[], None]) -> Tuple[str, bool]:
+        def check():
+            self._guard()
+            guard()
+        check()
         args = args if isinstance(args, dict) else {}
         self.calls.append((name, args))
         if self._only is not None and name not in self._only:
@@ -203,15 +209,15 @@ class Toolbox:
             def invoke():
                 if self._before_effect is not None:
                     self._before_effect()
-                self._guard()
+                check()
                 result = self._call(name, args)
-                self._guard()
+                check()
                 return result
             if self._effects is not None:
                 return self._effects.run(name, args, invoke)
             return invoke()
         result = self._call(name, args)
-        self._guard()
+        check()
         return result
 
     def _call(self, name: str, args: Any) -> Tuple[str, bool]:
@@ -323,10 +329,14 @@ class SpeakingTools:
         return [tool for tool in self.parent.definitions() if tool["name"] in self.allowed]
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
+        return self.guarded_call(name, args, lambda: None)
+
+    def guarded_call(self, name: str, args: Any, guard: Callable[[], None]) -> Tuple[str, bool]:
+        guard()
         self.calls.append((name, args))
         if name not in self.allowed:
             return "说话阶段不能改变任务、记忆或约定", True
-        return self.parent.call(name, args)
+        return self.parent.guarded_call(name, args, guard)
 
     def promised(self, said: str) -> bool:
         return False

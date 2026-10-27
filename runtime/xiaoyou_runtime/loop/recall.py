@@ -26,11 +26,11 @@ def _terms(query: str) -> List[str]:
 def _fts(records: List[Record], terms: List[str]) -> List[int]:
     connection = sqlite3.connect(":memory:")
     try:
-        connection.execute("create virtual table hay using fts5(body, tokenize='trigram')")
-        connection.executemany("insert into hay(rowid, body) values (?, ?)",
-                               [(index, record[3]) for index, record in enumerate(records)])
+        connection.execute("create virtual table hay using fts5(body, stamp UNINDEXED, tokenize='trigram')")
+        connection.executemany("insert into hay(rowid, body, stamp) values (?, ?, ?)",
+                               [(index, record[3], record[2]) for index, record in enumerate(records)])
         query = " OR ".join('"%s"' % term.replace('"', '""') for term in terms)
-        rows = connection.execute("select rowid from hay where hay match ? order by rank limit ?",
+        rows = connection.execute("select rowid from hay where hay match ? order by rank, cast(stamp as real) desc, rowid limit ?",
                                   (query, MAX_HITS * 3)).fetchall()
         return [row[0] for row in rows]
     finally:
@@ -48,8 +48,10 @@ def _plain(records: List[Record], terms: List[str]) -> List[int]:
     return [index for _, _, index in scored[:MAX_HITS * 3]]
 
 
-def search(query: str, records: Iterable[Record]) -> List[Record]:
+def search(query: str, records: Iterable[Record], *, limit: int = MAX_HITS) -> List[Record]:
     """找最相关的几条；新的优先。找不到返回空表。"""
+    if type(limit) is not int or not 1 <= limit <= MAX_HITS:
+        raise ValueError("Recall hit limit must be between 1 and MAX_HITS")
     records = [record for record in records if record[3].strip()]
     terms = _terms(query)
     if not terms or not records:
@@ -62,18 +64,23 @@ def search(query: str, records: Iterable[Record]) -> List[Record]:
             hits = []  # 没有 FTS5 或 trigram：下面逐条找
     if not hits:
         hits = _plain(records, terms)
-    chosen = [records[index] for index in hits[:MAX_HITS * 2]]
+    # Pick the relevant window before ordering those hits for display. Sorting
+    # a wider candidate set by age first can discard the strongest old evidence.
+    chosen = [records[index] for index in hits[:limit]]
     chosen.sort(key=lambda record: -record[2])
-    return chosen[:MAX_HITS]
+    return chosen
 
 
-def snippet(body: str, query: str) -> str:
+def snippet(body: str, query: str, *, max_chars: int = SNIPPET_CHARS) -> str:
     """命中处前后的一段，不整段给。"""
+    if type(max_chars) is not int or max_chars < 1:
+        raise ValueError("Recall excerpt size must be a positive integer")
     body = " ".join(body.split())
     terms = _terms(query)
-    at = min([body.find(term) for term in terms if body.find(term) >= 0] or [0])
-    start = max(0, at - SNIPPET_CHARS // 3)
-    piece = body[start:start + SNIPPET_CHARS]
+    matches = [re.search(re.escape(term), body, re.IGNORECASE) for term in terms]
+    at = min([match.start() for match in matches if match is not None] or [0])
+    start = max(0, at - max_chars // 3)
+    piece = body[start:start + max_chars]
     return ("…" if start else "") + piece + ("…" if start + SNIPPET_CHARS < len(body) else "")
 
 

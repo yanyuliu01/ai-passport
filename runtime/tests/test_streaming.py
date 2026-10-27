@@ -87,6 +87,30 @@ class ReplySoFarTests(unittest.TestCase):
 
 
 class DshStreamTests(TempDirCase):
+    def test_preparation_can_expire_the_budget_before_opening_the_provider(self):
+        now = [0.0]
+        def load(*args):
+            now[0] = 1.2
+            return []
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(dsh_stream, "_load", side_effect=load), patch.object(dsh_stream.urllib.request, "urlopen") as opener:
+            with self.assertRaises(AgentError):
+                dsh_stream.run(dsh_spec(self.folder), Job(text="test", plain=True, timeout=1),
+                               {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None, opener)
+        opener.assert_not_called()
+
+    def test_preparation_leaves_a_fractional_connection_timeout(self):
+        now = [0.0]
+        def load(*args):
+            now[0] = .8
+            return []
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(dsh_stream, "_load", side_effect=load), patch.object(dsh_stream.urllib.request, "urlopen", side_effect=urllib.error.URLError("offline")) as opener:
+            with self.assertRaises(AgentError):
+                dsh_stream.run(dsh_spec(self.folder), Job(text="test", plain=True, timeout=1),
+                               {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None, opener)
+        self.assertAlmostEqual(.2, opener.call_args.kwargs["timeout"])
+
     def test_silent_response_is_cancelled_without_waiting_for_an_event(self):
         closed = threading.Event()
 
@@ -461,7 +485,7 @@ class DshAgentStreamTests(TempDirCase):
         with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
                 patch.object(agent, "_headless", return_value=Outcome("fallback", None)) as headless:
             agent.run(Job(text="test", plain=True, timeout=10, on_text=lambda text: None))
-        self.assertEqual(headless.call_args[0][0].timeout, 2)
+        self.assertAlmostEqual(headless.call_args[0][0].timeout, 2.7)
 
     def test_expired_stream_does_not_start_another_full_wait(self):
         now = [0.0]
@@ -476,6 +500,37 @@ class DshAgentStreamTests(TempDirCase):
             with self.assertRaisesRegex(AgentError, "总时限"):
                 agent.run(Job(text="test", plain=True, timeout=10, on_text=lambda text: None))
         headless.assert_not_called()
+
+    def test_fractional_fallback_budget_is_never_rounded_up(self):
+        now = [0.0]
+        def offline(request, timeout):
+            now[0] = 9.8
+            raise urllib.error.URLError("offline")
+        agent = DshAgent(dsh_spec(self.folder), opener=offline)
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(agent, "_headless", return_value=Outcome("fallback", None)) as headless:
+            agent.run(Job(text="test", plain=True, timeout=10, on_text=lambda text: None))
+        self.assertAlmostEqual(.2, headless.call_args[0][0].timeout)
+
+    def test_stale_headless_speech_session_shares_the_original_deadline(self):
+        for spent in (7.3, 10.1):
+            with self.subTest(spent=spent):
+                now, seen = [0.0], []
+                def run(command, **kwargs):
+                    seen.append(kwargs["timeout"])
+                    if len(seen) == 1:
+                        now[0] = spent
+                        return subprocess.CompletedProcess(command, 1, '{"type":"error","message":"session does not exist"}', "")
+                    return subprocess.CompletedProcess(command, 0, '{"type":"final","text":"answer"}', "")
+                agent = DshAgent(dsh_spec(self.folder, stream=False), run=run)
+                with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]):
+                    if spent > 10:
+                        with self.assertRaises(AgentError):
+                            agent.run(Job(text="test", plain=True, timeout=10, session_id="old"))
+                        self.assertEqual(1, len(seen))
+                    else:
+                        self.assertEqual("answer", agent.run(Job(text="test", plain=True, timeout=10, session_id="old")).text)
+                        self.assertAlmostEqual(2.7, seen[1])
 
 
 class Streaming(Scripted):

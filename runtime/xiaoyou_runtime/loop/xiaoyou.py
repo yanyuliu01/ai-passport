@@ -37,6 +37,7 @@ from ..helpers.agents import (
     fields_from_text, span
 )
 from .context import bind as bind_context
+from ..helpers.deadline import Deadline
 from ..world.approvals import STALL, Approvals, Gate
 from ..world.artifacts import ArtifactError, ArtifactStore
 from ..events.intake import Intake
@@ -44,7 +45,6 @@ from ..world.cards import ACTIVE, MAX_ENTRY_CHARS, Cards, title_from
 from ..config import EFFORT_LEVELS, Config
 from ..world.store import Store
 from ..helpers.tasks import Deferred, StartError, Task, Tasks
-from . import recall as recall_search
 from ..world.memory import OwnerMemory
 from ..world.memory import prompt_section as memory_section
 from .proactive import Pulse
@@ -1268,13 +1268,20 @@ class Xiaoyou:
         if self._config.decide_first and toolbox is not None:
             return self._converse_decided(lead, text, conversation, turn_id, focus, available, hop,
                                           say, pinned, effort, model, prompt, toolbox, cut)
+        budget = Deadline(self._config.voice_timeout_seconds)
+
+        def before_retry():
+            budget.remaining()
+            if cut.is_set():
+                raise AgentError("主人已打断这一轮，不再重试")
+
         outcome = None
         if toolbox is not None:
             # 说的话直接写、做事调工具（voice_tools）。这条路不通（接口出错、超时）就退回写 JSON 的老路。
             try:
                 outcome = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
                                       on_text=self._streamer(lead.name, say, plain=True), tools=toolbox,
-                                      interrupt=cut)
+                                      interrupt=cut, budget=budget)
             except AgentError as error:
                 scope = getattr(self._effect_scope, "current", None)
                 if scope is not None and scope.selected:
@@ -1286,12 +1293,14 @@ class Xiaoyou:
                     return self._apply_conversation(lead, text, conversation, turn_id,
                         {"type": "none", "card": None}, reply, None, "oops", hop, say,
                         pinned, effort, model, seen=[])
+                before_retry()
                 sys.stderr.write("带工具的回话没成，改回写 JSON：%s\n" % error)
                 say("partial", lead.name, "")
                 toolbox = None
         if outcome is None:
+            before_retry()
             outcome = self._speak(lead, text, conversation, prompt(False), schema, hop, catch_up=True,
-                                  on_text=self._streamer(lead.name, say), interrupt=cut)
+                                  on_text=self._streamer(lead.name, say), interrupt=cut, budget=budget)
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
         self._trace(outcome, problem)
         if problem is not None and cut.is_set():
@@ -1303,6 +1312,7 @@ class Xiaoyou:
             return self._apply_conversation(lead, text, conversation, turn_id,
                 {"type": "none", "card": None}, reply, None, "oops", hop, say, pinned, effort, model)
         if problem is not None:
+            before_retry()
             # 刚才边说边给主人看的那段不算数了：收回来，重说的那一次从头再显示。
             say("partial", lead.name, "")
             note = retry_note(problem)
@@ -1313,7 +1323,7 @@ class Xiaoyou:
             outcome = self._speak(lead, note, conversation, prompt(toolbox is not None),
                                   None if toolbox is not None else schema, hop, catch_up=False,
                                   on_text=self._streamer(lead.name, say, plain=toolbox is not None),
-                                  tools=toolbox)
+                                  tools=toolbox, interrupt=cut, budget=budget)
             plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
         fields = outcome.fields or {}
@@ -1495,25 +1505,7 @@ class Xiaoyou:
         self._pulse.start()
 
     def recall(self, conversation: str, query: str) -> str:
-        """recall 工具：在聊过的话、记忆的修改记录、最近的事和帮手结果里找。"""
-        records: List[recall_search.Record] = []
-        for segment in self.context.segments(conversation):
-            for turn in segment["turns"]:
-                records.append(("聊天", "段 %s / %s" % (segment["id"], turn["id"]), float(turn.get("at") or 0),
-                                "主人：%s\n小幽：%s" % (turn["text"], turn["reply"])))
-        for path in self.memory.log_files():
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-                stamp = path.stat().st_mtime
-            except OSError:
-                continue
-            records.extend(("记忆", path.stem, stamp, line) for line in lines if line.strip())
-        for card in self._cards.recent(conversation, limit=120):
-            said = "\n".join(entry.get("text") or "" for entry in card.get("entries") or [])
-            records.append(("事", "%s %s" % (card["id"], clip(card.get("title") or "", 24)),
-                            float(card.get("updated_at") or card.get("created_at") or 0),
-                            (card.get("title") or "") + "\n" + said[-6000:]))
-        return recall_search.render(query, recall_search.search(query, records))
+        return self.context.recall(conversation, query)
 
     def _detail(self, card_id: str, conversation: str, focus: Optional[Dict[str, Any]]) -> Optional[str]:
         """task_detail 给她看的：一件事的状态、谁在做、最近几步、最后说的话。别的对话的事看不到。"""
@@ -1627,11 +1619,12 @@ class Xiaoyou:
                on_text: Optional[Callable[[str], None]] = None, tools: Any = None,
                interrupt: Optional[threading.Event] = None, decision_only: bool = False,
                decision_messages: Any = None, timeout_seconds: Optional[float] = None,
-               ephemeral: bool = False, guard: Optional[Callable[[], None]] = None) -> Outcome:
+               ephemeral: bool = False, guard: Optional[Callable[[], None]] = None, budget=None) -> Outcome:
         return self._speaker.speak(agent, text, conversation, system, schema, hop, catch_up,
             on_text=on_text, tools=tools, interrupt=interrupt, decision_only=decision_only,
             decision_messages=decision_messages, timeout_seconds=timeout_seconds,
             ephemeral=ephemeral, guard=guard, scope=getattr(self._effect_scope, "current", None),
+            budget=budget,
             default_timeout=self._config.voice_timeout_seconds, seed_turns=SEED_TURNS,
             max_chars=RECAP_TOTAL_CHARS, text_chars=RECAP_TEXT_CHARS, reply_chars=RECAP_REPLY_CHARS)
 

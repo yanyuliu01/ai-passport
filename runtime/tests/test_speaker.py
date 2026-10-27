@@ -33,6 +33,18 @@ class SpeakerTests(TempDirCase):
         self.assertEqual("new-session", self.store.session("side", "voice"))
         self.assertEqual([], self.x.context.unseen("side", "voice"))
 
+    def test_current_question_selects_old_evidence_without_an_extra_provider_call(self):
+        card = self.x.record.task_open("side", "older plan")
+        self.x.record.exchange(card["id"], "quartz-anchor", "original code ORCHID-472", turn_id="anchor")
+        for index in range(12):
+            self.x.record.exchange(card["id"], "unrelated %d" % index, "recent answer", turn_id="recent-%d" % index)
+        with mock.patch.object(self.voice, "run", return_value=Outcome("ORCHID-472", "new-session")) as provider:
+            self.x._speak(self.voice, "quartz-anchor 的原始代号？", "side", "system", None, 0,
+                          catch_up=True, tools=object())
+        self.assertEqual(1, provider.call_count)
+        self.assertIn("original code ORCHID-472", provider.call_args.args[0].text)
+        self.assertIn("unrelated 11", provider.call_args.args[0].text)
+
     def test_provider_failure_does_not_save_session_or_receipts(self):
         with mock.patch.object(self.voice, "run", side_effect=AgentError("provider unavailable")), \
                 mock.patch.object(self.store, "remember") as remember:

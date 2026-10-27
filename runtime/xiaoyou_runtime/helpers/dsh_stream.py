@@ -142,6 +142,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     job.tools（voice_tools.Toolbox）不为空时：她写的文字就是说的话，要做事调工具；
     工具结果交回给她接着说，最多 MAX_TOOL_ROUNDS 轮。每一轮说的话是单独的一条消息
     （用 voice_tools.JOIN 连起来，手机按它分开）。这时不要 JSON，也不加回复结构的说明。"""
+    began = time.monotonic()
+    timeout = job.timeout or spec.timeout_seconds or 60
     key = env.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
         raise AgentError("没有 DEEPSEEK_API_KEY，走不了流式")
@@ -162,8 +164,6 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         messages.extend(job.decision_messages)
     base = (env.get("DEEPSEEK_BASE_URL") or BASE_URL).rstrip("/")
     url = base if base.endswith("/v1") else base + "/v1"
-    timeout = job.timeout or spec.timeout_seconds or 60
-    began = time.monotonic()
     first_text: List[Optional[float]] = [None]
     cut = [False]  # 主人插话，这一次被打断了
 
@@ -200,7 +200,11 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
 
         try:
-            with opener(request, timeout=max(1, timeout - (time.monotonic() - began))) as response:
+            check_deadline()
+            remaining = timeout - (time.monotonic() - began)
+            if remaining <= 0:
+                check_deadline()
+            with opener(request, timeout=remaining) as response:
                 check_deadline()
 
                 def stop_reading() -> None:

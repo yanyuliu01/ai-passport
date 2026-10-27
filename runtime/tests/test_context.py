@@ -253,9 +253,89 @@ class ContextTests(TempDirCase):
                          [turn["id"] for turn in self.context.unseen("side", "reader")])
         self.assertEqual("", self.context.window("other", "reader")["body"])
 
+    def test_query_adds_relevant_old_evidence_before_the_recent_seed_without_duplicate_quotes(self):
+        for index in range(205):
+            self.exchange("old-%03d" % index,
+                          text="quartz-anchor " * 20 if index == 0 else "unrelated question %d" % index,
+                          reply="original code ORCHID-472" if index == 0 else "later answer")
+        window = self.context.window("side", "reader", seed=8, query="quartz-anchor")
+        self.assertIn("ORCHID-472", window["body"])
+        self.assertIn("old-204", window["body"])
+        self.assertEqual(1, window["coverage"]["retrieved"])
+        self.assertIn("本轮引用 %d 轮" % len(window["turns"]), window["body"])
+        self.assertIn("留存段", window["body"])
+        self.assertLessEqual(len(window["body"]), 8000)
+        self.assertEqual(len(window["turns"]), len({turn["id"] for turn in window["turns"]}))
+        self.assertIn("old-000", [turn["id"] for turn in window["receipts"]])
+        self.assertEqual(205, len(self.context.history("side")))
+        self.assertFalse((self.state / "context.json").exists())
+
+    def test_query_matches_deep_in_an_old_answer_are_excerpted_and_never_marked_complete(self):
+        self.exchange("old", text="old plan", reply="irrelevant " * 300 + "quartz-anchor ORCHID-472" + " tail" * 400)
+        for index in range(10):
+            self.exchange("recent-%d" % index, text="new question %d" % index)
+        window = self.context.window("side", "reader", seed=2, query="quartz-anchor")
+        self.assertIn("quartz-anchor ORCHID-472", window["body"])
+        self.assertIn("片段", window["body"])
+        self.assertNotIn("old", [turn["id"] for turn in window["receipts"]])
+        self.context.mark("side", "reader", window["turns"])
+        self.assertIn("old", [turn["id"] for turn in self.context.unseen("side", "reader")])
+
+    def test_query_can_requote_seen_evidence_but_obeys_reset_and_conversation_scope(self):
+        self.exchange("old", text="quartz-anchor", reply="saved code")
+        self.context.mark("side", "reader", self.context.history("side"))
+        for index in range(4): self.exchange("new-%d" % index, text="unrelated")
+        self.assertIn("saved code", self.context.window("side", "reader", seed=2, query="quartz-anchor")["body"])
+        self.assertNotIn("saved code", self.context.window("other", "reader", query="quartz-anchor")["body"])
+        self.context.clear("side")
+        self.exchange("after-reset", text="new question", reply="fresh answer")
+        context = bind_context(Store(self.state), self.cards)
+        self.assertNotIn("saved code", context.window("side", "reader", query="quartz-anchor")["body"])
+
+    def test_related_evidence_never_exceeds_the_budget_or_displaces_the_latest_turn(self):
+        self.exchange("old", text="quartz-anchor " * 100, reply="saved " * 400)
+        for index in range(10): self.exchange("new-%d" % index, text="new question %d" % index)
+        for budget in (256, 512, 2000, 8000):
+            window = self.context.window("side", "reader", seed=2, query="quartz-anchor", max_chars=budget)
+            self.assertLessEqual(len(window["body"]), budget)
+            self.assertIn("new-9", [turn["id"] for turn in window["turns"]])
+
+    def test_no_retrieval_scan_when_every_retained_turn_is_already_quoted(self):
+        self.exchange()
+        original = self.context.window("side", "reader")
+        with mock.patch("xiaoyou_runtime.loop.recall.search") as search:
+            queried = self.context.window("side", "reader", query="question")
+        search.assert_not_called()
+        self.assertEqual(original, queried)
+
+    def test_delivered_recent_turns_are_not_requoted_into_short_chat_or_helper_summaries(self):
+        self.exchange(text="saved question", reply="saved answer")
+        self.context.mark("side", "reader", self.context.history("side"))
+        with mock.patch("xiaoyou_runtime.loop.recall.search") as search:
+            window = self.context.window("side", "reader", query="saved question 的处理结果")
+        search.assert_not_called()
+        self.assertEqual("", window["body"])
+        self.assertEqual([], window["receipts"])
+
+    def test_query_recognizes_chinese_and_identifiers_without_spaces(self):
+        self.exchange("old", text="星河方案的代号是 ORCHID-472，别的方案不适用", reply="方案已保存")
+        for index in range(12): self.exchange("new-%d" % index, text="unrelated question")
+        for query in ("星河方案的代号是什么", "请查ORCHID-472原始记录"):
+            window = self.context.window("side", "reader", seed=2, query=query)
+            self.assertIn("ORCHID-472", window["body"])
+            self.assertEqual(1, window["coverage"]["retrieved"])
+
+    def test_common_repeated_query_terms_do_not_requote_old_boilerplate(self):
+        for index in range(20):
+            self.exchange("old-%d" % index, text="Transport verification %d" % index, reply="Ready%d" % index)
+        original = self.context.window("side", "reader", seed=2)
+        queried = self.context.window("side", "reader", seed=2,
+                                      query="Transport verification: reply only Ready999")
+        self.assertEqual(original, queried)
+
     def test_invalid_context_window_parameters_fail_before_a_model_call(self):
         for fields in ({"seed": 0}, {"seed": -1}, {"seed": True}, {"max_chars": 255},
-                       {"text_chars": 0}, {"reply_chars": -1}):
+                       {"text_chars": 0}, {"reply_chars": -1}, {"query": []}):
             with self.assertRaises(ValueError):
                 self.context.window("side", "reader", **fields)
 
@@ -276,6 +356,38 @@ class ContextTests(TempDirCase):
         x.context.clear("default")
         self.assertEqual([], x.context.history("default"))
         self.assertTrue(x.recall("default", "quartz-old-anchor").startswith("没找到"))
+
+    def test_recall_reset_does_not_reintroduce_hidden_messages_via_task_entries(self):
+        voice = Scripted("speaker")
+        x, _ = make_xiaoyou(self.folder / "recall-reset", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "retained task facts")
+        x._writer.exchange(card["id"], "private-reset-anchor", "saved reply", turn_id="old")
+        self.assertIn("private-reset-anchor", x.recall("default", "private-reset-anchor"))
+        x.context.clear("default")
+        self.assertTrue(x.recall("default", "private-reset-anchor").startswith("没找到"))
+        # Current task facts survive a model-context reset; new messages stay readable.
+        self.assertIn("retained task facts", x.recall("default", "retained task facts"))
+        x._writer.exchange(card["id"], "fresh-after-reset-anchor", "new reply", turn_id="fresh")
+        self.assertIn("fresh-after-reset-anchor", x.recall("default", "fresh-after-reset-anchor"))
+
+    def test_recall_keeps_global_memory_and_scoped_task_evidence_without_writes(self):
+        voice = Scripted("speaker")
+        x, store = make_xiaoyou(self.folder / "recall-sources", [voice])
+        self.addCleanup(x.close)
+        card = x._writer.task_open("default", "source-anchor task")
+        x._writer.exchange(card["id"], "source-anchor question", "source-anchor reply", turn_id="old")
+        x.memory.remember("source-anchor preference")
+        other = x._writer.task_open("other", "foreign-only-anchor")
+        x._writer.exchange(other["id"], "foreign-only-anchor", "other reply", turn_id="foreign")
+        before = {p: p.read_bytes() for p in store.state_dir.rglob("*") if p.is_file()}
+        result = x.recall("default", "source-anchor")
+        for label in ("聊天", "记忆", "事"):
+            self.assertIn("[" + label, result)
+        self.assertTrue(x.recall("default", "foreign-only-anchor").startswith("没找到"))
+        self.assertIn("source-anchor preference", x.recall("other", "source-anchor"))
+        self.assertEqual(before, {p: p.read_bytes() for p in store.state_dir.rglob("*") if p.is_file()})
+        self.assertEqual([], voice.jobs)
 
     def test_provider_failure_and_decision_only_do_not_mark_the_window_seen(self):
         from xiaoyou_runtime.helpers.agents import AgentError

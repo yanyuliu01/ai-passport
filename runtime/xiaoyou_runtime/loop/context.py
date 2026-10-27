@@ -12,12 +12,13 @@ import threading
 import time
 from copy import deepcopy
 
+from ..helpers.base import clip
+from . import recall as recall_search
+from . import context_window
+from .context_summaries import SEGMENT_TURNS, SegmentSummaries, source_page
 from ..world.store import MAX_TURNS
 from ..world.cards import ACTIVE
 from ..world.world import durable_write
-
-SEGMENT_TURNS = 32
-
 
 def _version(*values):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -51,6 +52,7 @@ class ContextBuilder:
             # Losing receipts would repeat quoted context; losing a reset
             # boundary would reintroduce deliberately forgotten history.
             raise RuntimeError("Cannot read model context receipts: %s" % path) from error
+        self._summaries = SegmentSummaries(path.with_name("context-summaries.json"))
 
     def _entry(self, conversation):
         return self._state.setdefault(conversation, {"receipts": {}, "hidden": []})
@@ -162,7 +164,29 @@ class ContextBuilder:
                 return deepcopy(segment)
         raise ValueError("History segment changed or is no longer readable")
 
-    def window(self, conversation, agent, *, seed=None, max_chars=8000, text_chars=500, reply_chars=1000):
+    def summary_candidate(self, conversation, *, now):
+        return self._summaries.candidate(conversation, self.segments(conversation), now)
+
+    def summary_activity(self, conversation):
+        """Include accepted inputs lacking a final reply, not only history pairs."""
+        _, messages = self._cards.context_snapshot(conversation)
+        return (max((message.get("seq", 0) for message in messages), default=0),
+                max((message.get("created_at", 0) for message in messages), default=0),
+                any(message.get("status") in ("queued", "streaming") for message in messages))
+
+    def begin_summary(self, conversation, segment, *, now):
+        with self._lock:
+            current = self._summaries.candidate(conversation, self.segments(conversation), now)
+            if current is None or current["id"] != segment["id"]:
+                return False
+            return self._summaries.begin(conversation, current, now)
+
+    def save_summary(self, conversation, segment, result):
+        with self._lock:
+            current = next((page for page in self.segments(conversation) if page["id"] == segment["id"]), None)
+            return self._summaries.save(conversation, current, result) if current is not None else False
+
+    def window(self, conversation, agent, *, seed=None, max_chars=8000, text_chars=500, reply_chars=1000, query=None):
         """Render bounded quotes and receipt only complete, actually quoted turns."""
         if type(max_chars) is not int or max_chars < 256:
             raise ValueError("Context window budget must be at least 256 characters")
@@ -170,45 +194,52 @@ class ContextBuilder:
             raise ValueError("Context seed must contain 1 to MAX_TURNS recent turns")
         if any(type(size) is not int or size < 1 for size in (text_chars, reply_chars)):
             raise ValueError("Context excerpt sizes must be positive integers")
+        if query is not None and not isinstance(query, str):
+            raise ValueError("Context query must be text")
         turns = self.history(conversation)
         segments = self._segments(conversation, turns)
-        eligible = turns[-seed:] if seed is not None else [turn for turn in turns if agent not in turn["seen"]]
-        labels = {turn["_key"]: page["id"] for page in segments for turn in page["turns"]}
-        def notice(selected, excerpts):
-            return ("（可读留存 %d 轮、%d 段；本轮引用 %d 轮，其中 %d 轮只有片段。"
-                    "未引用或未完整引用的历史没有标为已读；需要时先用 recall 检索原记录。"
-                    "这个范围不代表完整历史档案。）" % (len(turns), len(segments), selected, excerpts))
-        remaining = max_chars - len(notice(len(turns), len(turns))) - 2
-        selected, receipts, blocks = [], [], []
-        for turn in reversed(eligible):
-            quoted = dict(turn, text=turn["text"][:text_chars], reply=turn["reply"][:reply_chars])
-            excerpt = quoted["text"] != turn["text"] or quoted["reply"] != turn["reply"]
-            block = "[留存段 %s / %s%s]\n主人：%s\n小幽：%s" % (
-                labels[turn["_key"]], turn["id"], "，片段" if excerpt else "", quoted["text"], quoted["reply"])
-            if len(block) > remaining:
-                if blocks:
-                    break
-                block = block[:remaining - len("…（片段）")] + "…（片段）"
-                excerpt = True
-            quoted["_excerpted"] = excerpt
-            selected.append(quoted)
-            if not excerpt:
-                receipts.append(turn)
-            blocks.append(block)
-            remaining -= len(block) + 2
-        selected.reverse()
-        receipts.reverse()
-        blocks.reverse()
-        excerpts = sum(turn["_excerpted"] for turn in selected)
-        coverage_needed = len(segments) > 1 or len(selected) < len(eligible) or excerpts
-        if not coverage_needed:
-            # Keep ordinary complete catch-up quotes small and compatible.
-            # Already-delivered turns are not omitted eligible input.
-            blocks = ["主人：%s\n小幽：%s" % (turn["text"], turn["reply"]) for turn in selected]
-        prefix = notice(len(selected), excerpts) + "\n\n" if blocks and coverage_needed else ""
-        return {"body": prefix + "\n\n".join(blocks), "turns": selected, "receipts": receipts,
-                "coverage": {"retained": len(turns), "segments": len(segments), "eligible": len(eligible),
-                             "selected": len(selected), "complete": len(receipts), "excerpts": excerpts}}
+        lookup = context_window.prepare_lookup(query, turns)
+        window = context_window.render(turns, segments, agent, seed=seed, max_chars=max_chars,
+                                       text_chars=text_chars, reply_chars=reply_chars, query=query, lookup=lookup)
+        excluded = {turn["_key"] for turn in window["turns"] + turns[-8:]}
+        with self._lock:
+            summary, count = self._summaries.render(conversation, segments, excluded, max_chars // 4)
+        if summary:
+            window = context_window.render(turns, segments, agent, seed=seed,
+                max_chars=max_chars - len(summary) - 2, text_chars=text_chars, reply_chars=reply_chars, query=query, lookup=lookup)
+            window["quotes_body"], window["summary_body"] = window["body"], summary
+            window["body"] = summary + ("\n\n" + window["body"] if window["body"] else "")
+        window["coverage"]["summarized"] = count
+        return window
+
+    def recall(self, conversation: str, query: str) -> str:
+        """Read retained history, global memory logs and scoped task evidence."""
+        if query.startswith("source:"):
+            return source_page(query, self.segments(conversation))
+        records = []
+        for segment in self.segments(conversation):
+            for turn in segment["turns"]:
+                records.append(("聊天", "段 %s / %s" % (segment["id"], turn["id"]), float(turn.get("at") or 0),
+                                "主人：%s\n小幽：%s" % (turn["text"], turn["reply"])))
+        for path in self._memory.log_files() if self._memory is not None else []:
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+                stamp = path.stat().st_mtime
+            except OSError:
+                continue
+            records.extend(("记忆", path.stem, stamp, line) for line in lines if line.strip())
+        with self._lock:
+            hidden = set(self._entry(conversation).get("hidden", []))
+        for card in self._cards.recent(conversation, limit=120):
+            # Task entries duplicate canonical messages. A model-context reset
+            # must not reintroduce those same hidden messages through recall.
+            # The task's current title/state remains available independently.
+            said = "\n".join(entry.get("text") or "" for entry in card.get("entries") or []
+                             if entry.get("id") not in hidden)
+            records.append(("事", "%s %s" % (card["id"], clip(card.get("title") or "", 24)),
+                            float(card.get("updated_at") or card.get("created_at") or 0),
+                            (card.get("title") or "") + "\n" + said[-6000:]))
+        return recall_search.render(query, recall_search.search(query, records))
 
     def unseen(self, conversation, agent):
         return [turn for turn in self.turns(conversation) if agent not in turn["seen"]]

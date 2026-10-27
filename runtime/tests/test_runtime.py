@@ -2777,7 +2777,10 @@ class XiaoyouTests(TempDirCase):
         job = self.claude.jobs[0]
         self.assertEqual((job.text, job.session_id, job.conversation), ("几点了", None, "default"))
         # On her own line she only talks: no tools, and not for long.
-        self.assertEqual((job.plain, job.timeout), (True, 60))
+        self.assertTrue(job.plain)
+        # Context preparation now consumes part of the original 60s budget.
+        self.assertGreater(job.timeout, 0)
+        self.assertLessEqual(job.timeout, 60)
         self.assertIn("PERSONA-MARKER", job.system)
         # She is told who she can hand work to (the agent that voices her included)...
         self.assertIn("codex：codex helper", job.system)

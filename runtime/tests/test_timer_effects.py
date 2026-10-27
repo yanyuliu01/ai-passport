@@ -50,13 +50,13 @@ class TimerEffectTests(TempDirCase):
 
     def pending_upkeep(self, name="remember", args=None):
         self.upkeep()
-        checkpoint = self.x._pulse._checkpoint_upkeep
+        checkpoint = self.x._pulse._upkeep.checkpoint
         def save(target, before, after):
             if after["effects"][-1]["state"] == "running":
                 raise OSError("claim unavailable")
             return checkpoint(target, before, after)
         self.voice.tool_calls = [(name, args or {"note": "saved preference", "kind": "偏好"})]
-        with mock.patch.object(self.x._pulse, "_checkpoint_upkeep", side_effect=save):
+        with mock.patch.object(self.x._pulse._upkeep, "checkpoint", side_effect=save):
             self.x._pulse._maybe_upkeep(time.time() + 3600)
 
     def test_saved_reminder_effects_finish_after_a_lost_model_reply_without_another_model(self):
@@ -350,13 +350,13 @@ class TimerEffectTests(TempDirCase):
     def test_memory_revision_is_checked_atomically_at_the_actual_delete(self):
         self.upkeep()
         self.x.memory.remember("original preference")
-        checkpoint = self.x._pulse._checkpoint_upkeep
+        checkpoint = self.x._pulse._upkeep.checkpoint
         def save(target, before, after):
             checkpoint(target, before, after)
             if after["effects"][-1]["state"] == "running":
                 self.x.memory.replace(1, "new version after claim")
         self.voice.tool_calls = [("forget", {"number": 1})]
-        with mock.patch.object(self.x._pulse, "_checkpoint_upkeep", side_effect=save):
+        with mock.patch.object(self.x._pulse._upkeep, "checkpoint", side_effect=save):
             self.x._pulse._maybe_upkeep(time.time() + 3600)
         self.assertEqual(["new version after claim"], self.x.memory.texts())
         saved = json.loads(self.x._pulse._marker.read_text(encoding="utf-8"))
