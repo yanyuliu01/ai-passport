@@ -20,6 +20,9 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [windows-public-node-handoff.md](windows-public-node-handoff.md): Windows Codex handoff for the home public node, source snapshot, network-permission findings, native build and external acceptance.
 - [xiaoyou-desktop-plan.md](xiaoyou-desktop-plan.md): Mac/Windows client proposal, shared conversations, encrypted self-hosted transport, Thursday candidate milestones and acceptance dependencies.
 - [decide-then-speak.md](decide-then-speak.md): design draft that replaces the Runtime's promise reminder with a decide step before Xiaoyou speaks; also records the chat fixes of App 0.25.2 / Runtime 0.18.2 and how to hand the work over.
+- [dialogue-naturalness-design.md](dialogue-naturalness-design.md): deferred post-refactor proposal for companion/work context profiles, interaction preferences, truthful task replies and expression habits, with logical diagrams.
+- [decide-speak-experiment.md](decide-speak-experiment.md): experiment plan comparing serial and speculative parallel decide-then-speak, with 46 cases in 12 categories, measures and a decision rule fixed in advance.
+- [decide-speak-handoff.md](decide-speak-handoff.md): handoff for Codex to run that experiment: steps, limits and report format.
 - [auto-iteration.md](auto-iteration.md): design draft of unified usage collection (all clients report to the home computer) and version-level auto-iteration with local-first models.
 - [ai-guide.md](ai-guide.md): AI-assisted development workflow.
 - [Core AI skills](../../skills/README.md): development, setup, build, device testing, and diagnosis; installation and usage examples.
