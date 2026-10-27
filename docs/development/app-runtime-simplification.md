@@ -211,6 +211,28 @@ the state distinguishes "this computer is offline" from "this route is down"; Ap
 mesh peers among themselves, enforce a minimum version and say clearly when an upgrade is needed;
 an auxiliary failure never poses as a disconnect; recap material never quotes recap material.
 
+### 9.1 History across computers (2026-10-27, Windows main chat)
+
+In the main chat on the Windows Runtime the owner asked whether Xiaoyou could see the chats on
+the Mac. She first said "only what is local to this Mac", then said a helper had to be sent to
+the Mac, and finally asked the owner to choose "which computer". The owner's expectation: **after
+signing in with one account, every end has the same history.** Evidence: Windows
+`state/messages.jsonl`, `state/transcript.json`, `state/mesh/` and the Runtime source. Same kind
+of problem as N6.
+
+| ID | Problem | Evidence | Root cause |
+| --- | --- | --- | --- |
+| H1 | She gets her own location wrong: the main chat is shared by both Runtimes through the mesh, but a turn does not record which Runtime answered it. A 10-26 answer given on the Mac ("I can see the records kept on this Mac") entered the Windows transcript, and Xiaoyou on Windows repeated "this Mac". No statement of "which computer you are on now" was found in the prompt (inferred, not checked section by section) | The same turn in the Mac mesh log and the Windows `transcript.json`; replies at 10-27 23:0x | R2 R3 |
+| H2 | She cannot see history that has already been synced: read-only copies of the Mac's Claude Code and Codex sessions are on Windows under `state/mesh/history/weihaos-MacBook-Air-b067ca/` (7 updated on 10-27), but only helpers are told about them, through `elsewhere()` in `api/shared_history.py`. Her own `recall` (`loop/xiaoyou.py`) searches only local transcript segments, memory and this chat's cards, so she said a helper had to look on the Mac. Same problem as M2 | `delivery/mesh_share.py`, `api/shared_history.py`, `recall` in `loop/xiaoyou.py` | R1 |
+| H3 | "History" has several layers and she mixes them: the main chat (mesh-synced, on both), each computer's desktop sessions (read-only copies elsewhere), each computer's cards (copies only). She finally asked the owner to pick "the Mac's or the Windows'", handing the internal structure to the user | Replies at 23:1x | R2 R4 |
+| H4 | Synced data is noisy: on 10-27 the Mac mesh log carried 821 messages, 327 of them automation `<heartbeat>` entries in the `__desktop__` conversation, which nobody said | `state/mesh/b067ca….jsonl` | R4 |
+
+Direction: one history per account, with the computer as an attribute rather than an entry point
+the user must choose; every turn records the Runtime that spoke, the transcript marks turns from
+other computers, and the prompt states which computer she is on and which others she can see;
+`recall` covers the mesh main chat and the `mesh/history` copies, so reading history dispatches no
+helper; heartbeats and other automatic messages stay out of chats and sync.
+
 ## 10. Targets and measurable indicators
 
 | Item | Now | Target |
@@ -239,6 +261,7 @@ an auxiliary failure never poses as a disconnect; recap material never quotes re
 | Connection choice shown to the user | Raw addresses, picked by hand | Computers only; routes probed, switched and retired automatically |
 | Version mismatch | Unnoticed | Minimum versions between App and Runtimes, shown clearly in the UI |
 | Auxiliary request failure | Shown as "cannot reach Runtime" | Leaves connection state alone; reported only where that feature is |
+| History from other computers | She sends a helper there or asks the owner which computer | One per account, she reads it herself; every turn knows which computer spoke |
 
 ## 11. Suggested order
 
@@ -253,7 +276,7 @@ an auxiliary failure never poses as a disconnect; recap material never quotes re
 4. Interaction and wording after step 3: U4 (never block sending), I1-I7, U1-U6; sketch first,
    change code after the owner approves. V1-V12 and M6 belong here too; V4 (untitled items), V9 (merged
    helpers) and V11 (moving debug information) do not depend on step 3 and can go first.
-   M1-M5 and A1-A7 are Runtime-side and go with step 3; A1 (cancellation returns to the chat)
+   M1-M5, A1-A7 and H1-H4 are Runtime-side and go with step 3; A1 (cancellation returns to the chat)
    and A4 (record the initiator) are small and can go first. once replies take one path, M3 and M4 are easier to
    fix at the root.
 
