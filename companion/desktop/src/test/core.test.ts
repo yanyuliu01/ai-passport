@@ -115,6 +115,10 @@ test('network policy rejects cleartext remote URLs, credentials, redirect and ar
   assert.equal(allowedRPC('POST', '/v1/firmware/target', {}), false);
   assert.equal(allowedRPC('POST', '/v1/messages', { text: 'hello' }), false);
   assert.equal(allowedRPC('POST', '/v1/messages', { text: 'hello', client_id: 'a'.repeat(32) }), true);
+  assert.equal(allowedRPC('POST', '/v1/messages', { text: '', client_id: 'a'.repeat(32), image_ids: ['art_1', 'art_2'] }), true);
+  assert.equal(allowedRPC('POST', '/v1/messages', { text: '', client_id: 'a'.repeat(32), image_ids: [] }), false);
+  assert.equal(allowedRPC('POST', '/v1/messages', { text: '', client_id: 'a'.repeat(32), image_ids: ['a', 'b', 'c', 'd', 'e'] }), false);
+  assert.equal(allowedRPC('POST', '/v1/messages', { text: '', client_id: 'a'.repeat(32), image_ids: ['../x'] }), false);
   let redirect: RequestRedirect | undefined;
   const fetcher = (async (_url: unknown, init: RequestInit) => { redirect = init.redirect; return new Response('{"error":"bad"}', { status: 401 }); }) as typeof fetch;
   await assert.rejects(() => new HTTPRuntimeTransport(fetcher).request(endpoint, 'GET', '/v1/info'),
@@ -375,4 +379,62 @@ test('fresh sends prefer the local Runtime even when a remote endpoint was disco
  await client.send(endpoint.spaceId,'fresh local turn');assert.equal(db.pending()[0].runtimeId,endpoint.runtimeId);
  db.removePending(db.pending()[0].clientId);db.enqueue(endpoint.spaceId,remote.runtimeId,'original remote pending');
  await client.send(endpoint.spaceId,'same pending source');assert.ok(db.pending().every(p=>p.runtimeId===remote.runtimeId));
+});
+
+test('sign-out suspends subscriptions while retaining history and permits same-route sign-in recovery', async t => {
+  const { db } = fixture(t), vault = secrets(); let reads = 0;
+  const client = new DesktopClient(db, { request: async (_endpoint, _method, path, _body, signal) => {
+    if (!path.startsWith('/v1/sync')) return {};
+    if (++reads === 1 || reads === 3) return page({messages:[message('retained',1,{status:'final'})]});
+    return new Promise((_resolve,reject) => signal?.addEventListener('abort',() => reject(new Error('aborted')), {once:true}));
+  } }, vault, () => {});
+  t.after(() => client.stop()); client.add(endpoint);
+  await until(() => reads >= 2);
+  client.suspendConnections();
+  assert.equal(client.endpoints.size,0);
+  assert.equal(db.records<Message>(space,'message')[0].id,'retained');
+  assert.equal(vault.load<Endpoint[]>('endpoints')?.[0].runtimeId,runtime);
+  client.add(endpoint); await until(() => reads >= 3);
+  assert.equal(client.endpoints.get(runtime)?.url,endpoint.url);
+});
+
+test('authenticated helper RPC allows bounded management and denies unrelated or oversized fields', () => {
+  assert.equal(allowedRPC('GET', '/v1/helpers/options'), true);
+  assert.equal(allowedRPC('POST', '/v1/helpers', { name: 'extra', harness: 'codex', access: 'login' }), true);
+  assert.equal(allowedRPC('POST', '/v1/helpers', { restore: 'codex' }), true);
+  assert.equal(allowedRPC('POST', '/v1/helpers/extra/remove', {}), true);
+  assert.equal(allowedRPC('POST', '/v1/helpers/extra/remove', { confirm: true }), false);
+  assert.equal(allowedRPC('POST', '/v1/helpers', { name: 'extra', command: 'arbitrary' }), false);
+  assert.equal(allowedRPC('POST', '/v1/helpers', { key: 'x'.repeat(4097) }), false);
+  assert.equal(allowedRPC('POST', '/v1/helpers/extra/erase', {}), false);
+});
+test('helper writes stay on the chosen Runtime and never silently use the local computer', async t => {
+  const { db } = fixture(t), remote = { ...endpoint, runtimeId: '3'.repeat(32), url: 'peer://remote' };
+  const calls: string[] = [];
+  const client = new DesktopClient(db, { async request(target, _method, path, _body, signal) {
+    if (path.startsWith('/v1/sync')) {
+      await new Promise(resolve => { const timer = setTimeout(resolve, 50); signal?.addEventListener('abort', () => {clearTimeout(timer);resolve(undefined);}, { once: true }); });
+      return { ...page(), runtime_id: target.runtimeId };
+    }
+    if (path.startsWith('/v1/helpers')) calls.push(target.runtimeId + ':' + path);
+    return path === '/v1/agents' ? { agents: [] } : {};
+  } }, secrets(), () => {}, () => '加密通信入口已连接');
+  t.after(() => client.stop()); client.add(endpoint); client.add(remote);
+  await until(() => client.snapshot().spaces[0]?.connections?.filter(row => row.connected).length === 2);
+  await client.helperOptions(space, remote.runtimeId);
+  await client.addHelper(space, { name: 'extra', harness: 'codex', access: 'login' }, remote.runtimeId);
+  await client.removeHelper(space, 'extra', remote.runtimeId);
+  assert.equal(calls.length, 3); assert.ok(calls.every(row => row.startsWith(remote.runtimeId + ':')));
+  await assert.rejects(() => client.removeHelper(space, 'extra', 'missing'));
+  assert.equal(calls.length, 3);
+});
+
+test('permanent side-chat deletion purges cache and outbox across endpoints and blocks stale snapshots', t => {
+  const {db}=fixture(t);const id='side-erased';
+  db.apply(space,runtime,page({messages:[message('private',1,{conversation:id,text:'private history'})]}));
+  db.enqueue(space,runtime,'pending',undefined,'side-erased');
+  db.apply(space,runtime,page({seq:2,conversations:[{id,title:'',deleted:true}]}));
+  assert.equal(db.records(space,'message').length,0);assert.equal(db.pending(space).length,0);
+  db.apply(space,'remote',page({runtime_id:'remote',messages:[message('stale',1,{conversation:id,text:'stale private history'})]}));
+  assert.equal(db.records(space,'message').length,0);
 });

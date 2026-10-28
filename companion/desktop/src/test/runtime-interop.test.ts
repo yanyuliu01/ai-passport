@@ -63,10 +63,11 @@ test('two real isolated Runtimes: encrypted mesh context, remote continuation an
       agents: { echo: { type: 'echo' } }, xiaoyou: { default_agent: 'echo', voice_agent: null },
       mesh: { secret: meshToken, peers: [], advertise: [] }, usage: { enabled: false } }));
     writeFileSync(join(home, 'persona.txt'), 'Synthetic transport fixture.');
-    const bundle = process.env.XIAOYOU_TEST_BUNDLE || resolve(root, 'companion/desktop/runtime-dist');
-    const manifestPath = join(bundle, 'manifest.json');
-    const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : undefined;
-    const launch = manifest?.platform === process.platform ? bundledRuntimeLaunch(bundle, process.platform, home, manifest) : undefined;
+    // Source tests must not silently pick up an older ignored build directory.
+    const bundle = process.env.XIAOYOU_TEST_BUNDLE ? resolve(process.env.XIAOYOU_TEST_BUNDLE) : undefined;
+    const manifest = bundle ? JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8')) : undefined;
+    if (bundle) assert.equal(manifest.platform, process.platform, 'Explicit Runtime bundle must match the test platform');
+    const launch = bundle ? bundledRuntimeLaunch(bundle, process.platform, home, manifest) : undefined;
     const frozen = process.env.XIAOYOU_TEST_RUNTIME ? resolve(process.env.XIAOYOU_TEST_RUNTIME) : launch?.command;
     const executable = frozen || process.env.XIAOYOU_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
     const args = [...(frozen ? process.env.XIAOYOU_TEST_RUNTIME ? [] : launch!.args : ['-m', 'xiaoyou_runtime']), '--config', config];

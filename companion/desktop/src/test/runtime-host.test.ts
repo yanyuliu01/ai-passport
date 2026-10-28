@@ -19,8 +19,10 @@ async function fixture(t: { after(callback: () => Promise<void>): void }) {
     return new Response(JSON.stringify({ runtime_id: 'a'.repeat(32), subject_id: 'b'.repeat(32), capabilities: ['sync'] }));
   });
   const launches = join(dir, 'launches.txt');
+  const script = join(dir, 'service.cjs');
+  await writeFile(script, `require('node:fs').appendFileSync(${JSON.stringify(launches)}, process.pid + String.fromCharCode(10)); setInterval(() => {}, 1000)`);
   const host = new RuntimeHost(dir, { command: process.execPath, cwd: dir,
-    args: ['-e', `require('node:fs').appendFileSync(${JSON.stringify(launches)}, process.pid + '\\n'); setInterval(() => {}, 1000)`, '--'] }, transport);
+    args: [script] }, transport);
   t.after(async () => {
     host.stopOwned();
     const deadline = performance.now() + 2000;
@@ -29,7 +31,10 @@ async function fixture(t: { after(callback: () => Promise<void>): void }) {
     await rm(dir, { recursive: true, force: true });
   });
   return { host, ready: (value = true) => { ready = value; }, block: (fn: () => Promise<void>) => { beforeIdentify = fn; },
-    launches: async () => (await readFile(launches, 'utf8')).trim().split('\n') };
+    launches: async () => {
+      try { return (await readFile(launches, 'utf8')).trim().split(/\r?\n/); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    } };
 }
 
 test('a late owned service is recovered once without a second process or manual retry', async t => {
@@ -86,6 +91,7 @@ test('late recovery is single flight and cannot reconnect after shutdown', async
 test('a signal-exited owned service can restart, retaining the original configuration', async t => {
   const f = await fixture(t), starting = f.host.start();
   await until(() => f.host.ownedRunning()); f.ready(); await starting;
+  await until(async () => (await f.launches()).length === 1);
   const pid = Number((await f.launches())[0]);
   process.kill(pid, 'SIGTERM');
   await until(() => !f.host.ownedRunning()); f.ready(false);
@@ -102,5 +108,5 @@ test('attaching an existing service does not grant process ownership or automati
   assert.equal(f.host.ownedRunning(), false);
   f.host.stopOwned();
   assert.equal(await f.host.recover(), undefined);
-  await assert.rejects(() => f.launches(), { code: 'ENOENT' });
+  assert.deepEqual(await f.launches(), []);
 });

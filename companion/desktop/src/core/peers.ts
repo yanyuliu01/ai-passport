@@ -24,7 +24,7 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
   if (method === 'GET' && path === '/healthz') return true;
   if (typeof path !== 'string' || path.length > 1024 || !path.startsWith('/v1/')) return false;
   const url = new URL(path, 'http://localhost');
-  if (method === 'GET') return ['/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory'].includes(url.pathname)
+  if (method === 'GET') return ['/v1/helpers/options', '/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory'].includes(url.pathname)
     || /^\/v1\/directory\/(?:[A-Za-z0-9._:-]+(?:\/history)?|operations\/[A-Za-z0-9._:-]+)$/.test(url.pathname)
     || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
     || /^\/v1\/tasks\/[a-zA-Z0-9._:-]+\/activity$/.test(url.pathname)
@@ -47,7 +47,20 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
         : ['title', 'project'].includes(key) && typeof value === 'string' && value.length <= (key === 'title' ? 200 : 120)));
   }
   if (/^\/v1\/directory\/[A-Za-z0-9._:-]+\/(metadata|open)$/.test(url.pathname)) return Boolean(body && Object.keys(body).length === 0);
+  if (url.pathname === '/v1/helpers' || url.pathname === '/v1/helpers/models') {
+    if (!body || JSON.stringify(body).length > 12_000) return false;
+    const keys = ['name','harness','access','model','effort','provider','env','key','description','gateway_url','restore'];
+    return Object.entries(body).every(([key,value]) => keys.includes(key) && typeof value === 'string' && value.length <= (key === 'key' ? 4096 : key === 'gateway_url' ? 512 : 200));
+  }
+  if (/^\/v1\/helpers\/[A-Za-z0-9][A-Za-z0-9_-]{0,23}\/(remove|rename|model|capabilities)$/.test(url.pathname)) {
+    return Boolean(body && JSON.stringify(body).length <= 12_000
+      && (url.pathname.endsWith('/remove') ? Object.keys(body).length === 0
+        : url.pathname.endsWith('/rename') ? Object.keys(body).length === 1 && typeof body.title === 'string' && body.title.trim().length > 0 && body.title.length <= 80
+        : url.pathname.endsWith('/model') ? Object.keys(body).length === 1 && typeof body.model === 'string' && body.model.length <= 128
+        : Object.values(body).every(value => typeof value === 'boolean' || value && typeof value === 'object')));
+  }
   if (url.pathname === '/v1/events') return Boolean(body && JSON.stringify(body).length <= 512_000);
+  if (/^\/v1\/conversations\/side-[A-Za-z0-9_-]{1,58}\/delete$/.test(url.pathname)) return Boolean(body && Object.keys(body).length === 0);
   if (/^\/v1\/conversations\/[A-Za-z0-9_-]+\/rename$/.test(url.pathname)) return Boolean(body && typeof body.title === 'string' && body.title.length <= 80 && Object.keys(body).length === 1);
   if (url.pathname === '/v1/mesh/exchange') return Boolean(body && typeof body.from === 'object');
   if (url.pathname === '/v1/conversations') return Boolean(body && (body.id === undefined || typeof body.id === 'string' && /^side-[a-f0-9]{32}$/.test(body.id))
@@ -55,7 +68,10 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     && (body.from_message === undefined || typeof body.from_message === 'string' && body.from_message.length <= 128));
   if (url.pathname === '/v1/messages') return Boolean(body && typeof body.text === 'string'
     && body.text.length <= 32_000 && typeof body.client_id === 'string' && /^[a-f0-9]{32}$/.test(body.client_id)
-    && Object.keys(body).every(key => ['text', 'client_id', 'conversation', 'card', 'pin', 'reply_scope', 'agent', 'effort', 'model', 'attachments'].includes(key))
+    && Object.keys(body).every(key => ['text', 'client_id', 'conversation', 'card', 'pin', 'reply_scope', 'agent', 'effort', 'model', 'attachments', 'image_ids'].includes(key))
+    // Images uploaded through /v1/images are referenced by id; the Runtime allows at most four.
+    && (body.image_ids === undefined || (Array.isArray(body.image_ids) && body.image_ids.length >= 1 && body.image_ids.length <= 4
+      && body.image_ids.every(id => typeof id === 'string' && /^[a-zA-Z0-9._:-]{1,128}$/.test(id))))
     && (body.reply_scope === undefined || body.reply_scope === 'main'));
   if (/^\/v1\/approvals\/[a-zA-Z0-9._:-]+$/.test(url.pathname)) return ['allow', 'deny'].includes(String(body?.decision));
   // The owner's review of an unknown request: exactly the four fields, each answer applied or not_applied.
@@ -265,7 +281,7 @@ export class PeerNetwork implements RuntimeTransport {
         void this.respond(packet.from, packet.id, body).catch(async error => {
           const peer = this.trusted.get(packet.from);
           if (peer && typeof body.request === 'string') await this.send(peer, this.space, 'response',
-            { request: body.request, error: '远程请求与授权或已有记录不匹配，操作未重复执行',
+            { request: body.request, error: (error instanceof Error && error.message ? error.message + '；' : '') + '操作未重复执行',
               status: error instanceof RuntimeError ? error.status : 409 });
         }).catch(() => {});
       }

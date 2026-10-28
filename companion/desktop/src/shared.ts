@@ -89,11 +89,11 @@ export interface SpaceView {
   connections?: { runtime: string; name: string; local: boolean; connected: boolean; capabilities: string[] }[];
 }
 export interface Conversation { id: string; title: string; createdAt: number; updatedAt?: number; revision?: number;
-  metadataAt?: number; metadataRevision?: number; directoryId?: string; pinned?: boolean; archived?: boolean; origin?: string; context?: Json; unread?: boolean; pending?: boolean }
+  metadataAt?: number; metadataRevision?: number; directoryId?: string; pinned?: boolean; archived?: boolean; deleted?: boolean; origin?: string; context?: Json; unread?: boolean; pending?: boolean }
 export interface HelperView {
   members?: HelperView[];
   id: string; runtime: string; device: string; name: string; label: string; type: string;
-  model: string; effort: string; connected: boolean; updatedAt: number;
+  model: string; effort: string; connected: boolean; updatedAt: number; quotaProblem?: string;
   fiveHour: { left: number | null; resetsAt: number | null }; week: { left: number | null; resetsAt: number | null };
 }
 
@@ -167,12 +167,12 @@ export interface DesktopAPI {
   directoryMetadata(input: { space: string; runtime: string; id: string }): Promise<Json>;
   openNative(input: { space: string; id: string; runtime: string }): Promise<void>;
   openLink(href: string): Promise<void>;
-  helperOptions(input: { space: string }): Promise<Json>;
-  helperModels(input: { space: string; gateway_url: string; key?: string }): Promise<Json>;
-  helperModel(input: { space: string; name: string; model: string }): Promise<Json>;
-  helperGrants(input: { space: string; name: string; grants: Json }): Promise<Json>;
-  addHelper(input: { space: string; helper: Json }): Promise<Json>;
-  removeHelper(input: { space: string; name: string }): Promise<Json>;
+  helperOptions(input: { runtime?: string; space: string }): Promise<Json>;
+  helperModels(input: { runtime?: string; space: string; gateway_url: string; key?: string }): Promise<Json>;
+  helperModel(input: { runtime?: string; space: string; name: string; model: string }): Promise<Json>;
+  helperGrants(input: { runtime?: string; space: string; name: string; grants: Json }): Promise<Json>;
+  addHelper(input: { runtime?: string; space: string; helper: Json }): Promise<Json>;
+  removeHelper(input: { runtime?: string; space: string; name: string }): Promise<Json>;
   connectLocal(): Promise<void>;
   importConfig(): Promise<void>;
   approve(input: { space: string; id: string; runtime: string; decision: 'allow' | 'deny' }): Promise<void>;

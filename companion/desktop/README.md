@@ -2,7 +2,7 @@
 
 # Xiaoyou desktop client
 
-Implementation in progress, source version 0.1.16. Follow the
+Implementation in progress, source version 0.1.17. Follow the
 [development plan](../../docs/development/xiaoyou-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -11,6 +11,17 @@ The owner approved the v8 interaction reference on 2026-10-21. The onboarding
 increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
+
+## Server account connection (0.1.17 source)
+
+The only remote connection entry is the existing self-hosted account server.
+Desktop and Android 0.34.1 sign in to the same account. Computers retain their
+local helpers; the phone discovers computers without pairing QR codes.
+Old direct/relay routes are retained for recovery but are not automatically
+restored or offered in settings. See the [account connection guide](deploy/accounts.md)
+for migration, security boundaries and test scope. Earlier checkpoints below
+describe their respective historical versions. No installed-version acceptance
+is implied by this source increment.
 
 ## Late local-service startup (0.1.10 source)
 
@@ -585,3 +596,31 @@ availability and billing depend on the provider. Newly managed Codex helpers use
 `gpt-6.1-sol`; Astra requires an explicit choice. Older runtimes keep the read-only
 label. Preferences live in `state/helper-models.json`, separate from credentials
 and native CLI settings. Gateway helpers retain their existing setup flow.
+
+## Manage helpers across clients (0.1.18)
+
+Settings > Helpers includes an explicit computer selector. Adding, removing,
+model selection and tool grants bind to that connected Runtime; an unavailable
+selected computer never silently redirects a write to the local machine.
+Runtime 0.24.1 also supports reversible removal of config helpers, while
+protecting the primary dialogue/voice helper and retaining accepted work/history.
+Native subscriptions and API credentials remain local to the target computer.
+Quota rings use the limiting known, unexpired 5-hour/weekly remainder.
+
+The native-window synthetic acceptance script is
+`node tools/test-helper-management-shell.mjs` (Playwright supplied through
+`XIAOYOU_QA_PLAYWRIGHT` when needed). It checks the 82%/28% quota case, source
+label, adding and removing through the actual renderer/IPC path. It does not
+measure a real model's first response or Windows/phone acceptance.
+
+The Windows preview builder pins NSIS toolset 1.2.1, whose native Apple Silicon
+compiler avoids the legacy x86-only compiler on this build host. Building an
+installer on macOS does not verify execution on Windows.
+
+## Local helper roster (0.1.19)
+
+The sidebar and home helper chips follow the desktop's local Runtime. Remote
+mesh aliases such as `cc@Windows` remain task routes but do not appear as local
+helpers. Display aliases from Runtime 0.25.0 are respected. Shared side-chat
+deletion markers purge cached messages, tasks, and pending sends and prevent
+stale peer snapshots from restoring them.

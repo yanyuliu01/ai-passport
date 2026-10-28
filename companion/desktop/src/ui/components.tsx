@@ -1,3 +1,4 @@
+import { quotaLeft } from '../core/presentation';
 import React from 'react';
 import type { HelperView, Json } from '../shared';
 import { activeTask, helperMatchesTask } from '../core/presentation';
@@ -27,7 +28,7 @@ export function Avatar({ type = 'xiaoyou', size = 32 }: { type?: string; size?: 
 export const taskKey = (task: Json) => String(task._runtimeId) + '/' + String(task.id);
 export function helperTask(helper: HelperView, tasks: Json[]) { return tasks.find(task => helperMatchesTask(helper, task) && activeTask(task)); }
 export function QuotaAvatar({ helper, onClick }: { helper: HelperView; onClick(): void }) {
-  const left = helper.fiveHour.left, stale = !helper.connected || !helper.updatedAt || Date.now() - helper.updatedAt > 120_000;
+  const left = quotaLeft(helper), stale = !helper.connected || !helper.updatedAt || Date.now() - helper.updatedAt > 120_000;
   const level = left === null || stale ? 'unknown' : left > 40 ? 'normal' : left > 15 ? 'warn' : 'low';
   return <button className="quota-avatar" aria-label={helper.label + ' 的用量'} onClick={onClick} data-level={level}>
     <svg viewBox="0 0 42 42" aria-hidden="true"><circle className="quota-track" cx="21" cy="21" r="19" />{left !== null && <circle className="quota-fill" cx="21" cy="21" r="19" pathLength="100" strokeDasharray={`${left} 100`} />}</svg>

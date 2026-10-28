@@ -1,3 +1,4 @@
+import {accountFixture,loginShell,SHELL_MESH_SECRET,shellSpace} from './account-shell-fixture.mjs';
 // Real isolated Electron rendering of the shared wire fixtures. Never calls a provider.
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -13,8 +14,9 @@ const folder=mkdtempSync(join(tmpdir(),'xiaoyou-display-qa-')),bin=join(folder,'
 for(const id of ['dsh','codex','claude'])writeFileSync(join(bin,id),`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${id} 1.2.3"; else echo '{"loggedIn":true}'; fi\n`,{mode:0o700});
 const cases=JSON.parse(readFileSync(join(root,'tests/fixtures/presentation-v1.json'),'utf8')).cases;
 const sample=name=>structuredClone(cases.find(row=>row.name===name).wire);
-const runtime='a'.repeat(32),space='b'.repeat(32),token='synthetic-presentation-qa-token';
+const runtime='a'.repeat(32),space=shellSpace,token='synthetic-presentation-qa-token';
 let seq=100,current='one-complete-one-unfinished',future=false,app,liveStage=-1,historyBlocked=false,disconnected=false;
+let accountQA;
 const policy={version:1},errors=[];
 const server=createServer(async(req,res)=>{
  if(req.headers.authorization!=='Bearer '+token){res.writeHead(401);res.end('{}');return;}
@@ -58,16 +60,12 @@ async function until(predicate){const end=performance.now()+8000;while(!await pr
 try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const port=server.address().port,config=join(folder,'fixture.json');
- writeFileSync(config,JSON.stringify({server:{name:'显示规则隔离测试',port,token},agents:{deepseek:{type:'dsh'}}}));
- const env={...process.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};
+ writeFileSync(config,JSON.stringify({server:{name:'显示规则隔离测试',port,token},mesh:{secret:SHELL_MESH_SECRET},agents:{deepseek:{type:'dsh'}}}));
+ accountQA=await accountFixture(folder,{runtimeId:runtime,spaceId:space,name:'Fixture computer',url:'http://127.0.0.1:'+port,token,capabilities:['sync']});
+ const env={...process.env,...accountQA.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};
  delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
  let page;[app,page]=await launch(env);
- await page.getByRole('button',{name:/在这台电脑启用小幽/}).click();
- await page.getByRole('radio',{name:/复用已有小幽/}).check();
- await page.getByRole('button',{name:'继续确认 →',exact:true}).click();
- await page.getByRole('button',{name:'确认连接这个服务',exact:true}).click();
- await page.getByRole('button',{name:'进入小幽 →',exact:true}).click();
- await page.locator('.composer').waitFor();
+ await loginShell(page);
  let reply=page.locator('[data-message-id="turn:reply"]');
  await until(()=>reply.locator('[data-block-id]').count().then(n=>n===1));
  assert.match(await reply.innerText(),/First message/);assert.doesNotMatch(await page.locator('.timeline').innerText(),/Unfinished/);
@@ -121,4 +119,4 @@ try{
   acceptedWait:'PASS',ownerOnlyWait:'PASS',acceptedRestart:'PASS',offlineWait:'PASS',liveReplyDuringHistoryReplay:'PASS',recoveryMs,
   nativeCodexWindow:'NOT RUN',nativeClaudeWindow:'NOT RUN',phone:'NOT RUN',realModelTTFT:'NOT RUN'};
  writeFileSync(join(root,'build/presentation-window-validation.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
-}finally{if(app)await app.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+}finally{if(app)await app.close();await accountQA?.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

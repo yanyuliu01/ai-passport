@@ -113,20 +113,22 @@ export class DesktopClient {
   }
   conversations(space: string): Conversation[] {
     return this.db.get<Conversation[]>('conversations:' + space,
-      [{ id: 'default', title: '主对话', createdAt: 0 }]);
+      [{ id: 'default', title: '主对话', createdAt: 0 }]).filter(row => !row.deleted);
   }
   selectedConversation(space: string): string { return this.db.get('conversation:' + space, 'default'); }
   mergeConversations(space: string, incoming: Conversation[]): void {
     if (!Array.isArray(incoming) || incoming.length > 1000) throw new Error('会话目录无效');
-    const existing = new Map(this.conversations(space).map(item => [item.id, item]));
+    const existing = new Map(this.db.get<Conversation[]>('conversations:' + space, [{id:'default',title:'主对话',createdAt:0}]).map(item => [item.id, item]));
     let added = false;
     for (const raw of incoming) {
       const item = runtimeConversation(raw);
       if (!item) continue; // A malformed/private catalog row cannot stall message synchronization.
       const old = existing.get(item.id);
-      if (!old || newerConversation(item, old)) { existing.set(item.id, item); added = true; }
+      if (!old?.deleted && (item.deleted || !old || newerConversation(item, old))) { existing.set(item.id, item); added = true; }
     }
-    if (added) { this.db.set('conversations:' + space, [...existing.values()]); this.changed(); }
+    if (added) { this.db.set('conversations:' + space, [...existing.values()]);
+      if (existing.get(this.selectedConversation(space))?.deleted) this.db.set('conversation:' + space, 'default');
+      this.changed(); }
   }
   async createConversation(space: string, title: string, message?: string, runtime?: string): Promise<void> {
     const endpoint = [...this.endpoints.values()].find(item => item.spaceId === space && (!runtime || item.runtimeId === runtime) && this.link(item)?.connected)
@@ -167,41 +169,41 @@ export class DesktopClient {
       this.db.set('usage:' + endpoint.runtimeId, usage); this.changed();
     }));
   }
-  /** Helpers run on this computer, so they are managed through its own Runtime only. */
-  private localEndpoint(space: string): Endpoint {
+  /** Bind each management operation to the explicitly chosen authenticated computer. */
+  private helperEndpoint(space: string, runtime?: string): Endpoint {
     const endpoint = [...this.endpoints.values()].find(item => item.spaceId === space
-      && !item.url.startsWith('peer://') && this.link(item)?.connected);
-    if (!endpoint) throw new Error('这台电脑上的小幽还没连上，连上后才能管理帮手');
+      && (runtime ? item.runtimeId === runtime : !item.url.startsWith('peer://')) && this.link(item)?.connected);
+    if (!endpoint) throw new Error('所选电脑未连接，连接恢复后才能管理帮手');
     return endpoint;
   }
-  helperOptions(space: string): Promise<Json> {
-    return this.transport.request(this.localEndpoint(space), 'GET', '/v1/helpers/options');
+  helperOptions(space: string, runtime?: string): Promise<Json> {
+    return this.transport.request(this.helperEndpoint(space, runtime), 'GET', '/v1/helpers/options');
   }
-  helperModels(space: string, body: Json): Promise<Json> {
-    return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/models', body);
+  helperModels(space: string, body: Json, runtime?: string): Promise<Json> {
+    return this.transport.request(this.helperEndpoint(space, runtime), 'POST', '/v1/helpers/models', body);
   }
-  async helperModel(space: string, name: string, model: string): Promise<Json> {
-    const endpoint = this.localEndpoint(space);
+  async helperModel(space: string, name: string, model: string, runtime?: string): Promise<Json> {
+    const endpoint = this.helperEndpoint(space, runtime);
     const result = await this.transport.request(endpoint, 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/model', { model });
     const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
     if (lifetime) await this.loadAgents(endpoint, lifetime);
     return result;
   }
-  helperGrants(space: string, name: string, grants: Json): Promise<Json> {
-    return this.transport.request(this.localEndpoint(space), 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/capabilities', grants);
+  helperGrants(space: string, name: string, grants: Json, runtime?: string): Promise<Json> {
+    return this.transport.request(this.helperEndpoint(space, runtime), 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/capabilities', grants);
   }
-  async addHelper(space: string, helper: Json): Promise<Json> {
-    const endpoint = this.localEndpoint(space);
+  async addHelper(space: string, helper: Json, runtime?: string): Promise<Json> {
+    const endpoint = this.helperEndpoint(space, runtime);
     const result = await this.transport.request(endpoint, 'POST', '/v1/helpers', helper);
     const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
-    if (lifetime) void this.loadAgents(endpoint, lifetime);
+    if (lifetime) await this.loadAgents(endpoint, lifetime);
     return result;
   }
-  async removeHelper(space: string, name: string): Promise<Json> {
-    const endpoint = this.localEndpoint(space);
+  async removeHelper(space: string, name: string, runtime?: string): Promise<Json> {
+    const endpoint = this.helperEndpoint(space, runtime);
     const result = await this.transport.request(endpoint, 'POST', '/v1/helpers/' + encodeURIComponent(name) + '/remove', {});
     const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
-    if (lifetime) void this.loadAgents(endpoint, lifetime);
+    if (lifetime) await this.loadAgents(endpoint, lifetime);
     return result;
   }
   async taskDetail(space: string, id: string, runtime: string, before?: number): Promise<Json> {
@@ -350,7 +352,11 @@ export class DesktopClient {
           }
         }
         if (Array.isArray(page.conversations)) this.mergeConversations(endpoint.spaceId, page.conversations as Conversation[]);
-        if (page.usage && typeof page.usage === 'object') this.db.set('usage:' + endpoint.runtimeId, page.usage);
+        if (page.usage && typeof page.usage === 'object') {
+          const before = this.db.get<Json>('usage:' + endpoint.runtimeId, {});
+          this.db.set('usage:' + endpoint.runtimeId, page.usage);
+          if (JSON.stringify((page.usage as Json).agents) !== JSON.stringify(before.agents)) void this.loadAgents(endpoint, signal);
+        }
         more = page.more || Array.isArray(page.requests_more) && page.requests_more.length > 0;
         failures = 0;
         this.links.set(key, { connected: true, catchingUp: more, error: '' });
@@ -692,6 +698,14 @@ export class DesktopClient {
       this.endpoints.delete(endpoint.runtimeId);
       this.add(endpoint);
     }
+  }
+  /** Stop authenticated subscriptions without deleting history, credentials or accepted work. */
+  suspendConnections(): void {
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+    for (const controller of this.loops.values()) controller.abort();
+    this.loops.clear(); this.endpoints.clear();
+    this.runtime = { state: 'disconnected', message: '请登录小幽账号，已有记录保留' };
   }
   stop(): void {
     this.stopped = true;

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
-import { activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewBody } from '../core/presentation.js';
+import { localHelpers, quotaLeft, activeTask, unverifiedTask, helperViews, unifiedHelpers, helperMatchesTask, mainMessages, runtimeConversation, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewBody } from '../core/presentation.js';
 import { RuntimeError } from '../core/runtime-client.js';
 import { credentialHash, proofMatches, hostProof } from '../core/runtime-client.js';
 import { allowedRPC } from '../core/peers.js';
@@ -362,4 +362,31 @@ test('saved helper default takes precedence over the last observed task model', 
   const rows = helperViews(runtime, 'Mac', [{ name: 'codex', type: 'codex', configured_model: 'gpt-6.1-sol' }],
     { agents: [{ name: 'codex', model: 'gpt-6-astra' }] }, true);
   assert.equal(rows[0].model, 'gpt-6.1-sol');
+});
+
+test('quota ring uses the limiting live window, including weekly-only and unknown reports', () => {
+  const helper = helperViews(runtime, 'Mac', [{ name: 'codex', type: 'codex' }], {}, true)[0];
+  helper.fiveHour = { left: 82, resetsAt: 5000 }; helper.week = { left: 28, resetsAt: 9000 };
+  assert.equal(quotaLeft(helper, 1000), 28);
+  helper.fiveHour.left = 0; assert.equal(quotaLeft(helper, 1000), 0);
+  assert.equal(quotaLeft(helper, 6000), 28);
+  helper.fiveHour.left = null; assert.equal(quotaLeft(helper, 1000), 28);
+  helper.week.left = null; assert.equal(quotaLeft(helper, 1000), null);
+  helper.week.left = 60; assert.equal(quotaLeft(helper, 10000), null);
+});
+
+test('failed quota refresh never presents retained account windows as a live ring', () => {
+  const helper = helperViews(runtime, 'Mac', [{name:'codex',type:'codex'}], {
+    agents:[{name:'codex',account:'cached'}], accounts:[{id:'cached',note:'401 Unauthorized',windows:[{kind:'7d',left:28}]}]
+  }, true)[0];
+  assert.equal(helper.week.left,28); assert.equal(quotaLeft(helper),null);
+  helper.quotaProblem=undefined; assert.equal(quotaLeft(helper),28);
+  helper.connected=false; assert.equal(quotaLeft(helper),null);
+});
+
+test('local sidebar roster excludes mesh aliases and independent remote Runtime members', () => {
+  const rows = [...helperViews(runtime,'Mac',[{name:'cc',type:'claude_code',display_name:'我的帮手'},{name:'cc@Windows',type:'mesh'}],{},true),
+    ...helperViews('remote','Windows',[{name:'codex',type:'codex'}],{},true)];
+  const visible = localHelpers(unifiedHelpers(rows),[{runtime,name:'Mac',local:true,connected:true,capabilities:[]}]);
+  assert.deepEqual(visible.map(row=>[row.name,row.label]),[['cc','我的帮手']]);
 });

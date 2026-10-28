@@ -6,22 +6,22 @@ import claude from './images/claude.png';
 import './onboarding.css';
 import { AccountPanel } from './account';
 
-type Step = 'welcome' | 'detect' | 'agents' | 'review' | 'join' | 'joining' | 'restoring' | 'starting' | 'result';
+type Step = 'welcome' | 'detect' | 'agents' | 'review' | 'starting' | 'result';
 const authLabel = (agent: LocalAgent) => !agent.installed ? '未检测到' : agent.auth === 'signed-in' ? '已登录'
   : agent.auth === 'signed-out' ? '需要登录' : agent.id === 'dsh' ? '已安装 · API 配置单独确认' : '已安装 · 登录状态待验证';
 export function Onboarding({ view, onDone, local = false }: { view: ClientView; onDone(): void; local?: boolean }) {
   const [step, setStep] = useState<Step>('welcome');
   const [scan, setScan] = useState<SetupScan>();
   const [selected, setSelected] = useState<string[]>([]), [service, setService] = useState('');
-  const [key, setKey] = useState(''), [invitation, setInvitation] = useState('');
+  const [key, setKey] = useState('');
   const [loginStart, setLoginStart] = useState(false), [error, setError] = useState('');
   const [returnStep, setReturnStep] = useState<Step>('review');
-  const busy = ['detect', 'starting', 'restoring'].includes(step);
+  const busy = ['detect', 'starting'].includes(step);
   const connected = view.spaces.some(space => space.connected && !space.catchingUp);
   const current = scan?.services.find(item => item.id === service);
   const main = scan?.agents.find(item => item.id === 'dsh');
   const chosen = scan?.agents.filter(agent => selected.includes(agent.id)) || [];
-  const stage = step === 'welcome' ? 0 : ['detect', 'agents', 'join'].includes(step) ? 1 : ['review'].includes(step) ? 2 : 3;
+  const stage = step === 'welcome' ? 0 : ['detect', 'agents'].includes(step) ? 1 : ['review'].includes(step) ? 2 : 3;
   async function detect() {
     setError(''); setStep('detect');
     try { const value = await window.xiaoyou.scanLocal(); setScan(value); setService(''); setSelected([]); setStep('agents'); }
@@ -37,37 +37,22 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
       if (loginStart) try { await window.xiaoyou.loginStart(true); } catch { setError('服务已连接，但登录时启动未开启，可在设置中重试。'); }
     } catch (problem) { setKey(''); setError(cleanError(problem)); setStep('review'); }
   }
-  async function join() {
-    setError(''); setReturnStep('join');
-    try { await window.xiaoyou.join(invitation); setInvitation(''); setStep('joining'); }
-    catch (problem) { setError(cleanError(problem)); }
-  }
-  async function restore() {
-    setError(''); setReturnStep('welcome'); setStep('restoring');
-    try { await window.xiaoyou.restoreConnections(); setStep('result'); }
-    catch (problem) { setError(cleanError(problem)); setStep('welcome'); }
-  }
   const canReview = Boolean(scan && (service || (main?.installed && (scan.hasDeepSeekKey || key.trim().length >= 12))));
   const heading: Record<Step, string> = { welcome: local ? '启用这台电脑的小幽' : '把小幽带到这台电脑', detect: '看看你已经有哪些帮手',
-    agents: '让熟悉的帮手一起加入', review: '确认这次启用的内容', join: '连接你已有的小幽', joining: '等另一台设备确认',
-    restoring: '正在恢复你确认过的连接', starting: '正在启用本机服务', result: connected ? '连接已经建立' : '正在补齐最近的对话' };
+    agents: '让熟悉的帮手一起加入', review: '确认这次启用的内容', starting: '正在启用本机服务', result: connected ? '连接已经建立' : '正在补齐最近的对话' };
   return <main className="onboarding">
     <header className="onboarding-title"><span>小幽</span><small>{view.setup?.device || '这台电脑'} · 首次连接</small>
       {view.setup?.confirmed && !busy && <button onClick={onDone}>返回小幽</button>}</header>
     <div className="onboarding-body">
       <aside className="onboarding-aside"><img src={xiaoyou} alt="小幽" /><h2>换个地方，<br />接着聊。</h2><p>你的对话、正在做的事，<br />都留在同一个小幽里。</p>
-        <ol aria-label="启用步骤">{['选择连接方式', '检测与选择', '确认启用', '连接与同步'].map((label, index) => <li key={label} aria-current={stage === index ? 'step' : undefined}><span>{index < stage ? '✓' : index + 1}</span>{label}</li>)}</ol>
+        <ol aria-label="启用步骤">{['登录小幽账号', '检测与选择', '确认启用', '连接与同步'].map((label, index) => <li key={label} aria-current={stage === index ? 'step' : undefined}><span>{index < stage ? '✓' : index + 1}</span>{label}</li>)}</ol>
       </aside>
       <section className="onboarding-panel" aria-busy={busy}>
         <small>开始使用 · {Math.min(stage + 1, 4)} / 4</small><h1 tabIndex={-1}>{heading[step]}</h1>
         {error && <div role="alert" className="onboarding-error">{error}</div>}
         {step === 'welcome' && <>
-          <AccountPanel view={view.account} onConfigure={() => void detect()} /><p className="onboarding-description">登录同一账号后，直接配置本机 Runtime，原电脑无需在线。已有服务和记录保留。</p>
-          <button className="onboarding-choice" onClick={() => void detect()}><strong>在这台电脑启用小幽 <span>→</span></strong><p>客户端管理本机服务，默认由 dsh + DeepSeek 回应；也能接入你已有的帮手。</p></button>
-          <button className="onboarding-choice" onClick={() => { setError(''); setStep('join'); }}><strong>连接已有的小幽 <span>→</span></strong><p>从另一台设备取得邀请，配对后同步记录，继续原来的聊天。</p></button>
-          {!!view.setup?.savedConnections.length && <details className="onboarding-saved"><summary>发现此前保存的连接 · 需要你确认一次</summary>
-            {view.setup.savedConnections.map((item, index) => <p key={index}>{item.name}<small>{item.route}</small></p>)}
-            <p>恢复后会继续同步，原待发送请求仍使用原来的服务和请求编号。</p><button onClick={() => void restore()}>确认恢复这些连接</button></details>}
+          <AccountPanel view={view.account} onConfigure={view.account?.signedIn && view.account.provisioned ? () => void detect() : undefined} /><p className="onboarding-description">登录同一账号即可连接自己的电脑。帮手继续在各自电脑运行，已有服务和记录保留。</p>
+
         </>}
         {step === 'detect' && <div className="onboarding-wait" role="status"><span className="onboarding-spinner" />正在检测安装位置和登录状态…<p>只检查已知位置，不读取你的会话内容。</p></div>}
         {step === 'agents' && <>
@@ -103,18 +88,7 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
           <label className="onboarding-check"><input type="checkbox" checked={loginStart} onChange={event => setLoginStart(event.target.checked)} />系统登录后启动小幽（可选）</label>
           <footer><button onClick={() => setStep('agents')}>上一步</button><button className="primary" onClick={() => void start()}>{current ? '确认连接这个服务' : '确认并启用本机服务'}</button></footer>
         </>}
-        {step === 'join' && <>
-          <p className="onboarding-description">在已连接的设备上打开“连接与设置”，生成邀请。原设备确认后，这里会补齐同一个空间的对话。</p>
-          <label className="onboarding-key">小幽邀请链接<textarea value={invitation} maxLength={16384} autoComplete="off" placeholder="粘贴另一台设备生成的邀请" onChange={event => setInvitation(event.target.value)} /></label>
-          <div className="onboarding-note">这一步只连接已有小幽，不新建本机空间，也不会自动启用本机服务。邀请有有效期，原设备需要在线。</div>
-          <footer><button onClick={() => setStep('welcome')}>返回</button><button className="primary" disabled={!invitation.trim()} onClick={() => void join()}>请求连接 →</button></footer>
-        </>}
         {step === 'starting' && <div className="onboarding-wait" role="status"><span className="onboarding-spinner" />{view.runtime.message}<p>正在核对服务身份，随后同步会话记录。</p></div>}
-        {step === 'restoring' && <div className="onboarding-wait" role="status"><span className="onboarding-spinner" />恢复已保存连接…</div>}
-        {step === 'joining' && <>
-          <div className="onboarding-wait" role="status">{view.setup?.confirmed ? '配对已确认，正在同步最近记录…' : '请在原设备上确认这台电脑的加入请求。'}<p>{view.pairing.relayState}</p></div>
-          {connected ? <button className="primary" onClick={() => { setStep('result'); }}>查看连接结果 →</button> : <button onClick={() => { setError('原邀请可能已过期，请从原设备重新生成后粘贴。'); setStep('join'); }}>使用新的邀请</button>}
-        </>}
         {step === 'result' && <>
           <p className="onboarding-description">{view.setup?.service === 'none' ? '这台电脑通过已配对设备使用小幽。' : view.runtime.message}</p>
           <ul className="onboarding-status"><li><span>✓</span><div><strong>连接已确认</strong><p>{view.setup?.service === 'bundled' ? '本机服务由客户端管理' : view.setup?.service === 'external' ? '复用本机已有服务，不接管进程' : '使用已确认的设备与连接'}</p></div></li>

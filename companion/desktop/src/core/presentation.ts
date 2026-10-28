@@ -1,4 +1,4 @@
-import type { Conversation, DisplayBlock, DisplayProjection, HelperView, Json, Message } from '../shared.js';
+import type { SpaceView, Conversation, DisplayBlock, DisplayProjection, HelperView, Json, Message } from '../shared.js';
 
 /** Consume Gateway decisions; legacy heuristics apply only when the field is absent. */
 export function projection(record: Json): DisplayProjection | undefined {
@@ -40,7 +40,7 @@ export function runtimeConversation(raw: unknown): Conversation | undefined {
     createdAt: finite(row.createdAt) ?? (finite(row.created_at) || 0) * 1000,
     updatedAt: finite(row.updatedAt) ?? (finite(row.updated_at) || 0) * 1000,
     revision: finite(row.revision) || 0, metadataAt: finite(row.metadataAt) ?? (finite(row.metadata_at) || 0) * 1000,
-    metadataRevision: finite(row.metadata_revision) ?? finite(row.metadataRevision) ?? 0, directoryId: String(row.directory_id || row.directoryId || ''), pinned: row.pinned === true, archived: row.archived === true,
+    metadataRevision: finite(row.metadata_revision) ?? finite(row.metadataRevision) ?? 0, directoryId: String(row.directory_id || row.directoryId || ''), pinned: row.pinned === true, archived: row.archived === true, deleted: row.deleted === true,
     origin: typeof row.origin === 'string' ? row.origin : '', ...(row.title_source === 'pending' ? { pending: true } : {}),
     ...(row.context && typeof row.context === 'object' ? { context: row.context as Json } : {}) };
 }
@@ -66,10 +66,10 @@ export function helperViews(runtime: string, device: string, agents: Json[], usa
         return { left: expired || left === undefined ? null : Math.max(0, Math.min(100, left)), resetsAt: reset ? reset * 1000 : null };
       };
       return { id: runtime + '/' + String(agent.name), runtime, device: agent.type === 'mesh' && String(agent.name).includes('@') ? String(agent.name).split('@').slice(1).join('@') : device, name: String(agent.name), type, connected,
-        label: type === 'codex' ? 'Codex' : type === 'claude_code' ? 'Claude Code' : String(agent.name),
+        label: typeof agent.display_name === 'string' && agent.display_name.trim() ? agent.display_name : type === 'codex' ? 'Codex' : type === 'claude_code' ? 'Claude Code' : String(agent.name),
         model: typeof agent.configured_model === 'string' ? agent.configured_model : typeof details?.model === 'string' ? details.model : typeof agent.model === 'string' ? agent.model : '',
         effort: typeof details?.effort === 'string' ? details.effort : typeof agent.effort === 'string' ? agent.effort : '',
-        fiveHour: window('5h'), week: window('7d'), updatedAt: (finite(account?.updated_at) || 0) * 1000 };
+        quotaProblem: typeof account?.note === 'string' ? account.note : undefined, fiveHour: window('5h'), week: window('7d'), updatedAt: (finite(account?.updated_at) || 0) * 1000 };
     }).filter(helper => helper.type !== 'dsh');
 }
 export function mainMessages(messages: Message[], conversation: string): Message[] {
@@ -83,7 +83,7 @@ export function connectionWord(paired: boolean, connected: boolean): string {
 }
 /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
 export function listedSideChat(item: Conversation, open: string): boolean {
-  return item.id !== 'default' && !item.archived && (!item.pending || item.id === open);
+  return item.id !== 'default' && !item.deleted && !item.archived && (!item.pending || item.id === open);
 }
 /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
 export const listedTask = (task: Json) => Boolean(task.agent) && !task.monitoring_only;
@@ -154,6 +154,18 @@ export function unifiedHelpers(rows: HelperView[]): HelperView[] {
     return { ...candidates[0], id, connected: members.some(member => member.connected), members };
   });
 }
+/** Sidebar membership follows the local Runtime; remote routes remain available to tasks. */
+export function localHelpers(rows: HelperView[], connections: SpaceView['connections']): HelperView[] {
+  const local = new Set((connections || []).filter(row => row.local).map(row => row.runtime));
+  return rows.flatMap(row => row.members || [row]).filter(row => local.has(row.runtime) && !row.name.includes('@'));
+}
 export function helperMatchesTask(helper: HelperView, task: Json): boolean {
   return (helper.members || [helper]).some(member => member.runtime === task._runtimeId && member.name === (task.worker_agent || task.agent));
+}
+
+/** The limiting known subscription window, excluding windows already reset. */
+export function quotaLeft(helper: HelperView, now = Date.now()): number | null {
+  if (!helper.connected || helper.quotaProblem) return null;
+  const known = [helper.fiveHour, helper.week].filter(row => row.left !== null && (row.resetsAt === null || row.resetsAt > now));
+  return known.length ? Math.min(...known.map(row => row.left!)) : null;
 }

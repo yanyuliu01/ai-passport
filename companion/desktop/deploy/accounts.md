@@ -12,8 +12,8 @@ and forwarding still follow the Runtime mesh configuration.
 
 ## First use
 
-On the existing computer, connect the existing local Runtime and create a Xiaoyou
-account in Settings. The desktop already knows the public relay address and its
+Sign in or create a Xiaoyou account, then configure the computer
+from the account panel. Existing accounts recover their original matching Runtime. The desktop already knows the public relay address and its
 certificate fingerprint; no domain or JSON import is needed. These are public
 routing data, not an embedded access credential. The account is independent of
 cloud-provider, OpenAI and model-provider accounts.
@@ -28,17 +28,27 @@ conflicting existing space is reported and preserved for an explicit migration.
 Accounts created with 0.1.11 must sign in once on their original computer to
 create the recovery envelope; subsequent new computers do not need it online.
 
-On the phone, use the existing Scan computer action to scan the desktop's Add
-phone QR. It carries the private relay connection, including the TLS fingerprint.
-The existing Android invitation protocol is unchanged; no Android binary was
-changed. QR generation validates the active account invitation when signed in;
-legacy invitations retain their own validation. TLS and endpoint HPKE remain
-enabled on numeric-IP connections.
+Desktop 0.1.17 and Android 0.34.0 use this account server as the only remote
+connection entry. Sign in on the phone with the same account after configuring
+one computer. The phone validates the encrypted recovery envelope and discovers
+account devices automatically; no QR, invitation, LAN address, Tailscale, Funnel,
+custom relay, or computer-hosted relay setup is offered. Local computer helpers
+still use loopback internally. TLS pinning and endpoint HPKE remain enabled.
+
+Upgrading does not delete legacy pairing records, history, or source-bound pending
+requests. New clients do not restore those routes or transfer accepted work to
+another computer automatically. Sign in again on the upgraded phone. Account
+sessions, endpoint identities, and phone routes are scoped to the account;
+signing out stops subscriptions without erasing the local archive. A phone uses
+one shared relay socket for its identity when connected to multiple computers.
+The old invitation wire protocol remains available internally for account presence
+and supported older peers; it is no longer a user-selectable connection mode.
 
 ## Preserved boundaries
 
-Successful account authentication authorizes computer enrollment without approval
-on another computer. Phone QR pairing retains its existing explicit confirmation.
+Successful account authentication authorizes computer and phone enrollment without
+approval on another computer. New phones must verify the existing account recovery
+envelope before connecting; they cannot create a different mesh identity.
 The client encrypts the mesh identity using AES-256-GCM and a password-derived
 scrypt key (N=32768, r=8, p=1), with account ID and space bound as authenticated
 data. An immutable first-write recovery envelope survives relay restarts; invalid
@@ -100,3 +110,183 @@ legacy desktop regression. Runtime tests use isolated echo fixtures and do not
 establish real-model or rendered first response within three seconds. Installed
 Windows, physical Android, BLE and real-user full cross-network acceptance must
 be reported separately. Build and deployment do not prove those checks passed.
+
+The server-only source increment adds the phone account API/recovery checks,
+account-scoped phone routes, one shared phone identity connected to two computers,
+closing one link without dropping the other, and server logout rejection.
+Run `node tools/test-android-account.mjs` from `companion/desktop` after building
+its main process, with JDK 17 and the Gradle dependency cache available.
+The adjacent `node tools/test-android-relay.mjs` checks mixed legacy protocol
+compatibility, text/voice/image RPC and reconnection using synthetic local data.
+These checks do not measure installed-client rendering, real model TTFT,
+cellular recovery, BLE, or cross-device message convergence. The server remains
+an online discovery/forwarding service; this increment does not centralize chat
+storage or move helpers onto the server.
+
+### Validation checkpoint: 2026-10-28
+
+Candidate identities: desktop 0.1.17 (source/native test window), Android 0.34.0
+(code 74), fixed pinned WSS account transport. The running owner's Runtime reports
+0.24.0 and was not restarted; firmware behavior was not changed. The Android
+candidate preserves the previously published 0.33.4 numeric update-metadata fix.
+
+- Regression: PASS for 115 desktop and 229 Android unit tests, account-only
+  two-computer Java interoperability, adjacent legacy RPC, and isolated native
+  conversation/task/approval/presentation windows.
+- Build: PASS for desktop and Android; the complete repository gate also passed
+  its host suite and ESP-IDF 5.5.3 firmware/image validation.
+- Connection recovery: PASS in synthetic protocol/window fixtures; the current
+  reply-window recovery sample was 181 ms. Real WAN/cellular recovery: NOT RUN.
+- First meaningful model response within 3 seconds: NOT RUN, zero real samples.
+- Multi-end message synchronization: NOT RUN on installed physical clients.
+- Device tests: NOT RUN. Windows native, phone installation, BLE, real provider
+  latency and installed-version convergence remain unverified.
+- Recovery: original routes, credentials, local archives and source-bound pending
+  work remain on disk. Do not clear application data to reconnect. Desktop
+  production replacement and any active Runtime restart remain separate from
+  source/native-window validation.
+
+### Numeric account route correction: 0.34.1
+
+Android 0.34.0 used `URI.getHost()` for `relay://computer-id.account-id`.
+When an account ID started with a digit, Java treated that opaque identifier as
+an invalid DNS name and returned no host. Login and discovery succeeded, but
+subsequent reads and synchronization could not find their route.
+Version 0.34.1 (code 75) reads and strictly validates the raw authority instead.
+It preserves stored routes and account/computer identities, without another
+login, pairing operation or history reset.
+
+All 231 Android unit tests and the two-computer account interoperability check
+passed. Regression covers every hexadecimal leading character, legacy device
+identifiers, account scoping and rejection of ports, credentials and encoding.
+One USB-connected physical phone retained its login after the 0.34.0 upgrade,
+read the computer identity and conversation data, and displayed connected in its
+sidebar. No test chat was sent. Owner acceptance remains pending; real model
+three-second response, multi-end message convergence and BLE remain unverified.
+
+### Android recipient selection: 0.35.0
+
+Android 0.35.0 (code 76) promotes recipient selection into the Xiaoyou account
+sheet. Login uses the same bottom sheet, rounded fields and blue action as the
+existing app. Validation and login failures stay inline, with retry available.
+Known authenticated Runtime computers appear with their heartbeat availability;
+a connected relay alone does not mark a computer online. Other phones are not
+listed as Runtime recipients.
+
+An explicit choice is saved per account and survives restart. Discovery of a new
+computer never replaces that choice; an unavailable chosen source never causes
+a silent fallback. New messages use the selected entry Runtime, while existing
+accepted requests remain bound to their original source. Runtime helper routing
+is unchanged. Recording and image drafts must finish before switching.
+
+Host tests cover stable selection, account isolation, unavailable targets and
+heartbeat expiry. The encrypted two-computer harness verifies each chosen
+recipient and the absence of silent fallback. Physical Windows switching,
+first-response timing and multi-end message convergence still need live checks.
+
+Validation checkpoint (2026-10-28): the source at base `b8b0886` passed 235
+Android unit tests, APK build and the complete repository gate (including the
+ESP-IDF 5.5.3 firmware build and merged-image verification). The encrypted
+account harness passed login/recovery, two Runtime recipients, explicit switching,
+no silent fallback, shared-identity sockets and logout revocation. On the USB
+phone, 0.35.0 retained the encrypted account session and saved manual recipient
+after an update/relaunch; the account sheet showed the selected Mac and its
+heartbeat state against the existing Runtime 0.24.0. This is scoped device
+observation, not owner acceptance of the login form or full messaging regression.
+Real Windows switching, first meaningful response <= 3 seconds, interruption
+recovery during an accepted message and multi-end convergence remain unverified.
+
+### Helper and quota checkpoint (2026-10-28)
+
+Versions: desktop 0.1.18, Android 0.36.0/code 77, Runtime 0.24.1; fixed-server
+account transport. Firmware is unchanged. The deployment candidate applies the
+helper increment to the prior running Runtime baseline, retaining its deadline
+fix and leaving the separate undeployed persona work out. Its Runtime source
+SHA-256 is `6c69537ceda635d520ca08128724ec3aa4bb874d5d45033c5ba47c2d137932f5`
+on both Mac and Windows bundles.
+
+The actual Codex probe reproduced 401 Unauthorized while old weekly quota
+remained visible. Native `account/read` with `refreshToken:true` restored the
+same account's query without copying credentials. The corrected ring uses the
+limiting live window and suppresses percentages after a failed refresh. Android
+also redraws immediately when its asynchronous roster arrives, ignoring old
+source callbacks.
+
+- Build: PASS; Android, native Mac app, Windows x64 NSIS installer and the
+  complete repository/ESP-IDF 5.5.3 merged-image gate. Apple Silicon installer
+  compilation uses the checksum-verified NSIS toolset 1.2.1.
+- Host tests: desktop 119 and Android 236 PASS; 36 focused Runtime candidate
+  tests PASS. Runtime final full-suite confirmation: PASS (1,183 tests, 204.137s).
+- Regression: native source and packaged UI tests passed the synthetic 82%/28%
+  quota case and add/remove through renderer/IPC. A temporary live helper
+  appeared in the installed Mac roster and usage, then was removed; original
+  helpers remained intact. The phone's installed APK and Runtime arm64 update
+  metadata both match the final tested APK checksum.
+- Device tests: scoped Mac UI and USB phone update/reconnect/main roster observed;
+  owner acceptance of phone add/remove and native Windows execution NOT RUN.
+- First response <=3s: NOT RUN; no live model messages were sent for this increment.
+- Connection recovery: Runtime/desktop restart reconnection observed, but the
+  complete timed fault matrix is NOT RUN.
+- Multi-end sync: helper membership API/Mac observation and synthetic routing
+  passed; live shared-message convergence across phone/Windows/board NOT RUN.
+- A first cold frozen-Runtime startup did not become ready in the test's 8-second
+  startup window; direct version query and unchanged interop rerun passed.
+  The cause and cold-start timing remain unverified. A full Runtime run also
+  hit two mesh-offline timing failures; both isolated reruns passed without
+  changing assertions or deadlines.
+- Recovery: original Mac bundle and prior running Runtime source remain available;
+  account/config/history files are retained. Downgrading Runtime ignores the new
+  disabled-helper overlay and can make config helpers reappear. An active Runtime
+  must not be interrupted for rollback without owner approval.
+
+The unsigned Windows preview installer has SHA-256
+`8703f97a4cd0ee13499aee4687b9d95ff952fa94a3e283bbb9c96c8f502e8523`.
+Creating this installer is separate from installing and accepting it on Windows.
+
+## Sidebar management delivery — 2026-10-28
+
+Owner scope: phone sidebar long-press management; helper-heading creation; side
+chat pin/rename/delete/archive and multi-delete; local helper membership on Mac.
+Deletion clears client caches/navigation, keeps diagnostic logs, and has no
+restore entry. Archive keeps visible history and can be restored. Different
+agents with the same provider/portrait remain individually manageable.
+
+Candidate: Android 0.37.1 (79), desktop 0.1.19, Runtime 0.25.0. Mac is installed
+at the previous application path, its account remains connected, and the prior
+bundle is retained beside the original application. Runtime was restarted
+only after checking zero unfinished requests and zero active owned tasks; its
+PID is 3731. The release stages only this chat's helper/sidebar modules over
+the previous installed Runtime baseline; unrelated persona changes are excluded.
+Android was installed by USB without clearing app data and published through
+the Runtime update flow; owner interaction acceptance remains pending.
+
+Windows 0.1.19 preview installer under `sidebar-management-release/companion/desktop/release/`,
+127687139 bytes, SHA-256 `6aa97bc428bd557f66d4870208fcd6cb111d1cfa880a769276902e5a0c3df241`. Native Windows execution is NOT RUN.
+Mac and Windows Runtime source hash: `322b5d1f4bc083a7c117cad5729f1acb5e80fc46393f188fde0338e36f5644b9`.
+
+Evidence: desktop 121 tests, Android 240 tests, Runtime full suite 1,189 tests;
+staged Runtime directory 27, helpers 13, mesh 20 checks. Packaged native Mac
+UI passed quota/add/remove checks and excluded a synthetic `cc@Windows` sidebar
+entry. Shared deletion tests clear peer/client views, keep logs and reject stale
+replay; archive/restore and active-chat deletion refusal pass. Full repository
+gate including firmware merged-image verification also passed after the final
+Android identity patch. Android update source and the USB-installed arm64 APK
+were checked against the final build SHA-256
+`429cbf8b99383da2f862b051da0795cd9403002797703bcc11606d77bd052d9a`.
+Real model first response <=3s, timed connection recovery, live phone gesture
+acceptance, live multi-device chat convergence, and Windows execution remain
+unverified. No owner conversation was deleted for testing; firmware was not
+flashed. No commit or push was made.
+
+## Context menu follow-up — 2026-10-28
+
+Android 0.37.2 (80) replaces sidebar long-press sheets with anchored floating
+menus. Helper menus open immediately; authenticated writes remain bound to the
+captured Runtime. Rename/delete confirmations and helper forms are centered,
+without sliding or drag handles. Side-chat multi-selection adds Select all /
+Deselect all for visible unarchived side chats and excludes the main chat.
+Android build and 240 unit tests pass. The app was published and the arm64
+update metadata matches the build. USB is now disconnected, so this version
+has not been installed or gesture-tested on the phone; it is offered through
+the Runtime updater. Runtime 0.25.0 and desktop 0.1.19 remain in place.
+The complete repository gate passed for this Android-only follow-up, including firmware merged-image verification. Live first-response timing, connection recovery and multi-device convergence were not exercised.

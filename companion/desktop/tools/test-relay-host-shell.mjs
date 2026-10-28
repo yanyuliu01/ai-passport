@@ -1,3 +1,4 @@
+import {accountFixture,loginShell,SHELL_MESH_SECRET,shellSpace} from './account-shell-fixture.mjs';
 // Isolated native UI regression. Requires Playwright for Electron; no real Runtime/provider is called.
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -9,7 +10,7 @@ const require=createRequire(process.env.XIAOYOU_QA_PLAYWRIGHT || import.meta.url
 const {_electron}=require('playwright');
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../../..'),desktop=root+'/companion/desktop',folder=mkdtempSync(join(tmpdir(),'xiaoyou-shell-qa-')),bin=join(folder,'bin');mkdirSync(bin);
 for(const id of ['dsh','codex','claude'])writeFileSync(join(bin,id),`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${id} 1.2.3"; elif [ "$1" = "login" ]; then echo "Logged in using ChatGPT"; else echo '{"loggedIn":true}'; fi\n`,{mode:0o700});
-const runtime='1'.repeat(32),space='2'.repeat(32),token='synthetic-shell-token-123456',now=Date.now()/1000;
+const runtime='1'.repeat(32),space=shellSpace,token='synthetic-shell-token-123456',now=Date.now()/1000;
 let seq=1,posts=[],decisions=0,requests=0;
 let conversations=[{id:'default',title:'主对话',created_at:0,updated_at:now,revision:1},{id:'side-one',title:'客户端细节',created_at:now-60,updated_at:now,revision:1}];
 let messages=[{id:'one:you',conversation:'default',text:'把客户端的主界面接上吧。',created_at:now-10,status:'final',rev:1,scope:'main',kind:'user',author:{kind:'owner'}},{id:'one:reply',conversation:'default',text:'主对话、旁聊和工作记录已经分开。我会先接好真实状态，再检查各个入口。',created_at:now-9,status:'final',rev:1,scope:'main',kind:'reply',author:{kind:'assistant'},task:'task-a'},
@@ -42,18 +43,17 @@ const server=createServer(async(req,res)=>{
  else {res.writeHead(404);res.end('{}');return;}
  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value));
 });
-let app;let qrRelay;const errors=[];
+let app;let accountQA;const errors=[];
 const wait=async(fn,ms=8000)=>{const end=performance.now()+ms;while(!(await fn())){if(performance.now()>end)throw new Error('QA timeout');await new Promise(r=>setTimeout(r,25));}};
 try{
- await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port,config=join(folder,'existing.json');writeFileSync(config,JSON.stringify({server:{name:'隔离测试电脑',port,token},agents:{deepseek:{type:'dsh'},codex:{type:'codex'}}}));
- const env={...process.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port,config=join(folder,'existing.json');writeFileSync(config,JSON.stringify({server:{name:'隔离测试电脑',port,token},mesh:{secret:SHELL_MESH_SECRET},agents:{deepseek:{type:'dsh'},codex:{type:'codex'}}}));
+ accountQA=await accountFixture(folder,{runtimeId:runtime,spaceId:space,name:'Fixture computer',url:'http://127.0.0.1:'+port,token,capabilities:['sync']});
+ const env={...process.env,...accountQA.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
  const packaged=process.env.XIAOYOU_SHELL_PACKAGED;
  app=await _electron.launch({executablePath:packaged||desktop+'/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',args:packaged?[]:[desktop],env,timeout:30000});
  const page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));
- await page.getByRole('button',{name:/在这台电脑启用小幽/}).click();await page.getByRole('radio',{name:/复用已有小幽/}).check();
- if(requests)throw new Error('Detection contacted the Runtime');
- await page.getByRole('button',{name:'继续确认 →',exact:true}).click();await page.getByRole('button',{name:'确认连接这个服务',exact:true}).click();await page.getByRole('button',{name:'进入小幽 →',exact:true}).click();
- await page.getByRole('heading',{name:'小幽在这里',exact:true}).waitFor();
+ await loginShell(page);
+ await page.getByRole('heading',{name:'主对话',exact:true}).waitFor();
  await page.screenshot({path:root+'/build/xiaoyou-phone-home.png'});
  await page.locator('.composer').waitFor();
  await page.getByRole('heading',{name:'主对话',exact:true}).waitFor();await page.getByText('Codex',{exact:true}).first().waitFor();
@@ -83,30 +83,15 @@ try{
  await page.getByRole('button',{name:'关闭侧边栏',exact:true}).click();
  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(1120,780));
  await page.getByRole('button',{name:'设置',exact:true}).click();
- await page.getByRole('heading',{name:'让这台常开电脑承接通信',exact:true}).waitFor();
- const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const nodePort=probe.address().port;await new Promise(r=>probe.close(r));
- await page.getByLabel('节点监听端口',{exact:true}).fill(String(nodePort));
- await page.getByRole('button',{name:'启用本机节点',exact:true}).click();
- await page.getByText('本机节点已启动',{exact:false}).first().waitFor();
- await wait(async()=>((await page.evaluate(()=>window.xiaoyou.snapshot())).pairing.relayState==='加密通信入口已连接'));
- const first=await page.evaluate(()=>window.xiaoyou.snapshot());
- if(!first.relayHost.listening || first.relayHost.publicCheck!=='not-run' || first.relayHost.publicURL)throw Error('Unconfigured node was called public-ready');
- if(!(await page.getByRole('button',{name:'生成连接二维码',exact:true}).isDisabled()))throw Error('No-address public invitation allowed');
- await page.getByLabel('节点公网地址',{exact:true}).fill('node.invalid:443');await page.getByRole('button',{name:'保存公网地址',exact:true}).click();
- await wait(async()=>((await page.evaluate(()=>window.xiaoyou.snapshot())).pairing.relayState==='加密通信入口已连接'));
- await page.getByRole('button',{name:'生成连接二维码',exact:true}).click();await page.getByAltText('用手机小幽扫描此二维码连接电脑',{exact:true}).waitFor();
- const state=await page.evaluate(()=>window.xiaoyou.snapshot());const invite=JSON.parse(Buffer.from(state.pairing.invitation.split('#')[1],'base64url'));
- if(invite.relay.url!=='wss://node.invalid' || invite.relay.dialURL || invite.relay.tlsFingerprint!==state.relayHost.fingerprint)throw Error('Portable pinned invitation incorrect');
- if(JSON.stringify(state).includes('PRIVATE KEY')||JSON.stringify(state).includes(invite.relay.token))throw Error('Node secrets reached renderer snapshot');
- await page.getByRole('button',{name:'检测公网地址',exact:true}).click();await wait(async()=>((await page.evaluate(()=>window.xiaoyou.snapshot())).relayHost.publicCheck==='failed'));
- await page.screenshot({path:root+'/build/xiaoyou-node-settings.png',fullPage:true});
- await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
- if(!(await page.evaluate(()=>window.xiaoyou.snapshot())).relayHost.listening)throw Error('Closing window stopped node');
+ await page.getByRole('heading',{name:'已登录的电脑',exact:true}).waitFor();
+ const settings=await page.locator('.settings-page').innerText();
+ if(/启用本机节点|连接串|WSS 入口地址|请求加入|生成连接二维码/.test(settings))throw Error('Retired connection mode remains visible');
+ await page.screenshot({path:root+'/build/xiaoyou-account-settings.png',fullPage:true});
  await app.close();app=await _electron.launch({executablePath:packaged||desktop+'/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',args:packaged?[]:[desktop],env,timeout:30000});
- const restoredPage=await app.firstWindow();await wait(async()=>((await restoredPage.evaluate(()=>window.xiaoyou.snapshot())).pairing.relayState==='加密通信入口已连接'));
- const restored=await restoredPage.evaluate(()=>window.xiaoyou.snapshot());if(!restored.relayHost.listening||restored.relayHost.fingerprint!==first.relayHost.fingerprint)throw Error('Node identity not restored');
- await restoredPage.evaluate(()=>window.xiaoyou.stopRelayHost());const stopped=await restoredPage.evaluate(()=>window.xiaoyou.snapshot());if(stopped.relayHost.enabled||stopped.relayHost.listening)throw Error('Node did not stop');
+ const restoredPage=await app.firstWindow();await restoredPage.locator('.composer').waitFor();
+ const restored=await restoredPage.evaluate(()=>window.xiaoyou.snapshot());
+ if(!restored.account.signedIn || restored.relayHost)throw Error('Account did not restore exclusively');
  if(errors.length)throw new Error(errors.join('; '));
- const result={embeddedNodeLifecycle:'PASS',pinnedPortableQR:'PASS',backgroundNode:'PASS',nodeRestartSameIdentity:'PASS',publicReadyNotAssumed:'PASS',independentHome:'PASS',version:'0.1.5',packaged:Boolean(packaged),provider:'synthetic-http-fixture',realModel:false,mainSidebar:'PASS',realMetadataProjection:'PASS',completeBubble:'PASS',taskDetails:'PASS',readOnlyTranscript:'PASS',originBoundSupplement:'PASS',sideChatIsolation:'PASS',rightAttachmentMenu:'PASS',approvalConvergence:'PASS',responsiveSidebar:'PASS',credentialIsolation:'PASS'};
+ const result={accountLogin:'PASS',retiredModesAbsent:'PASS',accountRestart:'PASS',independentHome:'PASS',version:'0.1.17',packaged:Boolean(packaged),provider:'synthetic-http-fixture',realModel:false,mainSidebar:'PASS',realMetadataProjection:'PASS',completeBubble:'PASS',taskDetails:'PASS',readOnlyTranscript:'PASS',originBoundSupplement:'PASS',sideChatIsolation:'PASS',rightAttachmentMenu:'PASS',approvalConvergence:'PASS',responsiveSidebar:'PASS',credentialIsolation:'PASS'};
  writeFileSync(root+'/build/xiaoyou-node-shell-qa.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
-}finally{if(app)await app.close();if(qrRelay)await new Promise(r=>qrRelay.close(r));await new Promise(r=>server.close(r));server.closeAllConnections();}
+}finally{if(app)await app.close();await accountQA?.close();await new Promise(r=>server.close(r));server.closeAllConnections();}

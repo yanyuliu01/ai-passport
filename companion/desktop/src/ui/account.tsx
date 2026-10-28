@@ -17,12 +17,12 @@ export function AccountPanel({ view, onConfigure }: { view?: AccountView; onConf
   }
   return <article className="settings-card vertical account-card">
     <h3>{view?.signedIn ? '小幽账号 · ' + view.username : '用小幽账号连接自己的电脑'}</h3>
-    <p>每台电脑运行自己的 Runtime，通过同一账号互通。手机扫码连接，换网络自动恢复。</p>
+    <p>所有设备登录同一个小幽账号，通过服务器互通。帮手继续在各自电脑运行，换网络后自动恢复。</p>
     {error && <p role="alert">{error}</p>}
     {view?.signedIn ? <>
       <p role="status">{view.message}</p>
       {!view.provisioned && <small>登录后自动恢复原来的互通身份，无需原电脑在场。</small>}
-      {view.provisioned && onConfigure && <button className="primary" onClick={onConfigure}>配置这台电脑的 Runtime</button>}
+      {view.provisioned && onConfigure && <button className="primary" onClick={onConfigure}>配置这台电脑的帮手</button>}
       <button disabled={busy} onClick={() => void window.xiaoyou.accountRefresh()}>重新连接</button>
       <button disabled={busy} onClick={() => void logout()}>退出账号</button>
     </> : <form onSubmit={event => void login(event)}>

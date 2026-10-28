@@ -65,7 +65,15 @@ export class ClientDatabase {
         this.db.prepare("DELETE FROM records WHERE runtime=? AND kind='approval' AND (?='*' OR json_extract(data,'$.conversation')=? OR json_extract(data,'$.conversation') IS NULL)")
           .run(runtime, conversation, conversation);
       }
+      const erased = new Set(this.get<string[]>('deleted-conversations:' + space, []));
+      for (const row of (Array.isArray(page.conversations) ? page.conversations as Json[] : []))
+        if (row.deleted === true && typeof row.id === 'string' && row.id !== 'default') erased.add(row.id);
+      this.set('deleted-conversations:' + space, [...erased]);
       this.putRecords(space, runtime, page.epoch, [['message', page.messages], ['task', page.tasks], ['approval', page.approvals]]);
+      for (const id of erased) {
+        this.db.prepare("DELETE FROM records WHERE space=? AND json_extract(data,'$.conversation')=?").run(space, id);
+        for (const item of this.pending(space)) if (item.conversation === id) this.removePending(item.clientId);
+      }
       // Reset is not a chat-history deletion; actionable approvals were rebuilt above.
       for (const id of Array.isArray(page.removed) ? page.removed : []) {
         if (typeof id === 'string') this.db.prepare("DELETE FROM records WHERE runtime=? AND kind='message' AND id=?")
@@ -93,8 +101,10 @@ export class ClientDatabase {
         AND coalesce(json_extract(records.data,'$.presentation.version'),0)=0
         AND json_extract(excluded.data,'$.text') IS json_extract(records.data,'$.text')
         AND json_extract(excluded.data,'$.status') IS json_extract(records.data,'$.status'))`);
+    const erased = new Set(this.get<string[]>('deleted-conversations:' + space, []));
     for (const [kind, records] of groups) {
       for (const item of records) {
+        if (item && typeof item.conversation === 'string' && erased.has(item.conversation)) continue;
         if (!item || typeof item.id !== 'string' || !item.id) throw new Error('同步记录缺少编号');
         const rev = Number(item.rev ?? item.seq ?? 0);
         if (!Number.isSafeInteger(rev) || rev < 0) throw new Error('同步记录版本无效');
