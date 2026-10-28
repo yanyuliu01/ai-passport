@@ -415,11 +415,27 @@ npm start
 `127.0.0.1` cannot run that test; report the restriction instead of skipping it
 and claiming a pass. Unit tests use synthetic content and call no model.
 
+The Runtime interoperability test uses the current Python source by default,
+even if an ignored `runtime-dist/` exists. Set `XIAOYOU_TEST_PYTHON` to select
+the source interpreter. For a native package check, explicitly set
+`XIAOYOU_TEST_BUNDLE` to its bundle directory or `XIAOYOU_TEST_RUNTIME` to its
+executable; a missing or wrong-platform explicit bundle fails instead of
+falling back to source. `tools/build-windows.ps1` selects its freshly built
+executable. Source tests and packaged tests are separate evidence.
+The owned-service lifecycle fixture runs a temporary `.cjs` file and waits for
+its PID record before terminating it, avoiding inline-command quoting and
+process-start races across Windows and macOS.
+
 ## Native Runtime bundle and installers
 
 Build a PyInstaller Runtime on the target OS/architecture; a Mac Python bundle
 cannot be used in a Windows installer. The package hook verifies architecture
-and the Runtime source digest, and refuses a stale/missing bundle. A separate
+and the Runtime source digest, and refuses a stale/missing bundle. It reads the
+Runtime directory from the effective `extraResources` mapping, including the
+platform-specific configuration. Exactly one complete directory must map to
+`runtime`; duplicate, nested or filtered mappings are rejected. If
+`XIAOYOU_RUNTIME_BUNDLE` is set, it must resolve to that same directory: it cannot
+approve a different bundle from the one copied into the installer. A separate
 Windows path assembles official Windows binaries without executing them on the
 build host; it still requires native Windows acceptance.
 
@@ -448,7 +464,7 @@ download the official Electron distribution:
 ```bash
 python3 tools/bundle_windows_embedded.py
 node tools/download_windows_electron.mjs
-XIAOYOU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
+npm run package:win-preview
 python3 tools/release_manifest.py
 ```
 

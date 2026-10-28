@@ -133,3 +133,100 @@ the focused recheck passing does not erase the timeout or establish its cause.
 Unverified: remaining full-gate suites, firmware build, packaged desktop/Android
 tests, installed peer reconnect, phone/BLE, first-response compliance, public
 network recovery, history convergence and exact 0.33.4 source/artifact identity.
+
+## Client validation follow-up (2026-10-28)
+
+Reviewed CC's October 27 work against integrated commit `b8b0886` in a separate
+checkout. Desktop 0.1.16, R7 and the negotiated R8 client migration are already
+in that baseline; the earlier instruction to merge them is no longer pending.
+The active account/connection redesign and R6 candidates in other working
+directories are outside this increment. No Runtime implementation, prompt,
+configuration, client version or installed program was changed.
+
+Two desktop test issues were addressed: owned-service fixtures now use a
+temporary script and wait for the PID record before signalling the child;
+interop defaults to current Python source and requires an explicit bundle or
+executable for packaged validation. A stale ignored bundle can no longer change
+what the default source test exercises. The desktop guide documents both modes.
+
+Validation on macOS: desktop **111/111** before and after the test changes,
+plus **5/5** lifecycle cases with a temporary path containing spaces and Chinese
+characters; main/UI builds, Android **220/220**
+and all five ABI/universal debug APK outputs passed. A deliberately invalid
+ignored bundle did not affect the default interop test; selecting that bundle
+explicitly failed with the expected platform error. Interop uses isolated local
+Runtimes and an echo provider, not real-model rendered latency. Windows-native
+fixture validation and packaged/installed-client acceptance remain NOT RUN.
+No APK was published: Android source was unchanged, and these 0.33.2 artifacts
+are validation outputs, not an update over the active account redesign.
+
+R8 removal is still pending installed-client migration, compatibility/version
+gates and acceptance. R6's retained first-response failure remains open. Real
+phone/public-network recovery, three-second first response and multi-end timing
+are not established by these builds. Test cleanup does not close those gates.
+
+The final complete `./tools/validate.sh` gate passed, including repository,
+workflow, C/Runtime host checks, firmware-update interoperability, ESP-IDF
+5.5.3 build, merged-image and partition verification. An initial run stopped
+because IDF's Python lacked Pillow; the final run used existing host Python
+3.9.6/Pillow 11.3.0 for host checks and retained IDF's own build interpreter.
+JDK 17.0.20.1 was selected. No dependency pins were changed.
+The separate archive verification also passed. Validation-only firmware bundle:
+`build/firmware/3c075ba621b909c8d6bab2ee9f4ccf163f84df53856409b231a1ce90f3adac53/`;
+full-image SHA-256 `3c075ba621b909c8d6bab2ee9f4ccf163f84df53856409b231a1ce90f3adac53`,
+matching ELF SHA-256 `44c71e818833d33057fe571df68f2a166e1f8bf9868cb7da9019e5d7ebc054fe`.
+Firmware was unchanged and not flashed. Build: PASS; Host tests: PASS; Device
+tests: NOT RUN. Windows-native fixture execution and installed-client,
+real-model first-response/recovery/synchronization acceptance remain unverified.
+The initial six-file follow-up is uncommitted in the attached `client-refactor-finish`
+worktree; no commit, push or release was performed.
+
+## Packaging follow-up (2026-10-28)
+
+Continued in the same isolated worktree, leaving the active account, connection,
+helper-management and quota changes elsewhere untouched. The next reproducible
+issue was in desktop packaging: `XIAOYOU_RUNTIME_BUNDLE` could approve a fresh
+bundle while `extraResources` still copied another, stale directory. Three of
+the first six packaging regression cases failed on the old hook, including
+that exact false approval.
+
+The hook now validates the directory actually mapped to `runtime` in the global
+and platform-specific packaging configuration. An optional shell override must
+resolve to that same directory. Missing, duplicate, nested or filtered Runtime
+mappings fail before replacing build provenance. Native and preview paths keep
+their existing configured directories; the preview command no longer requires
+a second, matching shell variable. No Runtime implementation, protocol, client
+UI or version was changed. Recovery is a build-tool revert/rebuild; installed
+state and pairing formats are unchanged.
+
+Desktop source tests pass **119/119**, including eight packaging checks. The
+Mac arm64 directory package was built from desktop **0.1.16**, Electron
+**44.9.3** and freshly frozen Runtime **0.24.0** (Python 3.9.6, PyInstaller
+6.22.3, Pillow 11.3.0). Its embedded Runtime manifest matches the generated
+`build-info.json`; all **104** regular Runtime files match the build directory.
+The Runtime source SHA-256 is
+`a3464ab9af0a918e590c28617a2aee3de7cb1997a1b80709b574bef51c0f522e`.
+Two isolated processes launched from the packaged Runtime passed encrypted
+mesh, remote continuation and relay recovery using echo. This does not measure
+real-model TTFT or installed-client recovery.
+
+The private unsigned candidate is under
+`companion/desktop/release/mac-arm64/`; it was not installed or published and
+should not replace the active account redesign. Windows-native packaging and
+installation remain NOT RUN. Android was not changed in this increment.
+
+The complete gate was rerun after this packaging fix and passed, including the
+firmware build/layout checks; separate archive verification passed. Final
+validation-only image SHA-256:
+`ffa80e5c2cc5b49e72ec7a9b3de35d6bcae02e89ced6d83233b1ca3236827ce3`;
+matching ELF SHA-256:
+`e0ac1da47f09a7bda901bcb6737fcb4547f12a260a87283bd7556e858b66ea0b`.
+The bundle is under `build/firmware/<image-sha256>/`. No firmware was changed
+or flashed. Build: PASS; Host tests: PASS; Device tests: NOT RUN.
+Local packaged provenance evidence is in
+`build/client-refactor-validation/packaging.json`.
+
+At the final overlap check, the account worktree already contained the same
+`runtime-host.test.ts` and `runtime-interop.test.ts` fixes from the first
+increment. Keep those identical changes once when integrating. The packaging
+hook/test follow-up remains isolated here, uncommitted and unpushed.
