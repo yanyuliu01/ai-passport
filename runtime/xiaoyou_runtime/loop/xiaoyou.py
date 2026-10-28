@@ -48,6 +48,7 @@ from ..helpers.tasks import Deferred, StartError, Task, Tasks
 from ..world.memory import OwnerMemory
 from ..world.memory import prompt_section as memory_section
 from .proactive import Pulse
+from .prompt_rules import with_runtime_rules
 from ..world.promises import Promises
 from ..world.promises import prompt_section as promise_section
 from .voice_tools import JOIN, TOOL_SESSION_PREFIX, Toolbox
@@ -464,7 +465,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     notes 是每个帮手的模型、档位和额度（一句话），有就写在它后面；quota 表示帮手里有
     订阅额度可看的。desktop 是主人正看着的电脑上的会话（focus 就是它）。"""
     notes = notes or {}
-    parts = [persona, ""]
+    parts = [with_runtime_rules(persona), ""]
     # 现在几点：她要算“晚上提醒我”这类到点时间，也要知道主人这会儿是不是该休息了。
     parts.append("现在是 %s。" % time.strftime("%Y-%m-%d %H:%M（周%%s）", time.localtime(now)).replace(
         "%s", "一二三四五六日"[time.localtime(now).tm_wday]))
@@ -622,7 +623,7 @@ def voice_prompt(persona: str, brief_max_chars: int, text: bool = False,
     remembered = memory_section(memory or [])
     if text:
         return "\n".join([
-            persona, "",
+            with_runtime_rules(persona), "",
             CHAT_STYLE, "",
             *remembered, *([""] if remembered else []),
             "## 转述帮手的结果",
@@ -631,7 +632,7 @@ def voice_prompt(persona: str, brief_max_chars: int, text: bool = False,
             "直接写你要对主人说的话：不要写 JSON，不要代码块。",
         ])
     return "\n".join([
-        persona, "",
+        with_runtime_rules(persona), "",
         CHAT_STYLE, "",
         "## 转述帮手的结果",
         "帮手交回的原文主人看不到，完整的留在任务里。你用自己的话把结果告诉主人，"
@@ -645,7 +646,7 @@ def voice_prompt(persona: str, brief_max_chars: int, text: bool = False,
 def task_prompt(persona: str, brief_max_chars: int) -> str:
     """帮手以小幽的身份在后台做一件事时的系统提示。"""
     return "\n".join([
-        persona, "",
+        with_runtime_rules(persona), "",
         "## 这一次",
         "你正在后台替主人做一件事。把它做完，然后用你自己的话告诉主人：做了什么、结论是什么、"
         "有没有需要主人决定的事。除非主人明确要原文，不要原样贴一大段输出。", "",

@@ -47,3 +47,4 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 ## Release
 
 - [project-completion.md](release/project-completion.md): project completion flow — a menu of optional closing actions.
+- [persona-boundaries.md](persona-boundaries.md): character inputs, fixed operating rules and verified dispatch boundaries.

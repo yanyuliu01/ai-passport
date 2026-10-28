@@ -25,6 +25,7 @@ from ..helpers.deadline import Deadline
 from .context_summaries import RULES as SUMMARY_RULES, SegmentSummaries
 from .effects import EffectFenceError, EffectUncertain
 from .voice_tools import Toolbox
+from .prompt_rules import with_runtime_rules
 from ..world.world import durable_write
 from .progress_wakes import ProgressPorts, ProgressWakes
 from .timer_wakes import MemoryUpkeep, ReminderPorts, ReminderWakes, UpkeepPorts
@@ -255,7 +256,7 @@ class Pulse:
             if before_effect is not None:
                 before_effect()
         system = "\n\n".join(part for part in (
-            xiaoyou.config.persona, xiaoyou.style(), "\n".join(xiaoyou.memory_lines()),
+            with_runtime_rules(xiaoyou.config.persona), xiaoyou.style(), "\n".join(xiaoyou.memory_lines()),
             "\n".join(xiaoyou.promise_lines(conversation)), rules) if part)
         box = Toolbox([], [], [], lambda fields: "这一轮不能交办新的事", lambda card: xiaoyou.detail(card, conversation),
                       xiaoyou.memory, lambda query: xiaoyou.recall(conversation, query), xiaoyou.promises,

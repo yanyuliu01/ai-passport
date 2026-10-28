@@ -56,3 +56,4 @@
 ## 发布/完成流程（release）
 
 - [project-completion.zh_CN.md](release/project-completion.zh_CN.md)：项目开发完成流程说明（一组可选收尾动作）。
+- [persona-boundaries.zh_CN.md](persona-boundaries.zh_CN.md)：人设填写信息、固定做事规则与现有调度边界。
