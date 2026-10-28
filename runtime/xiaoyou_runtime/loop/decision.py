@@ -8,6 +8,7 @@ import time
 import urllib.request
 
 from ..helpers.base import Outcome
+from ..helpers.deadline import Deadline, DeadlineExceeded
 from ..helpers import dsh_stream
 
 DEADLINE_SECONDS = 1.3
@@ -20,6 +21,7 @@ RULES = (
 
 def choose(spec, job, env, model, opener=urllib.request.urlopen):
     began = time.monotonic()
+    budget = Deadline(min(DEADLINE_SECONDS, job.timeout or spec.timeout_seconds or 60))
     tools = job.tools
     definitions = [item for item in tools.definitions() if item["name"] in COMMITMENTS]
     definitions.append({"name": "just_reply", "description": "这轮不作承诺，只回答或询问。",
@@ -45,7 +47,7 @@ def choose(spec, job, env, model, opener=urllib.request.urlopen):
 
     def fetch():
         try:
-            with opener(request, timeout=DEADLINE_SECONDS) as response:
+            with opener(request, timeout=budget.remaining()) as response:
                 response_holder.append(response)
                 if cancelled.is_set():
                     return
@@ -57,10 +59,15 @@ def choose(spec, job, env, model, opener=urllib.request.urlopen):
             if not cancelled.is_set():
                 answers.put(None)
 
-    threading.Thread(target=fetch, daemon=True, name="xiaoyou-decision").start()
     status, name, content, facts = "reply", "just_reply", [], "这轮没有启动任务、改记忆或新增约定。"
+    applying = False
     try:
-        answer = answers.get(timeout=DEADLINE_SECONDS)
+        budget.remaining()
+        if job.interrupt is not None and job.interrupt.is_set():
+            raise ValueError("interrupted decision")
+        threading.Thread(target=fetch, daemon=True, name="xiaoyou-decision").start()
+        answer = answers.get(timeout=budget.remaining())
+        budget.remaining()
         calls = [item for item in (answer or {}).get("content", [])
                  if isinstance(item, dict) and item.get("type") == "tool_use"]
         if len(calls) > 1:
@@ -75,6 +82,8 @@ def choose(spec, job, env, model, opener=urllib.request.urlopen):
                 raise ValueError("interrupted decision")
             failed = False
             if name != "just_reply":
+                budget.remaining()
+                applying = True
                 facts, failed = tools.call(name, args)
                 status = "refused" if failed else "selected"
             content = [{"role": "assistant", "content": [call]},
@@ -82,7 +91,12 @@ def choose(spec, job, env, model, opener=urllib.request.urlopen):
                                                        "content": facts, "is_error": failed}]}]
         elif answer is None:
             status = "unavailable"
-    except queue.Empty:
+    except (queue.Empty, DeadlineExceeded):
+        # A tool may already have changed durable state before its phase guard
+        # reports expiry. Let the caller reconcile that effect; never describe
+        # an applied/uncertain mutation as an empty timed-out selection.
+        if applying:
+            raise
         status, facts = "timeout", "决定阶段超时。这轮没有执行任何承诺，不能声称已经安排或记下。"
     except (ValueError, TypeError, AttributeError):
         status, facts = "refused", "决定无效或已被打断，没有执行任何承诺。"

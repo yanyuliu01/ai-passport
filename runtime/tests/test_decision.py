@@ -14,6 +14,7 @@ from xiaoyou_runtime import config
 from xiaoyou_runtime.loop import decision
 from xiaoyou_runtime.helpers import dsh_stream
 from xiaoyou_runtime.helpers.agents import DshAgent, Job
+from xiaoyou_runtime.helpers.deadline import DeadlineExceeded
 from xiaoyou_runtime.loop.voice_tools import Toolbox
 
 
@@ -76,6 +77,71 @@ class DecisionTests(TempDirCase):
         time.sleep(.02)
         self.assertEqual(box.calls, [])
 
+    def test_preparation_expiry_never_opens_a_decision_request(self):
+        now = [0.0]
+        def load(*args):
+            now[0] = 1.4
+            return []
+        opener = FakeOpener(selected("cancel_task"))
+        box = self.box()
+        with patch("time.monotonic", side_effect=lambda: now[0]), patch.object(dsh_stream, "_load", side_effect=load):
+            result = self.choose(opener, box)
+        self.assertEqual("timeout", result.fields["_decision"]["status"])
+        self.assertEqual([], opener.requests)
+        self.assertEqual([], box.calls)
+
+    def test_decision_uses_the_remaining_parent_timeout_without_rounding(self):
+        now, timeouts = [0.0], []
+        def load(*args):
+            now[0] = .15
+            return []
+        def opener(request, timeout):
+            timeouts.append(timeout)
+            return io.BytesIO(selected())
+        with patch("time.monotonic", side_effect=lambda: now[0]), patch.object(dsh_stream, "_load", side_effect=load):
+            result = self.choose(opener, timeout=.2)
+        self.assertEqual("reply", result.fields["_decision"]["status"])
+        self.assertEqual(1, len(timeouts))
+        self.assertAlmostEqual(.05, timeouts[0])
+
+    def test_late_decision_cannot_apply_a_commitment_even_if_its_reply_is_queued(self):
+        now = [0.0]
+        box = self.box()
+        def opener(request, timeout):
+            now[0] = 1.4
+            return io.BytesIO(selected("cancel_task"))
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            result = self.choose(opener, box)
+        self.assertEqual("timeout", result.fields["_decision"]["status"])
+        self.assertEqual([], box.calls)
+
+    def test_expiry_reported_by_an_applied_tool_is_not_an_empty_decision_timeout(self):
+        box, applied = self.box(), []
+        def apply(name, args):
+            applied.append(name)
+            raise DeadlineExceeded("effect saved before the turn expired")
+        with patch.object(box, "call", side_effect=apply):
+            with self.assertRaises(DeadlineExceeded):
+                self.choose(FakeOpener(selected("cancel_task")), box)
+        self.assertEqual(["cancel_task"], applied)
+
+    def test_parent_timeout_bounds_the_actual_decision_wait(self):
+        ready, done = threading.Event(), threading.Event()
+        box = self.box()
+        def slow(request, timeout):
+            ready.wait(.3)
+            done.set()
+            return io.BytesIO(selected("cancel_task"))
+        began = time.monotonic()
+        try:
+            result = self.choose(slow, box, timeout=.02)
+            self.assertLess(time.monotonic() - began, .15)
+            self.assertEqual("timeout", result.fields["_decision"]["status"])
+        finally:
+            ready.set()
+        self.assertTrue(done.wait(.2))
+        self.assertEqual([], box.calls)
+
     def test_interruption_before_commitment_executes_nothing(self):
         cut = threading.Event()
         cut.set()
@@ -121,6 +187,29 @@ class DecisionTests(TempDirCase):
         history = dsh_stream._load(dsh_stream.sessions_dir(voice.spec), store.session("default", voice.name))
         human_messages = [item["content"] for item in history if item["role"] == "user" and isinstance(item["content"], str)]
         self.assertEqual(human_messages, ["检查一下日志"])
+
+    def test_saved_dispatch_survives_expiry_of_the_speaking_phase(self):
+        now, launched = [0.0], []
+        base = FakeOpener(selected("start_task", {"agent": "codex", "title": "check", "task": "check logs"}),
+                          sse("late generated answer"))
+        def opener(request, timeout=None):
+            if json.loads(request.data)["stream"]:
+                now[0] = 10.1
+            return base(request, timeout)
+        voice = DshAgent(dsh_spec(self.folder), opener=opener)
+        helper = Scripted("codex", speaks=False)
+        x, store = make_xiaoyou(self.folder, [voice, helper], decide_first=True, voice_timeout_seconds=10)
+        self.addCleanup(x.close)
+        with patch("time.monotonic", side_effect=lambda: now[0]), \
+                patch.object(x, "_launch", side_effect=lambda card, *a, **k: launched.append(card)):
+            turn = x._converse(voice, "check logs", "default", "r1", None, [helper], 0, lambda *args: None)
+        self.assertEqual(1, len(launched))
+        self.assertTrue(turn.started)
+        self.assertIn("决定已落实", turn.reply)
+        self.assertNotIn("late generated answer", turn.reply)
+        self.assertEqual(2, len(x.cards.get(turn.card)["entries"]))
+        self.assertEqual(2, len(base.requests))
+        self.assertIsNone(store.session("default", voice.name))
 
     def test_speaking_tool_attempt_is_refused_without_dispatching(self):
         box = self.box()

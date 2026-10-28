@@ -1388,8 +1388,9 @@ class Xiaoyou:
                           say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
                           prompt: Any, toolbox: Toolbox, cut: threading.Event) -> Turn:
         began = time.monotonic()
+        budget = Deadline(self._config.voice_timeout_seconds)
         decision = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
-                               tools=toolbox, interrupt=cut, decision_only=True)
+                               tools=toolbox, interrupt=cut, decision_only=True, budget=budget)
         data = (decision.fields or {}).get("_decision", {})
         facts = data.get("facts", "这轮没有执行任何承诺。")
         plan, problem = self._plan(decision, conversation, focus, available, pinned)
@@ -1398,6 +1399,7 @@ class Xiaoyou:
             plan = {"type": "none", "card": None}
             facts = "没有执行任务：%s" % (problem or "主人已打断这一轮")
         elif plan["type"] != "none":
+            budget.remaining()
             committed = self._apply_conversation(lead, text, conversation, turn_id, plan, "", None,
                                                   "busy", hop, say, pinned, effort, model, defer_reply=True)
             original = plan.get("card") or {}
@@ -1424,7 +1426,7 @@ class Xiaoyou:
         try:
             outcome = self._speak(lead, text, conversation, system, None, hop, catch_up=True,
                                    on_text=on_text, tools=speaking, interrupt=cut, decision_messages=messages,
-                                   timeout_seconds=max(0.001, self._config.voice_timeout_seconds - (time.monotonic() - began)))
+                                   budget=budget)
             reply = reply_text(outcome)
         except AgentError:
             # Commitments survive a failed speaking request; never replay the decision or fall back to JSON.
@@ -2021,6 +2023,9 @@ class Xiaoyou:
                 closed = True
 
     def _relay_current(self, task, result, cut, guard):
+        # Persona and retained-context preparation share the provider phase deadline.
+        # Expiry falls back to the already saved result under the original owner guard.
+        budget = Deadline(self._config.voice_timeout_seconds)
         card = self._cards.get(task.card) or {}
         def report(kind: str, agent: Optional[str], text: str) -> None:
             guard()
@@ -2035,7 +2040,8 @@ class Xiaoyou:
                     task.conversation, voice_prompt(
                         self._config.persona, self._config.brief_max_chars, plain, self.memory.notes()),
                     None if plain else reply_schema(), task.hop, catch_up=True,
-                    on_text=self._streamer(voice.name, report, plain=plain), interrupt=cut, guard=guard)
+                    on_text=self._streamer(voice.name, report, plain=plain), interrupt=cut, guard=guard,
+                    budget=budget)
                 reply = reply_text(outcome)
                 if reply:
                     fields = outcome.fields or {}

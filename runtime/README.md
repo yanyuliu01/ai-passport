@@ -125,6 +125,26 @@ Late returned output cannot save the caller's native-session or quote receipts.
 Configuration defaults, first-response acceptance and persisted/API formats are
 unchanged: a bounded timeout or error bubble is not a three-second response pass.
 
+Decision-first foreground turns and background wake calls now pass one `Deadline`
+through context preparation, commitment selection and speaking. The decision
+provider keeps its 1.3-second cap, shortened by the caller's remaining timeout;
+request preparation and queue waiting share that cap. Expired preparation starts
+no request, and a queued answer arriving after expiry cannot select a new
+commitment. Tool-originated expiry after a possible mutation propagates for
+reconciliation instead of being described as a decision that did nothing.
+An exhausted turn cannot start a fresh speaking request with an artificial
+one-millisecond timeout. Saved dispatches and memory changes remain authoritative.
+The default decision mode, models, tools and persistence formats are unchanged.
+
+
+Helper-result relay uses the same deadline boundary, starting when its queued
+relay phase runs, before persona and retained-context preparation. Expiry rejects
+late generated text, sessions and quote receipts. The existing saved-result digest
+can still complete the task under its original owner/run guard, without another
+model request or worker execution; an owner change or interruption instead keeps
+the saved result for reconciliation. This phase timeout does not measure queue
+latency or establish live first-response acceptance.
+
 ## Helper restart recovery (R6.1 source)
 
 Saved helper inputs that were not yet claimed resume after startup policy and
