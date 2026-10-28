@@ -27,6 +27,9 @@ final class ChatHistory {
 
     private final Map<String, Message> messages = new LinkedHashMap<>();
 
+    private final java.util.Set<String> erased = new java.util.HashSet<>();
+    void eraseConversation(String id) { erased.add(id); messages.values().removeIf(message -> message.conversation.equals(id)); }
+
     void begin(String id, String card, String text, double at) {
         String target = card == null ? "" : card;
         String scope = target.isEmpty() ? "main" : "task";
@@ -37,7 +40,7 @@ final class ChatHistory {
     void scope(String id, String conversation, boolean main) {
         for (String suffix : new String[]{":you", ":reply"}) {
             Message m = messages.get(id + suffix);
-            if (m != null) { m.conversation = conversation; if (main) m.scope = "main"; }
+            if (m != null) { m.conversation = conversation; if (main) m.scope = "main"; if(erased.contains(conversation))messages.remove(id+suffix); }
         }
     }
 
@@ -47,7 +50,7 @@ final class ChatHistory {
             message.attachments = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(items));
     }
 
-    private void put(Message message) { messages.put(message.id, message); }
+    private void put(Message message) { if(!erased.contains(message.conversation)) messages.put(message.id, message); }
 
     void importTurn(ChatTurn turn) {
         begin(turn.id, null, turn.text, turn.at);
@@ -285,6 +288,7 @@ final class ChatHistory {
     /** Adds the other history's messages this one does not have (same id = same message). */
     boolean absorb(ChatHistory other) {
         boolean added = false;
+        for(String id:other.erased) { if(!erased.contains(id))added=true;eraseConversation(id); }
         for (Message message : other.messages.values())
             if (!messages.containsKey(message.id)) { put(message); added = true; }
         return added;
@@ -305,7 +309,7 @@ final class ChatHistory {
     private List<Message> select(String scope, String card, boolean unsynced) {
         List<Message> result = new ArrayList<>();
         for (Message message : messages.values()) {
-            if (message.scope.equals(scope) && (card == null || message.card.equals(card))
+            if (!erased.contains(message.conversation) && message.scope.equals(scope) && (card == null || message.card.equals(card))
                     && (!unsynced || !message.synced)) {
                 Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
                         message.status, message.kind, message.at, message.synced);
@@ -343,13 +347,14 @@ final class ChatHistory {
             out.append(",\"client_id\":"); BuddyProtocol.quote(out, message.clientId);
             out.append(",\"at\":").append(message.at).append(",\"synced\":").append(message.synced).append('}');
         }
-        return out.append("]}").toString();
+        out.append("],\"erased\":[");boolean comma=false;for(String id:erased){if(comma)out.append(',');comma=true;BuddyProtocol.quote(out,id);}return out.append("]}").toString();
     }
 
     static ChatHistory restore(String json) {
         ChatHistory history = new ChatHistory();
         Map<String, Object> raw = Json.parseObject(json);
         if (raw == null) return history;
+        for(Object value:Json.list(raw,"erased"))if(value instanceof String)history.erased.add((String)value);
         for (Object value : Json.list(raw, "messages")) {
             Map<String, Object> item = Json.object(value);
             String id = Json.string(item, "id");

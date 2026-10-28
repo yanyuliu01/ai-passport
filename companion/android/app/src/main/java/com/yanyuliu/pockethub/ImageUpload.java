@@ -3,6 +3,8 @@ package com.yanyuliu.pockethub;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.media.ExifInterface;
 import android.net.Uri;
@@ -21,7 +23,8 @@ final class ImageUpload {
         void progress(String status);
         void ready(Attachment item, String error);
     }
-    private static final java.util.concurrent.ExecutorService WORK = Executors.newFixedThreadPool(2);
+    // One upload at a time: each relayed request has a 30 s deadline, and parallel bodies share the uplink.
+    private static final java.util.concurrent.ExecutorService WORK = Executors.newSingleThreadExecutor();
     private static final Handler UI = new Handler(Looper.getMainLooper());
     /** Matches the sent bubble's decode size, so the same bytes serve the draft and the bubble. */
     private static final int PREVIEW_EDGE = 900;
@@ -63,7 +66,7 @@ final class ImageUpload {
         Task task = new Task(callback);
         WORK.execute(() -> {
             // 几张图排队传：超时从真正开始传这张时算，排队等的不算。
-            UI.postDelayed(task.timeout, 45000);
+            UI.postDelayed(task.timeout, 120000);
             Attachment item = null; String error = null;
             try {
                 task.check();
@@ -73,15 +76,15 @@ final class ImageUpload {
                     byte[] buffer = new byte[8192]; int count;
                     while ((count = input.read(buffer)) != -1) {
                         task.check();
-                        if (original.size() + count > 8 * 1024 * 1024) throw new IOException("请选择小于 8 MB 的图片");
+                        if (original.size() + count > ImagePreparation.SOURCE_BYTES) throw new IOException("图片超过 40 MB，请换一张");
                         original.write(buffer, 0, count);
                     }
                 }
                 byte[] source = original.toByteArray();
                 BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
                 BitmapFactory.decodeByteArray(source, 0, source.length, bounds);
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || (long) bounds.outWidth * bounds.outHeight > 16000000)
-                    throw new IOException("请选择有效图片，至多 1600 万像素");
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new IOException("无法读取这张图片");
+                if ((long) bounds.outWidth * bounds.outHeight > ImagePreparation.SOURCE_PIXELS) throw new IOException("图片尺寸过大，请换一张");
                 int orientation = ExifInterface.ORIENTATION_NORMAL;
                 try { orientation = new ExifInterface(new ByteArrayInputStream(source)).getAttributeInt(
                         ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL); }
@@ -91,16 +94,15 @@ final class ImageUpload {
                 preview.compress(Bitmap.CompressFormat.JPEG, 85, thumb);
                 task.check();
                 UI.post(() -> { if (!task.cancelled) callback.preview(preview); else preview.recycle(); });
-                if (ImagePreparation.resizePhoto(bounds.outMimeType, source.length, bounds.outWidth, bounds.outHeight)) {
+                // The relay checks the declared type, so send the real one; anything it would refuse
+                // (HEIC, GIF, large photos, huge screenshots) becomes a JPEG small enough to cross it.
+                String mime = bounds.outMimeType;
+                if (!ImagePreparation.keepOriginal(mime, source.length, bounds.outWidth, bounds.outHeight)) {
                     task.status("正在优化照片…");
-                    Bitmap photo = decode(source, bounds, ImagePreparation.PHOTO_EDGE, orientation);
-                    ByteArrayOutputStream compact = new ByteArrayOutputStream();
-                    try { photo.compress(Bitmap.CompressFormat.JPEG, 90, compact); }
-                    finally { photo.recycle(); }
-                    if (compact.size() > 0 && compact.size() < source.length) source = compact.toByteArray();
+                    source = compact(source, bounds, orientation, task); mime = "image/jpeg";
                 }
                 task.check();
-                item = RuntimeClient.uploadImage(target, source, task);
+                item = RuntimeClient.uploadImage(target, source, mime, task);
                 if (item != null) ArtifactClient.seed(app, target, item, source, thumb.toByteArray());
             } catch (OutOfMemoryError exhausted) { error = "手机内存不足，请选择更小的图片";
             } catch (Exception failure) { error = failure.getMessage(); }
@@ -109,6 +111,30 @@ final class ImageUpload {
             UI.post(() -> { if (!task.cancelled) callback.ready(result, detail); });
         });
         return task;
+    }
+
+    /** JPEG under the relay limit: lower quality first, then shrink; transparent areas become white. */
+    private static byte[] compact(byte[] source, BitmapFactory.Options bounds, int orientation, Task task) throws IOException {
+        int[] size = ImagePreparation.fit(bounds.outWidth, bounds.outHeight);
+        for (int attempt = 0; attempt < 4; attempt++) {
+            Bitmap photo = decode(source, bounds, Math.max(size[0], size[1]), orientation);
+            Bitmap flat = photo;
+            if (photo.hasAlpha()) {
+                flat = Bitmap.createBitmap(photo.getWidth(), photo.getHeight(), Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(flat); canvas.drawColor(Color.WHITE); canvas.drawBitmap(photo, 0, 0, null);
+                photo.recycle();
+            }
+            try {
+                for (int quality : new int[]{88, 78, 68}) {
+                    task.check();
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    flat.compress(Bitmap.CompressFormat.JPEG, quality, out);
+                    if (out.size() <= ImagePreparation.RELAY_BYTES) return out.toByteArray();
+                }
+            } finally { flat.recycle(); }
+            size = new int[]{Math.max(1, size[0] * 4 / 5), Math.max(1, size[1] * 4 / 5)};
+        }
+        throw new IOException("图片压缩后仍然太大，请换一张");
     }
 
     private static Bitmap decode(byte[] bytes, BitmapFactory.Options bounds, int edge, int orientation) throws IOException {

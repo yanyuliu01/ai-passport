@@ -195,7 +195,7 @@ final class Usage {
 
     int left(String role, long now) {
         Account account = account(helper(role), role);
-        if (account == null) return -1;
+        if (account == null || !account.note.isEmpty()) return -1;
         int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;
         int weekLeft = account.reset7d > 0 && account.reset7d <= now ? -1 : account.left7d;
         if (shortLeft < 0) return weekLeft;
@@ -209,7 +209,7 @@ final class Usage {
                 ? "精力值：按量计费" : "精力值：未知";
         int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;
         int weekLeft = account.reset7d > 0 && account.reset7d <= now ? -1 : account.left7d;
-        String label = "精力值 · 5 小时 " + (shortLeft < 0 ? "未知" : shortLeft + "%")
+        String label = (account.note.isEmpty() ? "精力值" : "上次数据，刷新未成功") + " · 5 小时 " + (shortLeft < 0 ? "未知" : shortLeft + "%")
                 + " · 本周 " + (weekLeft < 0 ? "未知" : weekLeft + "%");
         long reset = shortLeft >= 0 && (weekLeft < 0 || shortLeft <= weekLeft) ? account.reset5h : account.reset7d;
         String when = resetText(reset, now, zone);
@@ -227,7 +227,7 @@ final class Usage {
         Agent helper = helper(role);
         Account account = account(helper, role);
         if (account == null) return "还没有这个帮手的订阅额度数据。";
-        StringBuilder out = new StringBuilder("绿圈显示以下两项中较少的剩余额度。");
+        StringBuilder out = new StringBuilder(account.note.isEmpty() ? "绿圈显示以下两项中较少的剩余额度。" : "额度刷新未成功，头像圈暂不显示。以下为上次收到的数据。");
         window(out, "5 小时", account.left5h, account.reset5h, now, zone);
         window(out, "本周", account.left7d, account.reset7d, now, zone);
         if (accountAgents(account).size() > 1) out.append("\n这份额度由多个帮手共用。");

@@ -50,6 +50,7 @@ final class SyncCache {
     private String epoch = "";
     private String cursor = "0";
     private int presentationVersion;
+    private final Set<String> erased = new LinkedHashSet<>();
     private final Map<String, Map<String, Object>> tasks = new HashMap<>();
     private final Map<String, Map<String, Object>> messages = new HashMap<>();
 
@@ -92,6 +93,9 @@ final class SyncCache {
             tasks.put(id, task);
             touched.add(id);
         }
+        for(Object raw:Json.list(page,"conversations")){Map<String,Object> item=Json.object(raw);if(Json.flag(item,"deleted")&&!"default".equals(Json.string(item,"id")))erased.add(Json.string(item,"id"));}
+        tasks.values().removeIf(item -> erased.contains(Json.string(item,"conversation")));
+        messages.values().removeIf(item -> erased.contains(Json.string(item,"conversation")));
         trimActivity(touched);
         List<Card> cards = new ArrayList<>();
         for (String id : touched) {
@@ -113,6 +117,7 @@ final class SyncCache {
         Map<String, Object> root = new HashMap<>();
         root.put("version", 1); root.put("conversation", conversation); root.put("epoch", epoch);
         root.put("cursor", cursor); root.put("presentation", presentationVersion);
+        root.put("erased",new ArrayList<>(erased));
         root.put("tasks", new ArrayList<>(tasks.values())); root.put("messages", new ArrayList<>(messages.values()));
         return UsageEvents.json(root);
     }
@@ -125,6 +130,7 @@ final class SyncCache {
         if (cursor.isEmpty() || epoch.isEmpty()) return null;
         SyncCache cache = new SyncCache(conversation);
         cache.cursor = cursor; cache.epoch = epoch;
+        for(Object item:Json.list(root,"erased"))if(item instanceof String)cache.erased.add((String)item);
         cache.presentationVersion = (int) Json.number(root, "presentation");
         for (Object item : Json.list(root, "tasks")) {
             Map<String, Object> task = Json.object(item);

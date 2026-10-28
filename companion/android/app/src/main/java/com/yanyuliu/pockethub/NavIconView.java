@@ -96,6 +96,11 @@ final class NavIconView extends View {
             Path path = new Path(); path.moveTo(9, 4); path.lineTo(15, 4); path.lineTo(14, 10); path.lineTo(18, 13);
             path.lineTo(6, 13); path.lineTo(10, 10); path.close();
             canvas.drawPath(path, paint); canvas.drawLine(12, 13, 12, 20, paint);
+        } else if (icon.equals("trash")) {
+            canvas.drawLine(4,6,20,6,paint);canvas.drawLine(9,3,15,3,paint);
+            canvas.drawRoundRect(new RectF(6,6,18,21),2,2,paint);canvas.drawLine(10,10,10,17,paint);canvas.drawLine(14,10,14,17,paint);
+        } else if (icon.equals("archive")) {
+            canvas.drawRoundRect(new RectF(3,4,21,9),1,1,paint);canvas.drawRoundRect(new RectF(5,9,19,21),1,1,paint);canvas.drawLine(10,13,14,13,paint);
         } else if (icon.equals("gear")) {
             canvas.drawCircle(12, 12, 3, paint);
             for (int i = 0; i < 8; i++) {
@@ -110,6 +115,12 @@ final class NavIconView extends View {
             canvas.drawCircle(12, 12, 9, paint);
             canvas.drawLine(12, 11, 12, 16.5f, paint);
             paint.setStyle(Paint.Style.FILL); canvas.drawCircle(12, 7.8f, 1.1f, paint);
+        } else if (icon.equals("unchecked")) {
+            paint.setColor(0xffb7c2d0); canvas.drawCircle(12, 12, 8.5f, paint);
+        } else if (icon.equals("checked")) {
+            paint.setStyle(Paint.Style.FILL); canvas.drawCircle(12, 12, 9.3f, paint);
+            paint.setStyle(Paint.Style.STROKE); paint.setColor(0xffffffff); paint.setStrokeWidth(2f);
+            Path path = new Path(); path.moveTo(8, 12.3f); path.lineTo(11, 15.2f); path.lineTo(16.2f, 9.4f); canvas.drawPath(path, paint);
         } else if (icon.equals("computer")) {
             canvas.drawRoundRect(new RectF(3.5f, 4.5f, 20.5f, 15.5f), 2, 2, paint);
             canvas.drawLine(2, 19, 22, 19, paint);

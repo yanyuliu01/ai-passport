@@ -6,6 +6,19 @@ import java.util.Arrays;
 import java.util.List;
 
 public class AppPresentationTest {
+    @Test public void localRosterExcludesRemoteAndRemovedHistoryOwners() {
+        Card old=card("\"id\":\"c1\",\"agent\":\"removed\"");
+        Card remote=card("\"id\":\"c2\",\"agent\":\"cc@Windows\"");
+        List<AppPresentation.Helper> rows=AppPresentation.localHelpers(Arrays.asList(old,remote),Arrays.asList("codex","cc","cc@Windows"));
+        assertEquals(2,rows.size());assertEquals("codex",rows.get(0).role);assertEquals("cc",rows.get(1).role);
+    }
+
+    @Test public void separateAgentsWithTheSamePortraitRemainIndividuallyManageable() {
+        List<AppPresentation.Helper> rows=AppPresentation.localHelpers(Arrays.asList(card("\"id\":\"c1\",\"agent\":\"cc\",\"state\":\"working\"")),Arrays.asList("cc","claude"));
+        assertEquals(2,rows.size());assertEquals("cc",rows.get(0).role);assertEquals("claude",rows.get(1).role);
+        assertNotNull(rows.get(0).current(true));assertNull(rows.get(1).current(true));
+    }
+
     private Card card(String fields) { return Card.from(Json.parseObject("{" + fields + "}")); }
 
     @Test public void tasksUseLocalCreationDayAndKeepPinnedSeparate() {

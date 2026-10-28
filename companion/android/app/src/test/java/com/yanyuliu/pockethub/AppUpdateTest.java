@@ -74,4 +74,17 @@ public class AppUpdateTest {
             assertFalse(AppUpdate.verified(file, release(20, hex.toString(), 1)));
         } finally { file.delete(); }
     }
+    @Test public void relayJsonRoundTripMustNotHideAnAvailableUpdate() {
+        String reply="{\"available\":true,\"version_code\":72,\"version_name\":\"0.33.3\",\"size\":63680000,\"sha256\":\""+SHA+"\",\"published_at\":1793090735.487}";
+        String relayed=RelayCrypto.json(Json.parseObject(reply));
+        AppUpdate.Release selected=new AppUpdate.Release(Presentation.snapshot(relayed));
+        assertEquals(72,selected.code);assertEquals(63680000L,selected.size);
+        assertTrue(AppUpdate.newer(selected,71,OTHER,1793000000000L));
+    }
+    @Test public void fractionalAndOverflowingMetadataIsNotRoundedIntoARelease() {
+        for(String code:new String[]{"72.5","9223372036854775808","NaN","Infinity"}) {
+            Map<String,String> fields=new HashMap<>();fields.put("version_code",code);fields.put("sha256",SHA);
+            assertFalse(AppUpdate.newer(new AppUpdate.Release(fields),71,OTHER,1));
+        }
+    }
 }

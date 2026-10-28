@@ -56,7 +56,7 @@ final class RuntimeClient {
     private static volatile long syncWake;
     private static final ThreadLocal<Long> syncReadWake = new ThreadLocal<>();
 
-    private static synchronized void wakeSync() {
+    static synchronized void wakeSync() {
         ++syncWake;
         HttpURLConnection pending = feedConnection;
         if (pending != null) pending.disconnect();
@@ -87,7 +87,7 @@ final class RuntimeClient {
     }
 
     /** 登记过的所有 Runtime。旧版本只存一台，这里一并读出来。 */
-    static synchronized List<Target> targets(Context context) {
+    private static synchronized List<Target> savedTargets(Context context) {
         SharedPreferences prefs = prefs(context);
         List<Target> list = new ArrayList<>();
         int count = prefs.getInt(KEY_COUNT, -1);
@@ -109,7 +109,18 @@ final class RuntimeClient {
         return list;
     }
 
+    static synchronized List<Target> targets(Context context) {
+        List<Target> list = savedTargets(context);
+        list.removeIf(item -> !AccountManager.allowed(item.url));
+        return list;
+    }
+
     private static synchronized void store(Context context, List<Target> list, String selected) {
+        // Retain inactive legacy/other-account routes for rollback without using them.
+        List<Target> retained = savedTargets(context);
+        retained.removeIf(item -> AccountManager.allowed(item.url));
+        for (Target item : list) retained.removeIf(old -> old.url.equals(item.url));
+        retained.addAll(list); list = retained;
         ++reviewGeneration;
         SharedPreferences.Editor editor = prefs(context).edit();
         editor.putInt(KEY_COUNT, list.size());
@@ -138,13 +149,16 @@ final class RuntimeClient {
     /** 现在用的那台；一台都没有时返回 null。 */
     static synchronized Target selected(Context context) {
         List<Target> list = targets(context);
-        String url = prefs(context).getString(KEY_URL, null);
-        for (Target target : list) {
-            if (target.url.equals(url)) {
-                return target;
-            }
-        }
-        return list.isEmpty() ? null : list.get(0);
+        List<String> urls = new ArrayList<>();
+        for(Target item:list)urls.add(item.url);
+        String url = RuntimeSelection.resolve(preferredRuntime(context),prefs(context).getString(KEY_URL,null),urls);
+        for(Target item:list)if(item.url.equals(url))return item;
+        return null;
+    }
+
+    private static String preferredRuntime(Context context) {
+        String account=AccountManager.accountId();
+        return account.isEmpty()?"":prefs(context).getString(RuntimeSelection.preferenceKey(account),"");
     }
 
     // ---- 同一台 Runtime 的几个地址（局域网、Funnel……）按 runtime_id 认成一台 ----
@@ -162,8 +176,16 @@ final class RuntimeClient {
         if (target == null) return "";
         String id = runtimeId(context, target.url);
         if (id.isEmpty()) return target.url;
-        for (Target item : targets(context)) if (id.equals(runtimeId(context, item.url))) return item.url;
-        return target.url;
+        List<String[]> known = new ArrayList<>();
+        for (Target item : savedTargets(context)) known.add(new String[]{item.url,runtimeId(context,item.url),subjectId(context,item.url)});
+        return retainedHistoryKey(target.url,id,subjectId(context,target.url),known);
+    }
+
+    /** Reuse an archive only after both the Runtime and account subject have been authenticated. */
+    static String retainedHistoryKey(String url,String runtime,String subject,List<String[]> known) {
+        if(runtime.isEmpty() || subject.isEmpty())return url;
+        for(String[] route:known)if(runtime.equals(route[1]) && subject.equals(route[2]))return route[0];
+        return url;
     }
 
     /** 这个地址上的小幽是哪一个（小幽网络里每台都一样，见 Runtime 的 mesh.py）；没加入网络是空串。 */
@@ -319,13 +341,20 @@ final class RuntimeClient {
         return out.toString();
     }
 
-    static synchronized void select(Context context, String url) {
+    static synchronized void select(Context context, String url) { select(context,url,true); }
+
+    private static synchronized void select(Context context,String url,boolean manual) {
+        if (!AccountManager.allowed(url) || target(context,url)==null) return;
+        Target previous=selected(context);
+        if(manual)prefs(context).edit().putString(RuntimeSelection.preferenceKey(AccountManager.accountId()),url).apply();
+        if(manual && previous!=null && previous.url.equals(url))return;
         store(context, targets(context), url);
         Target now = selected(context);
         // 换成另一台电脑：这台的卡收起来、那台的放回去；同一台的另一个地址什么都不动。
         HubStore.get().showComputer(now == null ? "" : historyKey(context, now));
         HubStore.get().selectedRuntime(url, now == null ? url : historyKey(context, now));
         HubStore.get().helpersChanged();
+        wakeSync();
         RelayManager.cancelReads();
         HttpURLConnection waiting = feedConnection;
         if (waiting != null) {
@@ -339,7 +368,7 @@ final class RuntimeClient {
 
     /** 开始盯着现在用的那台 Runtime 的卡；已经在盯就什么都不做。进程在它就在。 */
     static synchronized void watch(Context context) {
-        try { RelayManager.init(context); } catch (Exception issue) { /* Keep direct connections and original sealed records. */ }
+        try { RelayManager.init(context); } catch (Exception issue) { /* Keep original sealed records; account login can retry initialization. */ }
         if (watcher != null) {
             return;
         }
@@ -400,7 +429,7 @@ final class RuntimeClient {
                     continue;
                 }
                 store.catchingUp(false);  // 连不上：不再画占位，交给离线提示
-                List<Target> others = siblings(app, target);
+                List<Target> others = RuntimeSelection.mayFallback(preferredRuntime(app)) ? siblings(app,target) : new ArrayList<>();
                 if (!others.isEmpty() && failures < 1 + others.size()) {
                     // 同一台电脑还有别的地址（比如局域网连不上就走 Funnel）：换一个试，不清空卡。
                     Target next = others.get(0);
@@ -680,7 +709,7 @@ final class RuntimeClient {
                     String name = item.get("name");
                     if (name != null && !name.isEmpty()) {
                         String about = item.get("description");
-                        agents.add(new String[] {name, about == null ? "" : about});
+                        agents.add(new String[] {name, about == null ? "" : about, item.get("display_name") == null ? "" : item.get("display_name")});
                     }
                 }
                 callback.onAgents(agents);
@@ -688,6 +717,36 @@ final class RuntimeClient {
                 // 旧版 Runtime 没有这个接口，或者暂时连不上：设备上的帮手页就先空着。
                 HubStore.get().log("没问到小幽有哪些帮手：" + error.getMessage());
             }
+        });
+    }
+
+    interface HelperCallback { void done(Map<String,Object> value, String problem); }
+
+    /** A management operation always belongs to the source chosen when its form opened. */
+    static void helperRequest(Context context, Target target, String path, Map<String,Object> body, HelperCallback callback) {
+        Context app = context.getApplicationContext();
+        QUICK.execute(() -> {
+            Map<String,Object> value = null; String problem = null;
+            try {
+                Target current = selected(app);
+                if (target == null || current == null || !current.url.equals(target.url) || !current.token.equals(target.token))
+                    throw new IOException("所选电脑已变化，请重新打开帮手管理");
+                String raw = requestText(body == null ? "GET" : "POST", target.url + path, target.token,
+                        body == null ? null : RelayCrypto.json(body).getBytes(StandardCharsets.UTF_8),
+                        body == null ? null : "application/json; charset=utf-8", 30, false);
+                value = Json.parseObject(raw);
+                if (body != null && !path.endsWith("/models")) { HubStore.get().helpersChanged(); wakeSync(); }
+            } catch (IOException | RuntimeException error) {
+                problem = "操作未完成，请刷新确认；未自动重试。" + String.valueOf(error.getMessage());
+            }
+            Map<String,Object> answer = value; String issue = problem;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                Target current = selected(app);
+                if (current == null || target == null || !current.url.equals(target.url) || !current.token.equals(target.token)) {
+                    callback.done(null, "来源已切换，请在原电脑确认结果；未向新电脑重复操作"); return;
+                }
+                callback.done(answer, issue);
+            });
         });
     }
 
@@ -782,68 +841,18 @@ final class RuntimeClient {
      * 格式不对时返回说明，成功返回 null。
      */
     static synchronized void registerRelay(Context context, String url, String name) {
+        if (!AccountManager.allowed(url)) return; // Ignore a ready callback queued before logout or an account switch.
         if (target(context, url) != null) return;
         List<Target> list = targets(context);
         if (list.size() >= MAX_TARGETS) return;
-        list.add(new Target(name.isEmpty() ? "已配对电脑" : name, url, "paired-device-public-key"));
-        store(context, list, url); select(context, url);
+        Target current=selected(context);
+        list.add(new Target(name.isEmpty() ? "已登录电脑" : name, url, "paired-device-public-key"));
+        store(context,list,current==null?prefs(context).getString(KEY_URL,null):current.url);
+        if(current==null && preferredRuntime(context).isEmpty())select(context,url,false);
     }
 
     static String savePairing(Context context, String pairing) {
-        String text = pairing == null ? "" : pairing.trim();
-        if (text.startsWith("xiaoyou://")) {
-            String problem = RelayManager.join(context, text);
-            if (problem == null) RuntimeWatchService.start(context);
-            return problem;
-        }
-        int hash = text.indexOf('#');
-        if (hash <= 0 || hash == text.length() - 1) {
-            return "连接串应该像 http://192.168.1.5:8765#令牌";
-        }
-        String url = text.substring(0, hash);
-        while (url.endsWith("/")) {
-            url = url.substring(0, url.length() - 1);
-        }
-        String token = text.substring(hash + 1).trim();
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            return "地址要以 http:// 或 https:// 开头";
-        }
-        if (token.length() < 16 || token.contains(" ")) {
-            return "令牌不对：应该是至少 16 位、不含空格的一串字符";
-        }
-        synchronized (RuntimeClient.class) {
-            List<Target> list = targets(context);
-            boolean registered = false;
-            for (Target item : list) if (item.url.equals(url)) registered = true;
-            if (list.size() >= MAX_TARGETS && !registered) return "最多登记 8 台电脑，请先移除不再使用的电脑";
-            String name = hostOf(url);
-            for (int index = list.size() - 1; index >= 0; index--) {
-                if (list.get(index).url.equals(url)) {
-                    name = list.get(index).name;
-                    list.remove(index);
-                }
-            }
-            list.add(new Target(name, url, token));
-            store(context, list, url);
-        }
-        select(context, url);
-        // 问一下这台电脑叫什么，列表里好认；问不到就先用地址当名字。
-        final String address = url;
-        final Context app = context.getApplicationContext();
-        WORKER.execute(() -> {
-            try {
-                String name = request("GET", address + "/healthz", token, null, null, 8).get("name");
-                if (name != null && !name.trim().isEmpty()) {
-                    rename(app, address, name.trim());
-                    HubStore.get().log("已登记 Runtime：" + name.trim());
-                }
-            } catch (IOException | RuntimeException error) {
-                HubStore.get().log("已登记 " + address + "，但现在连不上它");
-            }
-        });
-        ApprovalMonitor.reconcile(app);
-        RuntimeWatchService.start(context);
-        return null;
+        return "连接已统一，请登录小幽账号；原配对和历史保留";
     }
 
     // ---- 最近的对话：存在手机上，换 Runtime 时带过去 ----
@@ -886,10 +895,11 @@ final class RuntimeClient {
         void sent(int bytes, int total) throws IOException;
     }
 
-    static Attachment uploadImage(Target target, byte[] bytes, UploadProgress progress) throws IOException {
+    /** mime must be image/jpeg, image/png or image/webp: the desktop relay refuses any other declared type. */
+    static Attachment uploadImage(Target target, byte[] bytes, String mime, UploadProgress progress) throws IOException {
         // Registration is not an idempotent message send; never retry it implicitly.
         Map<String, String> raw = BuddyProtocol.parseFlatObject(requestOnce("POST", target.url + "/v1/images", target.token,
-                bytes, "application/octet-stream", 30, false, progress));
+                bytes, mime, 90, false, progress));
         if (raw == null) throw new IOException("Runtime 返回的内容看不懂");
         Map<String, Object> item = new java.util.HashMap<>(raw);
         for (String key : new String[]{"size", "width", "height"}) {
@@ -938,6 +948,10 @@ final class RuntimeClient {
     private static String quoted(String value) { StringBuilder b = new StringBuilder(); BuddyProtocol.quote(b, value); return b.toString(); }
 
     interface CatalogCallback { void done(Map<String, Object> result, String error); }
+    static void deleteConversation(Context context, String id, CatalogCallback callback) {
+        if(!id.matches("side-[A-Za-z0-9_-]{1,58}")){callback.done(null,"只能删除旁聊");return;}
+        directoryRequest(context,"/v1/conversations/"+id+"/delete","{}",callback);
+    }
     static void directoryEdit(Context context, String id, long revision, String fields, CatalogCallback callback) {
         directoryRequest(context, "/v1/directory/" + id, "{\"revision\":" + revision + ",\"fields\":" + fields + "}", callback);
     }
@@ -1122,15 +1136,16 @@ final class RuntimeClient {
         });
     }
 
-    static void retryImages(Context context, String id, String text, List<Attachment> images) {
+    /** Retries go back to the conversation the message was written in, not the main chat. */
+    static void retryImages(Context context, String id, String text, List<Attachment> images, String conversation) {
         String client = HubStore.get().retryMessage(id);
-        if (client != null) submit(context, text, null, null, false, null, null, client, images);
+        if (client != null) submitScoped(context, text, null, null, false, null, null, client, images, conversation, true);
     }
 
-    static void retry(Context context, String id, String text, String card) {
+    static void retry(Context context, String id, String text, String card, String conversation) {
         if (HubStore.get().busy()) return;
         String client = HubStore.get().retryMessage(id);
-        if (client != null) submit(context, text, null, card, card != null, null, null, client);
+        if (client != null) submitScoped(context, text, null, card, card != null, null, null, client, null, conversation, card == null);
     }
 
     private static void submit(Context context, String text, byte[] wav, String card,
@@ -1475,54 +1490,7 @@ final class RuntimeClient {
             if (progress != null && body != null) progress.sent(body.length, body.length);
             return result;
         }
-        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
-        connection.setInstanceFollowRedirects(false);
-        if (feed) {
-            synchronized (RuntimeClient.class) {
-                Long wake = syncReadWake.get();
-                if (wake != null && wake != syncWake) { connection.disconnect(); throw new IOException("同步订阅已改变"); }
-                feedConnection = connection;
-            }
-        }
-        try {
-            if (progress != null) progress.connection(connection);
-            connection.setRequestMethod(method);
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(timeoutSeconds * 1000);
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-            if (body != null) {
-                connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", contentType);
-                connection.setFixedLengthStreamingMode(body.length);
-                try (OutputStream out = connection.getOutputStream()) {
-                    if (progress == null) out.write(body);
-                    else for (int offset = 0; offset < body.length;) {
-                        int count = Math.min(32768, body.length - offset);
-                        if (progress != null) progress.sent(offset, body.length);
-                        out.write(body, offset, count); offset += count;
-                    }
-                    if (progress != null) progress.sent(body.length, body.length);
-                }
-            }
-            int code = connection.getResponseCode();
-            InputStream stream = code >= 400 ? connection.getErrorStream()
-                    : connection.getInputStream();
-            String text = stream == null ? "" : readAll(stream);
-            if (code == 401) {
-                throw new IOException("令牌不对（401）");
-            }
-            if (code >= 300) {
-                Map<String, String> fields = BuddyProtocol.parseFlatObject(text);
-                String error = fields == null ? null : fields.get("error");
-                throw new IOException("Runtime 返回 " + code + (error == null ? "" : "：" + error));
-            }
-            return text;
-        } finally {
-            if (feed) {
-                feedConnection = null;
-            }
-            connection.disconnect();
-        }
+        throw new IOException("旧直连已停用，请登录小幽账号；原请求仍绑定原来的电脑");
     }
 
     private static String readAll(InputStream stream) throws IOException {

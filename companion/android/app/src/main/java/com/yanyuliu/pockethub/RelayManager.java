@@ -23,49 +23,46 @@ final class RelayManager {
     private static SharedPreferences storage;
     private static final String ALIAS="xiaoyou-relay-v1";
     static synchronized void init(Context context) throws Exception {
-        if(app!=null)return;app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
+        if(app!=null){AccountManager.init(context);return;}app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
         ArtifactDownload.relayBytes=RelayManager::binary;
-        boolean failed=false;
-        for(Map.Entry<String,?> entry:storage.getAll().entrySet())if(entry.getKey().startsWith("peer:") && entry.getValue() instanceof String) {
-            try { open(Json.parseObject(decrypt((String)entry.getValue()))); } catch(Exception failure) { failed=true; }
-        }
-        if(failed)toast("部分加密配对暂未恢复，原记录已保留，请检查系统安全存储。");
+        AccountManager.init(context);
     }
     static synchronized String join(Context context,String invitation) {
-        try {
-            init(context);Map<String,Object> config=RelayConnection.invitation(invitation,android.os.Build.MODEL);
-            @SuppressWarnings("unchecked") Map<String,Object> host=(Map<String,Object>)config.get("device");RelayCrypto.validateDevice(host);RelayConnection.validateRelay(cast(config.get("relay")));
-            String url="relay://"+Json.string(host,"id");if(links.containsKey(url) && !links.get(url).isPaired()) remove(url);
-            if(links.containsKey(url))return "这台电脑已有配对记录，请选择已有连接；不会覆盖设备密钥";
-            if(RuntimeClient.targets(context).size()>=RuntimeClient.MAX_TARGETS)return "已达到电脑连接上限，请先移除旧连接";
-            open(config);
-            RelayConnection pending=links.get(url);
-            if(context instanceof android.app.Activity) {
-                String fingerprint=pending.fingerprint().replaceAll("(.{4})(?!$)","$1 ");
-                new android.app.AlertDialog.Builder(context).setTitle("在电脑确认这部手机")
-                    .setMessage("请核对电脑上显示的设备指纹：\n\n"+fingerprint+"\n\n批准后添加这台电脑，已有连接保留。邀请两分钟内有效。")
-                    .setPositiveButton("知道了",null).show();
-            } else toast("配对请求已发出，请在电脑小幽确认。批准前不会切换聊天。");
-            return null;
-        }catch(Exception error){return "未能请求加密配对："+error.getMessage();}
+        return "连接已统一，请登录小幽账号；原配对记录保留";
+    }
+    static synchronized void retainAccount(Set<String> urls) {
+        for(String url:new ArrayList<>(links.keySet()))if(!urls.contains(url)){RelayConnection link=links.remove(url);if(link!=null)link.close();}
+    }
+    static synchronized void accountPeer(String account,Map<String,Object> config) throws Exception {
+        String id=Json.string(cast(config.get("device")),"id");config.put("account",account);String url=RelayConnection.address(config);
+        if(links.containsKey(url))return;
+        String key="account:"+account+":peer:"+id;
+        String sealed=storage.getString(key,"");
+        if(!sealed.isEmpty()){
+            Map<String,Object> old=Json.parseObject(decrypt(sealed));
+            if(old==null || !Objects.equals(old.get("space"),config.get("space")) || !Objects.equals(old.get("seed"),config.get("seed"))
+                || !Objects.equals(cast(old.get("device")).get("publicKey"),cast(config.get("device")).get("publicKey")))throw new IOException("原电脑身份不一致，原记录保留");
+            old.put("relay",config.get("relay"));old.put("device",config.get("device"));config=old;
+        }
+        open(config,key);
     }
     @SuppressWarnings("unchecked") private static Map<String,Object> cast(Object value){return (Map<String,Object>)value;}
-    private static synchronized void open(Map<String,Object> config) throws Exception {
+    private static synchronized void open(Map<String,Object> config,String key) throws Exception {
         if(config==null)throw new IOException("配对存储无法读取，原记录未删除");
-        final String key="peer:"+Json.string(cast(config.get("device")),"id");
         RelayConnection connection=new RelayConnection(config,new RelayConnection.Observer(){
             public void save(Map<String,Object> state){try{if(!storage.edit().putString(key,encrypt(RelayCrypto.json(state))).commit())throw new IOException("配对未能持久化");}catch(Exception failure){throw new IllegalStateException("系统安全存储不可用");}}
             public void ready(String url,String name){new Handler(Looper.getMainLooper()).post(()->RuntimeClient.registerRelay(app,url,name));}
             public void state(String message){ if(message.contains("已过期") && RuntimeClient.selected(app)==null)app.stopService(new android.content.Intent(app,RuntimeWatchService.class)); }
         });links.put(connection.url(),connection);
     }
+    static boolean online(String url){RelayConnection link=links.get(url);return AccountManager.allowed(url) && link!=null && link.online();}
     static boolean hasConnections(){return links.values().stream().anyMatch(RelayConnection::isActive);}
     static String request(String method,String address,byte[] bytes,String contentType,int seconds) throws IOException {
         return request(method,address,bytes,contentType,seconds,null);
     }
     static String request(String method,String address,byte[] bytes,String contentType,int seconds,
                           java.util.function.BooleanSupplier current) throws IOException {
-        URI uri=URI.create(address);RelayConnection link=links.get("relay://"+uri.getHost());if(link==null)throw new IOException("加密连接尚未恢复，请重新打开 App");
+        URI uri=URI.create(address);String target=RelayConnection.target(uri);if(!AccountManager.allowed(target))throw new IOException("请登录小幽账号，等待这台电脑恢复连接");RelayConnection link=links.get(target);if(link==null)throw new IOException("加密连接尚未恢复，请重新打开 App");
         Map<String,Object> body=null;
         if(bytes!=null){
             if(contentType!=null && contentType.startsWith("application/json")){body=Json.parseObject(new String(bytes,StandardCharsets.UTF_8));if(body==null)throw new IOException("请求格式无效");}
@@ -80,13 +77,13 @@ final class RelayManager {
     }
     static void cancelReads(){for(RelayConnection link:links.values())link.cancelReads();}
     static void cancelSyncReads(){for(RelayConnection link:links.values())link.cancelSyncReads();}
-    static void remove(String url){RelayConnection link=links.remove(url);if(link!=null){link.close();storage.edit().remove("peer:"+URI.create(url).getHost()).commit();}}
+    static void remove(String url){RelayConnection link=links.remove(url);if(link!=null){link.close();String authority=URI.create(url).getRawAuthority();if(authority!=null && authority.matches("[a-f0-9]{32}"))storage.edit().remove("peer:"+authority).commit();}}
     private static void toast(String text){new Handler(Looper.getMainLooper()).post(()->Toast.makeText(app,text,Toast.LENGTH_LONG).show());}
     private static SecretKey key() throws Exception {
         KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);
         if(!store.containsAlias(ALIAS)){KeyGenerator generator=KeyGenerator.getInstance("AES","AndroidKeyStore");generator.init(new KeyGenParameterSpec.Builder(ALIAS,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());generator.generateKey();}
         return (SecretKey)store.getKey(ALIAS,null);
     }
-    private static String encrypt(String text) throws Exception {Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());return RelayCrypto.encode(cipher.getIV())+"."+RelayCrypto.encode(cipher.doFinal(text.getBytes(StandardCharsets.UTF_8)));}
-    private static String decrypt(String text) throws Exception {String[] parts=text.split("\\.",2);Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,RelayCrypto.decode(parts[0],12)));return new String(cipher.doFinal(RelayCrypto.decode(parts[1],-1)),StandardCharsets.UTF_8);}
+    static String encrypt(String text) throws Exception {Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());return RelayCrypto.encode(cipher.getIV())+"."+RelayCrypto.encode(cipher.doFinal(text.getBytes(StandardCharsets.UTF_8)));}
+    static String decrypt(String text) throws Exception {String[] parts=text.split("\\.",2);Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,RelayCrypto.decode(parts[0],12)));return new String(cipher.doFinal(RelayCrypto.decode(parts[1],-1)),StandardCharsets.UTF_8);}
 }

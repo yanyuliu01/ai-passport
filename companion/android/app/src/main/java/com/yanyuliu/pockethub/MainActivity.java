@@ -68,7 +68,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private int testCount;
     private TextView chatView;
     private EditText chatInput;
-    private EditText pairingInput;
     private TextView runtimeStatus;
     private LinearLayout runtimeList;
     private String runtimeKey = null;
@@ -237,12 +236,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String helpersTarget = "";
     private File exportFile;
     private Dialog approvalDialog;
+    private Sheet accountDialog;
+    private LinearLayout accountRuntimeList;
+    private String accountRuntimeKey="";
     private final Handler uiHandler = new Handler();
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (tab == TAB_USAGE && System.currentTimeMillis() - usageUiAtMs >= 15000L)
                 refreshUsage(HubStore.get());
             if (drawerOpen) refreshDrawer();
+            refreshAccountRuntimes();
             if (HubStore.get().runtimeConnected()) checkForUpdate();
             if (HubStore.get().runtimeConnected() && System.currentTimeMillis() - eventsSentAt >= 60000L) {
                 eventsSentAt = System.currentTimeMillis();
@@ -347,9 +350,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         root.addView(runtimeList);
         runtimeStatus = text("", 13, false);
         root.addView(runtimeStatus);
-        pairingInput = input("粘贴连接串");
-        root.addView(pairingInput);
-        root.addView(button("用连接串添加", view -> savePairing()));
+        root.addView(button("小幽账号", view -> scanPairing()));
         root.addView(button("统一会话目录", view -> SharedDirectoryPane.show(this)));
         root.addView(button("同步本机整理", view -> previewSharedMarks()));
 
@@ -733,6 +734,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** 从现在的位置滑到开或关；剩下的路越短越快。 */
     private void settleDrawer(boolean open) {
         drawerOpen = open;
+        if (!open) AnchoredMenu.dismissOpen();
         float width = dp(312);
         float left = open ? -drawer.getTranslationX() : width + drawer.getTranslationX();
         long duration = Motion.enabled() ? Math.max(120, Math.round(220 * left / width)) : 0;
@@ -874,6 +876,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return AppPresentation.role(companionChoice).equals("ds") ? "小幽" : AppPresentation.name(companionChoice);
     }
 
+    private void helpersChanged() { helpersTarget=""; drawerKey=null; onHubChanged(); }
+    private String helperTitle(String role) {
+        for(String[] helper:helpers) if(helper[0].equals(role) && helper.length>2 && !helper[2].isEmpty())return helper[2];
+        int same=0;for(String[] helper:helpers)if(!helper[0].contains("@")&&AppPresentation.role(helper[0]).equals(AppPresentation.role(role)))same++;
+        if(same>1)return role;
+        for(String[] helper:helpers)if(!helper[0].contains("@")&&AppPresentation.role(helper[0]).equals(AppPresentation.role(role))&&helper.length>2&&!helper[2].isEmpty())return helper[2];
+        return AppPresentation.name(role);
+    }
+
     private List<String> offeredHelpers() {
         List<String> names = new ArrayList<>();
         for (String[] helper : helpers) names.add(helper[0]);
@@ -906,12 +917,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     /** 侧边栏五处：小幽（只显示状态）、主对话、在做的事、旁聊、帮手，最后是设置。内容没变时不重建。 */
+    private final Set<String> selectedSideChats = new java.util.LinkedHashSet<>();
+    private boolean selectingSideChats;
+    private String selectionRuntime = "";
     private void refreshDrawer() {
         HubStore store = HubStore.get();
         drawerState.setText(connectionWord());
         drawerState.setTextColor(store.runtimeConnected() ? GREEN : AMBER);
         if (!drawerOpen) return;
-        String key = tab + ":" + currentConversation + ":" + store.runtimeConnected() + ":" + store.cards().size();
+        if (AnchoredMenu.showing()) { AnchoredMenu.afterClose(this::refreshDrawer); return; }
+        if(!selectionRuntime.equals(runtimeUrl())) { selectionRuntime=runtimeUrl(); selectingSideChats=false; selectedSideChats.clear(); }
+        if(selectingSideChats)selectedSideChats.retainAll(visibleSideChatIds());
+        String key = selectingSideChats + ":" + selectedSideChats + ":" + helpersTarget + ":" + tab + ":" + currentConversation + ":" + store.runtimeConnected() + ":" + store.cards().size();
         for (Map<String, Object> item : store.conversations()) key += item.toString();
         for (Card card : store.cards()) key += card.state;
         if (key.equals(drawerKey)) return; drawerKey = key; drawerList.removeAllViews();
@@ -928,30 +945,54 @@ public class MainActivity extends Activity implements HubStore.Listener {
         drawerList.addView(groupRow("tasks", "在做的事", null, waiting > 0 ? String.valueOf(waiting) : doing > 0 ? String.valueOf(doing) : "",
                 waiting > 0 ? AMBER : BLUE, v -> topWork(), false));
         LinearLayout side = new LinearLayout(this); side.setGravity(Gravity.CENTER_VERTICAL);
-        TextView label = text("旁聊", 12, false); label.setTextColor(HINT); label.setPadding(dp(10), dp(14), 0, dp(6));
+        TextView label = text(selectingSideChats ? "已选 " + selectedSideChats.size() + " 项" : "旁聊", 12, false); label.setTextColor(HINT); label.setPadding(dp(10), dp(14), 0, dp(6));
         side.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
-        side.addView(iconAction("plus", "新旁聊", v -> createSideChat(null)), new LinearLayout.LayoutParams(dp(44), dp(44))); drawerList.addView(side);
+        if(selectingSideChats) {
+            List<String> visible=visibleSideChatIds();
+            boolean all=!visible.isEmpty()&&selectedSideChats.containsAll(visible);
+            TextView selectAll=text(all?"取消全选":"全选",13,true);selectAll.setTextColor(BLUE);selectAll.setPadding(dp(8),dp(10),dp(8),dp(10));
+            selectAll.setOnClickListener(v->{if(all)selectedSideChats.clear();else selectedSideChats.addAll(visibleSideChatIds());drawerKey=null;refreshDrawer();});side.addView(selectAll);
+            View archive=iconAction("archive", "归档所选旁聊", v -> archiveSideChats(new ArrayList<>(selectedSideChats)));
+            View trash=iconAction("trash", "删除所选旁聊", v -> confirmDeleteSideChats(new ArrayList<>(selectedSideChats)));
+            for(View action:new View[]{archive,trash}){action.setEnabled(!selectedSideChats.isEmpty());action.setAlpha(selectedSideChats.isEmpty()?0.35f:1f);side.addView(action,new LinearLayout.LayoutParams(dp(40),dp(44)));}
+            TextView done=text("完成",13,true);done.setTextColor(BLUE);done.setPadding(dp(8),dp(10),dp(8),dp(10));done.setOnClickListener(v->{selectingSideChats=false;selectedSideChats.clear();drawerKey=null;refreshDrawer();});side.addView(done);
+        } else {
+            side.addView(iconAction("plus", "新旁聊", v -> createSideChat(null)), new LinearLayout.LayoutParams(dp(44), dp(44)));
+        }
+        drawerList.addView(side);
         List<Map<String,Object>> sideChats = new ArrayList<>(store.conversations());
         sideChats.sort((a,b) -> { int pin=Boolean.compare(Json.flag(b,"pinned"),Json.flag(a,"pinned")); return pin!=0?pin:Double.compare(Json.number(b,"updated_at"),Json.number(a,"updated_at")); });
         for (Map<String, Object> item : sideChats) {
             String id = Json.string(item, "id"); if (!AppPresentation.listedSideChat(item, tab == TAB_CHAT ? currentConversation : "")) continue;
-            LinearLayout row = listRow(46, tab == TAB_CHAT && id.equals(currentConversation));
+            LinearLayout row = listRow(46, selectingSideChats ? selectedSideChats.contains(id) : tab == TAB_CHAT && id.equals(currentConversation));
+            if(selectingSideChats){NavIconView check=new NavIconView(this,selectedSideChats.contains(id)?"checked":"unchecked");check.color(BLUE);
+                LinearLayout.LayoutParams box=new LinearLayout.LayoutParams(dp(20),dp(20));box.setMargins(0,0,dp(10),0);row.addView(check,box);}
             TextView title = text(Json.string(item, "title"), 14, false); title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END);
             row.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
             double at = Json.number(item, "updated_at");
             TextView time = text(at > 0 ? new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date((long) (at * 1000))) : "", 11, false);
             long read = getSharedPreferences("conversation_read", MODE_PRIVATE).getLong(runtimeUrl() + ":" + id, 0);
             if (at * 1000 > read && !(tab == TAB_CHAT && id.equals(currentConversation))) { time.setText("●"); time.setTextColor(BLUE); } else time.setTextColor(HINT);
-            row.addView(time); row.setOnClickListener(v -> enterConversation(id, true));
-            row.setOnLongClickListener(v -> { renameSideChat(id); return true; }); drawerList.addView(row);
+            row.addView(time); row.setOnClickListener(v -> {
+                if(selectingSideChats){if(!selectedSideChats.add(id))selectedSideChats.remove(id);drawerKey=null;refreshDrawer();}
+                else enterConversation(id, true);
+            });
+            row.setOnLongClickListener(v -> { if(selectingSideChats)v.performClick();else sideChatMenu(v,id); return true; }); drawerList.addView(row);
         }
-        drawerList.addView(drawerHeading("帮手"));
-        for (AppPresentation.Helper helper : AppPresentation.helpers(store.cards(), offeredHelpers())) {
+        int archivedCount=0;for(Map<String,Object> item:sideChats)if(Json.flag(item,"archived")&&!"default".equals(Json.string(item,"id")))archivedCount++;
+        if(archivedCount>0)drawerList.addView(groupRow("archive","已归档",null,String.valueOf(archivedCount),HINT,v->showArchivedSideChats(),false));
+        LinearLayout helperHeading = new LinearLayout(this); helperHeading.setGravity(Gravity.CENTER_VERTICAL);
+        helperHeading.addView(drawerHeading("帮手"), new LinearLayout.LayoutParams(0,-2,1));
+        helperHeading.addView(iconAction("plus", "创建 agent", v -> new HelperManagement(this, this::helpersChanged).create()), new LinearLayout.LayoutParams(dp(44),dp(44)));
+        drawerList.addView(helperHeading);
+        for (AppPresentation.Helper helper : AppPresentation.localHelpers(store.cards(), offeredHelpers())) {
             LinearLayout row = listRow(48, false); FrameLayout face = new FrameLayout(this); face.addView(avatar(helper.role, helper.current(store.runtimeConnected()) != null ? "focus" : "idle", 30), new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER));
-            UsageRing ring = new UsageRing(this); Usage data = store.usage(); ring.set(data == null || !store.runtimeConnected() ? -1 : data.fiveHourLeft(helper.role, System.currentTimeMillis() / 1000L));
+            UsageRing ring = new UsageRing(this); Usage data = store.usage(); ring.set(data == null || !store.runtimeConnected() ? -1 : data.left(helper.role, System.currentTimeMillis() / 1000L));
             face.addView(ring, new FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER)); row.addView(face, new LinearLayout.LayoutParams(dp(42), dp(42)));
-            TextView title = text(AppPresentation.name(helper.role), 14, false); title.setPadding(dp(12), 0, 0, 0); row.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-            row.addView(stateText(helper.status(store.runtimeConnected()), 12)); row.setOnClickListener(v -> { setDrawer(false); showQuota(helper.role); }); drawerList.addView(row);
+            TextView title = text(helperTitle(helper.role), 14, false); title.setPadding(dp(12), 0, 0, 0); row.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(stateText(helper.status(store.runtimeConnected()), 12)); row.setOnClickListener(v -> { setDrawer(false); showQuota(helper.role); });
+            row.setOnLongClickListener(v -> { String nameId=agentName(helper.role); if(nameId!=null)new HelperManagement(this,this::helpersChanged).actions(v,nameId,helperTitle(helper.role)); return true; });
+            drawerList.addView(row);
         }
     }
 
@@ -1007,22 +1048,28 @@ public class MainActivity extends Activity implements HubStore.Listener {
         AppUpdate.Release update = AppUpdate.availableFor(RuntimeClient.selected(this));
         String key = store.linkState() + (target == null ? "" : target.name + target.url) + store.runtimeConnected()
                 + running + companionChoice + (update == null ? "" : update.sha256) + updateProgress
-                + "|" + packProgress + "|" + System.identityHashCode(AppUpdate.packs);
+                + "|" + AccountManager.status() + "|" + AccountManager.username() + "|" + packProgress + "|" + System.identityHashCode(AppUpdate.packs);
         boolean animate = getSharedPreferences("ds_ui", MODE_PRIVATE).getBoolean("animate", true);
         key += animate;
         if (key.equals(mineKey)) return;
         mineKey = key;
         minePane.removeAllViews();
-        // 小幽配对：手机只连小幽，不选由哪台电脑回答；在哪台电脑是小幽自己安排的。
+        // Account selection chooses the receiving Runtime; helper assignment stays with Xiaoyou.
         minePane.addView(groupHeading("小幽"));
         LinearLayout links = group();
-        links.addView(groupRow("chat", companionName(), target == null ? "扫电脑上的二维码，再在电脑上确认"
+        links.addView(groupRow("chat", companionName(), target == null ? "登录同一个小幽账号"
                         : running > 0 ? running + " 件事在做" : null,
                 connectionWord(), target != null && store.runtimeConnected() ? GREEN : AMBER,
                 view -> { if (target == null) scanPairing(); }, true));
-        links.addView(groupRow("computer", "添加电脑", target == null ? null : "在另一台电脑上也装好小幽后扫码", "›", HINT,
+        links.addView(groupRow("computer", "小幽账号", AccountManager.signedIn() && target != null
+                        ? "新消息发送到 · " + target.name : AccountManager.status(), "›", HINT,
                 view -> scanPairing(), false));
         minePane.addView(links);
+        LinearLayout management = group();
+        management.addView(groupRow("computer", "帮手管理", target == null ? "连接电脑后添加或移除帮手" : "管理 · " + target.name,
+                "›", HINT, view -> new HelperManagement(this, () -> { helpersTarget = ""; mineKey = ""; onHubChanged(); }).open(), false));
+        LinearLayout.LayoutParams managementGap = new LinearLayout.LayoutParams(-1, -2);
+        managementGap.setMargins(0, dp(12), 0, 0); minePane.addView(management, managementGap);
         minePane.addView(groupHeading("随身设备"));
         LinearLayout devices = group();
         devices.addView(groupRow("device", "随身设备", null, device ? "已连接 ›" : "未连接 ›",
@@ -1055,12 +1102,117 @@ public class MainActivity extends Activity implements HubStore.Listener {
         note.setGravity(Gravity.CENTER); note.setPadding(0, dp(28), 0, dp(14)); minePane.addView(note);
     }
 
-    /** 添加电脑只有一种方式：扫电脑上的一次性二维码，再在电脑上确认这部手机。 */
+    /** Account login and recipient selection share the app's bottom-sheet language. */
     private void scanPairing() {
-        new com.google.zxing.integration.android.IntentIntegrator(this)
-                .setDesiredBarcodeFormats(java.util.Collections.singletonList("QR_CODE"))
-                .setPrompt("扫描电脑小幽上的二维码，再在电脑上确认这部手机")
-                .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false).initiateScan();
+        if (accountDialog != null) accountDialog.dismiss();
+        accountRuntimeList = null; accountRuntimeKey = "";
+        Sheet sheet = new Sheet(this, "小幽账号", false);
+        accountDialog = sheet;
+        sheet.setOnDismissListener(ignored -> {
+            if (accountDialog == sheet) {
+                accountDialog = null; accountRuntimeList = null; accountRuntimeKey = "";
+            }
+        });
+        if (AccountManager.signedIn()) {
+            LinearLayout identity = group();
+            identity.addView(groupRow("mine", AccountManager.username(), "已登录小幽账号", "", HINT, null, false));
+            sheet.add(identity);
+            sheet.add(groupHeading("新消息发送到"));
+            accountRuntimeList = group(); accountRuntimeKey = "";
+            sheet.add(accountRuntimeList);
+            sheet.message("电脑登录同一账号并保持运行后，会出现在这里。选定后，离线时也不会改发到其他电脑；已受理的任务继续由原电脑处理。");
+            sheet.option("退出账号", null, true, () -> AccountManager.logout(problem -> {
+                if (problem != null) fail(problem);
+                mineKey = ""; refreshRuntimes();
+            }));
+        } else {
+            sheet.message("登录后，连接同一账号下的电脑。");
+            EditText user = accountInput("输入小幽账号", false);
+            EditText password = accountInput("输入密码", true);
+            user.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT);
+            password.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+            sheet.add(groupHeading("账号")); sheet.add(user);
+            sheet.add(groupHeading("密码")); sheet.add(password);
+            TextView feedback = text("", 13, false);
+            feedback.setTextColor(0xffb3402f); feedback.setPadding(dp(8), dp(10), dp(8), dp(4));
+            feedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            feedback.setVisibility(View.GONE); sheet.add(feedback);
+            Button login = button("登录并连接", null);
+            login.setBackground(pressable(BLUE, 14)); login.setTextColor(Color.WHITE);
+            Runnable submit = () -> {
+                if (AccountManager.busy()) return;
+                String name = user.getText().toString().trim(), secret = password.getText().toString();
+                if (name.isEmpty() || secret.isEmpty()) {
+                    feedback.setText("请输入账号和密码"); feedback.setVisibility(View.VISIBLE);
+                    (name.isEmpty() ? user : password).requestFocus(); return;
+                }
+                feedback.setVisibility(View.GONE); password.setText("");
+                login.setEnabled(false); login.setAlpha(.65f); login.setText("正在登录…");
+                AccountManager.login(this, name, secret, problem -> {
+                    login.setEnabled(true); login.setAlpha(1f); login.setText("登录并连接");
+                    if (problem != null) {
+                        feedback.setText(problem); feedback.setVisibility(View.VISIBLE);
+                    } else {
+                        sheet.dismiss(); RuntimeClient.watch(this); RuntimeWatchService.start(this);
+                        mineKey = ""; runtimeKey = ""; refreshRuntimes();
+                    }
+                });
+            };
+            login.setOnClickListener(view -> submit.run());
+            password.setOnEditorActionListener((view, action, event) -> {
+                if (action != android.view.inputmethod.EditorInfo.IME_ACTION_DONE) return false;
+                submit.run(); return true;
+            });
+            sheet.add(login);
+            sheet.message("请先在电脑上创建小幽账号并配置小幽。登录会保留原历史和待处理请求。");
+        }
+        sheet.show();
+        if (sheet.getWindow() != null) sheet.getWindow().setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        refreshAccountRuntimes();
+    }
+
+    private EditText accountInput(String hint, boolean secret) {
+        EditText field = input(hint);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | (secret
+                ? InputType.TYPE_TEXT_VARIATION_PASSWORD : InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD));
+        field.setTextSize(15); field.setTextColor(INK); field.setHintTextColor(HINT);
+        field.setPadding(dp(16), dp(14), dp(16), dp(14)); field.setMinimumHeight(dp(52));
+        field.setBackground(surface(Color.WHITE, Color.WHITE, 18));
+        field.setContentDescription(secret ? "密码" : "小幽账号");
+        return field;
+    }
+
+    private void refreshAccountRuntimes() {
+        if (accountDialog == null || !accountDialog.isShowing() || accountRuntimeList == null) return;
+        if (!AccountManager.signedIn()) { accountDialog.dismiss(); return; }
+        List<RuntimeClient.Target> targets = RuntimeClient.targets(this);
+        RuntimeClient.Target selected = RuntimeClient.selected(this);
+        StringBuilder key = new StringBuilder(selected == null ? "" : selected.url);
+        for (RuntimeClient.Target target : targets) key.append('|').append(target.url).append(':')
+                .append(target.name).append(':').append(RelayManager.online(target.url));
+        if (key.toString().equals(accountRuntimeKey) && accountRuntimeList.getChildCount() > 0) return;
+        accountRuntimeKey = key.toString(); accountRuntimeList.removeAllViews();
+        if (targets.isEmpty()) {
+            TextView empty = text("还没有发现电脑，等待电脑登录并上线", 14, false);
+            empty.setTextColor(HINT); empty.setPadding(0, dp(18), 0, dp(18)); accountRuntimeList.addView(empty);
+        }
+        for (int index = 0; index < targets.size(); index++) {
+            RuntimeClient.Target target = targets.get(index);
+            boolean chosen = selected != null && selected.url.equals(target.url);
+            boolean online = RelayManager.online(target.url);
+            View choice = groupRow(null, target.name, online ? "在线" : "离线，等待连接恢复",
+                    chosen ? "已选择 ✓" : "", BLUE, view -> {
+                if (listening || transcribing) { toast("请先结束当前录音，再切换电脑"); return; }
+                if (!draftImages.isEmpty()) { toast("请先发送或移除当前图片，再切换电脑"); return; }
+                saveUiContext(); RuntimeClient.select(this, target.url);
+                accountRuntimeKey = ""; mineKey = ""; runtimeKey = ""; drawerKey = null;
+                if (accountDialog != null) accountDialog.dismiss();
+                onHubChanged();
+            }, index < targets.size() - 1);
+            choice.setSelected(chosen);
+            accountRuntimeList.addView(choice);
+        }
     }
 
     /** 下载新版时的进度（0–99）；不在下载时是 -1。 */
@@ -1100,7 +1252,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void updateSpeechPack() {
         RuntimeClient.Target target = RuntimeClient.selected(this);
-        if (target == null) { toast("先添加电脑"); return; }
+        if (target == null) { toast("先登录小幽账号"); return; }
         if (packProgress >= 0) return;
         AppPacks.Pack pack = AppPacks.find(AppUpdate.packs, AppPacks.SPEECH);
         List<AppPacks.Item> todo = pack == null ? null : AppPacks.missing(pack, AppPacks.installed(this, AppPacks.SPEECH));
@@ -1126,7 +1278,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** 没有更新时去问一次；有更新时下载、校验，再交给系统安装（主人要在系统界面点确认）。 */
     private void updateApp() {
         RuntimeClient.Target target = RuntimeClient.selected(this);
-        if (target == null) { toast("先添加电脑"); return; }
+        if (target == null) { toast("先登录小幽账号"); return; }
         if (updateProgress >= 0) return;
         AppUpdate.Release update = AppUpdate.availableFor(RuntimeClient.selected(this));
         if (update == null) {
@@ -1194,7 +1346,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     /** Settings rows with fixed App wording; any other row (task titles, computer names, logs) is recorded as "row". */
     private static final java.util.Set<String> STATIC_ROWS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "随身设备", "伴侣形象", "形象呼吸动画", "快速审核", "通知", "开发者", "添加电脑", "App 更新",
+            "随身设备", "伴侣形象", "形象呼吸动画", "快速审核", "通知", "开发者", "小幽账号", "App 更新",
             "主对话", "在做的事",
             "手机语音模型", "断开设备", "连接设备", "固件", "电脑上的会话"));
 
@@ -1303,6 +1455,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         HubStore.get().removeListener(this);
         uiHandler.removeCallbacks(tick);
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (accountDialog != null) accountDialog.dismiss();
         if (listening || transcribing) {
             // 切走了就不算说完：丢掉这段，不发出去。
             ++voiceSession; listening = false; transcribing = false; heard = "";
@@ -1315,6 +1468,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     @Override
     public void onHubChanged() {
         HubStore store = HubStore.get();
+        if(store.conversationDeleted(currentConversation)) { currentConversation="default";store.activeConversation("default");chatHeader=""; }
         status.setText("蓝牙权限：" + (hasBluetoothPermission() ? "已授权" : "未授权")
                 + "\n通知读取：" + (listenerEnabled() ? "已开启" : "未开启")
                 + "\n设备连接：" + store.linkState()
@@ -1336,12 +1490,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
             refreshCompanions();
         }
         lead.set(companionChoice, !store.runtimeConnected() ? "idle" : !store.approvals().isEmpty() ? "ask" : store.busy() ? "think" : "happy");
-        if (!helpersTarget.equals(runtimeUrl)) {
-            helpersTarget = runtimeUrl;
+        StringBuilder rosterSource = new StringBuilder(runtimeUrl).append(store.helpersVersion());
+        Usage rosterUsage = store.usage();
+        if (rosterUsage != null) for (Usage.Agent agent : rosterUsage.agents) rosterSource.append('|').append(agent.name);
+        final String rosterRequest = rosterSource.toString();
+        if (!helpersTarget.equals(rosterRequest)) {
+            helpersTarget = rosterRequest;
             helpers = new ArrayList<>();
             RuntimeClient.fetchAgents(this, result -> runOnUiThread(() -> {
                 RuntimeClient.Target current = RuntimeClient.selected(this);
-                if (!isFinishing() && current != null && current.url.equals(runtimeUrl)) { helpers = result; drawerKey = null; refreshDrawer(); }
+                if (!isFinishing() && current != null && current.url.equals(runtimeUrl) && helpersTarget.equals(rosterRequest)) {
+                    helpers = result; drawerKey = null; refreshDrawer(); onHubChanged();
+                }
             }));
         }
 
@@ -1611,7 +1771,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             clearImageDraft();
             chatInput.setText(""); drafts.remove(composerContext); updateSendState(); scrollDown(); return;
         }
-        if (RuntimeClient.selected(this) == null) { toast("需要配对：去「设置」添加电脑"); return; }
+        if (RuntimeClient.selected(this) == null) { toast("请到「设置」登录小幽账号"); return; }
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
         String targetCard = tab == TAB_TASKS ? openTask : null;
@@ -1685,7 +1845,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
     /** 这位帮手在 Runtime 上的名字（帮手页按角色显示，发消息要用 Runtime 的代理名）；没有就是 null。 */
     private String agentName(String role) {
         if (role == null) return null;
-        for (String name : offeredHelpers()) if (AppPresentation.role(name).equals(role)) return name;
+        for (String name : offeredHelpers()) if(name.equals(role))return name;
+        for (String name : offeredHelpers()) if (!name.contains("@") && AppPresentation.role(name).equals(role)) return name;
         return null;
     }
 
@@ -1890,7 +2051,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 : "来源：" + target.name + "\n" + (store.runtimeConnected() ? "电脑在线"
                 : usage == null ? "电脑离线 · 等待连接" : "电脑离线 · 显示上次收到的缓存，额度可能已变化"));
         if (target == null) {
-            usageView.setText("到「连接与设置」添加电脑，连接后即可查看用量。\n5 小时额度：未知\n本周额度：未知");
+            usageView.setText("到「设置」登录小幽账号，连接后即可查看用量。\n5 小时额度：未知\n本周额度：未知");
         } else if (usage == null || usage.empty()) {
             usageView.setText("这台电脑还没有报告用量。连接正常后可点刷新；旧版 Runtime 可能不支持。"
                     + "\n5 小时额度：未知\n本周额度：未知\n模型和档位：等待电脑报告");
@@ -1930,6 +2091,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     @Override
     public void onBackPressed() {
         if (drawerOpen) {
+            if(selectingSideChats){selectingSideChats=false;selectedSideChats.clear();drawerKey=null;refreshDrawer();return;}
             setDrawer(false);
         } else if (!navigation.isEmpty()) {
             String[] previous = navigation.pop(); openTask = previous[1].isEmpty() ? null : previous[1];
@@ -1950,19 +2112,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return layout;
     }
 
-    private void savePairing() {
-        String problem = RuntimeClient.savePairing(this, pairingInput.getText().toString());
-        if (problem != null) {
-            HubStore.get().log(problem);
-            runtimeStatus.setText(problem); fail(problem);
-            return;
-        }
-        boolean encryptedPair = pairingInput.getText().toString().trim().startsWith("xiaoyou://");
-        pairingInput.setText("");
-        runtimeStatus.setText(encryptedPair ? "等待电脑确认配对，已有电脑连接保持可用" : "已保存连接串");
-        toast(encryptedPair ? "请在电脑上确认这部手机" : "已保存连接串");
-        HubStore.get().log(encryptedPair ? "已请求加密配对" : "已保存连接串");
-    }
 
     private void connect() {
         if (!hasBluetoothPermission()) {
@@ -2223,8 +2372,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             row.addView(receipt(card));
         if (message.status.equals("failed") && mine && !message.synced) {
             row.addView(button("重试发送", view -> {
-                if (!message.attachments.isEmpty()) RuntimeClient.retryImages(this, message.id, message.text, message.attachments);
-                else RuntimeClient.retry(this, message.id, message.text, message.scope.equals("task") ? message.card : null);
+                if (!message.attachments.isEmpty()) RuntimeClient.retryImages(this, message.id, message.text, message.attachments, message.conversation);
+                else RuntimeClient.retry(this, message.id, message.text, message.scope.equals("task") ? message.card : null, message.conversation);
             }));
         }
         row.setTag(message.id); row.setFocusable(true);
@@ -2453,7 +2602,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (openAgent == null) { if (agentPane.getChildCount() > 0) { agentPane.removeAllViews(); agentKey = null; } return; }
         boolean connected = HubStore.get().runtimeConnected();
         AppPresentation.Helper helper = null;
-        for (AppPresentation.Helper item : AppPresentation.helpers(cards, offeredHelpers()))
+        for (AppPresentation.Helper item : AppPresentation.localHelpers(cards, offeredHelpers()))
             if (item.role.equals(openAgent)) helper = item;
         if (helper == null) helper = new AppPresentation.Helper(openAgent);
         String energy = energyText(openAgent);
@@ -2466,7 +2615,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         LinearLayout hero = column(); hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(0, dp(4), 0, dp(20));
         AvatarView portrait = avatar(helper.role, now != null ? "focus" : "idle", 112);
         hero.addView(portrait);
-        TextView name = text(AppPresentation.name(helper.role), 22, true); name.setPadding(0, dp(10), 0, dp(2)); hero.addView(name);
+        TextView name = text(helperTitle(helper.role), 22, true); name.setPadding(0, dp(10), 0, dp(2)); hero.addView(name);
         TextView line = now != null ? stateText(DsState.state(now, connected).equals("waiting")
                 ? "等你确认「" + now.title + "」" : "正在做「" + now.title + "」", 13) : text(helper.status(connected), 13, false);
         line.setGravity(Gravity.CENTER); hero.addView(line);
@@ -2475,7 +2624,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         agentPane.addView(hero);
         agentPane.addView(groupHeading("小幽派给它的"));
         if (helper.dispatched.isEmpty()) {
-            TextView none = text("还没有。在聊天里说「让" + AppPresentation.name(helper.role) + "做……」，小幽会安排。", 13, false);
+            TextView none = text("还没有。在聊天里说「让" + helperTitle(helper.role) + "做……」，小幽会安排。", 13, false);
             none.setTextColor(HINT); none.setPadding(dp(4), 0, dp(4), 0); agentPane.addView(none);
         } else {
             LinearLayout list = group();
@@ -2800,7 +2949,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         ((TextView) devicePill.findViewWithTag("label")).setText(device ? "随身小幽在身边" : "随身小幽没连上");
         boolean connected = store.runtimeConnected();
         RuntimeClient.Target target = RuntimeClient.selected(this);
-        List<AppPresentation.Helper> roster = AppPresentation.helpers(cards, offeredHelpers());
+        List<AppPresentation.Helper> roster = AppPresentation.localHelpers(cards, offeredHelpers());
 
         // 新交出去的事飞信；做完的事让帮手变绿。第一次认卡时只记下，不飞。
         Set<String> nowActive = new HashSet<>();
@@ -2873,7 +3022,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (homeActions.getChildCount() == 0 || (target == null) != (homeActions.getTag() != null)) {
             homeActions.removeAllViews(); homeActions.setTag(target == null ? "setup" : null);
             if (target == null) {
-                Button setup = button("添加电脑", view -> scanPairing());
+                Button setup = button("登录小幽账号", view -> scanPairing());
                 setup.setBackground(pressable(BLUE, 24)); setup.setTextColor(Color.WHITE);
                 homeActions.addView(setup, new LinearLayout.LayoutParams(dp(200), dp(48)));
 
@@ -2911,7 +3060,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             ring = new NavIconView(MainActivity.this, "spinner"); ring.color(0xff6a5fd0); ring.setAlpha(0f);
             face.addView(ring, new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER));
             face.setClipChildren(false);
-            face.setContentDescription(AppPresentation.name(role) + " 的用量详情");
+            face.setContentDescription(helperTitle(role) + " 的用量详情");
             face.setOnClickListener(click -> showQuota(role)); ctl(face, "usage-face");
             view.addView(face, new LinearLayout.LayoutParams(dp(40), dp(40)));
             words = text("", 13, false); words.setPadding(dp(6), 0, 0, 0);
@@ -2919,7 +3068,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             view.setFocusable(true);
             view.setOnClickListener(click -> {
                 Card now = null;
-                for (AppPresentation.Helper helper : AppPresentation.helpers(HubStore.get().cards(), offeredHelpers()))
+                for (AppPresentation.Helper helper : AppPresentation.localHelpers(HubStore.get().cards(), offeredHelpers()))
                     if (helper.role.equals(role)) now = helper.current(HubStore.get().runtimeConnected());
                 if (now != null) open(now.id);
                 else if (mode.equals("done") && doneCard.containsKey(role)) open(doneCard.get(role));
@@ -2939,7 +3088,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         void show(String next, boolean animate) {
             if (next.equals(mode)) return;
             String before = mode; mode = next;
-            String name = AppPresentation.name(role);
+            String name = helperTitle(role);
             boolean busy = next.equals("working") || next.equals("desktop");
             String label = next.equals("working") ? name + " 在做…" : next.equals("desktop") ? name + " 电脑上在跑"
                     : next.equals("waiting") ? name + " 等你确认"
@@ -2983,13 +3132,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String details = data == null ? "还没有收到用量数据。"
                 : data.windowSummary(role, System.currentTimeMillis() / 1000L, java.util.TimeZone.getDefault());
         if (!current.runtimeConnected() && data != null) details += "\n连不上小幽，以上是上次收到的数据。";
-        new Sheet(this, AppPresentation.name(role) + " 的用量", false)
+        new Sheet(this, helperTitle(role) + " 的用量", false)
                 .message(details).action("刷新用量", false, this::fetchUsage).show();
     }
 
     private void refreshHelperRow(List<AppPresentation.Helper> roster, boolean connected) {
         StringBuilder key = new StringBuilder();
-        for (AppPresentation.Helper helper : roster) key.append(helper.role).append('|');
+        for (AppPresentation.Helper helper : roster) key.append(helper.role).append(helperTitle(helper.role)).append('|');
         boolean rebuilt = !key.toString().equals(busyKey);
         if (rebuilt) {
             busyKey = key.toString(); busyRow.removeAllViews();
@@ -3012,7 +3161,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             else if (mode.equals("idle") && done != null && now - done < 8000) mode = "done";
             HelperChip chip = helperChips.get(helper.role);
             chip.show(mode, animate);
-            chip.quota(usage == null || !connected ? -1 : usage.fiveHourLeft(helper.role, now / 1000L));
+            chip.quota(usage == null || !connected ? -1 : usage.left(helper.role, now / 1000L));
         }
     }
 
@@ -3200,6 +3349,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Card.Approval approval = HubStore.get().approval(id);
         if (approval == null) { toast("这次请求已经处理或撤回"); return; }
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (accountDialog != null) accountDialog.dismiss();
         Sheet dialog = new Sheet(this, "确认这次操作", true); approvalDialog = dialog;
         LinearLayout page = column();
         ScrollView reader = new ScrollView(this);
@@ -3476,15 +3626,6 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        com.google.zxing.integration.android.IntentResult scanned = com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (scanned != null) {
-            if (scanned.getContents() != null) {
-                String link = scanned.getContents().trim();
-                if (!link.startsWith("xiaoyou://join#")) { fail("这不是小幽的二维码，请扫电脑小幽「添加手机」里的二维码"); return; }
-                pairingInput.setText(link); savePairing();
-            }
-            return;
-        }
         if (requestCode == 54) {
             RuntimeClient.Target target = imagePickerTarget; imagePickerTarget = null;
             if (resultCode == RESULT_OK && data != null && target != null) {
@@ -3516,7 +3657,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return view;
     }
 
-    /** 登记过的 Runtime：点一下切换，长按删除。列表没变时不重建，免得打断点击。 */
+    /** 登记过的 Runtime：点一下切换。列表没变时不重建，免得打断点击。 */
     private void refreshRuntimes() {
         List<RuntimeClient.Target> targets = RuntimeClient.targets(this);
         RuntimeClient.Target current = RuntimeClient.selected(this);
@@ -3530,23 +3671,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         runtimeKey = key.toString();
         runtimeList.removeAllViews();
         for (RuntimeClient.Target target : targets) {
-            RadioButton choice = new RadioButton(this);
-            choice.setText(target.name + "  (" + target.url + ")");
-            choice.setChecked(current != null && current.url.equals(target.url));
-            choice.setOnClickListener(view -> {
-                RuntimeClient.select(this, target.url);
-                HubStore.get().log("现在由 " + target.name + " 上的ds回答");
-            });
-            choice.setOnLongClickListener(view -> {
-                RuntimeClient.remove(this, target.url);
-                HubStore.get().log("已删除 Runtime " + target.name);
-                return true;
-            });
+            TextView choice=text(target.name+(current!=null && current.url.equals(target.url)?" · 当前发送目标":""),14,false);
             runtimeList.addView(choice);
         }
         runtimeStatus.setText(targets.isEmpty()
-                ? "还没有登记电脑。正常添加请用「设置 › 添加电脑」扫码。"
-                : "这里列出的是线路，平时由 App 自己选。点一下强制改用这条，长按删除。");
+                ? "还没有连接电脑。请在手机和电脑登录同一个小幽账号。"
+                : "发送目标请在「小幽账号」中选择。");
     }
 
     /** 问现在用的那台电脑：仓库里有哪些固件。 */
@@ -3785,24 +3915,86 @@ public class MainActivity extends Activity implements HubStore.Listener {
         navigation.push(new String[]{String.valueOf(tab), openTask == null ? "" : openTask, currentConversation});
     }
 
-    private void renameSideChat(String id) {
-        for (Map<String, Object> item : HubStore.get().conversations()) if (id.equals(Json.string(item, "id")) && !Json.string(item, "directory_id").isEmpty()) {
-            String key = Json.string(item, "directory_id"); long revision = (long) Json.number(item, "metadata_revision");
-            new Sheet(this, conversationTitle(id), false)
-                .option("统一命名", null, false, () -> sharedRename(key, revision, conversationTitle(id)))
-                .option(Json.flag(item, "pinned") ? "取消置顶" : "置顶", null, false, () -> sharedEdit(key, revision, "{\"pinned\":" + !Json.flag(item, "pinned") + "}"))
-                .option("归档", "保留全部记录，可从归档入口恢复", false, () -> sharedEdit(key, revision, "{\"archived\":true}"))
-                .option("查看共享历史", null, false, () -> SharedHistoryPane.show(this, key, conversationTitle(id))).show();
-            return;
+    private List<String> visibleSideChatIds(){
+        List<String> ids=new ArrayList<>();for(Map<String,Object> item:HubStore.get().conversations())if(AppPresentation.listedSideChat(item,tab==TAB_CHAT?currentConversation:""))ids.add(Json.string(item,"id"));return ids;
+    }
+    private void sideChatMenu(View anchor,String id) {
+        Map<String,Object> item=sideChat(id);if(item==null)return;
+        String key=Json.string(item,"directory_id");long revision=(long)Json.number(item,"metadata_revision");String source=runtimeUrl();
+        AnchoredMenu menu=new AnchoredMenu(this);
+        menu.option(Json.flag(item,"pinned")?"取消置顶":"置顶",false,()->{if(source.equals(runtimeUrl()))sharedEdit(key,revision,"{\"pinned\":"+!Json.flag(item,"pinned")+"}");});
+        menu.option("重命名",false,()->{if(source.equals(runtimeUrl()))renameSideChatTitle(id);});
+        menu.option("归档",false,()->{if(source.equals(runtimeUrl()))sharedEdit(key,revision,"{\"archived\":true}");});
+        menu.option("多选",false,()->{if(!source.equals(runtimeUrl()))return;selectingSideChats=true;selectedSideChats.add(id);drawerKey=null;refreshDrawer();});
+        menu.option("删除",true,()->{if(source.equals(runtimeUrl()))confirmDeleteSideChats(java.util.Collections.singletonList(id));});
+        menu.show(anchor);
+    }
+    private Map<String,Object> sideChat(String id){for(Map<String,Object> item:HubStore.get().conversations())if(id.equals(Json.string(item,"id"))&&!"default".equals(id))return item;return null;}
+    private void renameSideChatTitle(String id){
+        Map<String,Object> item=sideChat(id);if(item==null)return;
+        final String key=Json.string(item,"directory_id");final long revision=(long)Json.number(item,"metadata_revision");final String source=runtimeUrl();
+        Sheet sheet=Sheet.centered(this,"重命名旁聊");EditText name=accountInput("旁聊名称",false);name.setText(conversationTitle(id));
+        TextView error=text("",13,false);error.setTextColor(0xffb3402f);Button save=button("保存",null);
+        save.setOnClickListener(v->{
+            if(!source.equals(runtimeUrl())){sheet.dismiss();return;}
+            String title=name.getText().toString().trim();if(title.isEmpty()||title.length()>80){error.setText("名称应为 1 到 80 个字");return;}
+            StringBuilder value=new StringBuilder();BuddyProtocol.quote(value,title);save.setEnabled(false);
+            RuntimeClient.directoryEdit(this,key,revision,"{\"title\":"+value+"}",(result,problem)->{
+                save.setEnabled(true);if(problem!=null){error.setText(problem);return;}sheet.dismiss();drawerKey=null;RuntimeClient.wakeSync();
+            });
+        });sheet.add(name).add(error).add(save).show();
+    }
+    private void showArchivedSideChats(){
+        Sheet sheet=Sheet.centered(this,"已归档旁聊");int count=0;
+        for(Map<String,Object> item:HubStore.get().conversations())if(Json.flag(item,"archived")&&!"default".equals(Json.string(item,"id"))){
+            String id=Json.string(item,"id");sheet.option(Json.string(item,"title"),"恢复、重命名或删除",false,()->archivedSideChatActions(id));count++;
         }
-        EditText name = input("旁聊名称"); name.setText(conversationTitle(id));
-        new AlertDialog.Builder(this).setTitle("重命名旁聊").setView(name).setNegativeButton("取消", null)
-                .setPositiveButton("保存", (dialog, which) -> RuntimeClient.renameConversation(this, id, name.getText().toString().trim(), (result, error) -> {
-                    if (error != null || result == null) { toast(error == null ? "保存失败" : error); return; }
-                    List<Object> list = new ArrayList<>(); for (Map<String, Object> item : HubStore.get().conversations())
-                        list.add(id.equals(Json.string(item, "id")) ? result : item);
-                    HubStore.get().conversations(list); drawerKey = null; refreshDrawer(); updateHeader();
-                })).show();
+        if(count==0)sheet.message("暂无归档旁聊");sheet.show();
+    }
+    /** 已归档面板里点一条：居中面板给出恢复、重命名、删除；侧边栏里已经看不到这一行，没处挂悬浮菜单。 */
+    private void archivedSideChatActions(String id){
+        Map<String,Object> item=sideChat(id);if(item==null)return;
+        String key=Json.string(item,"directory_id");long revision=(long)Json.number(item,"metadata_revision");String source=runtimeUrl();
+        Sheet.centered(this,Json.string(item,"title"))
+            .option("恢复旁聊",null,false,()->{if(source.equals(runtimeUrl()))sharedEdit(key,revision,"{\"archived\":false}");})
+            .option("重命名",null,false,()->{if(source.equals(runtimeUrl()))renameSideChatTitle(id);})
+            .option("删除",null,true,()->{if(source.equals(runtimeUrl()))confirmDeleteSideChats(java.util.Collections.singletonList(id));})
+            .show();
+    }
+    private void archiveSideChats(List<String> ids){
+        int[] left={ids.size()};List<String> failed=new ArrayList<>();
+        for(String id:ids){
+            Map<String,Object> item=sideChat(id);if(item==null){left[0]--;continue;}
+            RuntimeClient.directoryEdit(this,Json.string(item,"directory_id"),(long)Json.number(item,"metadata_revision"),"{\"archived\":true}",(result,error)->{
+                if(error!=null||result==null)failed.add(conversationTitle(id)+"："+(error==null?"保存失败":error));
+                if(--left[0]>0)return;
+                workKey="";drawerKey=null;refreshDrawer();RuntimeClient.wakeSync();
+                if(failed.isEmpty())toast("已归档 "+ids.size()+" 段旁聊");else Sheet.centered(this,"部分旁聊未归档").message(String.join("\n",failed)).show();
+            });
+        }
+        selectingSideChats=false;selectedSideChats.clear();drawerKey=null;refreshDrawer();
+    }
+    private void confirmDeleteSideChats(List<String> ids){
+        if(ids.isEmpty())return;final String source=runtimeUrl();
+        Sheet.centered(this,ids.size()==1?"删除旁聊？":"删除 "+ids.size()+" 段旁聊？")
+            .message("将清除所选旁聊的聊天缓存，并同步到其他已登录设备。底层日志保留用于排查，删除后不提供恢复入口。需要以后继续聊，请使用归档。")
+            .action("确认删除",true,()->{if(source.equals(runtimeUrl()))deleteSideChats(new ArrayList<>(ids),0,new ArrayList<>());})
+            .action("取消",false,()->{}).show();
+    }
+    private void deleteSideChats(List<String> ids,int index,List<String> failed){
+        if(index>=ids.size()){
+            selectingSideChats=false;selectedSideChats.clear();drawerKey=null;refreshDrawer();RuntimeClient.wakeSync();
+            if(!failed.isEmpty())Sheet.centered(this,"部分旁聊未删除").message(String.join("\n",failed)).show();return;
+        }
+        String id=ids.get(index);RuntimeClient.deleteConversation(this,id,(result,error)->{
+            if(error!=null)failed.add(conversationTitle(id)+"："+error);
+            else{
+                List<Object> rows=new ArrayList<>();for(Map<String,Object> item:HubStore.get().conversations())if(!id.equals(Json.string(item,"id")))rows.add(item);
+                Map<String,Object> tombstone=new java.util.HashMap<>();tombstone.put("id",id);tombstone.put("deleted",true);rows.add(tombstone);HubStore.get().conversations(rows);
+                if(id.equals(currentConversation))openMainChat();
+            }
+            deleteSideChats(ids,index+1,failed);
+        });
     }
 
     private void showMessageActions(String id) { showMessageActions(id, null); }

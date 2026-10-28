@@ -6,6 +6,14 @@ import java.util.List;
 import java.util.Map;
 
 public class SyncCacheTest {
+    @Test public void catalogDeletionPurgesSavedSyncRecordsAndRejectsReplay() {
+        String old="{\"epoch\":\"e\",\"seq\":1,\"messages\":[{\"id\":\"old\",\"conversation\":\"side-delete\",\"text\":\"private body\",\"rev\":1}]}";
+        SyncCache cache=new SyncCache("*");cache.apply(page(old));
+        cache.apply(page("{\"epoch\":\"e\",\"seq\":2,\"conversations\":[{\"id\":\"side-delete\",\"deleted\":true}]}"));
+        assertFalse(cache.save().contains("private body"));
+        cache=SyncCache.restore(cache.save(),"*");cache.apply(page(old));assertFalse(cache.save().contains("private body"));
+    }
+
     private static Map<String, Object> page(String body) { return Json.parseObject(body); }
 
     @Test public void activityIsOrderedDeduplicatedAndSeparateFromConversationAndPending() {

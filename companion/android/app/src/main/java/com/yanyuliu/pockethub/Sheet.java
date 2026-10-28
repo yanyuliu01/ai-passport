@@ -35,6 +35,7 @@ final class Sheet extends Dialog {
     private final LinearLayout body;
     private final FrameLayout holder;
     private boolean closing;
+    private boolean floating;
 
     /** full：占满大半个屏幕、内容自己管滚动（用于审批这类详情页）；否则按内容高度，太长时滚动。 */
     Sheet(Activity activity, String title, boolean full) {
@@ -102,6 +103,15 @@ final class Sheet extends Dialog {
         setOnShowListener(dialog -> slideIn());
     }
 
+    static Sheet centered(Activity activity,String title) {
+        Sheet sheet=new Sheet(activity,title,false);sheet.floating=true;
+        sheet.panel.setBackground(sheet.round(0xfff6f8fb,sheet.dp(20)));
+        LinearLayout top=(LinearLayout)sheet.panel.getChildAt(0);top.getChildAt(0).setVisibility(View.GONE);top.setOnTouchListener(null);top.setPadding(0,sheet.dp(12),0,0);
+        FrameLayout.LayoutParams params=(FrameLayout.LayoutParams)sheet.panel.getLayoutParams();
+        params.width=Math.min(sheet.dp(420),activity.getResources().getDisplayMetrics().widthPixels-sheet.dp(32));params.gravity=Gravity.CENTER;
+        sheet.panel.setLayoutParams(params);return sheet;
+    }
+
     /** 往面板里放一段内容。 */
     Sheet add(View view) { body.addView(view); return this; }
 
@@ -155,7 +165,7 @@ final class Sheet extends Dialog {
     void close() {
         if (closing) return;
         closing = true;
-        if (!Motion.enabled() || !isShowing()) { dismissNow(); return; }
+        if (floating || !Motion.enabled() || !isShowing()) { dismissNow(); return; }
         panel.animate().cancel();
         panel.animate().translationY(panel.getHeight()).setDuration(200)
                 .setInterpolator(new AccelerateInterpolator(1.4f)).withEndAction(this::dismissNow).start();
@@ -170,7 +180,7 @@ final class Sheet extends Dialog {
     @Override public void dismiss() { close(); }
 
     private void slideIn() {
-        if (!Motion.enabled()) return;
+        if (floating || !Motion.enabled()) return;
         panel.setTranslationY(activity.getResources().getDisplayMetrics().heightPixels);
         panel.post(() -> {
             panel.setTranslationY(panel.getHeight());

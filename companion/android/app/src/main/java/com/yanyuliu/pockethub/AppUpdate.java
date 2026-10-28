@@ -202,7 +202,8 @@ final class AppUpdate {
     }
 
     private static long number(String value) {
-        try { return Long.parseLong(text(value)); } catch (NumberFormatException ignored) { return 0; }
+        try { return new java.math.BigDecimal(text(value)).longValueExact(); }
+        catch (NumberFormatException | ArithmeticException ignored) { return 0; }
     }
 
     private static String text(String value) { return value == null ? "" : value; }

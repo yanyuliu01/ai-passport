@@ -38,6 +38,16 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Account-only remote connection (Android 0.35.0 source)
+
+Phone and desktop sign in to the same account on the existing self-hosted
+server. Local helpers stay on each computer. Android verifies account recovery
+before discovering computers; it no longer offers QR pairing or raw connection
+strings. Retained legacy routes remain inactive and their history is preserved.
+See the [account guide](desktop/deploy/accounts.md) for migration and boundaries.
+
+In Android 0.35.0, open **Xiaoyou account** to select the receiving computer for new messages. The choice persists per account, and an offline selection never silently falls back to another computer. Accepted requests remain bound to their original source. Login and account selection use the existing bottom sheet, rounded cards and blue primary action.
+
 ## Unified reply synchronization (App 0.33.2)
 
 App 0.33.2 no longer rewrites the stored chat history when only a desktop activity card changes. Those updates arrived about once a second and each rewrite of a 6 MB history took about 0.7 s on the phone. Conversation cards are stored as before.
@@ -952,3 +962,38 @@ name/pin/archive/restore/project edits and paged public history. Old phone-local
 marks have an explicit migration preview. Short messages stay in their existing
 logical chats. See [current coverage and native-control gaps](../docs/development/conversation-presentation.md#unified-directory-increment-2026-10-22);
 a shared alias does not rewrite native agent databases or prove safe native takeover.
+
+## Helper management and quota alignment (Android 0.36.0)
+
+Settings > Helper management operates on the computer selected in Xiaoyou account.
+The sheet names that computer and supports adding through its native subscription,
+API key or model service, removing a helper, and restoring removed config helpers.
+Credentials stay on the target computer; pending requests and history are retained.
+The main dialogue/voice helper is protected. Older Runtime versions retain their
+existing restrictions and do not offer config-helper restoration.
+
+Avatar rings now use the smaller known, unexpired remaining percentage of the
+5-hour and weekly windows, matching the usage detail explanation. Unknown windows
+do not become zero or full. Membership changes update Runtime usage and wake
+other clients; a stale management form cannot send a write to a newly selected
+computer. An uncertain write is reported without automatically retrying it.
+
+## Sidebar management (Android 0.37.0)
+
+Long-press a sidebar helper to rename its display name or remove it; the plus
+beside Helpers opens creation directly. The selected Runtime's local roster is
+shown; remote mesh aliases and removed historical helpers stay out of this list.
+Long-press a side chat for pin, rename, delete, archive, or selection
+for bulk deletion. Archived chats have a restore entry. Deletion requires a
+confirmation and Runtime 0.25.0; it clears client chat caches and
+synchronizes a deletion marker, while diagnostic message/request logs remain.
+Deletion has no restore entry; archive keeps the full history with a restore entry.
+Active conversations must finish before deletion. Helper removal retains tasks
+and chats; it is separate from deleting a side chat. Older Runtime versions
+report unsupported operations without pretending the record was deleted.
+
+Android 0.37.1 keeps separate agent identities visible even when they use the same portrait or provider. Each can be renamed or removed independently.
+
+Android 0.37.2 uses anchored floating context menus for sidebar long-press actions. Rename and delete confirmations are centered and do not slide. Side-chat selection includes Select all / Deselect all for the currently visible, unarchived list; the main chat and archived chats are excluded.
+
+Android 0.37.3 (81) opens the menu below the pressed row instead of over it and tints that row while the menu is open; Delete sits last, under a divider. A list refresh waits until the menu closes, and closing the drawer closes the menu. Selection mode uses round check marks and adds Archive selected; Archive and Delete are disabled while nothing is selected. Archived side chats open centered Restore, Rename and Delete actions.

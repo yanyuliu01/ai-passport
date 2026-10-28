@@ -203,6 +203,24 @@ final class AppPresentation {
         return result;
     }
 
+    /** Only helpers offered by the selected Runtime belong in its sidebar. */
+    static List<Helper> localHelpers(List<Card> cards, List<String> offered) {
+        Map<String,Helper> local = new LinkedHashMap<>();
+        for(String name:offered) if(!name.contains("@")&&!role(name).equals("ds"))local.put(name,new Helper(name));
+        List<Card> newest=new ArrayList<>(cards);newest.sort(Comparator.comparingDouble((Card card)->card.createdAt).reversed());
+        for(Card card:newest){
+            Helper helper=local.get(card.agent);
+            if(helper==null){
+                List<Helper> aliases=new ArrayList<>();for(Helper candidate:local.values())if(role(candidate.role).equals(owner(card)))aliases.add(candidate);
+                if(aliases.size()==1)helper=aliases.get(0);
+            }
+            if(helper!=null)(card.monitoringOnly?helper.desktop:helper.dispatched).add(card);
+        }
+        List<Helper> result=new ArrayList<>(local.values());
+        result.sort(Comparator.comparingInt((Helper helper)->role(helper.role).equals("codex")?0:role(helper.role).equals("claude")?1:2).thenComparing(helper->helper.role));
+        return result;
+    }
+
     /** 输入框右边那个按钮的四种样子：没字时安静、有字能发、在回话时等或停、点了停在等它停下。 */
     static final String COMPOSER_IDLE = "idle", COMPOSER_READY = "ready", COMPOSER_WAIT = "wait",
             COMPOSER_STOP = "stop", COMPOSER_STOPPING = "stopping";
@@ -246,7 +264,7 @@ final class AppPresentation {
     /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
     static boolean listedSideChat(Map<String, Object> item, String open) {
         String id = Json.string(item, "id");
-        if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived")) return false;
+        if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived") || Json.flag(item,"deleted")) return false;
         return !Json.string(item, "title_source").equals("pending") || id.equals(open);
     }
 

@@ -5,6 +5,7 @@ public class RelayProtocolHarness {
  public static void main(String[] args)throws Exception{
   CountDownLatch ready=new CountDownLatch(1);List<String> states=Collections.synchronizedList(new ArrayList<>());
   Map<String,Object> config=RelayConnection.invitation(new String(Files.readAllBytes(Path.of(args[0])),java.nio.charset.StandardCharsets.UTF_8),"Android protocol fixture");
+  config.put("seed",new RelayCrypto("Account phone fixture",null).seed);
   try(RelayConnection connection=new RelayConnection(config,new RelayConnection.Observer(){
    public void save(Map<String,Object> state){} public void ready(String url,String name){ready.countDown();} public void state(String state){states.add(state);}
   })){
@@ -21,13 +22,14 @@ public class RelayProtocolHarness {
    connection.request("GET","/v1/sync?wait=50&after=0",null,30);
    CountDownLatch ready2=new CountDownLatch(1);
    Map<String,Object> config2=RelayConnection.invitation(new String(Files.readAllBytes(Path.of(args[2])),java.nio.charset.StandardCharsets.UTF_8),"Same phone, second computer");
+   config2.put("seed",config.get("seed"));
    try(RelayConnection secondComputer=new RelayConnection(config2,new RelayConnection.Observer(){public void save(Map<String,Object> value){}public void ready(String url,String name){ready2.countDown();}public void state(String state){}})) {
      if(!ready2.await(15,TimeUnit.SECONDS))throw new Exception("Second computer pairing timed out");
      Map<String,Object> other=secondComputer.request("GET","/v1/info",null,10);
      Map<String,Object> original=connection.request("GET","/v1/info",null,10);
      if(original.get("runtime_id").equals(other.get("runtime_id")))throw new Exception("Computer identities mixed");
    }
-   Files.write(Path.of(args[1]),RelayCrypto.json(RelayCrypto.map("javaPhonePairing",true,"twoSimultaneousComputers",true,"requestRetryAfterLostResponse",true,"textVoiceImageBinary",true,"longPollClamped",true,"reconnected",states.stream().anyMatch(s->s.contains("恢复")),"realPhone",false,"realPublicNetwork",false)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+   Files.write(Path.of(args[1]),RelayCrypto.json(RelayCrypto.map("javaPhonePairing",true,"twoSimultaneousComputers",true,"sharedPhoneIdentity",true,"requestRetryAfterLostResponse",true,"textVoiceImageBinary",true,"longPollClamped",true,"reconnected",states.stream().anyMatch(s->s.contains("恢复")),"realPhone",false,"realPublicNetwork",false)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
   }
  }
 }

@@ -20,4 +20,14 @@ public class RuntimeGroupTest {
         // 主体编号和 Runtime 编号不会撞成一组。
         assertNotEquals(RuntimeClient.groupKeyOf("x", "", "u"), RuntimeClient.groupKeyOf("", "x", "u"));
     }
+    @org.junit.Test public void accountUpgradeRetainsAuthenticatedOldArchiveWithoutRestoringItsRoute() {
+        java.util.List<String[]> known=java.util.Collections.singletonList(new String[]{"http://old-lan","runtime","account-space"});
+        org.junit.Assert.assertEquals("http://old-lan",RuntimeClient.retainedHistoryKey("relay://new.account","runtime","account-space",known));
+        org.junit.Assert.assertEquals("relay://new.account",RuntimeClient.retainedHistoryKey("relay://new.account","runtime","another-space",known));
+        org.junit.Assert.assertEquals("relay://new.account",RuntimeClient.retainedHistoryKey("relay://new.account","runtime","",known));
+    }
+    @org.junit.Test public void queuedReadyFromASignedOutAccountCannotRegisterOrSelectAComputer() {
+        RuntimeClient.registerRelay(null,"relay://old.account","Stale computer");
+        RuntimeClient.select(null,"relay://old.account");
+    }
 }

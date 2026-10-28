@@ -5,6 +5,14 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class ChatHistoryTest {
+    @Test public void deletionSurvivesRestartAndRejectsOldImportedBubbles() {
+        String original="{\"messages\":[{\"id\":\"deleted\",\"conversation\":\"side-delete\",\"scope\":\"main\",\"role\":\"xiaoyou\",\"text\":\"private body\",\"status\":\"done\"}]}";
+        ChatHistory history=ChatHistory.restore(original);assertEquals(1,history.main("side-delete").size());
+        history.eraseConversation("side-delete");assertFalse(history.json().contains("private body"));
+        history=ChatHistory.restore(history.json());history.absorb(ChatHistory.restore(original));
+        assertTrue(history.main("side-delete").isEmpty());assertFalse(history.json().contains("private body"));
+    }
+
     private static java.util.Map<String,Object> mixedMessage(String id, double at, Double projectedAt) {
         java.util.Map<String,Object> message = new java.util.LinkedHashMap<>(java.util.Map.of(
                 "id", id, "at", at, "role", "xiaoyou", "scope", "main", "status", "done", "text", id));

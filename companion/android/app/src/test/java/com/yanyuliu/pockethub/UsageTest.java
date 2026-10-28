@@ -12,6 +12,13 @@ public class UsageTest {
         return Usage.from(Json.parseObject(body));
     }
 
+    @Test public void failedRefreshKeepsDetailButDoesNotShowCachedQuotaAsCurrent() {
+        Usage value = usage("{\"at\":1000,\"accounts\":[{\"id\":\"old\",\"note\":\"401 Unauthorized\",\"windows\":[{\"kind\":\"7d\",\"left\":28}]}],\"agents\":[{\"name\":\"codex\",\"account\":\"old\"}]}");
+        assertEquals(-1,value.left("codex",1000));
+        assertTrue(value.windowSummary("codex",1000,zone).contains("上次收到的数据"));
+        assertTrue(value.windowSummary("codex",1000,zone).contains("28%"));
+    }
+
     @Test public void unknownWindowsAndModelsRemainVisible() {
         Usage value = usage("{\"rev\":1,\"at\":1000,\"accounts\":["
                 + "{\"id\":\"codex-account\",\"state\":\"unknown\",\"agents\":[\"codex\"],\"windows\":[]}],"

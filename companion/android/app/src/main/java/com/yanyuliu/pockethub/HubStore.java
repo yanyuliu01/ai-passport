@@ -277,6 +277,8 @@ public final class HubStore {
     }
 
     private String activeConversation = "default";
+    private final Set<String> deletedConversations = new HashSet<>();
+    synchronized boolean conversationDeleted(String id) {return deletedConversations.contains(id);}
     private List<Map<String, Object>> conversations = new ArrayList<>();
     synchronized void activeConversation(String id) { activeConversation = id; }
     synchronized String activeConversation() { return activeConversation; }
@@ -293,7 +295,14 @@ public final class HubStore {
     synchronized List<Map<String, Object>> conversations() { return new ArrayList<>(conversations); }
     synchronized void conversations(List<Object> items) {
         conversations = new ArrayList<>();
-        for (Object item : items) if (item instanceof Map) conversations.add(Json.object(item));
+        for (Object item : items) if (item instanceof Map) {
+            Map<String,Object> row=Json.object(item);
+            if(Json.flag(row,"deleted")) {
+                String id=Json.string(row,"id");deletedConversations.add(id);history.eraseConversation(id);cards.values().removeIf(card -> card.conversation.equals(id));
+            }
+            else conversations.add(row);
+        }
+        saveHistory();
     }
     synchronized void detachHistoryTasks() { history.detachTasks(); saveHistory(); }
     synchronized List<ChatHistory.Message> mainMessages() { return history.main(activeConversation); }
