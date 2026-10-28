@@ -140,3 +140,21 @@ test('explicit configuration attach cannot be redirected by inherited Runtime po
     if (oldToken === undefined) delete process.env.XIAOYOU_TOKEN; else process.env.XIAOYOU_TOKEN = oldToken;
   }
 });
+
+test('account enrollment provisions the original mesh identity into a new local Runtime, retaining helper boundaries',async t=>{
+  const {db,dir,secrets}=await fixture(t),starts:StartOptions[]=[];
+  secrets.save('account-space',endpoint.spaceId);secrets.save('account-mesh-secret','approved mesh identity for test');
+  secrets.save('endpoints',[{...endpoint,url:'peer://'+'c'.repeat(32)}]);
+  const host={async start(options:StartOptions){starts.push(options);return endpoint;}} as unknown as RuntimeHost;
+  const setup=new Setup(db,secrets,host,[],'new computer',join(dir,'owned.json'),async()=>agents);
+  setup.confirm({...endpoint,url:'peer://'+'c'.repeat(32)});await setup.discover();
+  await setup.enable({agents:['codex'],deepseekKey:'private-test-api-key'});
+  assert.equal(starts[0].meshSecret,'approved mesh identity for test');assert.equal(setup.choice()?.mode,'bundled');
+  assert.doesNotMatch(JSON.stringify(setup.view()),/approved mesh identity|private-test-api-key/);
+});
+test('an account cannot start an unrelated local subject before recovering its authenticated account identity',async t=>{
+  const {db,dir,secrets}=await fixture(t);secrets.save('account-space',endpoint.spaceId);let started=false;
+  const host={async start(){started=true;return endpoint;}} as unknown as RuntimeHost;
+  const setup=new Setup(db,secrets,host,[],'new computer',join(dir,'owned.json'),async()=>agents);await setup.discover();
+  await assert.rejects(()=>setup.enable({agents:[],deepseekKey:'private-test-api-key'}),/先登录账号/);assert.equal(started,false);
+});

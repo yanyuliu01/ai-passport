@@ -7,13 +7,14 @@ import { RelayLink, validateRelay, invitationRelay, type RelayConfig } from './r
 import { RuntimeError, type RuntimeTransport } from './runtime-client.js';
 
 interface Invitation { v: 1; space: string; device: DeviceIdentity; relay: RelayConfig; token: string; expires: number }
-interface JoinRequest { device: DeviceIdentity; token: string; expires: number }
+interface JoinRequest { device: DeviceIdentity; token: string; expires: number; computer?: boolean }
 interface RPCWaiter { peer: string; resolve(value: Json): void; reject(error: Error): void }
 export interface PeerEvents {
   changed(state: { invitation?: string; joined: number; relayState: string;
-    requests: { id: string; name: string; fingerprint: string }[] }): void;
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] }): void;
   endpoint(endpoint: Endpoint): void;
   conversations?(space: string, conversations: Conversation[]): void;
+  provision?(meshSecret: string): void;
 }
 
 function publicRuntime(endpoint: Endpoint): Json {
@@ -120,21 +121,41 @@ export class PeerNetwork implements RuntimeTransport {
   }
   private emit(): void {
     this.events.changed({ invitation: this.invitation, joined: this.trusted.size, relayState: this.state,
-      requests: [...this.requests].map(([id, request]) => ({ id, name: request.device.name,
-        fingerprint: request.device.id.match(/.{1,4}/g)?.join(' ') || id })) });
+      requests: [...this.requests].filter(([, request]) => request.expires > Date.now()).map(([id, request]) => ({ id, name: request.device.name,
+        fingerprint: request.device.id.match(/.{1,4}/g)?.join(' ') || id, expires: request.expires,
+        ...(request.computer ? { computer: true } : {}) })) });
   }
-  async invite(): Promise<string> {
+  identity(): DeviceIdentity { if (!this.crypto) throw new Error('设备密钥尚未就绪'); return this.crypto.identity; }
+  owns(endpoint: Endpoint): boolean { return endpoint.url.startsWith('peer://') && this.trusted.has(endpoint.url.slice(7)) && endpoint.spaceId === this.space; }
+  members(): number { return this.trusted.size; }
+  /** Only call with a directory authenticated by the account session and a recovered mesh identity. */
+  async accountDevices(space: string, devices: DeviceIdentity[]): Promise<void> {
+    if (!this.crypto || !/^[a-f0-9]{32}$/.test(space) || this.space && this.space !== space)
+      throw new Error('账号与原互通空间不一致');
+    for (const device of devices) validateDevice(device);
+    this.space = space; this.db.set('paired-space', space);
+    for (const device of devices) if (device.id !== this.crypto.identity.id) {
+      const existing = this.trusted.get(device.id);
+      if (existing && existing.publicKey !== device.publicKey) throw new Error('账号设备身份不一致');
+      this.trusted.set(device.id, device);
+    }
+    this.saveMembers(); this.emit(); await this.announce();
+  }
+  async invite(reuse = false): Promise<string> {
     const endpoint = this.getLocal();
     if (!this.crypto || !this.relay || !endpoint) throw new Error('请先连接本机小幽并配置通信入口');
     if (this.space && this.space !== endpoint.spaceId) throw new Error('本机小幽与已加入空间不同，请使用原空间设备发出邀请');
     this.space = endpoint.spaceId; this.db.set('paired-space', this.space);
-    const invitation: Invitation = { v: 1, space: this.space, device: this.crypto.identity, relay: invitationRelay(this.relay),
-      token: randomBytes(32).toString('base64url'), expires: Date.now() + 120_000 };
+    const saved = reuse ? this.secrets.load<Invitation>('active-invitation') : undefined;
+    const invitation: Invitation = saved && saved.expires > Date.now() && saved.space === this.space
+      && JSON.stringify(saved.relay) === JSON.stringify(invitationRelay(this.relay)) ? saved
+      : { v: 1, space: this.space, device: this.crypto.identity, relay: invitationRelay(this.relay),
+        token: randomBytes(32).toString('base64url'), expires: Date.now() + 120_000 };
     this.secrets.save('active-invitation', invitation);
     this.invitation = 'xiaoyou://join#' + Buffer.from(JSON.stringify(invitation)).toString('base64url');
     this.emit(); return this.invitation;
   }
-  async join(text: string): Promise<void> {
+  async join(text: string, computer = false): Promise<void> {
     if (!this.crypto || text.length > 16_384) throw new Error('邀请无效');
     const url = new URL(text.trim());
     if (url.protocol !== 'xiaoyou:' || url.hostname !== 'join' || !url.hash) throw new Error('请使用小幽邀请链接');
@@ -148,6 +169,7 @@ export class PeerNetwork implements RuntimeTransport {
     this.connect(invitation.relay);
     await this.send(invitation.device, invitation.space, 'join', {
       token: invitation.token, device: this.crypto.identity, expires: invitation.expires,
+      ...(computer ? { computer: true } : {}),
     });
     this.emit();
   }
@@ -155,13 +177,21 @@ export class PeerNetwork implements RuntimeTransport {
     const request = this.requests.get(id), active = this.secrets.load<Invitation>('active-invitation');
     if (!request || !active || active.expires < Date.now() || request.token !== active.token)
       throw new Error('加入请求已过期，请重新邀请');
+    const meshSecret = request.computer ? this.getLocal()?.meshToken : undefined;
+    if (request.computer && !meshSecret) throw new Error('本机 Runtime 尚未启用互通身份，不能给新电脑配置另一个空间');
     this.trusted.set(id, request.device); this.saveMembers();
     this.requests.clear(); this.secrets.save('active-invitation', null); this.invitation = undefined;
-    await this.send(request.device, this.space, 'welcome', { devices: [this.crypto!.identity, ...this.trusted.values()] });
+    await this.send(request.device, this.space, 'welcome', { devices: [this.crypto!.identity, ...this.trusted.values()],
+      ...(meshSecret ? { mesh_secret: meshSecret } : {}) });
     for (const peer of this.trusted.values()) {
       if (peer.id !== id) await this.send(peer, this.space, 'membership', { device: request.device });
     }
     this.emit(); await this.announce();
+  }
+  async reject(id: string): Promise<void> {
+    const request = this.requests.get(id); if (!request) return;
+    this.requests.delete(id); this.emit();
+    if (request.expires > Date.now()) await this.send(request.device, this.space, 'decline', { token: request.token });
   }
   private saveMembers(): void { this.db.set('trusted-devices', [...this.trusted.values()]); }
   private async send(peer: DeviceIdentity, space: string, kind: string, body: Json, durable = true): Promise<Packet> {
@@ -202,11 +232,17 @@ export class PeerNetwork implements RuntimeTransport {
       validateDevice(device);
       if (!invite || packet.space !== invite.space || invite.expires < Date.now()
         || body.token !== invite.token || device.id !== packet.from || device.publicKey !== packet.key) return;
-      this.requests.set(device.id, { device, token: invite.token, expires: invite.expires }); this.emit();
+      this.requests.set(device.id, { device, token: invite.token, expires: invite.expires, computer: body.computer === true }); this.emit();
       return;
     }
     if (packet.kind === 'welcome') {
       if (!pending || packet.space !== pending.space || pending.expires < Date.now() || !Array.isArray(body.devices)) return;
+      if (body.mesh_secret !== undefined) {
+        if (typeof body.mesh_secret !== 'string' || body.mesh_secret.length < 16 || body.mesh_secret.length > 4096
+          || createHash('sha256').update('xiaoyou-subject\0' + body.mesh_secret).digest('hex').slice(0,32) !== pending.space)
+          throw new Error('互通身份与已确认空间不一致');
+        this.events.provision?.(body.mesh_secret);
+      }
       for (const device of body.devices as unknown as DeviceIdentity[]) {
         validateDevice(device); if (device.id !== this.crypto.identity.id) this.trusted.set(device.id, device);
       }
@@ -328,7 +364,18 @@ export class PeerNetwork implements RuntimeTransport {
       const target = method === 'POST' && /^\/v1\/(?:messages|timers)\/[a-zA-Z0-9._:-]+\/effects$/.test(path)
         ? this.reviewTarget(peerId, endpoint, path, payload!) : endpoint;
       const work = this.local.request(target, method, path, payload)
-        .then(value => ({ request, value } as Json))
+        .then(value => {
+          // Installed Android clients parse flat integers after a Double-based JSON relay hop.
+          // Decimal strings keep app updates discoverable before those clients can upgrade.
+          if (method === 'GET' && new URL(path, 'http://localhost').pathname === '/v1/app') {
+            value = { ...value };
+            for (const key of ['version_code', 'size']) {
+              const number = value[key];
+              if (typeof number === 'number' && Number.isSafeInteger(number) && number >= 0) value[key] = String(number);
+            }
+          }
+          return { request, value } as Json;
+        })
         .catch(error => ({ request, error: error instanceof Error ? error.message : '远程请求失败',
           status: error instanceof RuntimeError ? error.status : 0 }));
       this.executing.set(key, work);
@@ -371,5 +418,9 @@ export class PeerNetwork implements RuntimeTransport {
     clearInterval(this.timer); clearTimeout(this.kickTimer); this.link?.stop();
     for (const waiter of this.waiters.values()) waiter.reject(new RuntimeError('客户端已退出', 499));
     this.waiters.clear();
+  }
+  async drained(): Promise<void> {
+    await this.incoming;
+    await Promise.allSettled([...this.executing.values()]);
   }
 }

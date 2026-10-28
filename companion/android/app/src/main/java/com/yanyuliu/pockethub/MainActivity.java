@@ -1056,11 +1056,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     /** 添加电脑只有一种方式：扫电脑上的一次性二维码，再在电脑上确认这部手机。 */
+    void onPairingConnected(String url) {
+        RuntimeClient.Target selected=RuntimeClient.selected(this);
+        if(selected==null||!selected.url.equals(url))return;
+        onHubChanged();navigation.clear();setDrawer(false);show(TAB_HOME);
+    }
+
     private void scanPairing() {
         new com.google.zxing.integration.android.IntentIntegrator(this)
                 .setDesiredBarcodeFormats(java.util.Collections.singletonList("QR_CODE"))
-                .setPrompt("扫描电脑小幽上的二维码，再在电脑上确认这部手机")
-                .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false).initiateScan();
+                .setCaptureActivity(PairingScanActivity.class)
+                .setPrompt("")
+                .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(true).initiateScan();
     }
 
     /** 下载新版时的进度（0–99）；不在下载时是 -1。 */
@@ -1959,8 +1966,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         boolean encryptedPair = pairingInput.getText().toString().trim().startsWith("xiaoyou://");
         pairingInput.setText("");
-        runtimeStatus.setText(encryptedPair ? "等待电脑确认配对，已有电脑连接保持可用" : "已保存连接串");
-        toast(encryptedPair ? "请在电脑上确认这部手机" : "已保存连接串");
+        runtimeStatus.setText(encryptedPair ? "请在电脑上确认连接" : "已保存连接串");
+        if(!encryptedPair)toast("已保存连接串");
         HubStore.get().log(encryptedPair ? "已请求加密配对" : "已保存连接串");
     }
 

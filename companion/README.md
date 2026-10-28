@@ -38,6 +38,32 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Update discovery through the relay (App 0.33.4 / desktop 0.1.15)
+
+The Android relay reparses JSON numbers as doubles, so an integer version code can
+arrive as `72.0`. The old update reader rejected it and incorrectly reported the
+installed App as current. The new reader accepts exact integral decimal values,
+and rejects fractions and overflow. Desktop app-metadata forwarding sends version
+code and package size as decimal strings so installed older phones can discover
+and download their first corrected update. Direct HTTP metadata, checksums, ABI
+selection, download URLs and source binding remain unchanged.
+
+## Scan and confirm (App 0.33.3 / desktop 0.1.14)
+
+Add computer opens a portrait QR scanner with a square viewfinder, green corners,
+a back button and a flashlight control. It replaces the library's landscape red
+laser screen. After scanning, the phone says “Please confirm the connection on
+your computer”; raw device fingerprints and invitation strings are absent from
+this normal flow. The desktop raises a native Allow/Cancel dialog from any page,
+including while its window is hidden. Successful confirmation dismisses the phone
+waiting dialog and opens the selected computer's main chat. Cancellation and
+expiry preserve existing connections; cancellation is authenticated against the
+current invitation. A stale desktop dialog cannot approve a replacement request.
+Phone QR pairing still requires explicit confirmation; account-only computer
+login is unchanged. TLS pinning, HPKE identities, history and folder permissions
+remain in force. Build and protocol tests do not establish real-camera usability,
+phone installation, rendered first-response timing or cross-network acceptance.
+
 ## Unified reply synchronization (App 0.33.2)
 
 App 0.33.2 no longer rewrites the stored chat history when only a desktop activity card changes. Those updates arrived about once a second and each rewrite of a 6 MB history took about 0.7 s on the phone. Conversation cards are stored as before.

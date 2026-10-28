@@ -4247,7 +4247,7 @@ class HttpTests(TempDirCase):
         self.assertEqual((status, body["default"]), (200, "echo"))
         self.assertEqual(body["agents"], [{
             "name": "echo", "type": "echo", "description": "原样复述，用来测试链路",
-            "speaks": True, "default": True, "model": None, "effort": None, "efforts": [],
+            "speaks": True, "default": True, "model": None, "configured_model": None, "effort": None, "efforts": [],
             "models": [],
         }])
         status, usage = self.call("GET", "/v1/usage")

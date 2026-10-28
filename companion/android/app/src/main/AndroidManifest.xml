@@ -58,6 +58,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".PairingScanActivity" android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <service
             android:name=".LinkService"
             android:exported="false"

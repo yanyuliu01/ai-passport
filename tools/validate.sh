@@ -199,6 +199,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_ownership.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_permissions.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_helper_model_preferences.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_conversation_presentation.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_presentation_policy.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_conversation_directory.py

@@ -356,3 +356,10 @@ test('metadata and native navigation RPC cannot carry execution input', () => {
   assert.equal(allowedRPC('POST','/v1/directory/native-id/open',{text:'execute this'}),false);
   assert.equal(allowedRPC('POST','/v1/directory/native-id/metadata',{model:'astra'}),false);
 });
+
+
+test('saved helper default takes precedence over the last observed task model', () => {
+  const rows = helperViews(runtime, 'Mac', [{ name: 'codex', type: 'codex', configured_model: 'gpt-6.1-sol' }],
+    { agents: [{ name: 'codex', model: 'gpt-6-astra' }] }, true);
+  assert.equal(rows[0].model, 'gpt-6.1-sol');
+});

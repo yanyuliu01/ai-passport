@@ -3,6 +3,7 @@ import type { HelperView, Json, SpaceView } from '../shared';
 import { Avatar, Icon } from './components';
 
 interface Harness { harness: string; label: string; installed: boolean; ways: string[]; providers: string[]; login_hint: string | null }
+interface ModelSetting { name: string; model: string; models: string[] }
 interface ModelOption { id: string; name: string; efforts?: string[] }
 // The provider a harness usually runs on; any provider's key is still accepted.
 const USUAL_PROVIDER: Record<string, string> = { claude_code: 'anthropic', codex: 'openai', dsh: 'deepseek', pi: 'openai' };
@@ -14,17 +15,21 @@ const efforts = (harness: string) => ['', ...(harness === 'dsh' ? ['off', 'low',
 /** Settings › Helpers: what runs on this computer, and the entry to add one. */
 export function HelperSettings({ space, helpers, disabled, onRun }: { space?: SpaceView; helpers: HelperView[]; disabled: boolean; onRun(action: () => Promise<unknown>): Promise<void> }) {
   const [added, setAdded] = useState<string[]>([]), [adding, setAdding] = useState(false);
+  const [modelSettings, setModelSettings] = useState<ModelSetting[]>([]), [editingModel, setEditingModel] = useState<ModelSetting>();
   const [permissions, setPermissions] = useState<string>();
   const [managedRuntime, setManagedRuntime] = useState('');
-  const reload = () => { if (space) void window.xiaoyou.helperOptions({ space: space.id }).then(value => { setAdded(Array.isArray(value.added) ? value.added as string[] : []); setManagedRuntime(String(value.runtime_id || '')); }).catch(() => { setAdded([]); setManagedRuntime(''); }); };
+  const reload = () => { if (space) void window.xiaoyou.helperOptions({ space: space.id }).then(value => { setAdded(Array.isArray(value.added) ? value.added as string[] : []); setManagedRuntime(String(value.runtime_id || '')); setModelSettings(Array.isArray(value.model_settings) ? value.model_settings as unknown as ModelSetting[] : []); }).catch(() => { setAdded([]); setManagedRuntime(''); }); };
   useEffect(reload, [space?.id, helpers.length]);
+  useEffect(() => { setEditingModel(undefined); }, [space?.id]);
   return <article className="settings-card vertical">
-    {helpers.map(item => { const local = (item.members || [item]).find(member => member.runtime === managedRuntime && added.includes(member.name)); return <div className="helper-line" key={item.id}><Avatar type={item.type} size={26} /><span>{item.label}</span>
+    {helpers.map(item => { const local = (item.members || [item]).find(member => member.runtime === managedRuntime && added.includes(member.name)); const modelMember = (item.members || [item]).find(member => member.runtime === managedRuntime && modelSettings.some(setting => setting.name === member.name)); const setting = modelSettings.find(row => row.name === modelMember?.name); return <div className="helper-line" key={item.id}><Avatar type={item.type} size={26} /><span>{item.label}</span>
       <small className={item.connected ? 'ok' : ''}>{item.connected ? item.model || '已就绪' : '连不上'}</small>
+      {setting && <button disabled={disabled || !space} onClick={() => setEditingModel(setting)}>选择模型</button>}
       {local && <button disabled={disabled || !space} onClick={() => setPermissions(local.name)}>工具权限</button>}
       {local && <button disabled={disabled || !space} onClick={() => space && void onRun(async () => { await window.xiaoyou.removeHelper({ space: space.id, name: local.name }); reload(); })}>移除</button>}</div>; })}
     {!helpers.length && <p>还没有帮手</p>}
     <button className="quiet-button add-helper" disabled={disabled || !space} onClick={() => setAdding(true)}><Icon name="plus" />添加帮手</button>
+    {editingModel && space && <HelperModel space={space} setting={editingModel} onClose={() => setEditingModel(undefined)} onSaved={() => { setEditingModel(undefined); reload(); }} />}
     {adding && space && <AddHelper space={space} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); reload(); }} />}
     {permissions && space && <HelperPermissions space={space} name={permissions} onClose={() => setPermissions(undefined)} />}
   </article>;
@@ -132,5 +137,31 @@ function HelperPermissions({ space, name, onClose }: { space: SpaceView; name: s
     {servers?.length === 0 && <p>这台电脑还没有登记外部工具。</p>}
     {error && <p role="alert">{error}</p>}
     <footer><button type="submit" disabled={busy || !servers}>保存</button></footer>
+  </form></div>;
+}
+
+function HelperModel({ space, setting, onClose, onSaved }: { space: SpaceView; setting: ModelSetting; onClose(): void; onSaved(): void }) {
+  const [model, setModel] = useState(setting.model || setting.models.find(value => !value.includes('astra')) || '');
+  const [custom, setCustom] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  async function save(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setError('');
+    try { await window.xiaoyou.helperModel({ space: space.id, name: setting.name, model: model.trim() }); onSaved(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '没有保存成功，请重试'); }
+    finally { setBusy(false); }
+  }
+  return <div className="modal-shade"><form className="usage-modal add-helper-modal" role="dialog" aria-modal="true" aria-labelledby="helper-model-title" onSubmit={save}>
+    <header><h2 id="helper-model-title">选择模型</h2><button type="button" disabled={busy} onClick={onClose}>关闭</button></header>
+    <p>保存后用于新的任务，正在进行的任务继续使用原模型。</p>
+    <label className="field">模型<select autoFocus value={custom ? '__custom' : model} disabled={busy} onChange={event => {
+      if (event.target.value === '__custom') { setCustom(true); setModel(''); } else { setCustom(false); setModel(event.target.value); }
+    }}>
+      {!setting.model && <option value="" disabled>请选择模型</option>}
+      {setting.models.map(value => <option key={value} value={value}>{value}</option>)}
+      <option value="__custom">其他模型…</option>
+    </select></label>
+    {custom && <label className="field">模型名称<input value={model} maxLength={128} disabled={busy} placeholder="填写当前服务支持的模型名称" onChange={event => setModel(event.target.value)} /></label>}
+    <p className="usage-freshness">模型的可用性和费用取决于你的订阅或服务商。</p>
+    {error && <p role="alert" className="field-error">{error}</p>}
+    <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="primary" disabled={busy || !model.trim()} type="submit">{busy ? '正在保存…' : '保存'}</button></footer>
   </form></div>;
 }

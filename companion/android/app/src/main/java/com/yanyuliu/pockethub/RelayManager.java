@@ -21,6 +21,7 @@ final class RelayManager {
     private static final Map<String,RelayConnection> links=new ConcurrentHashMap<>();
     private static Context app;
     private static SharedPreferences storage;
+    private static final Map<String,java.lang.ref.WeakReference<android.app.AlertDialog>> waiting=new HashMap<>();
     private static final String ALIAS="xiaoyou-relay-v1";
     static synchronized void init(Context context) throws Exception {
         if(app!=null)return;app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
@@ -39,24 +40,41 @@ final class RelayManager {
             if(links.containsKey(url))return "这台电脑已有配对记录，请选择已有连接；不会覆盖设备密钥";
             if(RuntimeClient.targets(context).size()>=RuntimeClient.MAX_TARGETS)return "已达到电脑连接上限，请先移除旧连接";
             open(config);
-            RelayConnection pending=links.get(url);
             if(context instanceof android.app.Activity) {
-                String fingerprint=pending.fingerprint().replaceAll("(.{4})(?!$)","$1 ");
-                new android.app.AlertDialog.Builder(context).setTitle("在电脑确认这部手机")
-                    .setMessage("请核对电脑上显示的设备指纹：\n\n"+fingerprint+"\n\n批准后添加这台电脑，已有连接保留。邀请两分钟内有效。")
-                    .setPositiveButton("知道了",null).show();
-            } else toast("配对请求已发出，请在电脑小幽确认。批准前不会切换聊天。");
+                android.app.Activity activity=(android.app.Activity)context;
+                android.app.AlertDialog popup=new android.app.AlertDialog.Builder(activity)
+                    .setTitle("请在电脑上确认连接").setMessage("确认后会自动连接。")
+                    .setNegativeButton("取消",(dialog,which)->cancelPending(url)).create();
+                waiting.put(url,new java.lang.ref.WeakReference<>(popup));
+                popup.setOnCancelListener(dialog->cancelPending(url));
+                popup.setOnDismissListener(dialog->{synchronized(RelayManager.class){waiting.remove(url);}});
+                popup.setOwnerActivity(activity);popup.show();
+            } else toast("请在电脑上确认连接");
             return null;
         }catch(Exception error){return "未能请求加密配对："+error.getMessage();}
+    }
+    private static synchronized void cancelPending(String url) {
+        RelayConnection link=links.get(url);if(link!=null&&!link.isPaired())remove(url);
+    }
+    private static void finishWaiting(String url,String message) {
+        new Handler(Looper.getMainLooper()).post(()->{
+            android.app.AlertDialog dialog;
+            synchronized(RelayManager.class){java.lang.ref.WeakReference<android.app.AlertDialog> ref=waiting.remove(url);dialog=ref==null?null:ref.get();}
+            if(dialog!=null&&dialog.isShowing()) {
+                android.app.Activity owner=dialog.getOwnerActivity();dialog.dismiss();toast(message);
+                if("已连接".equals(message)&&owner instanceof MainActivity&&!owner.isFinishing()&&!owner.isDestroyed())((MainActivity)owner).onPairingConnected(url);
+            }
+        });
     }
     @SuppressWarnings("unchecked") private static Map<String,Object> cast(Object value){return (Map<String,Object>)value;}
     private static synchronized void open(Map<String,Object> config) throws Exception {
         if(config==null)throw new IOException("配对存储无法读取，原记录未删除");
         final String key="peer:"+Json.string(cast(config.get("device")),"id");
+        final String address="relay://"+Json.string(cast(config.get("device")),"id");
         RelayConnection connection=new RelayConnection(config,new RelayConnection.Observer(){
             public void save(Map<String,Object> state){try{if(!storage.edit().putString(key,encrypt(RelayCrypto.json(state))).commit())throw new IOException("配对未能持久化");}catch(Exception failure){throw new IllegalStateException("系统安全存储不可用");}}
-            public void ready(String url,String name){new Handler(Looper.getMainLooper()).post(()->RuntimeClient.registerRelay(app,url,name));}
-            public void state(String message){ if(message.contains("已过期") && RuntimeClient.selected(app)==null)app.stopService(new android.content.Intent(app,RuntimeWatchService.class)); }
+            public void ready(String url,String name){new Handler(Looper.getMainLooper()).post(()->{RuntimeClient.registerRelay(app,url,name);finishWaiting(url,"已连接");});}
+            public void state(String message){ if(message.contains("已过期")||message.contains("连接已取消"))finishWaiting(address,message.contains("已过期")?"二维码已过期，请重新扫码":"连接已取消"); if(message.contains("已过期") && RuntimeClient.selected(app)==null)app.stopService(new android.content.Intent(app,RuntimeWatchService.class)); }
         });links.put(connection.url(),connection);
     }
     static boolean hasConnections(){return links.values().stream().anyMatch(RelayConnection::isActive);}

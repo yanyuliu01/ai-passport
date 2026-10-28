@@ -1,3 +1,4 @@
+import { AccountPanel } from './account';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView, PhoneConnection } from '../shared';
@@ -10,7 +11,7 @@ import { Onboarding } from './onboarding';
 import './style.css';
 
 declare global { interface Window { xiaoyou: DesktopAPI } }
-const empty: ClientView = { version: '0.1.8', spaces: [], selectedSpace: '', background: true,
+const empty: ClientView = { version: '0.1.11', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
 type Page = 'chat' | 'work' | 'settings' | 'native';
 type TaskRef = { id: string; runtime: string };
@@ -278,17 +279,17 @@ function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory
   const [phone, setPhone] = useState<PhoneConnection>(), [phoneBusy, setPhoneBusy] = useState(false), [phoneNotice, setPhoneNotice] = useState('');
   async function checkPhone() { setPhoneBusy(true); setPhoneNotice(''); try { setPhone(await window.xiaoyou.phoneConnection()); } catch { setPhoneNotice('检测失败，请确认本机服务后重试。'); } finally { setPhoneBusy(false); } }
   // One-time pairing needs a reachable relay; without one, the developer options explain how to set it up.
-  const canInvite = view.pairing.relayState === '加密通信入口已连接' && !(view.relayHost?.enabled && !view.relayHost.publicURL);
+  const canInvite = view.pairing.relayState === '加密通信入口已连接' && (view.account?.signedIn ? view.account.canInvite : !(view.relayHost?.enabled && !view.relayHost.publicURL));
   return <section className="settings-page">
-    <div className="settings-group">小幽</div>
+    <div className="settings-group">小幽</div><AccountPanel view={view.account} onConfigure={onSetup} />
     <article className="settings-card vertical">
       {view.pairing.invitation ? <PairingCode link={view.pairing.invitation} /> : <div><h3>添加手机</h3><p>手机小幽 › 设置 › 添加电脑，扫码后在这里确认。之后换网络也会自动连上。</p></div>}
       <button className="primary" disabled={disabled || !canInvite} onClick={() => void onRun(() => window.xiaoyou.invite())}>{view.pairing.invitation ? '换一个二维码' : '添加手机'}</button>
-      {!canInvite && <small>这台电脑还不能被手机找到，先在下面的开发者里设置一次通信入口。</small>}
+      {!canInvite && <small>先登录小幽账号，并确认本机 Runtime 属于同一个互通空间；连接后直接生成二维码。</small>}
     </article>
-    {view.pairing.requests.map(request => <article className="decision" key={request.id}><h3>{request.name} 请求加入</h3><p>确认这是你正在配对的设备。</p><code>{request.fingerprint}</code><button disabled={disabled} className="primary" onClick={() => void onRun(() => window.xiaoyou.acceptJoin(request.id))}>确认</button></article>)}
+    {view.pairing.requests.map(request => <article className="decision" key={request.id}><h3>{request.name} 请求加入</h3><p>{request.computer ? '允许这台电脑取得原来的互通身份，再运行自己的 Runtime。' : '确认这是你正在配对的设备。'}</p><button disabled={disabled} className="primary" onClick={() => void onRun(() => window.xiaoyou.acceptJoin(request.id))}>确认</button></article>)}
     <article className="settings-card vertical"><h3>添加电脑</h3>{space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '连不上'}</small></div>)}
-      <p>在已经有小幽的设备上生成邀请，粘贴到这里，这台电脑就加入同一个小幽。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
+      <p>新电脑登录同一个小幽账号后，直接配置自己的 Runtime，原电脑无需在线；已共享文件在来源电脑上线后互通。下面的邀请方式仍可使用。</p><textarea aria-label="小幽邀请链接" value={invitation} onChange={event => setInvitation(event.target.value)} /><button disabled={!invitation.trim() || disabled} onClick={() => void onRun(async () => { await window.xiaoyou.join(invitation); setInvitation(''); })}>请求加入</button></article>
     <div className="settings-group">帮手</div>
     <HelperSettings space={space} helpers={space?.helpers || []} disabled={disabled} onRun={onRun} />
     <div className="settings-group">偏好</div>
@@ -321,7 +322,7 @@ function RelayHostSettings({ view, disabled, onRun }: { view: ClientView; disabl
 function PairingCode({ link }: { link: string }) {
   const [code, setCode] = useState<{dataURL: string; expiresAt: number}>(), [now, setNow] = useState(Date.now()), [error, setError] = useState('');
   useEffect(() => { let current = true; setCode(undefined); setError(''); void window.xiaoyou.invitationQR(link).then(value => { if (current) setCode(value); }).catch(() => { if(current) setError('二维码无法生成，请重新生成邀请'); }); const timer = setInterval(() => setNow(Date.now()), 1000); return () => { current = false; clearInterval(timer); }; }, [link]);
-  return <div className="pairing-code">{code && now < code.expiresAt ? <><img src={code.dataURL} width={320} height={320} alt="用手机小幽扫描此二维码连接电脑" /><p>手机小幽 › 设置 › 添加电脑</p><small>还剩 {Math.max(0,Math.ceil((code.expiresAt-now)/1000))} 秒 · 扫码后请核对设备指纹并在电脑确认</small></> : <p>{error || (code ? '二维码已过期，请重新生成' : '正在生成二维码…')}</p>}</div>;
+  return <div className="pairing-code">{code && now < code.expiresAt ? <><img src={code.dataURL} width={320} height={320} alt="用手机小幽扫描此二维码连接电脑" /><p>手机小幽 › 设置 › 添加电脑</p><small>还剩 {Math.max(0,Math.ceil((code.expiresAt-now)/1000))} 秒 · 请在电脑弹窗中确认连接</small></> : <p>{error || (code ? '二维码已过期，请重新生成' : '正在生成二维码…')}</p>}</div>;
 }
 function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(task.worker_session && !task._staleEpoch && !activeTask(task)
   && space?.connections?.some(item => item.runtime === task._runtimeId && item.local && item.connected && item.capabilities.includes('desktop_handoff'))

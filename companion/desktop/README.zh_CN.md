@@ -2,7 +2,7 @@
 
 # 小幽桌面客户端
 
-正在实现，源码版本 0.1.10。遵循[开发方案](../../docs/development/xiaoyou-desktop-plan.zh_CN.md)
+正在实现，源码版本 0.1.12。遵循[开发方案](../../docs/development/xiaoyou-desktop-plan.zh_CN.md)
 和[可靠性契约](../../docs/development/cross-stack-reliability.zh_CN.md)。
 源码/构建可用不代表已安装客户端验收通过。
 
@@ -407,3 +407,9 @@ full_bin_sha256: 7dbbaac6a521c74956dc578228ef9c282a27d65a97f417eade45aabcacb2ea7
 elf_sha256: 93c71a2fdc1d11936a66b84512ce35b9254ab05cb8a336a9724b0db1dfac902a
 archive_verification: PASS
 ```
+
+账号关联电脑及默认数字 IP 中继见[账号发现说明](deploy/accounts.zh_CN.md)。每台电脑继续运行自己的本机 Runtime。
+
+### 帮手模型选择（0.1.16）
+
+在「设置 → 帮手 → 选择模型」保存本机帮手后续任务的默认模型；正在运行的任务继续使用原来的帮手实例和模型。Codex 选项读取本机可见模型列表，Claude Code 提供原生模型别名，「其他模型」可填写服务商支持的名称。保存时不调用模型，可用性和计费以服务商为准。新建的托管 Codex 帮手默认使用 `gpt-6.1-sol`，Astra 需要明确选择。旧 Runtime 保持模型只读展示。偏好保存到 `state/helper-models.json`，不修改密钥和原生 CLI 设置。模型网关管理的帮手继续使用已有配置流程。

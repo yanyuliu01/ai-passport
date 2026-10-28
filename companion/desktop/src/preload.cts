@@ -3,6 +3,7 @@ import type { ClientView, DesktopAPI } from './shared.js';
 
 const call = (method: string, value?: unknown) => ipcRenderer.invoke('xiaoyou:' + method, value);
 const api: DesktopAPI = {
+  accountLogin: value => call('account-login', value), accountLogout: () => call('account-logout'), accountRefresh: () => call('account-refresh'),
   startRelayHost: value => call('start-relay-host', value), stopRelayHost: () => call('stop-relay-host'), checkRelayHost: () => call('check-relay-host'),
   invitationQR: value => call('invitation-qr', value), setRelay: value => call('set-relay', value),
   phoneConnection: () => call('phone-connection'), copyPhoneConnection: value => call('copy-phone-connection', value),
@@ -16,6 +17,7 @@ const api: DesktopAPI = {
   markRead: value => call('mark-read', value), openNative: value => call('open-native', value),
   openLink: value => call('open-link', value),
   helperOptions: value => call('helper-options', value), addHelper: value => call('helper-add', value),
+  helperModel: value => call('helper-model', value),
   helperModels: value => call('helper-models', value), helperGrants: value => call('helper-grants', value),
   removeHelper: value => call('helper-remove', value),
   select: value => call('select', value), connectLocal: () => call('connect-local'),

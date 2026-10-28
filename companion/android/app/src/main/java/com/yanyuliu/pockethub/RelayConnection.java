@@ -105,6 +105,9 @@ final class RelayConnection implements AutoCloseable {
         Map<String,Object> packet=(Map<String,Object>)envelope.get("packet");if(packet==null||!space.equals(packet.get("space")))return;
         Map<String,Object> body=crypto.open(packet,host);String kind=Json.string(packet,"kind"),id=Json.string(packet,"id");
         if("ack".equals(kind)){packets.remove(Json.string(body,"id"));return;}
+        if("decline".equals(kind)&&!paired&&Json.string(config,"token").equals(Json.string(body,"token"))){
+            config.put("expires",0);persist();close();status("连接已取消，请重新扫码");return;
+        }
         if("welcome".equals(kind)){
             if(!paired && Json.number(config,"expires")<System.currentTimeMillis())return;
             boolean found=false;for(Object raw:Json.list(body,"devices"))if(raw instanceof Map && Json.string(host,"id").equals(((Map<?,?>)raw).get("id")))found=true;

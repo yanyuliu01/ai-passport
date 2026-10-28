@@ -1,6 +1,6 @@
 {
   "name": "xiaoyou-desktop",
-  "version": "0.1.10",
+  "version": "0.1.16",
   "private": true,
   "description": "Xiaoyou desktop companion",
   "author": "AI Passport contributors",
@@ -21,7 +21,7 @@
   },
   "build": {
     "appId": "com.folotoy.xiaoyou",
-    "productName": "小幽",
+    "productName": "\u5c0f\u5e7d",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"

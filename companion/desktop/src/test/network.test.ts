@@ -33,6 +33,7 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   let posts = 0, release: (() => void) | undefined;
   const reviewPosts: { token: string; body: unknown }[] = [];
   const local: RuntimeTransport = { async request(endpoint, method, path, payload): Promise<Json> {
+    if (path.startsWith('/v1/app?')) return { available: true, version_code: 73, size: 63680000, sha256: 'e'.repeat(64), abi: 'arm64-v8a', download_url: 'https://example.com/app.apk' };
     if (method === 'POST' && path.endsWith('/effects')) {
       reviewPosts.push({ token: endpoint.token, body: structuredClone(payload) });
       if (reviewPosts.length === 1) throw new RuntimeError('synthetic lost review receipt', 503);
@@ -65,6 +66,10 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   const result = await networkB.request(remoteB[0], 'GET', '/v1/info');
   assert.equal(result.answer, 'private-result');
   assert.equal(result.runtime_id, a.runtimeId);
+  const update = await networkB.request(remoteB[0], 'GET', '/v1/app?abi=arm64-v8a');
+  assert.equal(update.available, true);assert.equal(update.version_code, '73');assert.equal(update.size, '63680000');
+  assert.equal(Number.parseInt(String(update.version_code),10),73);assert.equal(update.sha256,'e'.repeat(64));
+  assert.equal(update.download_url,'https://example.com/app.apk');assert.equal(update.abi,'arm64-v8a');
   const slow = networkB.request(remoteB[0], 'GET', '/v1/sync?wait-test=1');
   await until(() => Boolean(release));
   const started = performance.now();

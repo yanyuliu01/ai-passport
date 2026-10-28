@@ -6,6 +6,7 @@ import struct
 import zipfile
 
 REQUIRED = (
+    'Lcom/yanyuliu/pockethub/PairingScanActivity;',
     'Lcom/journeyapps/barcodescanner/CaptureActivity;',
     'Lcom/journeyapps/barcodescanner/CaptureManager;',
     'Landroidx/core/content/ContextCompat;',

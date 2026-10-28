@@ -7,6 +7,7 @@ public class ScannerDependenciesTest {
     @Test public void cameraPermissionAndScannerContractsHaveTheirRuntimeClasses() throws Exception {
         ClassLoader loader = ScannerDependenciesTest.class.getClassLoader();
         for (String name : new String[] {
+                "com.yanyuliu.pockethub.PairingScanActivity",
                 "com.journeyapps.barcodescanner.CaptureActivity",
                 "com.journeyapps.barcodescanner.CaptureManager",
                 "androidx.core.content.ContextCompat",

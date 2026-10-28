@@ -766,6 +766,9 @@ def make_server(config: Config, service: Service,
                 if parts == ["v1", "helpers", "models"]:
                     self._send(200, service.helper_models(body))
                     return
+                if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "model":
+                    self._send(200, service.helper_model(parts[2], body))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "capabilities":
                     self._send(200, service.helper_grants(parts[2], body))
                     return

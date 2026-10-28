@@ -14,12 +14,17 @@ import { PeerNetwork } from './core/peers.js';
 import { inspectPhoneConnection } from './core/phone-connection.js';
 import { RelayHost } from './core/relay-host.js';
 import { Setup } from './core/setup.js';
+import { PairingPrompts } from './core/pairing-prompts.js';
+import { AccountConnection } from './core/account.js';
 import type { RelayConfig } from './core/relay.js';
 import type { Endpoint, Json } from './shared.js';
 
 let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopClient;
 let db: ClientDatabase, network: PeerNetwork, host: RuntimeHost, setup: Setup;
 let relayHost: RelayHost;
+let account: AccountConnection;
+let pairingPrompts: PairingPrompts | undefined;
+let accountFocused = false;
 let quitting = false, connecting = false, joining = false;
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const ui = resolve(directory, '../dist-ui/index.html');
@@ -27,10 +32,18 @@ const rendererURL = pathToFileURL(ui).href;
 if (process.env.XIAOYOU_DESKTOP_TEST_DATA)
   app.setPath('userData', process.env.XIAOYOU_DESKTOP_TEST_DATA);
 
-function snapshot() { return { ...client.snapshot(), setup: setup?.view(), relayHost: relayHost?.view() }; }
+function snapshot() {
+  const view = client.snapshot(), state = account?.view();
+  return { ...view, version: app.getVersion(), setup: setup?.view(), relayHost: relayHost?.view(), account: state,
+    ...(state?.signedIn ? { pairing: { ...state.pairing, requests: [
+      ...state.pairing.requests.map(r => ({ ...r, id: 'account:' + r.id })),
+      ...view.pairing.requests.map(r => ({ ...r, id: 'legacy:' + r.id })),
+    ] } } : {}) };
+}
 let notificationTimer: ReturnType<typeof setTimeout> | undefined;
 function notify(): void {
   network?.kick();
+  pairingPrompts?.update();
   // History pages may arrive in bursts. Render the latest committed state once
   // per frame batch instead of serializing the whole cache for every change.
   if (notificationTimer) return;
@@ -114,7 +127,7 @@ async function quit(): Promise<void> {
       message: '退出会停止本机客户端管理的服务。', buttons: ['继续后台运行', '退出小幽'], defaultId: 0, cancelId: 0 });
     if (answer.response !== 1) return;
   }
-  quitting = true; client?.stop(); network?.stop(); await relayHost?.stop(false); host?.stopOwned(); tray?.destroy();
+  quitting = true; client?.stop(); account?.stop(); network?.stop(); await relayHost?.stop(false); host?.stopOwned(); tray?.destroy();
   db?.close(); app.exit(0);
 }
 
@@ -138,7 +151,10 @@ async function main(): Promise<void> {
     endpoint(endpoint) { setup.confirm(endpoint); client.add(endpoint); if (joining) { setup.confirmRelay(); client.select(endpoint.spaceId); joining = false; } },
     conversations(space, conversations) { client.mergeConversations(space, conversations); },
   }, hostname());
-  client = new DesktopClient(db, network, secrets, notify);
+  client = new DesktopClient(db, { request(endpoint, method, path, body, signal) {
+    return account?.owns(endpoint) ? account.request(endpoint, method, path, body, signal)
+      : network.request(endpoint, method, path, body, signal);
+  } }, secrets, notify, endpoint => account?.owns(endpoint) ? account.view().pairing.relayState : client.pairing.relayState);
   const runtimeRoot = join(process.resourcesPath, 'runtime');
   const launch = app.isPackaged
     ? bundledRuntimeLaunch(runtimeRoot, process.platform, dataDir,
@@ -148,6 +164,24 @@ async function main(): Promise<void> {
   host = new RuntimeHost(dataDir, launch, local);
   setup = new Setup(db, secrets, host, localCandidates(), hostname(), join(dataDir, 'runtime/config.json'));
   relayHost = new RelayHost(secrets, notify);
+  account = new AccountConnection(dataDir, secrets, local, getLocal, notify, endpoint => {
+    setup.confirm(endpoint); setup.confirmRelay();
+    const current = client.endpoints.get(endpoint.runtimeId);
+    if (!current || current.url.startsWith('peer://')) client.add(endpoint);
+    if (!accountFocused) { client.select(endpoint.spaceId); accountFocused = true; }
+  }, (space, values) => client.mergeConversations(space, values), hostname());
+  pairingPrompts = new PairingPrompts(() => snapshot().pairing.requests, async request => {
+    showWindow();
+    const result = await dialog.showMessageBox(window!, { type: 'question', title: request.computer ? '电脑请求连接' : '手机请求连接',
+      message: `允许「${request.name}」连接这台电脑吗？`,
+      detail: '连接后，可以在这部手机上与小幽聊天，并查看已授权的对话和任务。',
+      buttons: ['允许连接', '取消'], defaultId: 1, cancelId: 1, noLink: true });
+    return result.response === 0;
+  }, async (request, allowed) => {
+    const peer = request.id.startsWith('account:') ? account : network;
+    const id = request.id.replace(/^(?:account:|legacy:)/, '');
+    if (allowed) await peer.accept(id); else await peer.reject(id);
+  });
   await network.start(false);
   if (setup.view().confirmed && setup.relayAllowed()) {
     try { await relayHost.resume(); if (relayHost.configured()) network.configure(relayHost.config(false)); else network.resumeConfigured(); }
@@ -155,6 +189,13 @@ async function main(): Promise<void> {
   }
   if (setup.view().confirmed) client.restore(endpoint => setup.allowed(endpoint));
   ipc('snapshot', snapshot);
+  ipc('account-login', async value => { const input = object(value);
+    if (typeof input.register !== 'boolean') throw new Error('登录方式无效');
+    accountFocused = false;
+    await account.login(requiredString(input.username, 40), requiredString(input.password, 256), input.register);
+  });
+  ipc('account-logout', () => account.logout());
+  ipc('account-refresh', () => account.refresh());
   const phoneEndpoint = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://') && endpoint.spaceId === client.snapshot().selectedSpace);
   const phoneConnection = () => {
     const choice = setup.choice();
@@ -178,6 +219,7 @@ async function main(): Promise<void> {
         service: input.service === undefined ? undefined : requiredString(input.service, 100),
         deepseekKey: input.deepseekKey === undefined ? undefined : requiredString(input.deepseekKey, 4096) });
       client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
+      void account.refresh();
     } catch (error) { client.runtime = { state: 'error', message: error instanceof Error ? error.message : '服务未能启用' }; throw error; }
     finally { connecting = false; notify(); }
   });
@@ -201,6 +243,7 @@ async function main(): Promise<void> {
   ipc('helper-models', value => { const input = object(value);
     return client.helperModels(requiredString(input.space, 100), { gateway_url: requiredString(input.gateway_url, 512),
       ...(input.key ? { key: requiredString(input.key, 4096) } : {}) }); });
+  ipc('helper-model', value => { const input = object(value); return client.helperModel(requiredString(input.space, 100), requiredString(input.name, 24), requiredString(input.model, 128)); });
   ipc('helper-grants', value => { const input = object(value);
     return client.helperGrants(requiredString(input.space, 100), requiredString(input.name, 24), object(input.grants)); });
   ipc('helper-add', value => { const input = object(value), helper = object(input.helper);
@@ -257,14 +300,16 @@ async function main(): Promise<void> {
   ipc('check-relay-host', () => relayHost.checkPublic());
   ipc('invitation-qr', async value => {
     const link = requiredString(value, 16384);
-    if (link !== client.pairing.invitation) throw new Error('邀请已更新，请重新生成二维码');
+    if (link !== snapshot().pairing.invitation) throw new Error('邀请已更新，请重新生成二维码');
     const invite = JSON.parse(Buffer.from(link.slice('xiaoyou://join#'.length), 'base64url').toString('utf8'));
     if (invite.expires <= Date.now()) throw new Error('邀请已过期，请重新生成');
     return { dataURL: await QRCode.toDataURL(link, { width: 420, margin: 4, errorCorrectionLevel: 'M' }), expiresAt: invite.expires };
   });
-  ipc('invite', () => { if (relayHost.configured()) relayHost.config(); return network.invite(); });
+  ipc('invite', () => { if (account.view().signedIn) return account.invite(); if (relayHost.configured()) relayHost.config(); return network.invite(); });
   ipc('join', async value => { if (relayHost.configured()) throw new Error('请先停止本机节点，再加入其他电脑的通信入口'); joining = true; try { await network.join(requiredString(value, 16_384)); } catch (error) { joining = false; throw error; } });
-  ipc('accept-join', value => network.accept(requiredString(value, 100)));
+  ipc('accept-join', value => { const id = requiredString(value, 100);
+    return id.startsWith('account:') ? account.accept(id.slice(8)) : network.accept(id.replace(/^legacy:/,''));
+  });
   ipc('approve', value => { const input = object(value); return client.approve(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.decision, 5), requiredString(input.runtime, 100)); });
   ipc('cancel', value => { const input = object(value); return client.cancel(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100)); });
   ipc('effect-review', value => { const input = object(value); return client.effectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140)); });
@@ -283,10 +328,11 @@ async function main(): Promise<void> {
     { type: 'separator' }, { label: '退出小幽', click: () => { void quit(); } }]));
   tray.on('click', showWindow);
   app.on('activate', showWindow);
-  powerMonitor.on('resume', () => { network.reconnect(); client.refresh(); });
+  powerMonitor.on('resume', () => { network.reconnect(); account.reconnect(); client.refresh(); });
   app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quit(); } });
   app.on('window-all-closed', () => {});
   if (!process.argv.includes('--background')) showWindow();
+  void account.restore();
   if (setup.view().confirmed && setup.choice()) void connectLocal();
   const supervisor = setInterval(() => {
     if (quitting) return;

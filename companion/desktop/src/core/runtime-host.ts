@@ -12,7 +12,7 @@ export interface RuntimeLaunch {
   args: string[];
   cwd: string;
 }
-export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string }
+export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
 export function managedAgents(dsh: string, helpers: LocalAgent[]): Record<string, Json> {
   const agents: Record<string, Json> = { deepseek: { type: 'dsh', command: [dsh],
     model: 'deepseek-v4-pro', chat_model: 'deepseek-flash', stream: true,
@@ -90,6 +90,7 @@ export class RuntimeHost {
         state_dir: 'state', persona_file: 'persona.txt', desktop_sync: false,
         agents: managedAgents(options.dsh, options.helpers || []),
         xiaoyou: { default_agent: 'deepseek', voice_agent: 'deepseek' }, usage: { enabled: true },
+        ...(options.meshSecret ? { mesh: { secret: options.meshSecret } } : {}),
       };
       await writeFile(configFile, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
       await writeFile(join(configDir, 'persona.txt'),

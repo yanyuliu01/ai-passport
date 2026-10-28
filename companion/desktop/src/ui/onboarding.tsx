@@ -4,6 +4,7 @@ import xiaoyou from './images/xiaoyou.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
 import './onboarding.css';
+import { AccountPanel } from './account';
 
 type Step = 'welcome' | 'detect' | 'agents' | 'review' | 'join' | 'joining' | 'restoring' | 'starting' | 'result';
 const authLabel = (agent: LocalAgent) => !agent.installed ? '未检测到' : agent.auth === 'signed-in' ? '已登录'
@@ -61,7 +62,7 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
         <small>开始使用 · {Math.min(stage + 1, 4)} / 4</small><h1 tabIndex={-1}>{heading[step]}</h1>
         {error && <div role="alert" className="onboarding-error">{error}</div>}
         {step === 'welcome' && <>
-          <p className="onboarding-description">先选一种方式。确认前，小幽不会连接或更改本机已有服务。</p>
+          <AccountPanel view={view.account} onConfigure={() => void detect()} /><p className="onboarding-description">登录同一账号后，直接配置本机 Runtime，原电脑无需在线。已有服务和记录保留。</p>
           <button className="onboarding-choice" onClick={() => void detect()}><strong>在这台电脑启用小幽 <span>→</span></strong><p>客户端管理本机服务，默认由 dsh + DeepSeek 回应；也能接入你已有的帮手。</p></button>
           <button className="onboarding-choice" onClick={() => { setError(''); setStep('join'); }}><strong>连接已有的小幽 <span>→</span></strong><p>从另一台设备取得邀请，配对后同步记录，继续原来的聊天。</p></button>
           {!!view.setup?.savedConnections.length && <details className="onboarding-saved"><summary>发现此前保存的连接 · 需要你确认一次</summary>

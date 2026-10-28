@@ -67,7 +67,7 @@ export function helperViews(runtime: string, device: string, agents: Json[], usa
       };
       return { id: runtime + '/' + String(agent.name), runtime, device: agent.type === 'mesh' && String(agent.name).includes('@') ? String(agent.name).split('@').slice(1).join('@') : device, name: String(agent.name), type, connected,
         label: type === 'codex' ? 'Codex' : type === 'claude_code' ? 'Claude Code' : String(agent.name),
-        model: typeof details?.model === 'string' ? details.model : typeof agent.model === 'string' ? agent.model : '',
+        model: typeof agent.configured_model === 'string' ? agent.configured_model : typeof details?.model === 'string' ? details.model : typeof agent.model === 'string' ? agent.model : '',
         effort: typeof details?.effort === 'string' ? details.effort : typeof agent.effort === 'string' ? agent.effort : '',
         fiveHour: window('5h'), week: window('7d'), updatedAt: (finite(account?.updated_at) || 0) * 1000 };
     }).filter(helper => helper.type !== 'dsh');
