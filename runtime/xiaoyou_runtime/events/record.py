@@ -84,10 +84,23 @@ class Record:
         self._cards.catalog_seq = self.sequence()
         return result
 
+    def conversation_delete(self, name):
+        result = self._cards.conversations.delete(name)
+        self._cards.erase_conversation(name)
+        callback = getattr(self._cards, 'conversation_erased', None)
+        if callback:
+            callback(name)
+        return result
+
     def conversation_replica(self, origin, data):
         changed = self._cards.conversations.merge(origin, data)
         if changed:
             self._cards.catalog_seq = self.sequence()
+            if data.get('deleted'):
+                self._cards.erase_conversation(data['id'])
+                callback = getattr(self._cards, 'conversation_erased', None)
+                if callback:
+                    callback(data['id'])
         return changed
 
     def conversation_touch(self, name, text="", at=None):

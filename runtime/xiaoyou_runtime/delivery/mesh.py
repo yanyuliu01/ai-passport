@@ -692,7 +692,7 @@ class Mesh:
         return local_id(origin, message_id)
 
     def _message(self, origin: str, epoch: str, data: Dict[str, Any]) -> Optional[str]:
-        if self._hidden(data):
+        if self._hidden(data) or (self._cards.conversations.get(data.get('conversation')) or {}).get('deleted'):
             return None
         task = data.get("task")
         stored_task = self._replicas.get(origin, "task", task) if task else None
@@ -748,7 +748,7 @@ class Mesh:
                 "attachments": message.get("attachments") or []}
 
     def _task(self, origin: str, epoch: str, data: Dict[str, Any]) -> None:
-        if self._hidden(data):
+        if self._hidden(data) or (self._cards.conversations.get(data.get('conversation')) or {}).get('deleted'):
             return
         key = "%s|%s|%s" % (origin, epoch, data["id"])
         with self._lock:

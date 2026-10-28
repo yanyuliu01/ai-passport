@@ -93,6 +93,7 @@ class MessageLog:
         self.floor = 0
         # 这台 Runtime 的编号：本机产生的记录都写上它（产地），日志搬家或和别处合并时不会认错。
         self.origin = ""
+        self.hidden_conversation = lambda name: False
         self._load()
 
     def set_origin(self, runtime_id: str) -> None:
@@ -209,13 +210,13 @@ class MessageLog:
 
     def get(self, message_id: str) -> Optional[Dict[str, Any]]:
         record = self._messages.get(message_id)
-        return dict(record) if record is not None else None
+        return dict(record) if record is not None and not self.hidden_conversation(record.get("conversation")) else None
 
     def since(self, conversation: Optional[str], after: int, upto: int,
               include_desktop: bool = False) -> List[Dict[str, Any]]:
         return sorted(
             (self._copy(record) for record in self._messages.values()
-             if after < record["seq"] <= upto
+             if not self.hidden_conversation(record.get("conversation")) and after < record["seq"] <= upto
              and (conversation is None or record["conversation"] == conversation
                   or (include_desktop and record["conversation"] == DESKTOP_CONVERSATION))),
             key=lambda record: record["seq"])
@@ -225,7 +226,7 @@ class MessageLog:
         转交给别的 Runtime 的占位（relay_to）也不算：那句话以那台的记录为准。"""
         return sorted(
             (self._copy(record) for record in self._messages.values()
-             if after < record["seq"] <= upto and not record.get("mesh_origin")
+             if not self.hidden_conversation(record.get("conversation")) and after < record["seq"] <= upto and not record.get("mesh_origin")
              and not record.get("relay_to")),
             key=lambda record: record["seq"])
 

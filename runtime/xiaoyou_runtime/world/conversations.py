@@ -27,9 +27,9 @@ class ConversationCatalog:
         self.items.setdefault('default', {'id': 'default', 'title': '主对话', 'kind': 'main',
                                          'created_at': 0, 'updated_at': 0, 'revision': 1})
 
-    def list(self):
+    def list(self, include_deleted=False):
         with self.lock:
-            return copy.deepcopy(sorted(self.items.values(), key=lambda v: (-v['updated_at'], v['id'])))
+            return copy.deepcopy(sorted((v for v in self.items.values() if include_deleted or not v.get('deleted')), key=lambda v: (-v['updated_at'], v['id'])))
 
     def get(self, name):
         with self.lock:
@@ -39,6 +39,8 @@ class ConversationCatalog:
         name = name or 'side-' + uuid.uuid4().hex
         with self.lock:
             if name in self.items:
+                if self.items[name].get('deleted'):
+                    raise ValueError('旁聊已删除')
                 return self.get(name)
             now = time.time()
             item = {'id': name, 'title': '新旁聊', 'kind': 'side', 'created_at': now,
@@ -61,7 +63,7 @@ class ConversationCatalog:
             raise ValueError('标题应为 1 到 80 个字')
         with self.lock:
             item = self.get(name)
-            if not item or name == 'default':
+            if not item or item.get('deleted') or name == 'default':
                 raise ValueError('旁聊不存在')
             if expected is not None and item['revision'] != expected:
                 return item  # A late generated title cannot overwrite a newer edit.
@@ -74,12 +76,27 @@ class ConversationCatalog:
             if name not in self.items:
                 self.create(name)
             item = self.get(name)
+            if item.get('deleted'):
+                return item
             item['updated_at'] = max(item['updated_at'], at or time.time())
             if name != 'default' and item.get('title_source') == 'pending' and text.strip():
                 item.update(title=canonical_title(text, 'request').title or '新旁聊', title_source='request', metadata_at=time.time(), origin=self.origin)
                 item['revision'] += 1
             self._save(name, item)
             return self.get(name)
+
+    def delete(self, name):
+        with self.lock:
+            old = self.items.get(name)
+            if not old or old.get('kind') != 'side' or name == 'default':
+                raise ValueError('只能删除旁聊')
+            if old.get('deleted'):
+                return copy.deepcopy(old)
+            now = time.time()
+            item = {'id': name, 'kind': 'side', 'title': '', 'deleted': True, 'origin': self.origin,
+                    'metadata_at': now, 'created_at': now, 'updated_at': now, 'revision': old.get('revision', 0) + 1}
+            self._save(name, item)
+            return copy.deepcopy(item)
 
     def merge(self, origin, data):
         """Merge only versioned side-chat metadata from an authenticated mesh peer."""
@@ -93,8 +110,13 @@ class ConversationCatalog:
             return False
         with self.lock:
             old = self.get(name)
-            if old and (old.get('metadata_at', 0), old.get('origin', '')) >= (at, origin):
+            if old and old.get('deleted'):
                 return False
+            if not data.get('deleted') and old and (old.get('metadata_at', 0), old.get('origin', '')) >= (at, origin):
+                return False
+            if data.get('deleted') is True:
+                self._save(name, {'id': name, 'kind': 'side', 'title': '', 'deleted': True, 'origin': origin, 'metadata_at': at, 'created_at': at, 'updated_at': at, 'revision': (old or {}).get('revision', 0) + 1})
+                return True
             title = canonical_title(data.get('title')).title[:80] or '新旁聊'
             item = {'id': name, 'kind': 'side', 'title': title, 'origin': origin, 'metadata_at': at,
                     'created_at': at, 'updated_at': at,

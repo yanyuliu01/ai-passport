@@ -1259,7 +1259,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小幽在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
 | `GET /v1/helpers/options` | harnesses、界面添加的帮手、MCP 服务与当前授权；接入方式包括 `magpie`、`key`、`login`。 |
 | `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` 添加帮手。`magpie` 从模型服务选择模型，支持跨服务商接入；`key` 直接传变量，`login` 使用原生登录。返回 `201 {helper,problem}`。 |
-| `POST /v1/helpers/<名字>/remove` | 去掉一个用 `POST /v1/helpers` 加的帮手和它的 Key；写在 `config.json` 里的会被拒绝。 |
+| `POST /v1/helpers/<名字>/remove` | 移除界面添加的帮手及其 Key；0.24.1 也支持可恢复地停用配置中的非主对话帮手。 |
 | `POST /v1/helpers/models` | `{gateway_url,key?}` 读取本机 Magpie 实时模型目录，不返回凭据。 |
 | `POST /v1/helpers/<name>/capabilities` | `{server_id: true/false/{tools:[...]}}` 持久化界面所加帮手的授权，下次调用生效。 |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
@@ -1951,3 +1951,34 @@ Android 0.30.0 / 版本码 55、Runtime 0.22.0、桌面端 0.1.4 增加共享会
 ### 本机帮手默认模型
 
 `GET /v1/helpers/options` 为可编辑的本机帮手返回 `model_settings`（`name`、`model`、`models`）。带认证的 `POST /v1/helpers/<name>/model`，请求体 `{"model":"gpt-6.1-sol"}`，原子保存默认模型并替换后续交办使用的帮手实例。正在运行的任务保留原实例。`/v1/agents` 增加 `configured_model`，用量接口继续独立报告实际观察到的模型。偏好存于 `state/helper-models.json`，重启后保留，不修改密钥或原生 CLI 设置。模型名称校验格式，可用性在执行时由服务商判断。
+
+## 实时帮手清单（0.24.1）
+
+`GET /v1/helpers/options` 新增 `agents`、`removable` 和 `restorable` 清单。
+原移除接口也支持移除非主对话的配置帮手，通过原子保存到 `state/helpers.json`
+的 `disabled` 覆盖层生效，保留 config.json、凭据、已受理执行和历史。
+`POST /v1/helpers` 携带 `{"restore":"名称"}` 可恢复保留的配置和模型偏好。
+主对话／语音帮手不能移除；界面添加的帮手仍沿用原来的移除与凭据清理行为。
+
+清单／模型变化会更新用量投影与修订号，客户端通过已有 sync 更新帮手列表，
+无需重启。停用账号的窗口缓存和已受理任务计量仍保留。账号认证的设备可通过
+桌面 0.1.18 使用有边界的帮手管理接口。修改绑定原电脑，结果不确定时不得自动
+重试。降级到旧 Runtime 时，它会忽略新的 `disabled` 字段，配置中的帮手会重新
+出现；若仍需隐藏，需由用户在旧配置中停用。
+
+Codex 额度查询遇到明确的 401／Unauthorized 时，通过原生 `account/read`
+`{refreshToken:true}` 恢复一次登录，再在原查询截止时间内重试
+`account/rateLimits/read`。不在配置目录间复制登录文件，也不把它们返回客户端。
+协议见[官方 App Server 登录接口](https://learn.chatgpt.com/docs/app-server#auth-endpoints)。
+刷新失败时保留旧窗口供详情标注，更新后的客户端将头像圈显示为未知，
+不再把旧百分比当成当前数据。
+
+## 删除旁聊缓存（0.25.0）
+
+`POST /v1/conversations/<side-id>/delete` 检查进行中的请求和任务，清除各端
+聊天缓存和列表项，同步不含正文的目录删除标记。规范消息、请求和任务审计日志
+保留用于排查；公开历史和模型上下文不再包含此旁聊，旧记录导入不能恢复它。
+支持此协议的端在重连时清理缓存，旧客户端须升级。删除没有恢复入口；归档保留
+完整可见历史并可恢复。这是缓存删除，不是安全擦除模型工具记录或日志文件。
+`POST /v1/helpers/<name>/rename` 接收 `{"title":"显示名称"}`，持久化显示别名，
+不改变帮手 ID、凭据或任务路由。

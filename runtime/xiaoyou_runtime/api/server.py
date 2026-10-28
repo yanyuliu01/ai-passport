@@ -720,6 +720,9 @@ def make_server(config: Config, service: Service,
                 if len(parts) == 3 and parts[:2] == ["v1", "directory"]:
                     self._send(200, service.directory_edit(parts[2], body))
                     return
+                if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "delete":
+                    self._send(200, service.conversation_delete(parts[2]))
+                    return
                 if len(parts) == 4 and parts[:2] == ["v1", "conversations"] and parts[3] == "rename":
                     self._send(200, service.conversation_rename(parts[2], body.get("title")))
                     return
@@ -771,6 +774,9 @@ def make_server(config: Config, service: Service,
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "capabilities":
                     self._send(200, service.helper_grants(parts[2], body))
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "rename":
+                    self._send(200, service.helper_rename(parts[2], body))
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "helpers"] and parts[3] == "remove":
                     self._send(200, service.helper_remove(parts[2]))

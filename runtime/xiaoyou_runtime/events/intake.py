@@ -23,7 +23,7 @@ WRITES = frozenset({
     "task_open", "task", "execution_binding", "progress", "progress_checkpoint", "activity", "attach",
     "exchange", "reply", "observed_open", "observed", "replica_task", "replica_message",
     "request_changed", "sequence",
-    "conversation_create", "conversation_rename", "conversation_replica", "conversation_touch",
+    "conversation_delete", "conversation_create", "conversation_rename", "conversation_replica", "conversation_touch",
     "directory_edit", "directory_replica", "directory_sources",
     "directory_generated", "directory_generated_replica",
 })

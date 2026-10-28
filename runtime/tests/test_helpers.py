@@ -14,6 +14,15 @@ from xiaoyou_runtime.api.service import RequestError, Service
 
 
 class RegistryTests(TempDirCase):
+    def test_display_rename_survives_restart_without_changing_routing(self):
+        registry=self.registry()
+        registry.rename('claude','我的帮手')
+        self.assertEqual('我的帮手',self.registry().label('claude'))
+        self.assertEqual([],registry.names())
+        self.assertEqual([],registry.disabled())
+        with self.assertRaises(helpers.HelperError):registry.rename('missing','名称')
+        with self.assertRaises(helpers.HelperError):registry.rename('claude',' ')
+
     def registry(self, reserved=("claude",)):
         return helpers.Registry(self.folder / "state", self.folder, list(reserved))
 
@@ -67,8 +76,10 @@ class RegistryTests(TempDirCase):
             with self.subTest(body=body), self.assertRaisesRegex(helpers.HelperError, message):
                 registry.add(body)
         self.assertEqual(registry.names(), [])
-        with self.assertRaisesRegex(helpers.HelperError, "config.json"):
-            registry.remove("claude")
+        registry.remove("claude")
+        self.assertEqual(self.registry().disabled(), ["claude"])
+        registry.enable("claude")
+        self.assertEqual(self.registry().disabled(), [])
 
     def test_options_offer_every_key_to_every_harness_and_login_where_it_exists(self):
         rows = {row["harness"]: row for row in helpers.options()}
@@ -96,8 +107,78 @@ class ServiceTests(TempDirCase):
         self.assertIn("pi", self.service.helper_options()["added"])
         self.assertEqual(self.service.helper_remove("pi"), {"removed": "pi"})
         self.assertFalse(self.x.has("pi"))
-        with self.assertRaisesRegex(RequestError, "没有在界面上加过"):
+        with self.assertRaisesRegex(RequestError, "默认帮手"):
             self.service.helper_remove("claude")
+
+    def test_live_membership_updates_usage_and_notifies_other_clients(self):
+        before = self.x.usage.rev
+        self.service.helper_add({"name": "extra", "harness": "codex", "access": "login"})
+        self.assertGreater(self.x.usage.rev, before)
+        entry = next(row for row in self.service.usage()["agents"] if row["name"] == "extra")
+        self.assertIsNotNone(entry["account"])
+        self.assertIn("extra", self.service.helper_options()["removable"])
+        self.service.helper_remove("extra")
+        self.assertNotIn("extra", [row["name"] for row in self.service.usage()["agents"]])
+        self.assertNotIn("extra", [name for row in self.service.usage()["accounts"] for name in row["agents"]])
+
+    def test_config_helper_removal_survives_restart_and_can_be_restored(self):
+        from unittest.mock import patch
+        main, worker = Scripted("main"), Scripted("worker")
+        x, store = make_xiaoyou(self.folder / "base", [main, worker])
+        service = Service(x, store)
+        self.addCleanup(service.close); self.addCleanup(x.close)
+        with patch.object(x.helpers, "_save", side_effect=OSError("disk failure")):
+            with self.assertRaisesRegex(Exception, "未能移除"):
+                service.helper_remove("worker")
+        self.assertTrue(x.has("worker")); self.assertEqual(x.helpers.disabled(), [])
+        service.helper_remove("worker")
+        self.assertFalse(x.has("worker"))
+        again, again_store = make_xiaoyou(self.folder / "base", [Scripted("main"), Scripted("worker")])
+        self.addCleanup(again.close)
+        self.assertFalse(again.has("worker"))
+        self.assertNotIn("worker", [row["name"] for row in again.usage.snapshot()["agents"]])
+        self.assertEqual(service.helper_options()["restorable"], ["worker"])
+        # Restoration uses the original retained config without client-supplied credentials.
+        from dataclasses import replace
+        x._config = replace(x._config, agents=[main.spec, worker.spec])
+        service.helper_add({"restore": "worker"})
+        self.assertTrue(x.has("worker")); self.assertEqual(x.helpers.disabled(), [])
+        with self.assertRaisesRegex(RequestError, "默认帮手"):
+            service.helper_remove("main")
+
+    def test_late_quota_event_cannot_update_a_reused_helper_names_new_account(self):
+        from dataclasses import replace
+        from xiaoyou_runtime.config import AgentSpec
+        meter = self.x.usage
+        old = replace(Scripted("quota").spec, type="codex", config_dir=self.folder / "old-login")
+        new = replace(old, config_dir=self.folder / "new-login")
+        meter.sync_specs([old]); callback = meter.observer("quota")
+        meter.sync_specs([new]); callback("codex", {"rateLimits": {"primary": {"usedPercent": 72, "resetsAt": 2000000000}}})
+        snapshot = meter.snapshot()
+        self.assertEqual(snapshot["accounts"][0]["windows"], [])
+        meter.sync_specs([old])
+        self.assertEqual(meter.snapshot()["accounts"][0]["windows"][0]["left"], 28)
+
+    def test_codex_unauthorized_quota_refreshes_native_login_once_with_same_deadline(self):
+        from unittest.mock import Mock, patch
+        from xiaoyou_runtime.helpers.usage import fetch_codex
+        from xiaoyou_runtime.helpers.agents import AgentError
+        server = Mock()
+        server.request.side_effect = [1, 2, 3]
+        server.expect.side_effect = [AgentError("401 Unauthorized"), {"account": {}},
+            {"rateLimits": {"primary": {"usedPercent": 7, "resetsAt": 2000000000},
+                            "secondary": {"usedPercent": 2, "resetsAt": 2000500000}}}]
+        with patch("xiaoyou_runtime.helpers.codex_app.AppServer", return_value=server), \
+                patch("xiaoyou_runtime.helpers.codex_app.handshake"), \
+                patch("xiaoyou_runtime.helpers.agents.CodexAgent._env", return_value={}):
+            windows, _, problem = fetch_codex(Scripted("quota").spec)
+        self.assertIsNone(problem); self.assertEqual(windows["5h"]["left"], 93)
+        self.assertEqual(windows["7d"]["left"], 98)
+        self.assertEqual([call.args[0] for call in server.request.call_args_list],
+                         ["account/rateLimits/read", "account/read", "account/rateLimits/read"])
+        self.assertEqual(server.request.call_args_list[1].args[1], {"refreshToken": True})
+        self.assertEqual(len({call.args[1] for call in server.expect.call_args_list}), 1)
+        server.close.assert_called_once()
 
     def test_bad_requests_are_explained(self):
         with self.assertRaisesRegex(RequestError, "harness"):

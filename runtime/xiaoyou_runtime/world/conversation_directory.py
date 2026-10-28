@@ -69,6 +69,15 @@ class DirectoryMetadata:
         if path.name in self.errors:
             raise ValueError('Shared metadata is damaged; original file preserved. Repair or restore it before editing.')
 
+    def erase(self, keys):
+        with self.lock:
+            for attribute, path in (('items',self.path),('generated',self.generated_path)):
+                self._writable(path)
+                updated = {key: value for key, value in getattr(self,attribute).items() if key not in keys}
+                if updated != getattr(self,attribute):
+                    _write(path,updated,2)
+                    setattr(self,attribute,updated)
+
     def snapshot(self):
         with self.lock:
             return copy.deepcopy(self.items)

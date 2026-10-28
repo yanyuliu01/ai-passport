@@ -79,6 +79,8 @@ class ContextBuilder:
 
     def history(self, conversation, exclude=()):
         """All readable retained turns, never a promise of an eternal archive."""
+        if (self._cards.conversations.get(conversation) or {}).get('deleted'):
+            return []
         # One Cards lock supplies a consistent message/task view. No model or
         # effect runs while projecting it, including after a journal replay.
         tasks, messages = self._cards.context_snapshot(conversation)
@@ -290,6 +292,13 @@ class ContextBuilder:
                 # turn an already saved reply into a failed owner request.
                 sys.stderr.write("Model context receipt unavailable; saved messages remain authoritative.\n")
                 return
+            self._state = updated
+
+    def erase(self, conversation):
+        with self._lock:
+            updated = deepcopy(self._state)
+            updated.pop(conversation, None)
+            durable_write(self._path, updated)
             self._state = updated
 
     def clear(self, conversation):

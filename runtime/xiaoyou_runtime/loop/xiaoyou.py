@@ -804,6 +804,11 @@ class Xiaoyou:
                                                    [agent.name for agent in agents])
         except helpers_module.HelperError as error:
             sys.stderr.write("界面上加的帮手读不出来：%s\n" % error)
+        if self.helpers is not None:
+            for name in self.helpers.disabled():
+                if name not in (config.default_agent, config.voice_agent):
+                    self._agents.pop(name, None)
+                    self._order = [item for item in self._order if item != name]
         for spec in self.helpers.specs() if self.helpers is not None else []:
             self.add_agent(create_agent(spec))
         from ..helpers.model_preferences import Preferences
@@ -812,6 +817,7 @@ class Xiaoyou:
             spec = self.model_preferences.apply(agent.spec)
             if spec is not agent.spec:
                 self._agents[name] = create_agent(spec)
+        self._usage.sync_specs([agent.spec for agent in self.agents()])
         if self._gate.capabilities is not None and self.helpers is not None:
             self._gate.capabilities.grants_for = self.helpers.policy
 
@@ -827,6 +833,7 @@ class Xiaoyou:
             replacement = create(replace(agent.spec, model=model))
             self.model_preferences.save(name, model)
             self._agents[name] = replacement
+            self._usage.sync_specs([item.spec for item in self._agents.values()])
 
     def set_remote_agents(self, agents: List[Agent]) -> None:
         """换上网络里别的 Runtime 的帮手（mesh.py 按谁在线随时更新）；本机的不动。"""
@@ -847,6 +854,7 @@ class Xiaoyou:
                 raise ValueError("已经有叫 %s 的帮手了" % agent.name)
             self._agents[agent.name] = agent
             self._order.append(agent.name)
+            self._usage.sync_specs([item.spec for item in self._agents.values()])
         self.recover_tasks()
 
     def recover_tasks(self, ready: bool = False) -> int:
@@ -1033,6 +1041,7 @@ class Xiaoyou:
                 persist()
             del self._agents[name]
             self._order = [item for item in self._order if item != name]
+            self._usage.sync_specs([item.spec for item in self._agents.values()])
         return True
 
     @property
@@ -1849,13 +1858,13 @@ class Xiaoyou:
 
         def model(seen: str, task: Task = task) -> None:
             # 它实际用的模型：记到用量那边，卡上写的不一样就改过来。
-            self._usage.saw_model(task.agent.name, seen, usual=task.model is None)
+            self._usage.saw_model(task.agent.name, seen, usual=task.model is None and self._agents.get(task.agent.name) is task.agent)
             card = self._cards.get(task.card)
             if card is not None and card["model"] != seen:
                 writer.task(task.card, model=seen, expected_run_id=task.run_id)
 
         control.model = model
-        control.limits = lambda kind, payload, name=name: self._usage.observe(name, kind, payload)
+        control.limits = self._usage.observer(name)
         # 这一轮开始：记下额度现在剩多少（太久没问过就先问一次），做完好算花了多少。
         self._runs[control] = self._usage.begin(name, task.model)
         # This round's own approvals: a late release withdraws only these.

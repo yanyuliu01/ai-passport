@@ -11,7 +11,7 @@ config.json 里写的帮手照旧；这里记的是之后加的，放在 state/h
 - 订阅登录：用这台电脑上这个 harness 自己的登录（比如 codex login、在 pi 里 /login），这里
   只记下是这种方式。
 
-只能删在这里加的帮手；config.json 里的要改配置。
+配置中的帮手通过 disabled 列表移除并可恢复；不修改 config.json。
 """
 
 import json
@@ -68,6 +68,8 @@ class Registry:
         self._base = Path(base)
         self._reserved = set(reserved)  # config.json 里的名字：不能重名，也不能在这里删
         self._lock = threading.Lock()
+        self._disabled = set()
+        self._labels = {}
         self._rows: List[Dict[str, Any]] = self._load()
 
     def _load(self) -> List[Dict[str, Any]]:
@@ -77,6 +79,8 @@ class Registry:
             return []
         except (OSError, ValueError) as error:
             raise HelperError("读不了 %s：%s" % (self._path, error))
+        self._disabled = {name for name in raw.get("disabled", []) if isinstance(name, str)} if isinstance(raw, dict) else set()
+        self._labels = {k: v for k, v in raw.get("labels", {}).items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) and isinstance(raw.get("labels", {}), dict) else {}
         rows = raw.get("helpers") if isinstance(raw, dict) else None
         return [row for row in rows or [] if isinstance(row, dict) and isinstance(row.get("name"), str)]
 
@@ -114,6 +118,40 @@ class Registry:
             except HelperError:
                 continue
         return specs
+
+    def disabled(self) -> List[str]:
+        with self._lock:
+            return sorted(self._disabled)
+
+    def enable(self, name: str) -> None:
+        with self._lock:
+            if name not in self._disabled:
+                raise HelperError("这个帮手没有被移除")
+            self._disabled.remove(name)
+            try:
+                self._save()
+            except OSError:
+                self._disabled.add(name)
+                raise
+
+    def label(self, name):
+        with self._lock:
+            return self._labels.get(name, "")
+
+    def rename(self, name, title):
+        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 80 or any(ord(c) < 32 for c in title):
+            raise HelperError("名称应为 1 到 80 个字")
+        with self._lock:
+            if name not in self._reserved and name not in [row["name"] for row in self._rows]:
+                raise HelperError("帮手不存在")
+            old = dict(self._labels)
+            self._labels[name] = title.strip()
+            try:
+                self._save()
+            except OSError:
+                self._labels = old
+                raise
+        return title.strip()
 
     def names(self) -> List[str]:
         with self._lock:
@@ -197,7 +235,15 @@ class Registry:
     def remove(self, name: str) -> None:
         with self._lock:
             if name in self._reserved:
-                raise HelperError("%s 写在 config.json 里，要改配置才能删" % name)
+                if name in self._disabled:
+                    raise HelperError("这个帮手已经被移除")
+                self._disabled.add(name)
+                try:
+                    self._save()
+                except OSError:
+                    self._disabled.remove(name)
+                    raise
+                return
             rows = [row for row in self._rows if row["name"] != name]
             if len(rows) == len(self._rows):
                 raise HelperError("没有叫 %s 的帮手" % name)
@@ -255,7 +301,7 @@ class Registry:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle, temporary = tempfile.mkstemp(prefix="helpers-", suffix=".json", dir=str(self._path.parent))
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump({"format": FORMAT, "helpers": self._rows}, stream, ensure_ascii=False, indent=1)
+            json.dump({"format": FORMAT, "helpers": self._rows, "disabled": sorted(self._disabled), "labels": self._labels}, stream, ensure_ascii=False, indent=1)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, self._path)

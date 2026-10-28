@@ -134,7 +134,7 @@ class Shares:
                 text = self._read(path)
                 if text is not None:
                     items.append(("history:" + path.name, {"kind": "history", "path": path.name, "text": text}))
-        for item in self._mesh._xiaoyou.cards.conversations.list():
+        for item in self._mesh._xiaoyou.cards.conversations.list(include_deleted=True):
             if item.get("kind") == "side" and item.get("origin") == self._mesh.runtime_id:
                 items.append(("conversation:" + item["id"], {"kind": "conversation", "text": json.dumps(item, ensure_ascii=False)}))
         for key, item in self._mesh._xiaoyou.cards.directory.snapshot().items():

@@ -288,6 +288,29 @@ class Usage:
             self._fetching[found[0]] = threading.Lock()
         self._load()
 
+    def sync_specs(self, specs: List[AgentSpec]) -> None:
+        """Reflect live helper membership without discarding account windows or accepted work."""
+        with self._changed:
+            current = {spec.name: spec for spec in specs if spec.type != "mesh"}
+            if current == self._specs:
+                return
+            self._models = {name: model for name, model in self._models.items() if name in current and self._specs.get(name) == current[name]}
+            self._specs = current
+            self._account_of = {}
+            for account in self._accounts.values():
+                account["agents"] = []
+            for spec in self._specs.values():
+                found = account_of(spec)
+                if found is None:
+                    continue
+                account = self._accounts.setdefault(found[0], {
+                    "id": found[0], "kind": found[1], "agents": [], "windows": {}, "source": None,
+                    "updated_at": 0.0, "checked_at": 0.0, "plan": None, "note": None})
+                account["agents"].append(spec.name)
+                self._account_of[spec.name] = found[0]
+                self._fetching.setdefault(found[0], threading.Lock())
+            self._touch()
+
     # ---- 落盘 ----
 
     def _load(self) -> None:
@@ -373,7 +396,14 @@ class Usage:
 
     def observe(self, agent: str, kind: str, payload: Any) -> None:
         """帮手干活时自己报上来的额度消息。kind：claude_event、codex。"""
+        self._observe_account(self._account_of.get(agent), kind, payload)
+
+    def observer(self, agent: str):
+        """Capture the originating account before a removed name can be reused."""
         account_id = self._account_of.get(agent)
+        return lambda kind, payload: self._observe_account(account_id, kind, payload)
+
+    def _observe_account(self, account_id, kind: str, payload: Any) -> None:
         if account_id is None:
             return
         if kind == "claude_event":
@@ -407,7 +437,7 @@ class Usage:
             return
         targets = [account_id] if account_id is not None else list(self._accounts)
         for target in targets:
-            if target not in self._accounts:
+            if target not in self._accounts or not self._accounts[target]["agents"]:
                 continue
             if wait:
                 self._refresh_one(target)
@@ -424,6 +454,8 @@ class Usage:
         try:
             with self._changed:
                 account = self._accounts[account_id]
+                if not account["agents"]:
+                    return
                 account["checked_at"] = self._clock()
                 spec = self._specs[account["agents"][0]]
                 kind = account["kind"]
@@ -451,7 +483,7 @@ class Usage:
         now = self._clock()
         with self._changed:
             stale = [account["id"] for account in self._accounts.values()
-                     if now - max(account["checked_at"], account["updated_at"])
+                     if account["agents"] and now - max(account["checked_at"], account["updated_at"])
                      > self._config.usage_refresh_seconds]
             for account_id in stale:
                 self._accounts[account_id]["checked_at"] = now  # 别让下一个来看的人又问一次
@@ -533,6 +565,8 @@ class Usage:
         with self._changed:
             accounts = []
             for account in self._accounts.values():
+                if not account["agents"]:
+                    continue
                 windows = self._windows(account)
                 accounts.append({
                     "id": account["id"], "kind": account["kind"], "agents": list(account["agents"]),

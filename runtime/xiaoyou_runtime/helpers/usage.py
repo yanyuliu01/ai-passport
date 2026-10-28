@@ -80,8 +80,20 @@ def fetch_codex(spec: AgentSpec) -> Tuple[Windows, Optional[str], Optional[str]]
     try:
         deadline = time.monotonic() + FETCH_SECONDS
         codex_app.handshake(server, deadline)
-        request_id = server.request("account/rateLimits/read", codex_app.LIMITS_PARAMS)
-        windows, plan = codex_windows(server.expect(request_id, deadline, "account/rateLimits/read"))
+        def read_limits():
+            request_id = server.request("account/rateLimits/read", codex_app.LIMITS_PARAMS)
+            return server.expect(request_id, deadline, "account/rateLimits/read")
+        try:
+            response = read_limits()
+        except AgentError as error:
+            # The native login may still be recoverable even after the usage endpoint rejects its access token.
+            detail = str(error).lower()
+            if not any(marker in detail for marker in ("401", "unauthorized", "token has expired")):
+                raise
+            refresh_id = server.request("account/read", {"refreshToken": True})
+            server.expect(refresh_id, deadline, "account/read")
+            response = read_limits()  # One retry, sharing the original 20-second probe deadline.
+        windows, plan = codex_windows(response)
         return windows, plan, None if windows else "Codex 这一次没有给出额度"
     except AgentError as error:
         return {}, None, str(error)

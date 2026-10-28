@@ -92,6 +92,20 @@ class Node:
 
 
 class MeshTests(TempDirCase):
+    def test_side_chat_delete_converges_without_restoring_stale_history(self):
+        network=Network();a=Node(self,network,'DeleteMac');b=Node(self,network,'DeleteWindows',peers=[a.url])
+        chat=a.service.conversation_create({'id':'side-delete-mesh'})
+        card=a.xiaoyou.record.task_open(chat['id'],'private task','done','claude')
+        a.xiaoyou.record.reply(card['id'],'private deletion body',turn_id='delete-mesh-turn')
+        self.assertTrue(until(lambda: b.xiaoyou.cards.conversations.get(chat['id']) is not None))
+        self.assertTrue(until(lambda: b.card_from(a,card['id']) is not None))
+        b.service.conversation_delete(chat['id'])
+        self.assertTrue(until(lambda: bool((a.xiaoyou.cards.conversations.get(chat['id']) or {}).get('deleted'))))
+        self.assertEqual([],a.xiaoyou.cards.recent(chat['id'],100))
+        self.assertEqual([],b.xiaoyou.cards.recent(chat['id'],100))
+        self.assertEqual(0,a.service.share(chat['id'],[{'id':'old','text':'private deletion body','reply':'old answer'}]))
+
+
     def setUp(self):
         super().setUp()
         self.network = Network()

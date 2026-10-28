@@ -1722,7 +1722,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyou can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
 | `GET /v1/helpers/options` | Harnesses, UI-added helpers, MCP services and current grants; access ways include `magpie`, `key` and `login`. |
 | `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` adds a helper. `magpie` selects a model through the model service; `key` passes a native environment variable; `login` uses native sign-in. Returns `201 {helper,problem}`. |
-| `POST /v1/helpers/<name>/remove` | Removes a helper added through `POST /v1/helpers` and its key; helpers written in `config.json` are refused. |
+| `POST /v1/helpers/<name>/remove` | Removes a managed helper and its key, or reversibly disables a non-primary config helper (0.24.1). |
 | `POST /v1/helpers/models` | `{gateway_url,key?}` reads a local Magpie live model catalog, without returning credentials. |
 | `POST /v1/helpers/<name>/capabilities` | `{server_id: true/false/{tools:[...]}}` persists grants for a UI-added helper, checked on its next call. |
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}` (since 0.6.0). `accounts` has one entry per subscription login: `{"id", "kind", "agents", "state", "windows": [{"kind": "5h" or "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`; `left` is the percentage that remains, `null` when unknown. `agents` has one entry per helper: `{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`; `running` is how many rounds it is working on and `now` the model of the one in progress. Without `refresh` the numbers at hand are returned (and asked for again in the background when they are old); with it they are asked for now, which takes a few seconds. See [Usage](#usage-what-is-left-of-each-subscription). |
@@ -2665,3 +2665,42 @@ for future dispatches. Running jobs retain their original instance.
 independently. Preferences survive restart in `state/helper-models.json`.
 No credentials or native CLI settings change. Model IDs are syntactically
 validated; provider availability is checked when the helper executes.
+
+## Live helper membership (0.24.1)
+
+`GET /v1/helpers/options` adds `agents`, `removable` and `restorable` lists.
+The existing remove route also removes a non-primary config helper using an
+atomic `disabled` overlay in `state/helpers.json`; it leaves config.json,
+credentials, accepted executions and history intact. `POST /v1/helpers` with
+`{"restore":"name"}` restores that retained configuration and saved model
+preference. The primary dialogue/voice helper cannot be removed. UI-added
+helpers retain their existing removal and credential-cleanup behavior.
+
+Live membership/model changes reconcile the usage projection and its revision,
+so clients can refresh their roster through existing sync without a restart.
+Dormant account windows and accepted-work accounting stay retained. Authenticated
+account peers may use bounded helper routes through desktop 0.1.18. Management
+writes are source-bound and must not be automatically retried after an uncertain
+response. Older Runtimes ignore the new `disabled` field on downgrade, so removed
+config helpers reappear unless the owner also disables them in the old config.
+
+Codex quota probes recover an explicit 401/Unauthorized once with the native
+`account/read` `{refreshToken:true}` request, then retry `account/rateLimits/read`
+within the original probe deadline. Login files are neither copied between
+homes nor returned to a client. The protocol is documented in the
+[official App Server auth reference](https://learn.chatgpt.com/docs/app-server#auth-endpoints).
+A failed refresh retains old windows for labelled detail only; updated clients
+show an unknown avatar ring rather than presenting the old percentage as live.
+
+## Side-chat cache deletion (0.25.0)
+
+`POST /v1/conversations/<side-id>/delete` checks active requests/tasks, clears
+client chat caches and navigation, and synchronizes a content-free catalog
+delete marker. Canonical message/request logs and task audit logs remain for
+diagnostics; public history and model context exclude the deleted chat. Old
+imports cannot restore it. Supported peers clear caches on reconnect; older
+clients need upgrading for cache purging. Deletion has no restore entry; archive
+retains the full visible history and is reversible. This is cache deletion,
+not secure erasure of provider records or log files.
+`POST /v1/helpers/<name>/rename` accepts `{"title":"display name"}` and persists
+a display alias without changing agent IDs, credentials, or task routing.

@@ -2,6 +2,7 @@
 import dataclasses
 import json
 import unittest
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +25,62 @@ class DirectoryCase(TempDirCase):
 
 
 class DirectoryTests(DirectoryCase):
+    def test_delete_clears_views_keeps_request_logs_and_survives_reload(self):
+        chat=self.service.conversation_create({'id':'side-ledger-delete'})
+        message=self.service.submit('private ledger body',chat['id'])
+        self.service.get(message['id'],wait=2)
+        deadline=time.monotonic()+2
+        while self.service._busy_reason(chat['id']) and time.monotonic()<deadline:time.sleep(.01)
+        self.service.conversation_delete(chat['id'])
+        self.assertIsNone(self.service.get(message['id']))
+        self.assertIn(message['id'],self.service._messages)
+        self.assertTrue(any('private ledger body' in file.read_text() for file in self.store.state_dir.rglob('*') if file.is_file() and file.suffix in ('.json','.jsonl')))
+        from xiaoyou_runtime.world.conversations import ConversationCatalog
+        catalog=ConversationCatalog(self.x.cards.conversations.path)
+        self.assertTrue(catalog.get(chat['id'])['deleted'])
+
+    def test_delete_clears_cache_retains_logs_and_cannot_be_replayed(self):
+        chat = self.service.conversation_create({'id': 'side-delete'})
+        card = self.x.record.task_open(chat['id'], 'private task', 'done', 'codex')
+        self.x.record.reply(card['id'], 'private body', turn_id='delete-turn')
+        self.x.cards._log.retain([])
+        result = self.service.conversation_delete(chat['id'])
+        self.assertEqual('deleted', result['status'])
+        self.assertEqual([], self.x.cards.recent(chat['id'], 100))
+        path = self.x.cards._log._path
+        self.assertTrue(page(path, lambda m: m.get('conversation') == chat['id'], 'deleted')['messages'])
+        self.assertEqual([],self.service.sync('default',all_conversations=True)['messages'])
+        self.assertNotIn(chat['id'], [c['id'] for c in self.x.cards.conversations.list()])
+        tombstone = next(c for c in self.service.conversations()['conversations'] if c['id'] == chat['id'])
+        self.assertTrue(tombstone['deleted'])
+        self.assertNotIn('private', json.dumps(tombstone))
+        self.assertFalse(self.x.record.conversation_replica('peer', dict(chat, metadata_at=10**12)))
+        with self.assertRaises(RequestError):
+            self.service.submit('try revive', chat['id'])
+        with self.assertRaises(RequestError):
+            self.service.conversation_delete('default')
+
+    def test_delete_busy_chat_refused_and_archive_keeps_history_for_restore(self):
+        chat = self.service.conversation_create({'id':'side-archive'})
+        card = self.x.record.task_open(chat['id'], 'task', 'working', 'codex')
+        with self.assertRaises(RequestError):
+            self.service.conversation_delete(chat['id'])
+        key = uid('chat', chat['id'])
+        self.service.directory_edit(key, {'fields': {'archived': True}, 'revision':0})
+        self.assertIsNotNone(self.x.cards.get(card['id']))
+        self.service.directory_edit(key, {'fields': {'archived': False}, 'revision':1})
+        self.assertFalse(next(c for c in self.service.conversations()['conversations'] if c['id']==chat['id'])['archived'])
+
+    def test_peer_delete_erases_replica_and_stale_messages_do_not_restore_it(self):
+        chat = self.service.conversation_create({'id':'side-peer-delete'})
+        card = self.x.record.task_open(chat['id'], 'task', 'done', 'codex')
+        self.x.record.reply(card['id'], 'private reply', turn_id='peer-delete-turn')
+        message = next(m for m in self.x.cards._log._messages.values() if m['conversation']==chat['id'])
+        self.assertTrue(self.x.record.conversation_replica('peer',dict(chat, deleted=True, metadata_at=chat['created_at']+1)))
+        self.assertEqual([],self.x.cards.recent(chat['id'],100))
+        self.assertFalse(self.x.record.replica_message(dict(message, mesh_origin='peer')))
+
+
     def test_equal_names_and_directories_never_merge_distinct_native_sessions(self):
         for sid in ('native-one', 'native-two'):
             card = self.x.record.observed_open('__desktop__', 'same name', 'unknown', 'codex')

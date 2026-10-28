@@ -124,6 +124,7 @@ class Cards:
                 continue
         # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
         self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
+        self._log.hidden_conversation = lambda name: bool((self.conversations.get(name) or {}).get('deleted'))
         # cards.json 丢了、日志还在时：序号要从日志里见过的最大号往后数，不能重复发号。
         if self._log.max_seq() > self._seq:
             self._seq = self._log.max_seq()
@@ -436,9 +437,32 @@ class Cards:
             self._log.request(message)
             self._changed.notify_all()
 
+    def erase_conversation(self, conversation):
+        with self._changed:
+            from .conversation_directory import uid
+            keys = {uid('chat',conversation)}
+            for card in [*self._cards.values(),*self._retained.values()]:
+                if card.get('conversation') == conversation:
+                    keys.add(uid('task',card.get('mesh_origin') or self.conversations.origin,
+                                 card.get('mesh_epoch') or card.get('record_epoch') or self._epoch,
+                                 card.get('mesh_id') or card['id']))
+            self.directory.erase(keys)
+            for key, card in list(self._cards.items()):
+                if card.get('conversation') == conversation:
+                    del self._cards[key]
+            for key, card in list(self._retained.items()):
+                if card.get('conversation') == conversation:
+                    self._path.with_suffix('.retained').joinpath(key + '.json').unlink(missing_ok=True)
+                    del self._retained[key]
+            self.catalog_seq = self._issue()
+            self._save()
+            self._changed.notify_all()
+
     def replicate_message(self, record: Dict[str, Any]) -> bool:
         """别的 Runtime 的一条消息在这里的副本（见 MessageLog.replicate）；变了返回 True。"""
         with self._changed:
+            if (self.conversations.get(record.get('conversation')) or {}).get('deleted'):
+                return False
             changed = self._log.replicate(record)
             if changed:
                 self._changed.notify_all()
@@ -505,6 +529,8 @@ class Cards:
         字段和条目整段换成那台报来的样子；条目对应的消息已经由 mesh.py 原样写进日志
         （MessageLog.replicate），这里不再从条目反推消息。"""
         with self._changed:
+            if (self.conversations.get(fields.get('conversation')) or {}).get('deleted'):
+                return {}
             card = self._cards.get(card_id) if card_id else None
             if card is None:
                 now = time.time()

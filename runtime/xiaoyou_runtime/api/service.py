@@ -209,6 +209,11 @@ class Service:
         source_seq = max([int(v.get('source_revision', 0)) for v in xiaoyou.cards.directory.source_snapshot().values() if v.get('authority') == self.runtime_id] + [xiaoyou.cards.seq])
         if source_seq > xiaoyou.cards.seq:
             self._system_writer.sequence(at_least=source_seq)
+        xiaoyou.cards.conversation_erased = self._erase_conversation_state
+        for item in xiaoyou.cards.conversations.list(include_deleted=True):
+            if item.get('deleted'):
+                xiaoyou.cards.erase_conversation(item['id'])
+                self._erase_conversation_state(item['id'])
         self._recover()
         from ..events.directory_discovery import Discovery
         self.discovery = Discovery(xiaoyou._config, xiaoyou.intake.writer("desktop", actor="discovery"), self.runtime_id, owned=store.session_ids,
@@ -255,6 +260,8 @@ class Service:
         """Runtime 刚启动：上次收下但没处理完的话。"""
         requeue, unfinished = [], []
         for message in self._messages.values():
+            if (self.card_store.conversations.get(message.get("conversation")) or {}).get("deleted"):
+                continue
             if message["status"] in FINISHED or message["operation_state"] in operations.TERMINAL:
                 continue
             if message.get("relay_to") and message["status"] == "running":
@@ -371,6 +378,7 @@ class Service:
         return [
             {
                 "name": agent.name, "type": agent.type, "description": agent.description,
+                **({"display_name": self._xiaoyou.helpers.label(agent.name)} if self._xiaoyou.helpers and self._xiaoyou.helpers.label(agent.name) else {}),
                 "speaks": agent.speaks, "default": agent.name == self._xiaoyou.default_agent,
                 "model": tiers[agent.name]["model"] if agent.name in tiers else agent.spec.model,
                 "configured_model": agent.spec.model,
@@ -379,6 +387,19 @@ class Service:
             }
             for agent in self._xiaoyou.agents()
         ]
+
+    def helper_rename(self, name, body):
+        if not isinstance(body, dict) or set(body) != {'title'}:
+            raise RequestError('Invalid helper name request')
+        agent = next((a for a in self._xiaoyou.agents() if a.name == name and a.type != 'mesh'), None)
+        if agent is None or self._xiaoyou.helpers is None:
+            raise RequestError('帮手不存在')
+        from ..helpers.helpers import HelperError
+        try:
+            title = self._xiaoyou.helpers.rename(name, body['title'])
+        except HelperError as error:
+            raise RequestError(str(error))
+        return {'name': name, 'display_name': title}
 
     def helper_options(self) -> Dict[str, Any]:
         """添加帮手时能选什么：这台电脑装了哪些 harness、每种能怎么接入模型。"""
@@ -395,8 +416,12 @@ class Service:
                 grants[name][server.id] = (False if not grant.enabled else
                                           {"tools": grant.tools} if grant.tools is not None else True)
         return {"runtime_id": self.runtime_id, "harnesses": helpers.options(), "added": added,
-                "capabilities": servers, "helper_grants": grants,
-                "model_settings": self.helper_model_settings()}
+                "capabilities": servers, "helper_grants": grants, "agents": self.agents(),
+                "model_settings": self.helper_model_settings(),
+                "removable": [agent.name for agent in self._xiaoyou.agents()
+                              if agent.type != "mesh" and agent.name not in
+                              (self._xiaoyou._config.default_agent, self._xiaoyou._config.voice_agent)],
+                "restorable": registry.disabled() if registry is not None else []}
 
     def helper_model_settings(self) -> List[Dict[str, Any]]:
         from ..helpers.model_preferences import editable, options
@@ -439,6 +464,19 @@ class Service:
             raise RequestError("这台 Runtime 没有开帮手登记")
         if not isinstance(body, dict):
             raise RequestError("请求体应为对象")
+        if "restore" in body:
+            name = _name(body["restore"], "restore")
+            spec = next((item for item in self._xiaoyou._config.agents if item.name == name), None)
+            if spec is None or name not in registry.disabled():
+                raise RequestError("没有可以恢复的这个帮手")
+            try:
+                registry.enable(name)
+                self._xiaoyou.add_agent(create_agent(self._xiaoyou.model_preferences.apply(spec)))
+            except (HelperError, ValueError) as error:
+                raise RequestError(str(error))
+            except OSError:
+                raise UnavailableError("帮手未能恢复，请重试") from None
+            return {"helper": {"name": name, "type": spec.type}}
         if body.get("access") == "magpie":
             listed = self.helper_models(body)
             selected = next((item for item in listed["models"] if item["id"] == body.get("model")), None)
@@ -468,8 +506,8 @@ class Service:
         from ..helpers.helpers import HelperError
         registry = self._xiaoyou.helpers
         name = _name(name, "name")
-        if registry is None or name not in registry.names():
-            raise RequestError("没有在界面上加过叫 %s 的帮手" % name)
+        if registry is None or (name not in registry.names() and not self._xiaoyou.has(name)):
+            raise RequestError("没有叫 %s 的本机帮手" % name)
         try:
             if not self._xiaoyou.remove_agent(name, persist=lambda: registry.remove(name)):
                 registry.remove(name)  # Remove a saved helper that could not be loaded.
@@ -559,6 +597,8 @@ class Service:
                  pin: bool = False, effort: Any = None, model: Any = None,
                  mesh: Optional[Dict[str, Any]] = None, attachments=None, reply_scope=None) -> Dict[str, Any]:
         conversation = _name(conversation, "conversation")
+        if (self.card_store.conversations.get(conversation) or {}).get('deleted'):
+            raise RequestError('旁聊已删除，请新建旁聊')
         mesh = mesh or {}
         relay = None
         if card is not None:
@@ -602,6 +642,8 @@ class Service:
         # 写完（或者写失败、撤回）才看得到结果，不会对一句还没写下去的话回“收到了”。
         with self._write_lock:
             with self._changed:
+                if (self.card_store.conversations.get(conversation) or {}).get('deleted'):
+                    raise RequestError('旁聊已删除，请新建旁聊')
                 if self._closed:
                     raise RequestError("Runtime 正在关闭")
                 if client_id is not None:
@@ -854,14 +896,15 @@ class Service:
     def conversations(self):
         from ..world.conversation_directory import uid
         preferences = self.card_store.directory.snapshot()
-        values = self.card_store.conversations.list()
+        values = self.card_store.conversations.list(include_deleted=True)
         for item in values:
             key = uid('chat', item['id'])
             metadata = preferences.get(key, {})
             if metadata.get('origin') != (item.get('origin') or self.runtime_id):
                 metadata = {}
             item.update(directory_id=key, metadata_revision=metadata.get('revision', 0))
-            item.update({k: metadata[k] for k in ('title', 'pinned', 'archived', 'project') if k in metadata})
+            if not item.get('deleted'):
+                item.update({k: metadata[k] for k in ('title', 'pinned', 'archived', 'project') if k in metadata})
         return {"conversations": values}
 
     def directory(self, include_retained=True):
@@ -990,6 +1033,7 @@ class Service:
                                                        [row['task_id']] if row.get('task_id') and not row.get('retained_only') else [])
         except ValueError as error:
             raise RequestError(str(error))
+        self._publish_directory_share('directory:' + key, 'directory', result)
         return {'status': 'applied', 'metadata': result}
 
     def _directory_tasks(self, tasks):
@@ -1053,6 +1097,33 @@ class Service:
         result = self.mesh.outcome(command, authority, 'accepted')
         return dict(result or {}, status='applied' if result and result.get('ok') else 'failed' if result else 'queued')
 
+    def _publish_directory_share(self, key, kind, item):
+        if self.mesh is not None:
+            import hashlib
+            text = json.dumps(item, ensure_ascii=False)
+            self.mesh.publish_share(key, {'key': key, 'kind': kind, 'text': text,
+                                         'sha': hashlib.sha256(text.encode()).hexdigest(), 'at': time.time()})
+
+    def conversation_delete(self, name):
+        name = _name(name, 'conversation')
+        with self._write_lock, self._changed:
+            if self._busy_reason(name) or any(c['state'] in ACTIVE for c in self.card_store.recent(name, 10 ** 6)):
+                raise RequestError('旁聊中还有任务在进行，请结束后再删除')
+            try:
+                self._owner_writer.conversation_delete(name)
+            except ValueError as error:
+                raise RequestError(str(error))
+        return {'status': 'deleted', 'id': name}
+
+    def _erase_conversation_state(self, name):
+        # Clear continuation/cache state; retain request and canonical logs for diagnostics.
+        self._store.forget(name)
+        self._xiaoyou.context.erase(name)
+        if self.mesh is not None:
+            item = self.card_store.conversations.get(name)
+            if item and item.get('origin') == self.runtime_id:
+                self._publish_directory_share('conversation:' + name, 'conversation', item)
+
     def conversation_create(self, body):
         if not isinstance(body, dict):
             raise RequestError("请求体应为对象")
@@ -1069,7 +1140,9 @@ class Service:
                 raise RequestError("来源消息已不在可读历史里")
             context = {key: original.get(key) for key in ("id", "conversation", "author", "source")}
             context["text"] = redact_credentials(original.get("text") or "")[:4000]
-        return self._owner_writer.conversation_create(name, context)
+        item = self._owner_writer.conversation_create(name, context)
+        self._publish_directory_share('conversation:' + item['id'], 'conversation', item)
+        return item
 
     def conversation_rename(self, name, title):
         try:
@@ -1316,7 +1389,7 @@ class Service:
         with self._changed:
             for key in requested:
                 value = self._messages.get(key)
-                if value is None or not (all_conversations or value["conversation"] == conversation):
+                if value is None or (self.card_store.conversations.get(value.get('conversation')) or {}).get('deleted') or not (all_conversations or value["conversation"] == conversation):
                     missing.append(key)
                     continue
                 if items and size >= 512 * 1024:
@@ -1336,6 +1409,7 @@ class Service:
         with self._changed:
             return [self._snapshot(message) for message in self._messages.values()
                     if message["conversation"] == conversation
+                    and not (self.card_store.conversations.get(conversation) or {}).get('deleted')
                     and after < message.get("seq", 0) <= upto]
 
     @staticmethod
@@ -1796,7 +1870,7 @@ class Service:
         with self._changed:
             while True:
                 message = self._messages.get(message_id)
-                if message is None:
+                if message is None or (self.card_store.conversations.get(message.get('conversation')) or {}).get('deleted'):
                     return None
                 remaining = deadline - time.monotonic()
                 if message["status"] in ("done", "failed") or remaining <= 0:
@@ -1815,6 +1889,8 @@ class Service:
         不立刻打扰模型：等这个对话的下一句话到来时一并告诉接话的代理。
         """
         conversation = _name(conversation, "conversation")
+        if (self.card_store.conversations.get(conversation) or {}).get('deleted'):
+            return 0
         if not isinstance(turns, list) or len(turns) > MAX_SHARED_TURNS:
             raise RequestError("turns 应该是最多 %d 项的列表" % MAX_SHARED_TURNS)
         cleaned = []
