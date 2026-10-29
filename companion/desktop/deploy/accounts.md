@@ -290,3 +290,11 @@ update metadata matches the build. USB is now disconnected, so this version
 has not been installed or gesture-tested on the phone; it is offered through
 the Runtime updater. Runtime 0.25.0 and desktop 0.1.19 remain in place.
 The complete repository gate passed for this Android-only follow-up, including firmware merged-image verification. Live first-response timing, connection recovery and multi-device convergence were not exercised.
+
+### Relay APK hosting, 2026-10-29
+
+Android 0.39.1/code 88 adds exact-origin account-certificate pinning for immutable relay APK URLs. The relay streams only hash-named APKs with bounded ranges, HEAD and ETag support; it never exposes account storage. Publisher verification covers Gradle ABI/version consistency, SSH-side hashes and actual pinned HTTPS range responses before updating Runtime metadata. Deployment retained the original certificate, account data and relay secret; only the relay container restarted.
+
+Build/full repository gate PASS; desktop 124 tests, Android 249 tests and two publisher checks PASS. The USB phone reports installed 0.39.1 and connected; the owner confirmed updating. Production Android download classes fetched all 21,941,155 bytes from the real relay and verified SHA-256, then resumed another transfer from 6,045,696 retained bytes and verified the same hash. This is scoped physical download/upgrade evidence, not message timing or full multi-end acceptance. The reported desktop-to-phone reply delay remains a separate active investigation.
+
+Legacy Android preference and keystore names remain compatibility identities. The one-time old-client mirror was removed from Runtime metadata after upgrading; all five ABI URLs now point at the relay. Future owner releases use `tools/publish_app_relay.py`. Previous relay source is retained under its deployment backup directory for rollback; account/TLS/profile data are not cleared.

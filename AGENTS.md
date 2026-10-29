@@ -126,10 +126,9 @@ and obtain approval before flashing; detection alone is not consent.
 
 After each complete change to the companion app (`companion/android`), deliver
 it through the runtime instead of handing the owner an APK: bump the version,
-build and run the unit tests, publish with `python3 -m xiaoyu_runtime app
-publish` and a plain-language `--note`, and tell the owner the phone will offer
+build and run the unit tests, publish to the owner's relay with `python3 tools/publish_app_relay.py --config <runtime-config>` and a plain-language `--note`, and tell the owner the phone will offer
 the update. Follow [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents).
-Publishing is local and does not need separate approval; restarting the
+Relay hosting is owner-authorized and publishing needs no separate approval; restarting the
 runtime does, unless no task is running. Do not report the phone install as
 verified until the owner confirms it.
 

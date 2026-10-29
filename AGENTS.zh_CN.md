@@ -111,9 +111,9 @@ App、Runtime 或固件行为修改还须按[共同交付契约](docs/developmen
 烧录前须取得用户同意；检测到设备本身不代表获得烧录授权。
 
 每次完整改完配套 App（`companion/android`）后，经 Runtime 推给主人，不再把 APK 文件交给主人：
-加版本号、编译并跑单元测试、用 `python3 -m xiaoyu_runtime app publish` 加一句主人看得懂的
+加版本号、编译并跑单元测试、用 `python3 tools/publish_app_relay.py --config <runtime-config>` 将安装包发布到老板的中继，并加一句主人看得懂的
 `--note` 发布，再告诉主人手机会提示更新。按[发布一次 App 改动](companion/README.zh_CN.md#发布一次-app-改动开发者和-ai-agent)
-执行。发布只动本机，不需要另外征得同意；重启 Runtime 需要征得同意，除非当时没有任务在跑。主人确认装好之前，
+执行。老板已授权中继托管，发布不需要另外征得同意；重启 Runtime 需要征得同意，除非当时没有任务在跑。主人确认装好之前，
 不要说手机上的安装已经验证。
 
 仅在用户请求或当前工作流明确要求时创建 commit 和 push。普通功能、应用和文档 PR 不得修改 `docs/CHANGELOG.md` 或 `docs/CHANGELOG.zh_CN.md`；用户可见行为、兼容性和发布流程影响改为写入 PR 正文及对应权威文档。发布准备期间，由发布负责人在创建 tag 前把已合并的用户可见变化统一汇总到两份变更日志。

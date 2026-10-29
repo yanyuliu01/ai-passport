@@ -21,7 +21,7 @@ final class RelayManager {
     private static final Map<String,RelayConnection> links=new ConcurrentHashMap<>();
     private static Context app;
     private static SharedPreferences storage;
-    private static final String ALIAS="xiaoyu-relay-v1";
+    private static final String ALIAS="xiaoyou-relay-v1";
     static synchronized void init(Context context) throws Exception {
         if(app!=null){AccountManager.init(context);return;}app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
         ArtifactDownload.relayBytes=RelayManager::binary;

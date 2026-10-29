@@ -26,11 +26,11 @@ final class UpdateDownload {
     static void fetch(String address, String token, String sha, long size, File file,
                       Progress progress) throws Exception {
         fetch(address, token, sha, size, file, progress, false,
-                url -> (HttpURLConnection) url.openConnection());
+                PinnedRelayTLS::openDownload);
     }
 
     static void fetchExternal(String address, String sha, long size, File file, Progress progress) throws Exception {
-        fetchExternal(address, sha, size, file, progress, url -> (HttpURLConnection) url.openConnection());
+        fetchExternal(address, sha, size, file, progress, PinnedRelayTLS::openDownload);
     }
 
     static void fetchExternal(String address, String sha, long size, File file, Progress progress,
@@ -42,7 +42,7 @@ final class UpdateDownload {
     static void fetchPreferred(String mirror, String runtime, String token, String sha, long size,
                                File file, Progress progress) throws Exception {
         fetchPreferred(mirror, runtime, token, sha, size, file, progress,
-                url -> (HttpURLConnection) url.openConnection());
+                PinnedRelayTLS::openDownload);
     }
 
     static void fetchPreferred(String mirror, String runtime, String token, String sha, long size,

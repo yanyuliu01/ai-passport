@@ -4,11 +4,14 @@ import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { pathToFileURL } from 'node:url';
 import type { RelayAccounts } from './accounts.js';
+import { releaseDownloads } from './releases.js';
 
 /** An authenticated, bounded byte forwarder. No model, plaintext or persistent mailbox. */
-export function createRelay(token: string, tls?: ServerOptions, accounts?: RelayAccounts): Server {
+export function createRelay(token: string, tls?: ServerOptions, accounts?: RelayAccounts, options: { releases?: string } = {}): Server {
   if (token.length < 32) throw new Error('Set a random relay access token of at least 32 characters');
+  const downloads = options.releases ? releaseDownloads(options.releases) : undefined;
   const handler: import('node:http').RequestListener = (request, response) => {
+    if (downloads?.(request, response)) return;
     if (accounts && request.url?.startsWith('/v1/account/')) { void accounts.handle(request, response); return; }
     if (request.url === '/healthz') { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{"ok":true}'); }
     else { response.writeHead(404); response.end(); }

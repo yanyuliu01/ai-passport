@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { releaseDownloads } from '../relay/releases.js';
+
+test('public release downloads are hash-addressed, resumable and confined to APKs', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xiaoyu-release-'));
+  const bytes = Buffer.from('PK\x03\x04synthetic-public-apk');
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  await writeFile(join(dir, sha + '.apk'), bytes);
+  await symlink('/etc/passwd', join(dir, 'a'.repeat(64) + '.apk'));
+  const serve = releaseDownloads(dir);
+  const server = createServer((req, res) => { if (!serve(req, res)) { res.writeHead(404); res.end(); } });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true }); });
+  const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
+  const url = base + '/v1/releases/apps/' + sha + '.apk';
+  let reply = await fetch(url); assert.equal(reply.status, 200); assert.deepEqual(Buffer.from(await reply.arrayBuffer()), bytes);
+  reply = await fetch(url, { method: 'HEAD' }); assert.equal(reply.headers.get('content-length'), String(bytes.length));
+  reply = await fetch(url, { headers: { Range: 'bytes=4-8' } });
+  assert.equal(reply.status, 206); assert.deepEqual(Buffer.from(await reply.arrayBuffer()), bytes.subarray(4, 9));
+  assert.equal((await fetch(url, { headers: { Range: 'bytes=999-' } })).status, 416);
+  assert.equal((await fetch(url, { headers: { 'If-Match': 'wrong' } })).status, 412);
+  assert.equal((await fetch(base + '/v1/releases/apps/' + 'a'.repeat(64) + '.apk')).status, 404);
+  assert.equal((await fetch(base + '/v1/releases/apps/accounts.json')).status, 404);
+});

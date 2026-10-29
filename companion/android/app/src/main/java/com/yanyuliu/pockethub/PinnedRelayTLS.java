@@ -36,4 +36,33 @@ final class PinnedRelayTLS {
         try {if(!MessageDigest.isEqual(pin,MessageDigest.getInstance("SHA-256").digest(chain[0].getEncoded())))throw new CertificateException("节点证书与扫码记录不一致");}
         catch(CertificateException error){throw error;}catch(Exception error){throw new CertificateException("节点证书验证失败",error);}
     }
+    /** APK hosting uses the existing account certificate, only at its exact origin/path. */
+    static java.net.HttpURLConnection openDownload(java.net.URL url) throws java.io.IOException {
+        java.net.HttpURLConnection raw=(java.net.HttpURLConnection)url.openConnection();
+        if(!isReleaseURL(url))return raw;
+        try {
+            String fingerprint=AccountManager.PIN;
+            byte[] pin=new byte[32];for(int i=0;i<32;i++)pin[i]=(byte)Integer.parseInt(fingerprint.substring(i*2,i*2+2),16);
+            X509TrustManager trust=new X509TrustManager(){
+                public X509Certificate[] getAcceptedIssuers(){return new X509Certificate[0];}
+                public void checkClientTrusted(X509Certificate[] chain,String auth)throws CertificateException{throw new CertificateException("不接受客户端证书");}
+                public void checkServerTrusted(X509Certificate[] chain,String auth)throws CertificateException{check(chain,pin);}
+            };
+            SSLContext context=SSLContext.getInstance("TLS");context.init(null,new javax.net.ssl.TrustManager[]{trust},null);
+            javax.net.ssl.HttpsURLConnection secure=(javax.net.ssl.HttpsURLConnection)raw;
+            secure.setSSLSocketFactory(context.getSocketFactory());
+            secure.setHostnameVerifier((host,session)->{
+                if(!url.getHost().equalsIgnoreCase(host))return false;
+                try{check(new X509Certificate[]{(X509Certificate)session.getPeerCertificates()[0]},pin);return true;}catch(Exception e){return false;}
+            });
+            return secure;
+        } catch(Exception failure){raw.disconnect();throw new java.io.IOException("更新服务器证书配置无效",failure);}
+    }
+    static boolean isReleaseURL(java.net.URL url){
+        URI origin=URI.create(AccountManager.SERVER);
+        return "https".equals(url.getProtocol()) && origin.getHost().equalsIgnoreCase(url.getHost())
+            && (url.getPort()==-1 || url.getPort()==443) && url.getUserInfo()==null
+            && url.getPath().matches("/v1/releases/apps/[a-f0-9]{64}\\.apk");
+    }
+
 }

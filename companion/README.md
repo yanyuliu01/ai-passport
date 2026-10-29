@@ -756,6 +756,14 @@ the phone browser and confirm Android's installer. Later upgrades can use the
 new in-app downloader. An external hosting change does not move conversations,
 recordings, or Runtime credentials to that host.
 
+## Relay-hosted App releases
+
+The owner's latest Android packages are hosted on the account relay. After building all ABIs, use `python3 tools/publish_app_relay.py --config /path/to/runtime/config.json --note "plain-language change"` from the repository root. Publisher settings live outside Git at `~/.config/xiaoyu/release-publisher.json`: SSH host/user, key path, verified known-hosts path, remote directory and public base URL. Never store the private key or account credentials in this file or the repository.
+
+The publisher verifies local Gradle version/ABI metadata, uploads immutable hash-named APKs, verifies remote SHA-256, writes the relay's latest manifest and finally updates Runtime URLs. Existing APKs remain available for resumable downloads and rollback. The server exposes only published APKs, with Range/HEAD/ETag support; account state and private files are not downloadable. Android 0.39.1 trusts only the existing account certificate at that exact release origin. Other HTTPS hosts retain ordinary platform verification; private Runtime tokens never go to public hosts.
+
+Older Apps need a one-time compatible bootstrap because they do not yet apply that certificate pin to APK downloads. A checksum-identical compatibility mirror may bootstrap that upgrade; subsequent latest packages use the relay. Do not use local-only publication for an account-relay phone: a connected chat does not establish binary APK RPC support. The older GitHub publishing commands below remain an explicit compatibility alternative, not the owner's primary delivery route.
+
 ### Shipping an app change (developers and AI agents)
 
 Every finished change to `companion/android` reaches the owner's phone this

@@ -23,7 +23,7 @@ final class AccountManager {
     static synchronized void init(Context context) throws Exception {
         if(app!=null)return;
         Context next=context.getApplicationContext();
-        SharedPreferences prefs=next.getSharedPreferences("xiaoyu-account-v1",Context.MODE_PRIVATE);
+        SharedPreferences prefs=next.getSharedPreferences("xiaoyou-account-v1",Context.MODE_PRIVATE);
         String sealed=prefs.getString("device","");
         RelayCrypto identity=new RelayCrypto(android.os.Build.MODEL,sealed.isEmpty()?null:RelayManager.decrypt(sealed));
         if(!prefs.edit().putString("device",RelayManager.encrypt(identity.seed)).commit())throw new IOException("登录身份未能保存");
