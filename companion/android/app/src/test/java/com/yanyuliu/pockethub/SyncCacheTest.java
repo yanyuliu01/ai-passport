@@ -6,6 +6,24 @@ import java.util.List;
 import java.util.Map;
 
 public class SyncCacheTest {
+    @Test public void backgroundSnapshotKeepsItsOwnCursorAndRecordsAcrossChangesAndReset() {
+        SyncCache cache = new SyncCache("*");
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":1,\"messages\":[{\"id\":\"m1\",\"rev\":1,\"conversation\":\"side-one\",\"text\":\"before\"}]}"));
+        SyncCache.Snapshot before = cache.snapshot();
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":2,\"messages\":[{\"id\":\"m1\",\"rev\":2,\"conversation\":\"side-one\",\"text\":\"after\"}],\"conversations\":[{\"id\":\"side-one\",\"deleted\":true}]}"));
+        SyncCache.Snapshot deleted = cache.snapshot();
+        cache.apply(page("{\"epoch\":\"e2\",\"seq\":1,\"tasks\":[{\"id\":\"new-task\"}]}"));
+        SyncCache old = SyncCache.restore(before.json(), "*");
+        assertNotNull(old); assertEquals("1", old.cursor()); assertEquals("e1", old.epoch());
+        assertTrue(old.save().contains("before")); assertFalse(old.save().contains("after"));
+        SyncCache removed = SyncCache.restore(deleted.json(), "*");
+        assertNotNull(removed); assertEquals("2", removed.cursor()); assertEquals("e1", removed.epoch());
+        assertTrue(removed.save().contains("side-one"));
+        assertFalse(removed.save().contains("before"));
+        assertFalse(removed.save().contains("after"));
+        assertEquals("e2", cache.epoch()); assertTrue(cache.save().contains("new-task"));
+    }
+
     @Test public void catalogDeletionPurgesSavedSyncRecordsAndRejectsReplay() {
         String old="{\"epoch\":\"e\",\"seq\":1,\"messages\":[{\"id\":\"old\",\"conversation\":\"side-delete\",\"text\":\"private body\",\"rev\":1}]}";
         SyncCache cache=new SyncCache("*");cache.apply(page(old));

@@ -28,7 +28,10 @@ final class ChatHistory {
     private final Map<String, Message> messages = new LinkedHashMap<>();
 
     private final java.util.Set<String> erased = new java.util.HashSet<>();
-    void eraseConversation(String id) { erased.add(id); messages.values().removeIf(message -> message.conversation.equals(id)); }
+    boolean eraseConversation(String id) {
+        boolean changed = erased.add(id);
+        return messages.values().removeIf(message -> message.conversation.equals(id)) || changed;
+    }
 
     void begin(String id, String card, String text, double at) {
         String target = card == null ? "" : card;

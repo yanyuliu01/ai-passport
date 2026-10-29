@@ -294,15 +294,21 @@ public final class HubStore {
     }
     synchronized List<Map<String, Object>> conversations() { return new ArrayList<>(conversations); }
     synchronized void conversations(List<Object> items) {
+        if (conversations.equals(items)) return;
+        boolean historyChanged = false;
         conversations = new ArrayList<>();
         for (Object item : items) if (item instanceof Map) {
             Map<String,Object> row=Json.object(item);
             if(Json.flag(row,"deleted")) {
-                String id=Json.string(row,"id");deletedConversations.add(id);history.eraseConversation(id);cards.values().removeIf(card -> card.conversation.equals(id));
+                String id=Json.string(row,"id");deletedConversations.add(id);
+                historyChanged |= history.eraseConversation(id);
+                cards.values().removeIf(card -> card.conversation.equals(id));
             }
             else conversations.add(row);
         }
-        saveHistory();
+        // Catalog metadata is not part of ChatHistory. Only a real deletion changes
+        // the history document; task-only sync pages must not rewrite megabytes.
+        if (historyChanged) saveHistory();
     }
     synchronized void detachHistoryTasks() { history.detachTasks(); saveHistory(); }
     synchronized List<ChatHistory.Message> mainMessages() { return history.main(activeConversation); }

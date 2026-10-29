@@ -48,6 +48,18 @@ See the [account guide](desktop/deploy/accounts.md) for migration and boundaries
 
 In Android 0.35.0, open **Xiaoyou account** to select the receiving computer for new messages. The choice persists per account, and an offline selection never silently falls back to another computer. Accepted requests remain bound to their original source. Login and account selection use the existing bottom sheet, rounded cards and blue primary action.
 
+## Cache persistence (App 0.38.3)
+
+Unchanged conversation catalogs no longer rewrite chat history. Catalog metadata
+does not change the history document; new deletions still persist their tombstones.
+Sync checkpoints keep the existing version-1 file format and atomic replacement.
+The sync thread captures matching records and cursor, then a single background
+writer serializes and stores them. It retains at most one pending checkpoint per
+computer (eight pending sources maximum), replacing superseded pending work.
+After interruption, the previous complete checkpoint remains usable for replay.
+This adds no archive, history pruning, attachment cache or permission cache.
+Installed-device latency and recovery still require measurement.
+
 ## Unified reply synchronization (App 0.33.2)
 
 App 0.33.2 no longer rewrites the stored chat history when only a desktop activity card changes. Those updates arrived about once a second and each rewrite of a 6 MB history took about 0.7 s on the phone. Conversation cards are stored as before.

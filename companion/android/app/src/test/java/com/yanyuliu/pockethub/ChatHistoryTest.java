@@ -5,6 +5,18 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class ChatHistoryTest {
+    @Test public void repeatedDeletionDoesNotRequestAnotherHistoryWrite() {
+        ChatHistory history = new ChatHistory();
+        history.begin("retained", null, "preserved", 10);
+        assertTrue(history.eraseConversation("side-delete"));
+        String saved = history.json();
+        assertFalse(history.eraseConversation("side-delete"));
+        assertEquals(saved, history.json());
+        ChatHistory restored = ChatHistory.restore(saved);
+        assertFalse(restored.eraseConversation("side-delete"));
+        assertEquals(2, restored.main().size());
+    }
+
     @Test public void deletionSurvivesRestartAndRejectsOldImportedBubbles() {
         String original="{\"messages\":[{\"id\":\"deleted\",\"conversation\":\"side-delete\",\"scope\":\"main\",\"role\":\"xiaoyou\",\"text\":\"private body\",\"status\":\"done\"}]}";
         ChatHistory history=ChatHistory.restore(original);assertEquals(1,history.main("side-delete").size());

@@ -467,6 +467,9 @@ final class RuntimeClient {
     }
 
     private static final Object SYNC_FILES = new Object();
+    private static final SyncCacheWriter SYNC_WRITER = new SyncCacheWriter(
+            Executors.newSingleThreadExecutor(), MAX_TARGETS,
+            error -> HubStore.get().log("同步进度没存下：" + error.getMessage()));
 
     private static void saveSync(Context app, String key, String document) {
         synchronized (SYNC_FILES) {
@@ -563,10 +566,14 @@ final class RuntimeClient {
             else if (!before.equals(cache.cursor()) || !Json.list(page, "messages").isEmpty()
                     || !Json.list(page, "tasks").isEmpty()) toSave = cache;
         }
-        // 只有这个同步线程改这份缓存：出了锁再序列化，存下的仍是“应用到哪一页、游标就在哪一页”，
-        // 主线程不用等这一步（整份缓存的序列化要上百毫秒）。
-        String document = toSave == null ? null : toSave.save();
-        if (document != null && key != null && !key.isEmpty()) saveSync(app, key, document);
+        // Capture the matching state/cursor on this sync thread, then let the
+        // bounded writer serialize and atomically store it. Reading the next
+        // delta no longer waits for a whole-cache JSON build and fsync.
+        if (toSave != null && key != null && !key.isEmpty()) {
+            SyncCache.Snapshot snapshot = toSave.snapshot();
+            if (!SYNC_WRITER.offer(key, () -> saveSync(app, key, snapshot.json())))
+                store.log("同步保存繁忙，保留上次完整进度，下次连接会补齐");
+        }
         return more;
     }
 

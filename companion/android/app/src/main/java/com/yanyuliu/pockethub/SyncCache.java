@@ -113,13 +113,25 @@ final class SyncCache {
      * The applied records and the cursor that covers them, as one document: saving them together is what
      * lets a restart continue from the cursor without skipping records it never applied.
      */
-    String save() {
+    String save() { return snapshot().json(); }
+
+    /** Capture the applied state and cursor together on the owning sync thread.
+     * Records are replaced, never edited in place by apply(), so the writer can
+     * serialize these captured lists after later pages or an epoch reset arrive.
+     */
+    Snapshot snapshot() {
         Map<String, Object> root = new HashMap<>();
         root.put("version", 1); root.put("conversation", conversation); root.put("epoch", epoch);
         root.put("cursor", cursor); root.put("presentation", presentationVersion);
         root.put("erased",new ArrayList<>(erased));
         root.put("tasks", new ArrayList<>(tasks.values())); root.put("messages", new ArrayList<>(messages.values()));
-        return UsageEvents.json(root);
+        return new Snapshot(root);
+    }
+
+    static final class Snapshot {
+        private final Map<String, Object> root;
+        private Snapshot(Map<String, Object> root) { this.root = root; }
+        String json() { return UsageEvents.json(root); }
     }
 
     /** A saved document back, or null when it is unreadable or from another format; then sync starts over. */
