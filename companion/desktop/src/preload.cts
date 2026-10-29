@@ -9,6 +9,7 @@ const api: DesktopAPI = {
   phoneConnection: () => call('phone-connection'), copyPhoneConnection: value => call('copy-phone-connection', value),
   snapshot: () => call('snapshot'), send: value => call('send', value),
   scanLocal: () => call('scan-local'), enableLocal: value => call('enable-local', value),
+  startFirstRun: value => call('first-run-start', value), checkFirstRun: () => call('first-run-check'),
   restoreConnections: () => call('restore-connections'),
   directory: value => call('directory', value), directoryEdit: value => call('directory-edit', value),
   directoryOpen: value => call('directory-open',value),

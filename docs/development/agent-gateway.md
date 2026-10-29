@@ -7,6 +7,108 @@ installer or grant permission to install a CLI. The present increment implements
 public helper activity in the existing record/sync path; installation management
 is a later increment.
 
+## Session continuation gateway (0.26.0 source)
+
+Runtime 0.26.0 adds one session gateway inside each existing peer Runtime.
+Xiaoyu's `find_sessions` / `continue_session` tools and authenticated
+`GET /v1/sessions` / `POST /v1/sessions/<target>/continue` use the same selection
+and dispatch boundary. This is source implementation status, not deployment or
+native-window acceptance evidence. There is no additional daemon, transcript
+store, or dispatch journal: shared-directory metadata, Cards, Record effects,
+request idempotency, mesh and adapter protocols remain authoritative.
+
+Search is bounded to 20 results, projects only session metadata, and includes
+owner-visible native sources alongside the current conversation's managed tasks.
+It does not expose another side chat's ordinary task content. Ambiguous matches
+require an explicit target. A continuation requires a client request identity;
+retries preserve the selected target and use the existing durable request and
+effect records. The desktop encrypted relay validates this optional API and
+keeps the same receipt across transport retries. Existing `/v1/messages` clients
+remain compatible; relay hosts need the updated allowlist for the new endpoints.
+
+All configured execution engines use this gateway for managed-task follow-up,
+including Codex, Claude Code, DSH, Pi, command, echo and remote agents. Native
+resume is a separate adapter capability: Codex, Claude Code, DSH and Pi advertise
+it; command and echo do not. Native-source discovery currently imports Codex and
+Claude Code. Advertising resume does not imply external discovery or GUI refresh
+support for every harness. Remote tasks return through their existing mesh
+binding; a directory-only remote source without that binding is unavailable and
+must not silently become a local task.
+
+A native continuation retains the observed session ID, working directory and
+source-home scope. When the configured worker uses an isolated home, Codex and
+Claude may bind to the verified discovery home without editing global settings
+or copying transcripts. Conflicting explicit provider-routing settings, unknown
+homes, unavailable sources and changed recovery bindings fail before dispatch.
+Legacy records without a scope retain the configured adapter and cannot rebind.
+An active or approval-blocked native source, or an existing active continuation,
+blocks a second writer. A new Runtime execution record links to the original
+native session; it is not a replacement native conversation. Returned native
+session identity is checked before executing the resumed turn.
+
+Delivery distinguishes submission, session binding, actual turn start,
+approval waiting and unknown acceptance. Native idle means the turn ended,
+not that the owner's overall task is complete. Recovery revalidates the original
+binding before checking the existing dispatch fingerprint. Unsupported steering
+or unavailable bindings produce an explicit failure instead of a new session.
+Borrowed DSH sessions disable the legacy create-on-resume-error fallback and use
+the original working directory. Borrowed Pi sessions require a unique existing
+header with the exact ID and directory, then use `--session <path>`; they never
+use the create-if-missing `--session-id` path. This follows the
+[Pi session-selection implementation](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/main.ts).
+
+Automated coverage includes gateway selection, adapter capability boundaries,
+original-home binding, request/effect replay, source identity, HTTP authorization
+and encrypted-relay retry deduplication. Real native desktop rendering, phone
+end-to-end delivery, first response within three seconds and live reconnect
+acceptance still require testing with the deployed versions.
+
+## Validation and local rollout, 2026-10-29
+
+The candidate is based on `7575c61` plus these uncommitted gateway changes and
+the deployed 0.25.0 speech-deadline fixes. Newer character-rule injection is
+retained. Runtime 0.26.0 was deployed on the owner's Mac only after confirming no
+local managed task or message was active. The original Runtime/subject identities
+and configuration/state paths were retained. Read-only live queries found the
+original Codex and Claude sources; a working Codex source was explicitly reported
+as unavailable for a second writer. No test message was sent into an owner-native
+conversation. Other computers and the installed desktop host were not upgraded.
+The host source includes the optional relay allowlist; existing chat messages use
+the gateway through Runtime without requiring that host upgrade.
+
+| Check | Result and evidence |
+| --- | --- |
+| Build | PASS: desktop TypeScript/UI, Mac ARM64 frozen Runtime 0.26.0, complete `tools/validate.sh` firmware build and merged-image verification |
+| Host tests | PASS: final Runtime suite 1,210; gateway/merge regression 60; desktop suite 122 using a frozen bundle; final staged-binary dual-Runtime interoperability |
+| Regression | PASS for tested managed-task/selection, original source binding, capability boundaries, authorization, effect recovery and idempotent retry paths; existing live speech-deadline fixes preserved |
+| First response <= 3s | NOT RUN on phone/native UI with a real model; echo/API acknowledgement is not TTFT evidence |
+| Connection recovery | PASS in isolated dual-Runtime encrypted relay tests; deployed phone/native disconnect recovery NOT RUN |
+| Multi-end synchronization | PASS for isolated API/relay records and source-bound routing; original native-window rendering and real phone delivery NOT RUN |
+| Device tests | NOT RUN; no Android or firmware change/install/flash in this increment |
+| Unverified | Real Codex/Claude/DSH/Pi execution and native-window refresh, all remote computers, phone rendering/TTFT/reconnect; installed App/firmware versions were not remeasured |
+
+Final frozen source SHA-256:
+`8577ef11ff5c5a899ec03fe2e59cedaa626171da6427365d49a87c3859e5cfa5`.
+The final staged HTTP probe passed capability discovery, authorized search,
+same-task continuation and durable retry. Its first process startup took 8.161 s.
+Fresh-bundle interop attempts exceeded the unchanged 8-second startup fixture
+limit; the full frozen desktop suite passed serially, and the final staged binary
+passed the unchanged focused interop test after initialization. This remains a
+startup limitation, not a three-second response pass.
+
+During preservation of live fixes, regression tests caught omitted character-rule
+injection; this was corrected before rollout. A concurrent directory-deletion
+fixture also timed out; its focused rerun and the final complete Runtime suite
+passed without deadline changes. Failed runs are retained locally alongside the
+passing logs under `/private/tmp/session-gateway-*`.
+
+The previous package is retained at
+`companion/desktop/runtime-dist.before-gateway-0.26.0` in the local deployment
+snapshot, with the previous source beside it. Rollback requires the same idle
+check (or owner approval to interrupt), a graceful stop, restoring that package,
+and restarting with the unchanged configuration. No credentials, history, pairing
+or settings are cleared. No commit or push was made.
+
 ## Product boundary
 
 The phone should let the owner choose a computer, discover agents, install a

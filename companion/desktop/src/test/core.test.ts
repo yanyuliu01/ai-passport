@@ -6,6 +6,16 @@ import { tmpdir } from 'node:os';
 import { ClientDatabase } from '../core/database.js';
 import { EndpointCrypto } from '../core/crypto.js';
 import { allowedRPC } from '../core/peers.js';
+
+test('session gateway relay admits only bounded idempotent continuation inputs', () => {
+  const body = { text: 'continue original work', client_id: 'a'.repeat(32), conversation: 'default' };
+  assert.equal(allowedRPC('GET', '/v1/sessions?query=project'), true);
+  assert.equal(allowedRPC('POST', '/v1/sessions/native-source/continue', body), true);
+  assert.equal(allowedRPC('POST', '/v1/sessions/native-source/continue', { ...body, cwd: '/other' }), false);
+  assert.equal(allowedRPC('POST', '/v1/sessions/native-source/continue', { ...body, client_id: '' }), false);
+  assert.equal(allowedRPC('POST', '/v1/sessions/native-source/continue', { ...body, conversation: '../other' }), false);
+  assert.equal(allowedRPC('POST', '/v1/sessions/native-source/continue', { ...body, text: '' }), false);
+});
 import { DesktopClient, type SecretStore } from '../core/client.js';
 import { HTTPRuntimeTransport, RuntimeError, syncPath, validateRuntimeURL, type RuntimeTransport } from '../core/runtime-client.js';
 import { validateRelay } from '../core/relay.js';

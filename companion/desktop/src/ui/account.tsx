@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { AccountView } from '../shared';
-export function AccountPanel({ view, onConfigure }: { view?: AccountView; onConfigure?: () => void }) {
+export function AccountPanel({ view, onConfigure, configureLabel = '配置这台电脑的帮手' }: { view?: AccountView; onConfigure?: () => void; configureLabel?: string }) {
   const [username, setUsername] = useState(''), [password, setPassword] = useState('');
   const [register, setRegister] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   async function login(event: React.FormEvent) {
@@ -22,7 +22,7 @@ export function AccountPanel({ view, onConfigure }: { view?: AccountView; onConf
     {view?.signedIn ? <>
       <p role="status">{view.message}</p>
       {!view.provisioned && <small>登录后自动恢复原来的互通身份，无需原电脑在场。</small>}
-      {view.provisioned && onConfigure && <button className="primary" onClick={onConfigure}>配置这台电脑的帮手</button>}
+      {view.provisioned && onConfigure && <button className="primary" onClick={onConfigure}>{configureLabel}</button>}
       <button disabled={busy} onClick={() => void window.xiaoyu.accountRefresh()}>重新连接</button>
       <button disabled={busy} onClick={() => void logout()}>退出账号</button>
     </> : <form onSubmit={event => void login(event)}>
@@ -30,7 +30,7 @@ export function AccountPanel({ view, onConfigure }: { view?: AccountView; onConf
       <label>密码<input name="password" type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} minLength={8} maxLength={256} required onChange={event => setPassword(event.target.value)} placeholder="至少 8 位" /></label>
       <button className="primary" type="submit" disabled={busy || view?.busy}>{busy ? '正在连接…' : register ? '创建小鱼账号' : '登录并连接'}</button>
       <button type="button" disabled={busy} onClick={() => { setRegister(!register); setPassword(''); setError(''); }}>{register ? '已有账号，去登录' : '首次使用，创建账号'}</button>
-      <small>使用你自建服务器上的小鱼账号。密码不保存在客户端，登录凭据由系统安全存储保护。</small>
+      <small>这是小鱼账号，与 DeepSeek、Claude、Codex 账号无关。密码不保存在客户端，登录凭据由系统安全存储保护。</small>
     </form>}
   </article>;
 }

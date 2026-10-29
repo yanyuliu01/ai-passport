@@ -20,6 +20,7 @@ class DesktopContinueTests(TempDirCase):
         self.voice = Scripted("claude")
         self.cc = Scripted("cc", speaks=True, kind="claude_code")
         self.codex = Scripted("codex", speaks=False, kind="codex")
+        self.cc.native_resume = self.codex.native_resume = True
         self.xiaoyu, self.store = make_xiaoyu(self.folder, [self.voice, self.cc, self.codex])
         self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)

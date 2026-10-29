@@ -409,6 +409,14 @@ def make_server(config: Config, service: Service,
             if not self._authorized():
                 return
             query = parse_qs(url.query)
+            if parts == ["v1", "sessions"]:
+                try:
+                    result = service.session_search(query.get("conversation", ["default"])[0],
+                        query.get("query", [""])[0], int(query.get("limit", ["8"])[0]))
+                    self._send(200, result)
+                except (ValueError, RequestError) as error:
+                    self._fail(400, str(error))
+                return
             if parts == ["v1", "timers", "effects"] or (
                     len(parts) == 4 and parts[:2] == ["v1", "timers"] and parts[3] == "effects"):
                 try:
@@ -514,7 +522,7 @@ def make_server(config: Config, service: Service,
             if parts == ["v1", "info"]:
                 info = service.info(query.get("nonce", [None])[0], getattr(self, "key_hash", None))
                 info.update(name=config.name, version=__version__)
-                info["capabilities"] = list(info.get("capabilities", [])) + ["events_v1"]
+                info["capabilities"] = list(info.get("capabilities", [])) + ["events_v1", "session_gateway_v1"]
                 info["events"] = event_types.describe()
                 info["iterate"] = iterate_lease.capabilities(iterate_settings, iterate_gateway)
                 self._send(200, info)
@@ -737,6 +745,9 @@ def make_server(config: Config, service: Service,
                         image_ids=body.get("image_ids"), reply_scope=body.get("reply_scope"),
                     )
                     self._send(202, message)
+                    return
+                if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "continue":
+                    self._send(202, service.session_continue(parts[2], body))
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "messages"] and parts[3] == "effects":
                     actor = "device:" + self.device["id"] if self.device else "legacy-client"

@@ -9,7 +9,11 @@ import { DesktopClient, type SecretStore } from './core/client.js';
 import { HTTPRuntimeTransport } from './core/runtime-client.js';
 import { RuntimeHost, findExecutable } from './core/runtime-host.js';
 import { bundledRuntimeLaunch } from './core/runtime-layout.js';
+import { bundledAgents } from './core/bundled-agents.js';
+import { agentDescriptors, scanAgents } from './core/agent-catalog.js';
 import { Setup } from './core/setup.js';
+import { FirstRun } from './core/first-run.js';
+import { bindLegacyModelKey } from './core/model-key.js';
 import { PairingPrompts } from './core/pairing-prompts.js';
 import { accountRoute } from './core/connection-policy.js';
 import { AccountConnection } from './core/account.js';
@@ -17,9 +21,11 @@ import type { Json } from './shared.js';
 
 let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopClient;
 let db: ClientDatabase, host: RuntimeHost, setup: Setup;
+let firstRun: FirstRun;
 let account: AccountConnection;
 let pairingPrompts: PairingPrompts | undefined;
 let accountFocused = false;
+let currentAccountSpace: () => string | undefined = () => undefined;
 let quitting = false, connecting = false;
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const ui = resolve(directory, '../dist-ui/index.html');
@@ -38,18 +44,22 @@ if (process.env.XIAOYU_DESKTOP_TEST_DATA)
 
 function snapshot() {
   const view = client.snapshot(), state = account?.view();
-  return { ...view, version: app.getVersion(), setup: setup?.view(), account: state,
+  const space = state?.signedIn && state.provisioned && !state.busy ? currentAccountSpace() : undefined;
+  view.spaces = view.spaces.filter(item => item.id === space);
+  if (!view.spaces.some(item => item.id === view.selectedSpace)) view.selectedSpace = view.spaces[0]?.id || '';
+  return { ...view, version: app.getVersion(), setup: setup ? { ...setup.view(), firstRun: firstRun?.view() } : undefined, account: state,
     pairing: state ? { ...state.pairing, requests: state.pairing.requests.map(request => ({ ...request, id: 'account:' + request.id })) } : { joined: 0, relayState: '请登录小鱼账号', requests: [] } };
 }
 let notificationTimer: ReturnType<typeof setTimeout> | undefined;
 function notify(): void {
+  if (quitting) return;
   pairingPrompts?.update();
   // History pages may arrive in bursts. Render the latest committed state once
   // per frame batch instead of serializing the whole cache for every change.
   if (notificationTimer) return;
   notificationTimer = setTimeout(() => {
     notificationTimer = undefined;
-    if (window && !window.isDestroyed()) window.webContents.send('xiaoyu:view', snapshot());
+    if (!quitting && window && !window.isDestroyed()) window.webContents.send('xiaoyu:view', snapshot());
   }, 100);
 }
 function moonIcon() {
@@ -94,6 +104,9 @@ function ipc(name: string, callback: (value: unknown) => unknown): void {
     try {
       if (!['snapshot', 'account-login', 'account-logout', 'account-refresh', 'login-start'].includes(name) && !account?.view().signedIn)
         throw new Error('请先登录小鱼账号');
+      const requestedSpace = value && typeof value === 'object' ? (value as Json).space
+        : ['select', 'refresh-helpers'].includes(name) ? value : undefined;
+      if (requestedSpace !== undefined && requestedSpace !== currentAccountSpace()) throw new Error('此数据不属于当前账号。');
       return await callback(value);
     }
     catch (error) {
@@ -112,10 +125,12 @@ function localCandidates(): string[] {
     ] : [])];
 }
 async function connectAccountLocal(): Promise<void> {
-  if (connecting || !account.view().signedIn) return;
+  if (quitting || connecting || !account.view().signedIn) return;
+  if (firstRun?.view().required) { await firstRun.advance(); return; }
   connecting = true;
   try {
     const endpoint = await setup.resumeAccount();
+    if (quitting) return;
     if (endpoint) {
       client.add(endpoint); client.select(endpoint.spaceId);
       client.runtime = { state: 'ready', message: '已复用这台电脑的 Runtime · 原配置和记录保留' };
@@ -134,7 +149,12 @@ async function quit(): Promise<void> {
       message: '退出会停止本机客户端管理的服务。', buttons: ['继续后台运行', '退出小鱼'], defaultId: 0, cancelId: 0 });
     if (answer.response !== 1) return;
   }
-  quitting = true; client?.stop(); await account?.stop(); host?.stopOwned(); tray?.destroy();
+  quitting = true;
+  if (notificationTimer) { clearTimeout(notificationTimer); notificationTimer = undefined; }
+  firstRun?.suspend(); client?.stop();
+  try { await host?.shutdownOwned(); }
+  catch { quitting = false; dialog.showErrorBox('小鱼尚未退出', '本机服务尚未停止，请再次退出。配置和记录已保留。'); return; }
+  await account?.stop(); tray?.destroy();
   db?.close(); app.exit(0);
 }
 
@@ -163,7 +183,10 @@ async function main(): Promise<void> {
     save(key, value) { db.set('vault:' + key, safeStorage.encryptString(JSON.stringify(value)).toString('base64')); },
   };
   const local = new HTTPRuntimeTransport();
-  const getLocal = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://'));
+  currentAccountSpace = () => secrets.load<string>('account-space');
+  bindLegacyModelKey(secrets);
+  const getLocal = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://')
+    && endpoint.spaceId === secrets.load<string>('account-space'));
   client = new DesktopClient(db, { request(endpoint, method, path, body, signal) {
     try {
       return accountRoute(Boolean(account?.view().signedIn), Boolean(account?.owns(endpoint)), endpoint, secrets.load<string>('account-space')) === 'account'
@@ -177,7 +200,18 @@ async function main(): Promise<void> {
     : { command: await findExecutable(process.platform === 'win32' ? 'python' : 'python3') || process.execPath,
       args: ['-m', 'xiaoyu_runtime'], cwd: resolve(app.getAppPath(), '../../runtime') };
   host = new RuntimeHost(dataDir, launch, local);
-  setup = new Setup(db, secrets, host, localCandidates(), hostname(), join(dataDir, 'runtime/config.json'));
+  const agentRoot = app.isPackaged ? join(process.resourcesPath, 'agent-tools') : join(app.getAppPath(), 'agents-dist');
+  setup = new Setup(db, secrets, host, localCandidates(), hostname(), join(dataDir, 'runtime/config.json'), async (includeHelpers = true) => {
+    const tools = app.isPackaged ? await bundledAgents(agentRoot)
+      : await bundledAgents(agentRoot).catch(() => undefined);
+    return scanAgents(findExecutable, undefined, agentDescriptors(homedir(), process.platform, tools)
+      .filter(item => includeHelpers || item.id === 'dsh' || item.id === 'pi'));
+  });
+  firstRun = new FirstRun(db, secrets, setup, host, local,
+    () => Boolean(!quitting && account?.view().signedIn && account.view().provisioned && !account.view().busy), endpoint => {
+      client.add(endpoint); client.select(endpoint.spaceId);
+      client.runtime = { state: 'ready', message: '首次回复已验证，可以开始聊天' }; void account.refresh();
+    }, notify);
   // An isolated QA profile may use a synthetic pinned account service; normal launches use the fixed server.
   const testServer = process.env.XIAOYU_DESKTOP_TEST_DATA && process.env.XIAOYU_ACCOUNT_TEST_SERVER
     ? JSON.parse(process.env.XIAOYU_ACCOUNT_TEST_SERVER) as { url: string; tlsFingerprint: string } : undefined;
@@ -206,13 +240,18 @@ async function main(): Promise<void> {
     await account.login(requiredString(input.username, 40), requiredString(input.password, 256), input.register);
     await connectAccountLocal();
   });
-  ipc('account-logout', async () => { await account.logout(); client.suspendConnections(); notify(); });
+  ipc('account-logout', async () => { firstRun.suspend(); await account.logout(); client.suspendConnections(); notify(); });
   ipc('account-refresh', () => account.refresh());
   ipc('scan-local', () => setup.discover());
+  ipc('first-run-start', value => { const input = object(value);
+    if (input.agents !== undefined && (!Array.isArray(input.agents) || input.agents.length > 3 || input.agents.some(id => typeof id !== 'string'))) throw new Error('帮手选择无效');
+    return firstRun.start(input.key === undefined ? undefined : requiredString(input.key, 4096), input.agents as string[] | undefined); });
+  ipc('first-run-check', () => firstRun.advance());
   ipc('enable-local', async value => {
+    if (!account.view().signedIn || !account.view().provisioned) throw new Error('请先登录小鱼账号。');
     if (connecting) throw new Error('本机服务正在连接，请稍候');
     const input = object(value);
-    if (!Array.isArray(input.agents) || input.agents.length > 2 || input.agents.some(id => typeof id !== 'string')) throw new Error('帮手选择无效');
+    if (!Array.isArray(input.agents) || input.agents.length > 3 || input.agents.some(id => typeof id !== 'string')) throw new Error('帮手选择无效');
     connecting = true; client.runtime = { state: 'connecting', message: '正在启用本机服务并核对身份' }; notify();
     try {
       const endpoint = await setup.enable({ agents: input.agents as string[],
@@ -287,14 +326,16 @@ async function main(): Promise<void> {
   tray.on('click', showWindow);
   app.on('activate', showWindow);
   powerMonitor.on('resume', () => { account.reconnect(); client.refresh(); });
-  app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quit(); } });
+  app.on('before-quit', event => { event.preventDefault(); if (!quitting) void quit(); });
   app.on('window-all-closed', () => {});
   if (!process.argv.includes('--background')) showWindow();
   void account.restore().then(connectAccountLocal);
 
   const supervisor = setInterval(() => {
     if (quitting || !account.view().signedIn) return;
+    if (firstRun.view().required) { void firstRun.advance(); return; }
     void host.recover().then(endpoint => {
+      if (quitting) return;
       if (endpoint && (!setup.allowed(endpoint) || endpoint.spaceId !== secrets.load<string>('account-space'))) throw new Error('服务身份变化，需要重新确认');
       if (endpoint) { client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已恢复' }; notify(); }
     }).catch(() => { client.runtime = { state: 'error', message: '本机服务连续退出，自动恢复已暂停，请检查连接设置' }; notify(); });

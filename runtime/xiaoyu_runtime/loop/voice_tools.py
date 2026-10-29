@@ -43,7 +43,7 @@ LATER_PROMISE = re.compile(
     r"(到时候(我|再)|我(会|来|再)提醒|提醒你|晚点(我|再)|回头(我|再)|等.{1,12}(了|后|以后)(我|再)(去|发|做|弄|提醒|告诉))")
 MEMORY_TOOLS = ("remember", "replace", "forget")
 
-ACTION_TOOLS = ("start_task", "amend_task", "cancel_task")
+ACTION_TOOLS = ("start_task", "amend_task", "cancel_task", "continue_session")
 
 # 给模型看的工具结果：办得了的事先记下，提醒她不用再说一遍。
 RECORDED = "好，这一轮说完就去办：%s。用一句话告诉主人交给了谁、在做什么；前面已经说过就不用再说，直接结束。"
@@ -63,7 +63,7 @@ class Toolbox:
                  recall: Optional[Callable[[str], str]] = None, promises: Any = None,
                  conversation: str = "default", only: Optional[Iterable[str]] = None,
                  before_effect: Optional[Callable[[], None]] = None, effects=None,
-                 guard: Optional[Callable[[], None]] = None):
+                 guard: Optional[Callable[[], None]] = None, session_search=None):
         self._helpers = helpers
         self._memory = memory  # memory.OwnerMemory；None 就没有 remember / replace / forget
         self._recall = recall  # recall(query) → 给她看的结果；None 就没有 recall
@@ -77,6 +77,7 @@ class Toolbox:
         self._models = models
         self._check = check
         self._lookup = lookup
+        self._session_search = session_search
         self.action: Optional[Dict[str, Any]] = None
         self.card: Optional[str] = None
         self._looked: Optional[str] = None
@@ -86,6 +87,13 @@ class Toolbox:
         """Anthropic Messages 接口格式的工具清单（name、description、input_schema）。"""
         card = {"type": "string", "description": "那件事的编号，连同前面的字母，比如 c3"}
         tools: List[Dict[str, Any]] = []
+        if self._session_search is not None:
+            tools.extend([
+                {"name": "find_sessions", "description": "通过统一 gateway 查找原任务和电脑会话。主人说继续、昨晚、某个目录里的活时先查；多个候选不能猜。跨执行端共用。",
+                 "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "标题、项目或执行端；空串查最近会话"}}, "required": ["query"]}},
+                {"name": "continue_session", "description": "把主人的新要求投递给查询返回的准确原会话；无法续接时报告原因，绝不另开代替。",
+                 "input_schema": {"type": "object", "properties": {"card": {"type": "string", "description": "find_sessions 返回的 target 原样填写"}, "task": {"type": "string", "description": "主人要求原会话继续做的内容"}}, "required": ["card", "task"]}},
+            ])
         if self._helpers:
             start: Dict[str, Any] = {
                 "agent": {"type": "string", "enum": list(self._helpers), "description": "交给哪个帮手"},
@@ -221,6 +229,11 @@ class Toolbox:
         return result
 
     def _call(self, name: str, args: Any) -> Tuple[str, bool]:
+        if name == "find_sessions" and self._session_search is not None:
+            try:
+                return self._session_search(args.get("query", "")), False
+            except (ValueError, RuntimeError) as error:
+                return str(error), True
         if name == "recall" and self._recall is not None:
             query = str(args.get("query") or "").strip()
             return (self._recall(query), False) if query else ("要写想找什么", True)
@@ -272,7 +285,7 @@ class Toolbox:
             return "没有叫 %s 的工具" % name, True
         if self.action is not None:
             return "这一轮已经有一件要办的事了（一句话只办一件）。别的等主人下一句再说。", True
-        action: Dict[str, Any] = {"type": name.split("_")[0]}
+        action: Dict[str, Any] = {"type": "resume" if name == "continue_session" else name.split("_")[0]}
         for key in ("agent", "title", "task", "mode", "effort", "model"):
             if isinstance(args.get(key), str) and args[key].strip():
                 action[key] = args[key].strip()
@@ -284,7 +297,8 @@ class Toolbox:
         self.action, self.card = action, card
         what = {"start": "交给 %s 做「%s」" % (action.get("agent"), action.get("title") or "这件事"),
                 "amend": "告诉 %s 新的要求" % (card or "正看着的那件事"),
-                "cancel": "停掉 %s" % (card or "正看着的那件事")}[action["type"]]
+                "cancel": "停掉 %s" % (card or "正看着的那件事"),
+                "resume": "向原会话 %s 提交续接请求（执行状态以 gateway 回执为准）" % card}[action["type"]]
         return RECORDED % what, False
 
     def promised(self, said: str) -> bool:
@@ -313,7 +327,7 @@ class Toolbox:
             return {"reply": said, "card": self._looked or "new", "action": {"type": "none"},
                     "mood": "happy"}
         return {"reply": said, "card": self.card or "new", "action": self.action,
-                "mood": "busy" if self.action["type"] in ("start", "amend") else "happy"}
+                "mood": "busy" if self.action["type"] in ("start", "amend", "resume") else "happy"}
 
 
 class SpeakingTools:
@@ -323,7 +337,7 @@ class SpeakingTools:
         self.parent = parent
         self.calls: List[Tuple[str, Dict[str, Any]]] = []
         self.action = None
-        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall"}
+        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall", "find_sessions"}
 
     def definitions(self) -> List[Dict[str, Any]]:
         return [tool for tool in self.parent.definitions() if tool["name"] in self.allowed]

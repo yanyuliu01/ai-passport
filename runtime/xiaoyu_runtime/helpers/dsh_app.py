@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 from .. import __version__
 from .base import (
-    AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip, fields_from_text, kill_tree
+    AgentError, Cancelled, Control, Job, Outcome, Watchdog, clip, fields_from_text, kill_tree, workdir
 )
 from ..config import AgentSpec
 
@@ -270,12 +270,14 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
     from .helper_extras import acp_servers
     deadline = time.monotonic() + HANDSHAKE_SECONDS
     handshake(server, deadline)
-    cwd = str(spec.workdir) if spec.workdir else os.getcwd()
+    cwd = str(workdir(spec, job) or os.getcwd())
     if job.session_id:
         opened = server.request("session/resume", {"sessionId": job.session_id, "cwd": cwd})
         try:
             began = server.expect(opened, deadline, "session/resume")
         except AgentError:
+            if job.require_session:
+                raise
             # 接不上这个会话编号（比如上一次是别的壳留下的）：当作新对话开始，
             # 不要因为接不上旧对话就让这一轮直接失败。
             opened = server.request("session/new", {"cwd": cwd, "mcpServers": acp_servers(control.gate)})
@@ -286,6 +288,8 @@ def _turn(server: AcpServer, spec: AgentSpec, job: Job, control: Control,
     session_id = began.get("sessionId") if isinstance(began.get("sessionId"), str) else job.session_id
     if not isinstance(session_id, str):
         raise AgentError("dsh 没有给出会话编号")
+    if job.require_session and session_id != job.session_id:
+        raise AgentError("dsh 返回了其他会话，尚未执行续接")
     control.session(session_id)
 
     model, effort = tier

@@ -28,14 +28,19 @@ def native_agent(name):
 
 
 def agent_home(spec):
-    key = 'CODEX_HOME' if spec.type == 'codex' else 'CLAUDE_CONFIG_DIR'
-    value = spec.config_dir or spec.env.get(key)
+    key, default = {
+        'codex': ('CODEX_HOME', '.codex'),
+        'dsh': ('DSH_HOME', '.dsh'),
+        'pi': ('PI_CODING_AGENT_DIR', '.pi/agent'),
+    }.get(spec.type, ('CLAUDE_CONFIG_DIR', '.claude'))
+    # Pi's adapter uses its environment, not config_dir.
+    value = (spec.config_dir if spec.type != 'pi' else None) or spec.env.get(key)
     if not value and key in spec.env_files:
         path = Path(spec.env_files[key])
         if path.stat().st_size > 4096:
             raise ValueError('Native home setting is oversized')
         value = path.read_text().strip()
-    return Path(value or os.environ.get(key) or Path.home()/('.codex' if spec.type == 'codex' else '.claude')).expanduser().resolve()
+    return Path(value or os.environ.get(key) or Path.home()/default).expanduser().resolve()
 
 
 def home_scope(path):

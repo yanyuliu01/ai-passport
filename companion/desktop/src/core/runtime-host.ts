@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -14,16 +14,22 @@ export interface RuntimeLaunch {
   args: string[];
   cwd: string;
   personaFile?: string;
+  version?: string;
 }
-export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
-export function managedAgents(dsh: string, helpers: LocalAgent[]): Record<string, Json> {
-  const agents: Record<string, Json> = { deepseek: { type: 'dsh', command: [dsh],
+export interface StartOptions { dsh?: string; dshCommand?: string[]; helpers?: LocalAgent[]; availableHelpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
+export function managedAgents(dsh: string, helpers: LocalAgent[], dshCommand = [dsh], configDir = process.cwd()): Record<string, Json> {
+  const agents: Record<string, Json> = { deepseek: { type: 'dsh', command: dshCommand,
     model: 'deepseek-v4-pro', chat_model: 'deepseek-flash', stream: true,
     workdir: 'workdir', config_dir: 'dsh', sandbox: 'workspace-write' } };
   for (const helper of helpers) {
-    if (helper.id === 'codex') agents.codex = { type: 'codex', command: [helper.location],
+    if (helper.id === 'pi') agents.pi = { type: 'pi', command: helper.command || [helper.location],
+      description: '仅回答交办的分析和问答；没有文件、命令、联网或其他工具权限。需要实际操作时交给其他有权限的帮手。',
+      model: 'deepseek/deepseek-v4-pro', workdir: 'workdir',
+      env: { PI_CODING_AGENT_DIR: join(configDir, 'pi') },
+      extra_args: ['--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates'] };
+    if (helper.id === 'codex') agents.codex = { type: 'codex', command: helper.command || [helper.location],
       model: 'gpt-6.1-sol', workdir: 'workdir', sandbox: 'workspace-write', approval_policy: 'on-request' };
-    if (helper.id === 'claude') agents.claude = { type: 'claude_code', command: [helper.location],
+    if (helper.id === 'claude') agents.claude = { type: 'claude_code', command: helper.command || [helper.location],
       model: 'sonnet', workdir: 'workdir', permission_mode: 'manual', allowed_tools: ['Read', 'Glob', 'Grep'], add_dirs: [] };
   }
   return agents;
@@ -31,8 +37,12 @@ export function managedAgents(dsh: string, helpers: LocalAgent[]): Record<string
 
 /** Never stops or rewrites a Runtime that this process did not start. */
 export class RuntimeHost {
+  private preparation?: Promise<void>;
+  private preparingChild?: ChildProcess;
   private child?: ChildProcess;
   private stopping = false;
+  private closed = false;
+  private stopGeneration = 0;
   private desired = false;
   private recovering = false;
   private starting = false;
@@ -42,6 +52,39 @@ export class RuntimeHost {
   private externalConfig?: string;
   constructor(private readonly dataDir: string, private readonly launch: RuntimeLaunch,
     private readonly transport = new HTTPRuntimeTransport()) {}
+
+  /** First-run resource preparation has no configuration, identity or inference side effect. */
+  prepare(): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('客户端正在退出'));
+    if (!this.launch.version) return Promise.resolve();
+    if (!this.preparation) this.preparation = new Promise<void>((resolve, reject) => {
+      this.preparingChild = execFile(this.launch.command, [...this.launch.args, '--version'], {
+        cwd: this.launch.cwd, timeout: 30000, maxBuffer: 16384, windowsHide: true,
+        env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XIAOYU_'))),
+      }, (error, stdout) => {
+        this.preparingChild = undefined;
+        if (error || !stdout.includes(this.launch.version!)) { this.preparation = undefined;
+          reject(new Error('内置服务尚未准备好，请重试；持续失败时请重新安装小鱼。')); }
+        else resolve();
+      });
+    });
+    return this.preparation;
+  }
+
+  async stopForSetup(): Promise<void> {
+    if (!this.ownedRunning()) return;
+    if (this.externalConfig) throw new Error('已有外部服务不能由首次配置重启。');
+    const endpoint = await this.attach(join(this.dataDir, 'runtime/config.json'));
+    const feed = await this.transport.request(endpoint, 'GET', '/v1/feed?wait=0&messages=1');
+    if (!Array.isArray(feed.cards) || !Array.isArray(feed.messages) ||
+      feed.cards.some((row: Json) => ['working', 'talking', 'waiting', 'unknown'].includes(String(row.state))) ||
+      feed.messages.some((row: Json) => ['queued', 'running', 'streaming'].includes(String(row.status))))
+      throw new Error('当前还有事情在处理，请等待完成后再更换 Key。');
+    this.stopOwned();
+    const deadline = performance.now() + 3000;
+    while (this.ownedRunning() && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    if (this.ownedRunning()) throw new Error('服务正在保存，请稍后重试，原进程保留。');
+  }
 
   async attach(configPath: string): Promise<Endpoint> {
     const config = JSON.parse(await readFile(configPath, 'utf8')) as { server?: Json; mesh?: Json };
@@ -104,12 +147,14 @@ export class RuntimeHost {
   }
 
   async start(options: StartOptions = {}): Promise<Endpoint> {
+    if (this.closed) throw new Error('客户端正在退出');
     if (this.starting || this.recovering) throw new Error('本机服务正在启动，请稍后重试');
     this.starting = true;
     try { return await this.startOwned(options); } finally { this.starting = false; }
   }
 
   private async startOwned(options: StartOptions): Promise<Endpoint> {
+    const generation = this.stopGeneration;
     const configFile = this.externalConfig || join(this.dataDir, 'runtime/config.json');
     const configDir = dirname(configFile);
     if (options.deepseekKey) this.providerKey = options.deepseekKey;
@@ -132,16 +177,25 @@ export class RuntimeHost {
       config = {
         server: { host: '127.0.0.1', port: 18765, name: hostname(), token: randomBytes(32).toString('base64url') },
         state_dir: 'state', persona_file: 'persona.txt', desktop_sync: false,
-        agents: managedAgents(options.dsh, options.helpers || []),
+        agents: managedAgents(options.dsh, [...(options.helpers || []), ...(options.availableHelpers || [])], options.dshCommand, configDir),
         xiaoyu: { default_agent: 'deepseek', voice_agent: 'deepseek' }, usage: { enabled: true },
         ...(options.meshSecret ? { mesh: { secret: options.meshSecret } } : {}),
       };
       await writeFile(configFile, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
+      if (options.availableHelpers?.length) {
+        await mkdir(join(configDir, 'state'), { recursive: true, mode: 0o700 });
+        await writeFile(join(configDir, 'state/helpers.json'), JSON.stringify({ helpers: [], disabled: options.availableHelpers.map(item => item.id) }),
+          { mode: 0o600, flag: 'wx' });
+      }
       await writeFile(join(configDir, 'persona.txt'), persona, { mode: 0o600, flag: 'wx' });
     }
     if (existing && options.dsh) throw new Error('已有本机服务配置，请重新检测并确认复用；不会覆盖原配置或记录');
-    try { return await this.attach(configFile); } catch { /* Start only this client's confirmed private config. */ }
+    let available: Endpoint | undefined;
+    try { available = await this.attach(configFile); } catch { /* Start only this client's confirmed private config. */ }
+    if (this.closed || generation !== this.stopGeneration) throw new Error('客户端已停止启动服务');
+    if (available) return available;
     await access(this.launch.command, constants.X_OK);
+    if (this.closed || generation !== this.stopGeneration) throw new Error('客户端已停止启动服务');
     this.stopping = false;
     this.desired = true;
     this.child = spawn(this.launch.command, [...this.launch.args, '--config', configFile], {
@@ -200,8 +254,30 @@ export class RuntimeHost {
     } finally { this.recovering = false; }
   }
   stopOwned(): void {
-    this.desired = false; this.stopping = true; this.awaitingAttach = false; this.child?.kill('SIGTERM');
+    this.stopGeneration++; this.desired = false; this.stopping = true; this.awaitingAttach = false; this.child?.kill('SIGTERM'); this.preparingChild?.kill('SIGTERM');
   }
+  /** Final App exit: only wait for and stop children created by this host. */
+  async shutdownOwned(): Promise<void> {
+    this.closed = true;
+    const children = [this.child, this.preparingChild].filter((child): child is ChildProcess => Boolean(child?.pid));
+    const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
+    if (process.platform === 'win32') {
+      this.stopGeneration++; this.desired = false; this.stopping = true; this.awaitingAttach = false;
+      for (const child of children.filter(alive)) await new Promise<void>(resolve => {
+        execFile(join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],
+          { timeout: 5000, windowsHide: true }, () => resolve());
+      });
+    } else this.stopOwned();
+    const wait = async (ms: number) => {
+      const deadline = performance.now() + ms;
+      while (children.some(alive) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    };
+    await wait(5000);
+    for (const child of children.filter(alive)) child.kill('SIGKILL');
+    await wait(1000);
+    if (children.some(alive)) throw new Error('本机 Runtime 尚未退出，请重试退出；配置和记录已保留。');
+  }
+
 }
 
 export async function findExecutable(name: string): Promise<string | undefined> {

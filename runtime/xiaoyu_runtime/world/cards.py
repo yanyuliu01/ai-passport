@@ -267,7 +267,7 @@ class Cards:
             "run_id": text("run_id"),
             **({"dispatch": deepcopy(card["dispatch"])} if isinstance(card.get("dispatch"), dict) else {}),
             **({"progress_watch": deepcopy(card["progress_watch"])} if "progress_watch" in card else {}),
-            **{key: text(key) for key in ("native_scope", "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "borrowed_session", "borrowed_cwd", "desktop_card")},
+            **{key: text(key) for key in ("native_scope", "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "borrowed_session", "borrowed_cwd", "borrowed_scope", "desktop_card")},
             "binding_error": text("binding_error"),
             "last_meaningful_at": number("last_meaningful_at"),
             "execution_attempts": [dict(i) for i in card.get("execution_attempts", []) if isinstance(i, dict)][-64:],
@@ -422,6 +422,23 @@ class Cards:
         """日志里的一条消息（没有返回 None）。"""
         with self._changed:
             return self._log.get(message_id)
+
+    def session_targets(self, conversation=None):
+        """Gateway metadata only; searching must not copy every retained transcript."""
+        fields = ('id', 'conversation', 'title', 'state', 'agent', 'seq', 'project', 'source',
+                  'monitoring_only', 'session_id', 'native_scope', 'desktop_cwd', 'desktop_status',
+                  'worker_cwd', 'worker_scope', 'worker_session', 'mesh_origin', 'mesh_id',
+                  'origin_name', 'available', 'stale', 'updated_at', 'approval', 'relay_state',
+                  'borrowed_session', 'borrowed_scope')
+        with self._changed:
+            result = []
+            for card in self._cards.values():
+                if conversation is not None and card['conversation'] != conversation and not card.get('monitoring_only'):
+                    continue
+                item = {key: card[key] for key in fields if key in card}
+                item['dispatch'] = {'state': (card.get('dispatch') or {}).get('state')}
+                result.append(item)
+            return result
 
     def context_snapshot(self, conversation):
         """Model history and attribution from one read lock, without UI copies."""

@@ -81,6 +81,11 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/messages', body)).id, 'accepted-once');
   assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/messages', body)).id, 'accepted-once');
   assert.equal(posts, 1, 'A new transport RPC ID must not execute the same client submission twice');
+  const resumed = { ...body, client_id: '5'.repeat(32) };
+  assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/sessions/native-test/continue', resumed)).id, 'accepted-once');
+  assert.equal((await networkB.request(remoteB[0], 'POST', '/v1/sessions/native-test/continue', resumed)).id, 'accepted-once');
+  assert.equal(posts, 2, 'A lost continuation receipt must not create a second native turn');
+  await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/sessions/native-test/continue', { ...resumed, text: 'different work' }));
   await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages', { ...body, text: 'changed payload' }));
   const review = { operation_id: 'op-1', revision: 'rev-1', review_id: 'review-1', outcomes: { e1: 'applied' } };
   await assert.rejects(() => networkB.request(remoteB[0], 'POST', '/v1/messages/m1/effects', review), (error: unknown) => error instanceof RuntimeError && error.status === 503);

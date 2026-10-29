@@ -98,14 +98,20 @@ export interface HelperView {
 }
 
 export interface LocalAgent {
-  id: 'dsh' | 'codex' | 'claude'; name: string; installed: boolean; configured: boolean;
+  id: 'dsh' | 'pi' | 'codex' | 'claude'; name: string; installed: boolean; configured: boolean;
   auth: 'signed-in' | 'signed-out' | 'unknown'; version: string; location: string;
+  command?: string[]; bundled?: boolean;
 }
 export interface LocalService { id: string; name: string; source: string; agents: string[]; managed: boolean }
 export interface SetupScan { agents: LocalAgent[]; services: LocalService[]; hasDeepSeekKey: boolean }
 export interface SetupView {
   confirmed: boolean; savedConnections: { name: string; route: string }[];
   service: 'none' | 'bundled' | 'external'; device: string;
+  firstRun?: FirstRunView;
+}
+export interface FirstRunView {
+  required: boolean; phase: 'key' | 'validating' | 'preparing' | 'reply' | 'ready' | 'failed';
+  reply: string; problem: string; hasKey: boolean; canEditKey: boolean; selectedAgents?: string[];
 }
 
 export interface ClientView {
@@ -152,6 +158,8 @@ export interface DesktopAPI {
   snapshot(): Promise<ClientView>;
   scanLocal(): Promise<SetupScan>;
   enableLocal(input: { service?: string; agents: string[]; deepseekKey?: string }): Promise<void>;
+  startFirstRun(input: { key?: string; agents?: string[] }): Promise<void>;
+  checkFirstRun(): Promise<void>;
   restoreConnections(): Promise<void>;
   send(input: { space: string; text: string; card?: string; runtime?: string; mainReply?: boolean }): Promise<void>;
   select(space: string): Promise<void>;

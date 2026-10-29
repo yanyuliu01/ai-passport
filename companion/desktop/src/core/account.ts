@@ -59,7 +59,8 @@ export class AccountConnection {
       message: this.message, pairing: this.pairing, canInvite: Boolean(this.session && this.getLocal()?.meshToken
         && (!this.session.space || this.getLocal()?.spaceId === this.session.space)),
       requiresProvisioning: Boolean(this.session?.space && !this.secrets.load<string>('account-mesh-secret')),
-      provisioned: Boolean(this.secrets.load<string>('account-mesh-secret')) };
+      provisioned: Boolean(this.session?.space && this.session.space === this.secrets.load<string>('account-space')
+        && this.secrets.load<string>('account-mesh-secret')) };
   }
   private async device(): Promise<DeviceIdentity> {
     if (!this.identity) {

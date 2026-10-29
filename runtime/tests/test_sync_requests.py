@@ -2,6 +2,7 @@
 import json
 import threading
 import unittest
+from unittest.mock import patch
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyu, until, start_runtime
 from xiaoyu_runtime.api.service import Service, RequestError
@@ -61,6 +62,18 @@ class SyncRequestTests(TempDirCase):
         thread.join(1)
         self.assertFalse(thread.is_alive())
         self.assertEqual(result[0]["requests"][0]["stage"], "stage without a new body")
+
+    def test_stage_change_during_history_snapshot_does_not_wait_a_full_poll(self):
+        key = self.queued()
+        before = self.x.cards.seq
+        original = self.x.cards.sync_since
+        def concurrent_snapshot(*args, **kwargs):
+            self.service._update(key, stage="changed while taking snapshot")
+            return original(*args, **kwargs)
+        with patch.object(self.x.cards, "sync_since", side_effect=concurrent_snapshot), \
+                patch.object(self.x.cards, "wait_beyond", side_effect=AssertionError("lost request wakeup")):
+            page = self.service.sync("default", after=before, wait=20, requests=[key])
+        self.assertEqual(page["requests"][0]["stage"], "changed while taking snapshot")
 
     def test_id_validation_budget_and_legacy_shape(self):
         key = self.queued()

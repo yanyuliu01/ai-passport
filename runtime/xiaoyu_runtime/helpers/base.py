@@ -336,6 +336,7 @@ class Job:
     card: Optional[str] = None
     images: tuple = ()  # trusted local immutable snapshots, supplied by Runtime only
     title: str = ""  # Runtime-owned display name, never an owner prompt
+    require_session: bool = False  # Borrowed native session: never create a replacement
 
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:
@@ -554,6 +555,8 @@ def run_command(command: List[str], text: Optional[str], cwd: Optional[Path], ti
 
 
 class Agent:
+    # Adapters opt in only if Job.session_id is an actual native resume input.
+    native_resume = False
     def __init__(self, spec: AgentSpec):
         self.spec = spec
         self.name = spec.name

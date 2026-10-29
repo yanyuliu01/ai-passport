@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { scanAgents, type AgentDescriptor } from '../core/agent-catalog.js';
+import { agentDescriptors, agentInvocation, scanAgents, type AgentDescriptor } from '../core/agent-catalog.js';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
 import { RuntimeHost, managedAgents, type StartOptions } from '../core/runtime-host.js';
@@ -145,7 +145,7 @@ test('account enrollment provisions the original mesh identity into a new local 
   const {db,dir,secrets}=await fixture(t),starts:StartOptions[]=[];
   secrets.save('account-space',endpoint.spaceId);secrets.save('account-mesh-secret','approved mesh identity for test');
   secrets.save('endpoints',[{...endpoint,url:'peer://'+'c'.repeat(32)}]);
-  const host={async start(options:StartOptions){starts.push(options);return endpoint;}} as unknown as RuntimeHost;
+  const host={async configurationSpace(){throw Object.assign(new Error('missing'),{code:'ENOENT'});},async start(options:StartOptions){starts.push(options);return endpoint;}} as unknown as RuntimeHost;
   const setup=new Setup(db,secrets,host,[],'new computer',join(dir,'owned.json'),async()=>agents);
   setup.confirm({...endpoint,url:'peer://'+'c'.repeat(32)});await setup.discover();
   await setup.enable({agents:['codex'],deepseekKey:'private-test-api-key'});
@@ -179,4 +179,72 @@ test('account login leaves different-space and ambiguous local Runtime configura
   assert.equal(await setup.resumeAccount(), undefined); assert.equal(starts, 0);
   space = endpoint.spaceId; await assert.rejects(() => setup.resumeAccount(), /多个同账号/);
   assert.equal(starts, 0); assert.equal(setup.choice(), undefined);
+});
+
+test('bundled DSH and Pi are discovered without a global CLI or user login config', async () => {
+  const commands = { dsh: { command: [process.execPath, '/private/dsh.js'], version: '0.2.1-rc.2' },
+    pi: { command: [process.execPath, '/private/pi.js'], version: '0.73.1' } };
+  const calls: string[][] = [];
+  const result = await scanAgents(async () => undefined, async (command, args) => {
+    calls.push([command, ...args]); return { ok: true, text: args[0].endsWith('dsh.js') ? '0.2.1-rc.2' : '0.73.1' };
+  }, agentDescriptors('/nonexistent-synthetic-home', process.platform, commands));
+  for (const id of ['dsh', 'pi']) {
+    const agent = result.find(item => item.id === id)!;
+    assert.equal(agent.bundled, true); assert.equal(agent.installed, true);
+    assert.equal(agent.auth, 'unknown'); assert.equal(agent.configured, false);
+    assert.deepEqual(agent.command, commands[id as keyof typeof commands].command);
+  }
+  assert.deepEqual(calls, [], 'bundled metadata is already verified; onboarding must not launch CLI processes');
+});
+test('private launch arguments survive setup and Pi cannot run tools or discover extensions', async t => {
+  const { db, dir, secrets } = await fixture(t), dshEntry = join(dir, 'dsh.js'), piEntry = join(dir, 'pi.js');
+  await writeFile(dshEntry, '// fixture'); await writeFile(piEntry, '// fixture');
+  const privateAgents: LocalAgent[] = [
+    { ...agents[0], command: [process.execPath, dshEntry], bundled: true },
+    { ...agents[0], id: 'pi', name: 'Pi', command: [process.execPath, piEntry], bundled: true }];
+  const starts: StartOptions[] = [];
+  const host = { async start(options: StartOptions) { starts.push(options); return endpoint; } } as unknown as RuntimeHost;
+  const setup = new Setup(db, secrets, host, [], 'Test computer', join(dir, 'owned.json'), async () => privateAgents);
+  await setup.discover(); await setup.enable({ agents: ['pi'], deepseekKey: 'synthetic-api-key-value' });
+  const configured = managedAgents(starts[0].dsh!, starts[0].helpers!, starts[0].dshCommand, dir);
+  assert.deepEqual(configured.deepseek.command, [process.execPath, dshEntry]);
+  assert.deepEqual(configured.pi.command, [process.execPath, piEntry]);
+  assert.match(String(configured.pi.description), /没有文件、命令、联网/);
+  assert.deepEqual(configured.pi.extra_args, ['--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates']);
+  assert.equal((configured.pi.env as Record<string, string>).PI_CODING_AGENT_DIR, join(dir, 'pi'));
+  assert.equal(configured.deepseek.type, 'dsh');
+  assert.doesNotMatch(JSON.stringify(configured), /synthetic-api-key-value/);
+});
+
+test('an unusable bundled CLI cannot be reported installed just because Node exists', async () => {
+  const result = await scanAgents(async () => undefined, async () => ({ ok: false, text: '' }),
+    [{ id: 'dsh', name: 'DSH', bin: 'dsh', config: '', extras: [], command: [process.execPath, '/missing-entry.js'], bundled: true }]);
+  assert.equal(result[0].installed, false);
+});
+
+
+test('Windows npm shims use the private Node and registered package bin without a shell', async t => {
+  const { dir } = await fixture(t);
+  const { mkdir } = await import('node:fs/promises');
+  const pkg = join(dir, 'node_modules/@openai/codex'); await mkdir(join(pkg, 'bin'), { recursive: true });
+  await writeFile(join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'bin/codex.js' } }));
+  await writeFile(join(pkg, 'bin/codex.js'), '#!/usr/bin/env node\n');
+  const descriptor = { id: 'codex' as const, name: 'Codex', bin: 'codex', config: '', extras: [], node: '/private/node' };
+  assert.deepEqual(await agentInvocation(descriptor, join(dir, 'codex.cmd')), ['/private/node', await realpath(join(pkg, 'bin/codex.js'))]);
+  assert.equal(await agentInvocation({ ...descriptor, node: undefined }, join(dir, 'codex.cmd')), undefined);
+  await writeFile(join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: '../../escape.js' } }));
+  await writeFile(join(dir, 'escape.js'), '');
+  assert.equal(await agentInvocation(descriptor, join(dir, 'codex.cmd')), undefined);
+});
+
+test('GUI scans use private Node for JS CLI shebangs and do not accept a failed executable probe', async t => {
+  const { dir } = await fixture(t), executable = join(dir, 'claude');
+  await writeFile(executable, '#!/usr/bin/env node\n');
+  const descriptor = { id: 'claude' as const, name: 'Claude Code', bin: 'claude', config: dir, extras: [], node: '/private/node' };
+  assert.deepEqual(await agentInvocation(descriptor, executable), ['/private/node', executable]);
+  const result = await scanAgents(async () => executable, async () => ({ ok: false, text: 'not usable' }), [descriptor]);
+  assert.equal(result[0].installed, false);
+  const configured = managedAgents('/private/dsh', [{ id: 'claude', name: 'Claude', installed: true, configured: true,
+    auth: 'signed-in', version: 'fixture', location: '/private/node', command: ['/private/node', executable] }]);
+  assert.deepEqual(configured.claude.command, ['/private/node', executable]);
 });

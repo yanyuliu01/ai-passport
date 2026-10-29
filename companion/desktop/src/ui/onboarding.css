@@ -7,3 +7,5 @@
 .account-card input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #d8d1c2; border-radius: 8px; background: #fffdf8; color: #302b22; }
 .account-card small { display: block; line-height: 1.6; }
 .account-card [role="alert"] { color: #9d342a; }
+
+.onboarding-first-reply { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; padding: 12px 0; }

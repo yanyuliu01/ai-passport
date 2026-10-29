@@ -70,6 +70,7 @@ class ClaudeCodeAgent(Agent):
     """
 
     PROMPT_TOOL = "mcp__xiaoyu__approve"
+    native_resume = True
 
     def __init__(self, spec: AgentSpec, run=subprocess.run):
         super().__init__(spec)
@@ -334,6 +335,8 @@ class CodexAgent(Agent):
     做不了。
     """
 
+    native_resume = True
+
     def __init__(self, spec: AgentSpec, run=subprocess.run):
         super().__init__(spec)
         self._run = run
@@ -476,6 +479,7 @@ class DshAgent(Agent):
     """
 
     PROVIDER = "deepseek-official"
+    native_resume = True
 
     def __init__(self, spec: AgentSpec, run=subprocess.run, opener=urllib.request.urlopen):
         super().__init__(spec)
@@ -611,12 +615,14 @@ class DshAgent(Agent):
                 return command
 
             env = self._env()
-            done = run_command(build(job.session_id), text, self.spec.workdir,
+            done = run_command(build(job.session_id), text, workdir(self.spec, job),
                                budget.remaining() if budget is not None else timeout, "dsh",
                                env=env, run=self._run, control=job.control)
             if job.session_id and self._stale_session(done.stdout):
+                if job.require_session:
+                    raise AgentError("原 dsh 会话不存在，尚未续接；不会新开代替")
                 # 当作新对话开始，不要因为接不上旧对话就让这一轮直接失败。
-                done = run_command(build(None), text, self.spec.workdir,
+                done = run_command(build(None), text, workdir(self.spec, job),
                                    budget.remaining() if budget is not None else timeout, "dsh",
                                    env=env, run=self._run, control=job.control)
         return self.parse(done.returncode, done.stdout, done.stderr, job.system is not None)
@@ -716,6 +722,8 @@ class PiAgent(Agent):
     pi 没有沙箱和审批：能用哪些工具，用 extra_args 里的 --tools 限定。
     """
 
+    native_resume = True
+
     def __init__(self, spec: AgentSpec, run=subprocess.run):
         super().__init__(spec)
         self._run = run
@@ -732,7 +740,7 @@ class PiAgent(Agent):
 
     def command(self, job: Job, session_id: str) -> List[str]:
         spec = self.spec
-        command = list(spec.command) + ["-p", "--session-id", session_id]
+        command = list(spec.command) + ["-p", "--session" if job.require_session else "--session-id", session_id]
         model, effort = self.tier(job)
         if model:
             command += ["--model", model]
@@ -748,15 +756,43 @@ class PiAgent(Agent):
                 command += ["--skill", str(skill)]
         return command + spec.extra_args
 
+    def _resume_file(self, job, env):
+        # --session-id creates a missing session. Resolve an existing exact
+        # header and pass --session <path> instead; never rely on prefix search.
+        if not job.session_id or not job.cwd:
+            raise AgentError("原 pi 会话缺少编号或目录，尚未续接")
+        if any(arg.split('=', 1)[0] in ('--session', '--session-id', '--session-dir', '--no-session', '--continue', '-c', '--resume', '-r', '--fork') for arg in self.spec.extra_args):
+            raise AgentError("pi 的额外参数覆盖会话选择，尚未续接")
+        env = env or os.environ
+        root = Path(env.get('PI_CODING_AGENT_SESSION_DIR') or
+                    str(Path(env.get('PI_CODING_AGENT_DIR') or Path.home()/'.pi'/'agent')/'sessions')).expanduser()
+        found = []
+        for index, path in enumerate(root.rglob('*.jsonl')):
+            if index >= 10000:
+                raise AgentError("pi 来源目录过大，无法核实原会话，尚未续接")
+            try:
+                with path.open(encoding='utf-8') as stream:
+                    header = json.loads(stream.readline(8192))
+                if (header.get('type') == 'session' and header.get('id') == job.session_id
+                        and Path(header.get('cwd') or '').resolve() == Path(job.cwd).resolve()):
+                    found.append(path.resolve())
+            except (OSError, ValueError, AttributeError):
+                continue
+        if len(found) != 1:
+            raise AgentError("无法唯一核实原 pi 会话，尚未续接；不会新开代替")
+        return str(found[0])
+
     def run(self, job: Job) -> Outcome:
         session_id = job.session_id or str(uuid.uuid4())
+        env = self._env()
+        selection = self._resume_file(job, env) if job.require_session else session_id
         text = job.text
         if job.schema:
             text += ("\n\n请只输出一个 JSON 对象，不要代码围栏或额外说明。按以下 JSON Schema "
                     "填写字段；reply 是对主人说的话。\n" + json.dumps(job.schema, ensure_ascii=False))
-        done = run_command(self.command(job, session_id), text, workdir(self.spec, job),
+        done = run_command(self.command(job, selection), text, workdir(self.spec, job),
                            job.timeout or self.spec.timeout_seconds or UNWATCHED_SECONDS, "pi",
-                           env=self._env(), run=self._run, control=job.control)
+                           env=env, run=self._run, control=job.control)
         output = done.stdout.strip()
         if done.returncode != 0 or not output:
             detail = (done.stderr.strip().splitlines() or ["没有输出"])[-1]

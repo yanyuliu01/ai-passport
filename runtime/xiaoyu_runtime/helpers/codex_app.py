@@ -335,6 +335,8 @@ def _turn(server: AppServer, spec: AgentSpec, job: Job, control: Control,
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     if not isinstance(thread_id, str):
         raise AgentError("Codex 没有给出线程编号。可以先把这个代理的 mode 改成 exec")
+    if job.session_id and thread_id != job.session_id:
+        raise AgentError("Codex 返回的会话不是原会话，尚未开始这一轮；不会另开代替")
     control.session(thread_id)
 
     if not job.session_id and job.title:

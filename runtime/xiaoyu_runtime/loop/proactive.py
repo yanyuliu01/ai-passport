@@ -244,6 +244,7 @@ class Pulse:
         owner = self._owner(conversation) if owner is None else owner
         if owner is None or self._stop.is_set() or self._owner(conversation) != owner:
             return None
+        budget = Deadline(xiaoyu.config.voice_timeout_seconds)
         cut, active, effects_open = None, True, True
         def guard():
             if (not active or self._stop.is_set() or self._owner(conversation) != owner
@@ -263,13 +264,12 @@ class Pulse:
                       conversation, only=only, before_effect=before_mutation, guard=guard, effects=effects)
         text = "%s\n\n（你最近跟主人说过的话：）\n%s" % (event, self._recent_said(conversation) or "（还没有）")
         messages = None
-        began = time.monotonic()
         try:
             with xiaoyu.speaking_turn(conversation) as cut:
                 if xiaoyu.config.decide_first and voice.talks_with_tools():
                     decision = xiaoyu._speak(voice, text, conversation, system, None, 0, catch_up=True,
                                               tools=box, decision_only=True, interrupt=cut,
-                                              ephemeral=rules == UPKEEP_RULES, guard=guard)
+                                              ephemeral=rules == UPKEEP_RULES, guard=guard, budget=budget)
                     effects_open = False
                     data = (decision.fields or {}).get("_decision", {})
                     system += "\n\n这一轮已落实的事实：" + data.get("facts", "没有执行任何承诺。")
@@ -279,9 +279,8 @@ class Pulse:
                 if cut.is_set() or self._owner(conversation) != owner or self._stop.is_set():
                     return None
                 outcome = xiaoyu._speak(voice, text, conversation, system, None, 0, catch_up=True,
-                    timeout_seconds=max(0.001, xiaoyu.config.voice_timeout_seconds - (time.monotonic() - began)),
                     on_text=lambda raw: None, tools=box, decision_messages=messages, interrupt=cut,
-                    ephemeral=rules == UPKEEP_RULES, guard=guard)
+                    ephemeral=rules == UPKEEP_RULES, guard=guard, budget=budget)
                 if cut.is_set() or self._owner(conversation) != owner or self._stop.is_set():
                     return None
         except (AgentError, OSError, RuntimeError) as error:

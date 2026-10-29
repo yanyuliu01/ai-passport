@@ -35,9 +35,18 @@
 状态：验证阶段，先跑在自己的电脑上。同一份代码之后要搬到虚拟机，里面没有任何假设
 某台机器的地方。见[哪些验证过、哪些没有](#哪些验证过哪些没有)。
 
-## 小鱼身份与人设（0.27.0 源码）
+## 小鱼身份与人设（0.27.1 源码）
 
 正式包名为 `xiaoyu_runtime`。她称创造她的人为老板，重视自己的感受、意见与好奇，故事从真实互动和探索中逐渐积累；固定做事规则继续独立提供。旧命令、配置兼容及部署边界见[人设与迁移说明](../docs/development/persona-boundaries.zh_CN.md)。本次源码候选不会替换其他工作区或已安装 Runtime 的工作。
+
+## 共享会话续接
+
+Runtime 0.26.0 为小鱼工具、经过认证的会话查找
+（`GET /v1/sessions?conversation=default&query=project&limit=8`）和续接
+（`POST /v1/sessions/<target>/continue`，JSON 字段为 `text`、`client_id` 及可选的
+`conversation`）使用同一个网关。携带正常的 Runtime bearer token，重试时复用 `client_id`。
+明确选择返回的目标。网关保留原任务或原生会话及其运行环境，或明确说明无法续接的原因。
+详见[能力、兼容性及验证边界](../docs/development/agent-gateway.zh_CN.md#会话续接网关0260-源码)。
 
 ## 统一请求同步（0.24.0）
 

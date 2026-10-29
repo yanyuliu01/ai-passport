@@ -2,7 +2,7 @@
 
 # Xiaoyu desktop client
 
-Implementation in progress, source version 0.1.26. Follow the
+Implementation in progress, source version 0.1.27. Follow the
 [development plan](../../docs/development/xiaoyu-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -12,9 +12,100 @@ increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
 
-## Xiaoyu identity and character packaging (0.1.26 source)
+## Xiaoyu identity and character packaging (0.1.27 source)
 
-The product, IPC and new internal names use Xiaoyu. Existing encrypted profiles retain their storage/keychain identity. New managed Runtime profiles read the complete shared character file; packaging verifies its hash as well as Runtime code. This source candidate has not replaced the installed client or incorporated other worktrees' uncommitted changes.
+The product, IPC and new internal names use Xiaoyu. Existing encrypted profiles retain their storage/keychain identity. New managed Runtime profiles read the complete shared character file; packaging verifies its hash as well as Runtime code. Version 0.1.27 incorporates the bundled-helper and Runtime shutdown baseline before installation; installed-client acceptance is recorded separately.
+
+## Runtime lifetime and installed-version checks (0.1.25)
+
+Quit Xiaoyu through its menu or Cmd+Q to stop the Runtime children launched by
+that App. Quit now waits up to five seconds for process exit before forced
+termination and a final bounded check. Windows stops the owned process tree.
+An already-running external Runtime that the App only attached to is never
+terminated. Shutdown also fences late service startup/recovery. Closing the
+window retains the existing background behavior; it is separate from Quit.
+
+The owner screenshots showed 0.1.19 running from an older release directory.
+The supplied 0.1.23 DMG was mounted read-only and its bundled Info.plist
+confirmed 0.1.23. A still-running older App can receive subsequent opens through
+the single-instance mechanism. Quit the old App and use the installed current
+App; inspect the displayed version rather than inferring it from the DMG name.
+
+Signing out always returns to the current first-use flow, including profiles with legacy setup confirmation.
+
+## Helper selection during first use (0.1.23)
+
+The first-use flow is account sign-in, local helper scan and explicit selection,
+DeepSeek Key, then a real greeting. Scan results distinguish a runnable CLI,
+local configuration and authentication. Codex and Claude Code are supported;
+Pi is bundled and optional. A signed-out CLI must be signed in and rescanned;
+unknown login state is labelled and remains unverified until an actual task.
+Nothing is selected automatically, and users can continue without helpers.
+WorkBuddy and Doubao Work are future integrations, not selectable adapters.
+
+The selected helper commands and approval boundaries are written into the new
+local Runtime configuration. Setup recovery preserves that selection; it does
+not change helpers in a service already provisioned during an earlier attempt.
+Codex defaults to gpt-6.1-sol, Claude Code to Sonnet. Scanning runs bounded
+version/auth-status probes, does not call a model, return raw login output,
+import history or copy credentials. Common native CLI locations are scanned;
+Windows npm launchers resolve their own registered package bin and run with
+the private bundled Node without cmd.exe. JavaScript CLI shebangs also use
+that Node when the GUI has no system Node on PATH. A desktop app without a
+runnable CLI is not falsely labelled as an available helper.
+
+The installers include private Python, Pillow/native Runtime dependencies,
+Node, DSH and Pi. They install with Xiaoyu and need no separate developer
+setup, administrator-level global Python/Node installation or PATH edits.
+After packaging, every Runtime/Python dependency is compared with the selected
+native bundle; the Node/agent payload also has a full hash inventory gate.
+Windows native installation remains deferred by the owner.
+
+Validation: all 154 desktop tests and the activated complete repository gate
+passed. The packaged Mac window passed helper scan/selection, selected-Codex
+configuration with approval policy retained, signed-out-Claude rejection, Key
+error, first reply, restart restoration and clean shutdown. The CLI and model
+in this acceptance fixture are synthetic. A separate read-only scan found both
+real installed Codex 0.162.0 and Claude Code 2.1.294 signed in on the build Mac.
+This does not verify real helper task execution, Windows native behavior,
+rendered response within 3 seconds or physical multi-end/network recovery.
+The previously observed packed cold-start timeout remains unresolved.
+
+## First use without development tools (0.1.22 source)
+
+The default flow is account sign-in, the user's DeepSeek key, then a first
+reply. Runtime, Node, DSH and Pi are packaged; helper discovery and advanced
+connection choices do not block this flow. Pi is registered inactive and can
+be explicitly enabled later in helper settings; it has no file/command tools.
+Existing configured profiles retain their advanced setup path.
+
+The button explicitly authorizes two short paid calls: a minimal fixed DeepSeek
+key check, followed by a greeting through the actual local Runtime/message API.
+The key check distinguishes authentication, balance, provider and network
+failures. Only successful keys are sealed, scoped to the account space; legacy
+keys bind to their original owner before sign-in can change that space. Raw
+provider diagnostics and keys are never returned to the renderer. Completion
+requires a nonempty final Runtime reply, not a health/transport acknowledgement.
+The greeting remains in main chat. If acceptance is lost, retry uses the same
+durable client ID; restart resumes the recorded request without another key
+probe. Terminal failures require an explicit new attempt. Signing out fences
+callbacks, credentials and cached conversation views.
+
+First startup prepares the packaged Runtime with `--version` before creating
+any configuration or identity. This has a separate bounded preparation state;
+it does not extend chat deadlines or count as a meaningful first reply. The
+existing service startup deadline remains unchanged. A late service keeps its
+original process and planned account space, and the supervisor resumes setup
+without creating another Runtime. Interruption during preparation retains only
+the successful sealed key and resumes from the saved phase. Existing services
+are checked for space mismatch before starting or attaching.
+
+Windows resources use checksum-pinned embedded Python/Pillow and private Node
+with the same state machine. A cross-built installer is a candidate, not native
+Windows installation evidence. Real-key rendered timing, native clean-user
+installation, signing/notarization and public-network recovery remain separate
+acceptance checks. The previous installer/configuration is retained for rollback;
+never clear credentials/history to retry setup.
 
 ## Server account connection (0.1.17 source)
 
@@ -330,8 +421,8 @@ New managed services use dsh as both the default and voice agent, with
 executable and a DeepSeek API key are required. Keys entered in onboarding are
 sealed with OS storage and passed only to the owned child, never stored in
 plaintext Runtime config. An existing sealed key or `DEEPSEEK_API_KEY` can be
-reused. Importing arbitrary provider stores is not yet implemented. The dsh
-executable is detected, not yet included in the installer. Selected Codex/Claude
+reused. Importing arbitrary provider stores is not yet implemented. Since 0.1.21 the dsh
+executable is included in desktop installers (see the bundled-agent section). Selected Codex/Claude
 helpers use their existing local sign-in, with workspace-scoped/manual approval
 settings. Calls from this client use gpt-6.1-sol/Sonnet respectively, shown in
 review; their global settings and past conversations are not modified/imported.
@@ -430,6 +521,61 @@ npm start
 `127.0.0.1` cannot run that test; report the restriction instead of skipping it
 and claiming a pass. Unit tests use synthetic content and call no model.
 
+## Bundled DSH and Pi (0.1.21 source)
+
+Desktop installers carry private Node, DeepSeek Harness and Pi resources in
+`agent-tools`. New local services use the bundled DSH without requiring a system
+Node/npm installation or a global CLI. Versions, the complete npm dependency
+graph, official Node archive hashes and target architecture are locked in
+`tools/agent-runtime/`. Existing services retain their configuration and model
+policy. Development builds may use `agents-dist` or detect external CLIs.
+
+Pi is an optional helper selected during setup. It shares the locally supplied
+DeepSeek key, uses DeepSeek V4 Pro and stores its own configuration under the
+managed Runtime directory. Pi has no native sandbox/approval channel, so this
+initial integration disables tools, extensions, skills and prompt templates.
+It can answer delegated questions; file/command operations remain with existing
+authorized helpers. Selecting no helpers leaves normal DeepSeek chat available.
+Bundling an executable does not prove model access or available credit.
+
+Build the private dependencies before packaging (build hosts need npm/Python;
+end users do not):
+
+```bash
+npm run bundle:agents
+# On the native Windows build host:
+python tools/bundle_agents.py --target win32-x64
+```
+
+The builder downloads checksum-pinned official Node archives and uses `npm ci`
+with lifecycle scripts disabled. It packages the headless/ACP profile dependency graph; the separate DSH Web UI,
+experimental profiles and office/voice surfaces are excluded. It preserves
+upstream licenses and runtime assets, excluding development source maps/type
+declarations and npm shims.
+Native builds check both CLI versions with an empty home and no system PATH.
+A small private Pi launcher maps the Runtime session ID to a persistent session
+file accepted by the locked Pi CLI. Cross-built resources are labelled as not
+natively verified. Packaging verifies
+the exact resource mappings, all dependency files, locks and launch entries;
+missing, modified, stale or wrong-platform resources stop the build. An afterPack
+check repeats the inventory verification on the actual copied resources,
+including nested Node dependencies. Provenance
+includes the agent manifest hash. No user configuration, credentials or history
+is copied from the build host. Updates require rebuilding the locked resources;
+there is no first-launch download or global installation. A profile first created with bundled agents needs those private CLI files
+when rolling back; retain them or explicitly configure a replacement before
+removing the newer app. Never clear the profile to repair a downgrade.
+
+Validation on 2026-10-28: the Mac ARM64 candidate uses desktop 0.1.21 and
+Runtime 0.25.0. All 138 desktop host tests, the dependency-closure check and the
+complete repository gate passed. Empty-home CLI/profile/protocol checks make no
+model calls. Newly copied frozen Runtime processes exceeded the unchanged
+8-second startup check in initial runs; repeat runs passed. This cold-start
+failure is retained, not treated as clean-install acceptance. Windows native
+installation, real-key replies, rendered response within three seconds and
+public-network multi-client acceptance remain unverified. The candidate is
+unsigned and has not replaced the owner's running client.
+
 ## Native Runtime bundle and installers
 
 Build a PyInstaller Runtime on the target OS/architecture; a Mac Python bundle
@@ -442,6 +588,7 @@ build host; it still requires native Windows acceptance.
 python3 -m venv .runtime-venv
 .runtime-venv/bin/python -m pip install -r requirements-build.txt
 .runtime-venv/bin/python tools/bundle_runtime.py
+npm run bundle:agents
 npm run package:mac
 ```
 
@@ -451,8 +598,8 @@ tests and produces the NSIS installer. It needs Node 24+ and Python 3.11+.
 Alternatively use `.runtime-venv\Scripts\python.exe` for the Python steps and
 `npm run package:win`. `python3` may be named `python` there. Generated Runtime
 files and installers are ignored by Git. Do not include real Runtime config,
-state, keys or CLI homes in a package. Helper executables/login are external
-to this bundle. The build pins Pillow 11.3.0; the local Mac bundle uses Python 3.9;
+state, keys or CLI homes in a package. Codex/Claude executables and login remain external; DSH/Pi are included
+in the separate private agent bundle. The build pins Pillow 11.3.0; the local Mac bundle uses Python 3.9;
 it does not change an existing system Python or Runtime environment.
 
 The embedded Windows preview uses CPython 3.13.16 and a matching Pillow wheel,
@@ -462,6 +609,7 @@ download the official Electron distribution:
 
 ```bash
 python3 tools/bundle_windows_embedded.py
+python3 tools/bundle_agents.py --target win32-x64
 node tools/download_windows_electron.mjs
 XIAOYU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
 python3 tools/release_manifest.py
@@ -628,3 +776,25 @@ mesh aliases such as `cc@Windows` remain task routes but do not appear as local
 helpers. Display aliases from Runtime 0.25.0 are respected. Shared side-chat
 deletion markers purge cached messages, tasks, and pending sends and prevent
 stale peer snapshots from restoring them.
+
+### First-use validation checkpoint (2026-10-29)
+
+Desktop 0.1.22 bundles Runtime 0.26.0, Node 24.22.1, DSH 0.2.1-rc.2 and
+Pi 0.73.1. The isolated native Mac window exercised invalid-Key handling,
+first reply, one persisted greeting and restart restoration, using a synthetic
+provider. A separate isolated real-provider check with the frozen Runtime
+reached `ready` with a nonempty reply in 6,853 ms for the whole setup; this
+does not measure rendered chat first response.
+
+Desktop host tests passed (149), Runtime tests passed (1,210), and the complete
+repository gate passed. Packed CLI checks passed, but one packed Runtime
+interop run exceeded its unchanged 8-second startup deadline. Cold startup
+remains unresolved. Native-window shutdown exposed a late callback reading
+the closed database; shutdown now fences callbacks and cancels the pending
+view notification, with a native-window shutdown regression check.
+
+Both installers are private unsigned candidates. Windows native installation
+was explicitly deferred by the owner. Clean OS-user installation, signing and
+notarization, rendered meaningful reply within 3 seconds, physical multi-end
+synchronization and real cross-network recovery remain unverified. These
+checks did not restart the production Runtime or flash firmware.

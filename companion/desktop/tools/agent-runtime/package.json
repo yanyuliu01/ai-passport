@@ -1,0 +1,10 @@
+{
+  "name": "xiaoyu-bundled-agents",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Version-locked private CLI dependencies for Xiaoyu desktop",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@mariozechner/pi-coding-agent": "0.73.1"
+  }
+}

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { RuntimeHost } from '../core/runtime-host.js';
 import { HTTPRuntimeTransport } from '../core/runtime-client.js';
 
-async function fixture(t: { after(callback: () => Promise<void>): void }) {
+async function fixture(t: { after(callback: () => Promise<void>): void }, shutdownDelay = 0) {
   const dir = await mkdtemp(join(tmpdir(), 'xiaoyou-host-'));
   await mkdir(join(dir, 'runtime'));
   await writeFile(join(dir, 'runtime/config.json'), JSON.stringify({
@@ -20,7 +20,7 @@ async function fixture(t: { after(callback: () => Promise<void>): void }) {
   });
   const launches = join(dir, 'launches.txt');
   const script = join(dir, 'service.cjs');
-  await writeFile(script, `require('node:fs').appendFileSync(${JSON.stringify(launches)}, process.pid + String.fromCharCode(10)); setInterval(() => {}, 1000)`);
+  await writeFile(script, `${shutdownDelay ? `process.on('SIGTERM', () => setTimeout(() => process.exit(0), ${shutdownDelay}));` : ''} require('node:fs').appendFileSync(${JSON.stringify(launches)}, process.pid + String.fromCharCode(10)); setInterval(() => {}, 1000)`);
   const host = new RuntimeHost(dir, { command: process.execPath, cwd: dir,
     args: [script] }, transport);
   t.after(async () => {
@@ -128,4 +128,26 @@ test('new Runtime profiles get the complete supplied character and existing prof
   await writeFile(installed, 'Existing custom character');
   await host.start();
   assert.equal(await readFile(installed, 'utf8'), 'Existing custom character');
+});
+
+test('final shutdown waits for the owned process and forbids late startup or recovery', async t => {
+  const f = await fixture(t, 300), starting = f.host.start();
+  await until(() => f.host.ownedRunning()); f.ready(); await starting;
+  await until(async () => (await f.launches()).length === 1);
+  const pid = Number((await f.launches())[0]);
+  await f.host.shutdownOwned();
+  assert.equal(f.host.ownedRunning(), false);
+  assert.throws(() => process.kill(pid, 0), /ESRCH/);
+  assert.equal(await f.host.recover(), undefined);
+  await assert.rejects(() => f.host.start(), /正在退出/);
+});
+
+test('shutdown during asynchronous preflight never leaves a late spawned child', async t => {
+  const f = await fixture(t); let release!: () => void, entered = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  f.block(async () => { entered = true; await gate; }); f.ready();
+  const starting = f.host.start(); await until(() => entered);
+  await f.host.shutdownOwned(); f.ready(false); release();
+  await assert.rejects(starting, /停止启动服务/);
+  assert.equal(f.host.ownedRunning(), false); assert.deepEqual(await f.launches(), []);
 });

@@ -73,7 +73,7 @@ MAX_TASK_CHARS = 8000
 # 点名交给帮手时，带上最近这么多轮对话当背景。
 BACKGROUND_TURNS = 6
 
-ACTIONS = ("none", "start", "amend", "cancel")
+ACTIONS = ("none", "start", "amend", "cancel", "resume")
 # 主人看着电脑上的会话说话时，提示里带上它最近的内容：每条最多这么多字，合起来最多这么多字。
 DESKTOP_ENTRY_CHARS = 1500
 DESKTOP_CONTEXT_CHARS = 6000
@@ -484,6 +484,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
             "也不要替它编结果。主人问一件事进展如何，先用 task_detail 看一眼再说。"
             "主人可以同时让几件事一起做，一件事没做完不妨碍开下一件。"
         )
+        parts.append("主人提到电脑上、某个项目或昨晚没做完的原会话时，先用 find_sessions 查询共享目录，再用 continue_session 和返回的 target 续接。不要因为当前聊天找不到就另开 start_task；多个候选先让主人选。投递未确认、等待审批和执行中要分清，不能只凭观察到进度就说原会话已收到。")
     else:
             parts.append(
             "这一轮你只负责说话：听懂主人的话，凭你已经知道的就能答的直接答，其余的交给帮手。"
@@ -770,6 +771,8 @@ class Xiaoyu:
         # Model history is a projection of canonical messages, with legacy
         # transcript imports retained for old clients during migration.
         self.context = bind_context(store, self._cards, self.memory, self.promises)
+        from .session_gateway import SessionGateway
+        self.sessions = SessionGateway(config, self._cards, self.agents, lambda: self.mesh)
         self._speaker = Speaker(self._store, self._cards, self.context,
                                 lambda *args, **kwargs: recap(*args, **kwargs))
         self._executor = Executor(self._cards, self._agents, ActionPorts(
@@ -783,7 +786,8 @@ class Xiaoyu:
             continue_desktop=lambda *args, **kwargs: self._continue_desktop(*args, **kwargs),
             remote=lambda: self.mesh,
             note=lambda *args, **kwargs: self._workspace.note(*args, **kwargs),
-            delivered=lambda *args, **kwargs: self.context.delivered(*args, **kwargs)))
+            delivered=lambda *args, **kwargs: self.context.delivered(*args, **kwargs),
+            resolve=lambda key, conversation: self.sessions.target(key, conversation)))
         self.artifacts = ArtifactStore(config)
         self._approvals = Approvals(self._approval_changed, self.intake.writer("system", actor="approvals").sequence)
         self._gate = Gate(self._approvals)
@@ -889,6 +893,10 @@ class Xiaoyu:
                     continue
                 with self._agents_lock:
                     agent = self._agents.get(intent["agent"])
+                try:
+                    agent = self.sessions.execution_agent(card, agent) if agent is not None else None
+                except (AgentError, OSError, ValueError):
+                    agent = None
                 if agent is None or fingerprint(agent) != intent["fingerprint"]:
                     note = "排队中：原帮手不可用或配置已改变，等待核对"
                 else:
@@ -979,6 +987,7 @@ class Xiaoyu:
                 from ..helpers.tasks import fingerprint
                 with self._agents_lock:
                     agent = self._agents.get(intent["agent"])
+                agent = self.sessions.execution_agent(card, agent) if agent is not None else None
                 if (agent is None or fingerprint(agent) != intent["fingerprint"]
                         or binding.get("run_id") != run_id or binding.get("agent") != intent["agent"]
                         or not isinstance(binding.get("attempt_id"), str) or not binding["attempt_id"]):
@@ -988,6 +997,7 @@ class Xiaoyu:
                     return False
                 with self._agents_lock:
                     current = self._agents.get(intent["agent"])
+                    current = self.sessions.execution_agent(card, current) if current is not None else None
                     if current is None or fingerprint(current) != intent["fingerprint"]:
                         return False
                 if not self._recovery_owner(card, intent):
@@ -1031,7 +1041,7 @@ class Xiaoyu:
                 turn_id=run_id + "-summary", scope="main", kind="summary",
                 expected_run=(run_id, "unknown"), expected_execution=expected_execution,
                 attachments=result.get("attachments", [])) is not None
-        except (OSError, ValueError, ArtifactError):
+        except (OSError, ValueError, ArtifactError, AgentError):
             sys.stderr.write("原执行结果暂时无法核对或保存，保留原执行身份。\n")
             return False
 
@@ -1138,7 +1148,7 @@ class Xiaoyu:
         直接给主人看。
         """
         say: Report = report if report is not None else (lambda kind, agent, detail: None)
-        desktop = self._cards.get(card) if card else None
+        desktop = self.sessions.target(card, conversation) if card else None
         if desktop is not None and not desktop.get("monitoring_only"):
             desktop = None
         available = self._available(hop)
@@ -1208,13 +1218,21 @@ class Xiaoyu:
 
     def _desktop_agent(self, desktop: Dict[str, Any]) -> Optional[Agent]:
         """能接电脑上这类会话的代理：Codex 的会话交给 codex 类型，Claude 的交给 claude_code 类型。"""
-        wanted = "codex" if desktop.get("agent") == "codex" else "claude_code"
-        return next((agent for agent in self.agents() if agent.type == wanted), None)
+        try:
+            return self.sessions.adapter(desktop)
+        except (AgentError, OSError, ValueError):
+            return None
 
     def _continue_desktop(self, desktop: Dict[str, Any], said: str, conversation: str,
                           turn_id: str, hop: int, say: Report, effort: Optional[str] = None,
                           model: Optional[str] = None, task: Optional[str] = None,
                           reply: Optional[str] = None, defer_reply: bool = False) -> Turn:
+        with self.sessions.lock:
+            return self._continue_bound_session(desktop, said, conversation, turn_id, hop, say,
+                effort, model, task, reply, defer_reply)
+
+    def _continue_bound_session(self, desktop, said, conversation, turn_id, hop, say,
+                                effort=None, model=None, task=None, reply=None, defer_reply=False):
         """接着电脑上的会话做一轮：另开一件事，在那个会话的目录里用它的会话编号跑。
 
         主人点名让帮手接着做时 task 就是主人的原话；小鱼判断要接着做时 task 是她交代的话，
@@ -1222,9 +1240,8 @@ class Xiaoyu:
         出现在那个会话里；主人之后还能回到电脑上接着聊。电脑上这一轮还在跑时不接，免得两边
         同时改一个会话。
         """
-        agent = self._desktop_agent(desktop)
-        if agent is None:
-            raise AgentError("这台 Runtime 上没有能接 %s 会话的代理" % (desktop.get("agent") or "这个"))
+        self.sessions.validate(desktop)
+        agent = self.sessions.adapter(desktop, bind=True)
         if desktop.get("source") == "external":
             raise AgentError("这是别处上报来的会话，只能查看，请在它原来的地方继续")
         session, where = desktop.get("session_id"), desktop.get("desktop_cwd")
@@ -1233,13 +1250,22 @@ class Xiaoyu:
         if desktop.get("desktop_status") in ("running", "waiting") and not desktop.get("stale"):
             raise AgentError("电脑上这一轮还在跑，等它停下再发")
         name = desktop.get("title") or "电脑上的会话"
-        reply = "" if defer_reply else reply or "好，让 %s 接着电脑上的「%s」做" % (agent.name, name[:30])
+        reply = "" if defer_reply else reply or "已提交向原会话「%s」续接的请求，等待执行端确认" % name[:30]
         card = self._writer.task_open(conversation, "接着：" + name, "working", agent.name)
         self._writer.exchange(card["id"], said=said, say=None if defer_reply else reply, turn_id=turn_id, kind="handoff",
                            brief=clip(reply, self._config.brief_max_chars), mood="busy",
-                           borrowed_session=session, borrowed_cwd=where, desktop_card=desktop["id"])
+                           borrowed_session=session, borrowed_cwd=where, desktop_card=desktop["id"],
+                           borrowed_scope=desktop.get("native_scope") or "")
         say("handoff", agent.name, reply)
-        self._launch(card["id"], agent, task or said, conversation, hop, effort, model)
+        try:
+            self._launch(card["id"], agent, task or said, conversation, hop, effort, model)
+        except (AgentError, OSError, ValueError) as error:
+            # Binding can change after selection. If no dispatch intent was
+            # saved, leave a terminal record rather than a phantom active writer.
+            current = self._cards.get(card["id"]) or {}
+            if not current.get("dispatch"):
+                self._writer.task(card["id"], state="failed", relay_state="resume_failed", brief=str(error))
+            raise
         return Turn(reply, clip(reply, self._config.brief_max_chars), "busy", agent.name,
                     card["id"], True)
 
@@ -1423,8 +1449,9 @@ class Xiaoyu:
                           say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
                           prompt: Any, toolbox: Toolbox, cut: threading.Event) -> Turn:
         began = time.monotonic()
+        budget = Deadline(self._config.voice_timeout_seconds)
         decision = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
-                               tools=toolbox, interrupt=cut, decision_only=True)
+                               tools=toolbox, interrupt=cut, decision_only=True, budget=budget)
         data = (decision.fields or {}).get("_decision", {})
         facts = data.get("facts", "这轮没有执行任何承诺。")
         plan, problem = self._plan(decision, conversation, focus, available, pinned)
@@ -1433,6 +1460,7 @@ class Xiaoyu:
             plan = {"type": "none", "card": None}
             facts = "没有执行任务：%s" % (problem or "主人已打断这一轮")
         elif plan["type"] != "none":
+            budget.remaining()
             committed = self._apply_conversation(lead, text, conversation, turn_id, plan, "", None,
                                                   "busy", hop, say, pinned, effort, model, defer_reply=True)
             original = plan.get("card") or {}
@@ -1459,7 +1487,7 @@ class Xiaoyu:
         try:
             outcome = self._speak(lead, text, conversation, system, None, hop, catch_up=True,
                                    on_text=on_text, tools=speaking, interrupt=cut, decision_messages=messages,
-                                   timeout_seconds=max(0.001, self._config.voice_timeout_seconds - (time.monotonic() - began)))
+                                   budget=budget)
             reply = reply_text(outcome)
         except AgentError:
             # Commitments survive a failed speaking request; never replay the decision or fall back to JSON.
@@ -1499,7 +1527,8 @@ class Xiaoyu:
         return Toolbox([agent.name for agent in available], efforts, models, check,
                        lambda card: self._detail(card, conversation, focus), self.memory,
                        lambda query: self.recall(conversation, query), self.promises, conversation,
-                       effects=getattr(self._effect_scope, "current", None))
+                       effects=getattr(self._effect_scope, "current", None),
+                       session_search=lambda query: self.sessions.render(conversation, query))
 
     # ---- 给后台节拍（proactive.Pulse）用的几样 ----
 
@@ -1573,10 +1602,20 @@ class Xiaoyu:
             # 她常把 c3 写成 3。
             wanted = "c" + wanted
         target: Optional[Dict[str, Any]] = None
+        if kind == "resume":
+            try:
+                target = self.sessions.validate(self.sessions.target(wanted, conversation))
+            except (AgentError, OSError, ValueError) as error:
+                return None, str(error)
+            task = action.get("task")
+            if not isinstance(task, str) or not task.strip():
+                return None, "续接要写清主人要求原会话做什么"
+            return {"type": "desktop" if target.get("monitoring_only") else "amend",
+                    "card": target, "task": task.strip()[:MAX_TASK_CHARS], "mode": "after"}, None
         if wanted and wanted != "new":
-            target = self._cards.get(wanted)
+            target = self.sessions.target(wanted, conversation)
             # 主人正看着的电脑上的会话不在这个对话里，也能指它。
-            if target is None or (target["conversation"] != conversation and not (
+            if target is None or (target["conversation"] != conversation and not target.get("monitoring_only") and not (
                     focus is not None and target["id"] == focus["id"])):
                 return None, "没有编号是 %s 的事" % clip(wanted, 20)
         elif kind in ("amend", "cancel") or (pinned and not (wanted == "new" and kind == "start")):
@@ -1737,6 +1776,8 @@ class Xiaoyu:
                 effort: Optional[str] = None, model: Optional[str] = None, images=()) -> None:
         opened = self._cards.get(card_id) or {}
         borrowed = opened.get("borrowed_session") if opened.get("borrowed_cwd") else None
+        if borrowed:
+            agent = self.sessions.execution_agent(opened, agent)
         # 借来的电脑会话是主人自己的：不给它加小鱼的人设和回复格式。
         speaking = agent.speaks and borrowed is None
         effort, model = self._tier(agent, self._cards.get(card_id), effort, model)
@@ -1825,6 +1866,8 @@ class Xiaoyu:
         def native_turn(turn_id, phase):
             writer.execution_binding(task.card, round_id, native_turn_id=turn_id,
                                            range_state='complete-turn' if phase == 'ended' else 'open-turn')
+            if task.borrowed_session and phase == 'started':
+                writer.task(task.card, relay_state='delivered', expected_run_id=task.run_id)
         control.native_turn = native_turn
 
         def activity(phase: str, text: str, key: Optional[str] = None) -> None:
@@ -1835,11 +1878,14 @@ class Xiaoyu:
         # run they only describe the old one and must not land on the new run.
         original_session = control.session
         def session_bound(session_id):
+            if task.borrowed_session and session_id != task.borrowed_session:
+                raise AgentError("执行端返回的会话不是原会话，停止续接；不会将它当作已送达")
             original_session(session_id)
             writer.execution_binding(task.card, round_id, native_session_id=session_id)
             writer.task(task.card, worker_session=session_id,
                               worker_cwd=task.cwd or str(task.agent.spec.workdir or ""),
                               worker_agent=task.agent.name, worker_scope=self._worker_scope(task.agent),
+                              **({'relay_state':'session_bound'} if task.borrowed_session else {}),
                               expected_run_id=task.run_id)
         control.session = session_bound
         control.activity = activity
@@ -1850,7 +1896,8 @@ class Xiaoyu:
                 if item.get("state") == "queued":
                     item["state"] = "relayed"
                     break
-        writer.task(task.card, relay_state="relay_queued" if any(i.get("state") == "queued" for i in additions) else "relayed", supplements=additions,
+        writer.task(task.card, relay_state=("resume_submitted" if task.borrowed_session else
+                    "relay_queued" if any(i.get("state") == "queued" for i in additions) else "relayed"), supplements=additions,
                     expected_active_run=task.run_id)
         def progress(line: str) -> None:
             # 投递闸（proactive.Pulse）记下这一步；要不要跟主人说由它叫醒她来定。
@@ -2056,6 +2103,9 @@ class Xiaoyu:
                 closed = True
 
     def _relay_current(self, task, result, cut, guard):
+        # Persona and retained-context preparation share the provider phase deadline.
+        # Expiry falls back to the already saved result under the original owner guard.
+        budget = Deadline(self._config.voice_timeout_seconds)
         card = self._cards.get(task.card) or {}
         def report(kind: str, agent: Optional[str], text: str) -> None:
             guard()
@@ -2070,7 +2120,8 @@ class Xiaoyu:
                     task.conversation, voice_prompt(
                         self._config.persona, self._config.brief_max_chars, plain, self.memory.notes()),
                     None if plain else reply_schema(), task.hop, catch_up=True,
-                    on_text=self._streamer(voice.name, report, plain=plain), interrupt=cut, guard=guard)
+                    on_text=self._streamer(voice.name, report, plain=plain), interrupt=cut, guard=guard,
+                    budget=budget)
                 reply = reply_text(outcome)
                 if reply:
                     fields = outcome.fields or {}

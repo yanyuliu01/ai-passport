@@ -21,7 +21,7 @@ KINDS = ("reply", "handoff", "worker_result", "summary", "note")
 TASK_FIELDS = {"state", "agent", "brief", "mood", "started_at", "queued", "fresh", "effort", "model",
                "model_asked", "run_id", "result_ready", "summary_partial", "approval", "cost", "edits",
                "title", "title_source", "attachments", "progress_lines", "borrowed_session",
-               "borrowed_cwd", "desktop_card", "finished_at", "error", "delegated_to",
+               "borrowed_cwd", "borrowed_scope", "desktop_card", "finished_at", "error", "delegated_to",
                "worker_scope", "worker_session", "worker_cwd", "worker_agent", "origin_message", "relay_state", "last_meaningful_at", "supplements",
                "cancelled_by", "cancel_reason", "dispatch"}
 

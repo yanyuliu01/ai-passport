@@ -34,6 +34,7 @@ class ActionPorts:
     remote: Callable[[], Any]
     note: Callable[..., Any]
     delivered: Callable[..., Any]
+    resolve: Optional[Callable[..., Any]] = None
 
 
 class Executor:
@@ -64,7 +65,8 @@ class Executor:
                 if name not in self._agents or fingerprint(self._agents[name]) != expected:
                     raise EffectUncertain("原帮手缺失或配置已改变，需先核对决定。")
             plan = dict(args["plan"])
-            target = self._cards.get(plan["card"]) if plan.get("card") else None
+            target = (self._ports.resolve(plan["card"], args["conversation"]) if self._ports.resolve
+                      else self._cards.get(plan["card"])) if plan.get("card") else None
             if plan.get("card") and (target is None or target["seq"] != args.get("target_seq")):
                 raise EffectUncertain("原决定对应的任务已经改变，不能沿用旧决定。")
             plan["card"] = target

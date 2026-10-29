@@ -191,6 +191,7 @@ class Service:
         # 小鱼网络（mesh.py）：加入了网络时由 Mesh 设上。在别的 Runtime 的事里说的话转交给那台。
         self.mesh: Optional[Any] = None
         xiaoyu.defer = self._defer
+        xiaoyu.sessions.authority = self.runtime_id
         xiaoyu.retry_effects = self.retry_effects
         xiaoyu.cards.subscribe(self._card_changed)
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
@@ -604,7 +605,7 @@ class Service:
         if card is not None:
             # 主人说这句话时屏幕上的那件事。认不出的编号不算错：当作没带。
             card = _name(card, "card")
-            observed = self._xiaoyu.cards.get(card)
+            observed = self._xiaoyu.sessions.target(card, conversation)
             if observed is not None and observed.get("mesh_origin") and pin:
                 # 别的 Runtime 的事：这句话交给那台，在那件事里说（mesh.py 转交）。
                 if self.mesh is None:
@@ -906,6 +907,38 @@ class Service:
             if not item.get('deleted'):
                 item.update({k: metadata[k] for k in ('title', 'pinned', 'archived', 'project') if k in metadata})
         return {"conversations": values}
+
+    def session_search(self, conversation='default', query='', limit=8):
+        try:
+            return self._xiaoyu.sessions.search(_name(conversation, 'conversation'), query, limit)
+        except (AgentError, ValueError) as error:
+            raise RequestError(str(error)) from None
+
+    def session_continue(self, key, body):
+        """Existing message acceptance owns retry IDs, ordering, effects and replies."""
+        if not isinstance(body, dict):
+            raise RequestError('请求体应该是一个对象')
+        conversation = _name(body.get('conversation', 'default'), 'conversation')
+        client_id = _name(body.get('client_id'), 'client_id')
+        target = self._xiaoyu.sessions.target(key, conversation)
+        if target is None:
+            raise RequestError('没有找到原会话；不会另开任务代替')
+        if target.get('mesh_origin'):
+            if self.mesh is None or not target.get('mesh_id'):
+                raise RequestError('来源电脑的转交绑定暂不可用，尚未投递')
+            agent = target.get('agent')
+        elif target.get('monitoring_only'):
+            try:
+                agent = self._xiaoyu.sessions.adapter(target).name
+            except (AgentError, OSError, ValueError) as error:
+                raise RequestError(str(error)) from None
+        else:
+            agent = target.get('agent')
+        if not agent:
+            raise RequestError('原执行端暂不可用，尚未投递')
+        # reply_scope also binds the durable client fingerprint to the target.
+        return self.submit(body.get('text'), conversation, client_id, agent,
+                           card=key, pin=True, reply_scope='main')
 
     def directory(self, include_retained=True):
         seq = self.card_store.seq
@@ -1324,15 +1357,16 @@ class Service:
             after, reset = 0, True
         deadline = time.monotonic() + max(0.0, wait)
         while True:
-            # Request stage changes also allocate a shared sequence, even when
-            # they have no new chat body. Wake the single subscription for them.
+            seq, tasks, messages, floor = cards_store.sync_since(
+                None if all_conversations else conversation, after, unavailable="unavailable" in states)
+            # Check requests after the history snapshot: a request-only update
+            # before that snapshot can advance seq without adding a chat body.
+            # Checking first would swallow its wakeup and wait a full poll.
             with self._changed:
                 request_changed = bool(requests and any(
                     value.get("seq", 0) > after
                     for key in requests for value in [self._messages.get(key)]
                     if value and (all_conversations or value["conversation"] == conversation)))
-            seq, tasks, messages, floor = cards_store.sync_since(
-                None if all_conversations else conversation, after, unavailable="unavailable" in states)
             if after > 0 and (after < floor or len(tasks) + len(messages) > SYNC_DELTA_WINDOW):
                 # 游标之后的增量已经不全（日志挤掉了），或者落后太多：改给快照。
                 after, reset = 0, True

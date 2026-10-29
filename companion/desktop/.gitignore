@@ -7,3 +7,6 @@ release/
 .runtime-venv/
 .build-cache/
 *.tsbuildinfo
+
+agents-dist/
+agents-dist-win/

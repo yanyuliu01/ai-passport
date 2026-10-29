@@ -360,6 +360,7 @@ class Scripted(agents_module.Agent):
             models=list(models), model=model,
         ))
         self.jobs = []
+        self.native_resume = kind in ('codex', 'claude_code', 'dsh', 'pi')
         self.started = []
         self.gate = threading.Event()
         self.gate.set()
@@ -902,7 +903,7 @@ class ShapeTests(unittest.TestCase):
         self.assertNotIn("agent", alone)
         helped = xiaoyu_module.lane_schema([Scripted("codex", speaks=False), Scripted("pc")])
         action = helped["properties"]["action"]["properties"]
-        self.assertEqual(action["type"]["enum"], ["none", "start", "amend", "cancel"])
+        self.assertEqual(action["type"]["enum"], ["none", "start", "amend", "cancel", "resume"])
         self.assertEqual(action["agent"]["enum"], ["codex", "pc"])
         # Doing nothing more is always allowed: the action itself is optional.
         self.assertEqual(helped["required"], ["reply", "brief", "mood"])

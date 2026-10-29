@@ -24,13 +24,19 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
   if (method === 'GET' && path === '/healthz') return true;
   if (typeof path !== 'string' || path.length > 1024 || !path.startsWith('/v1/')) return false;
   const url = new URL(path, 'http://localhost');
-  if (method === 'GET') return ['/v1/helpers/options', '/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory'].includes(url.pathname)
+  if (method === 'GET') return ['/v1/helpers/options', '/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory', '/v1/sessions'].includes(url.pathname)
     || /^\/v1\/directory\/(?:[A-Za-z0-9._:-]+(?:\/history)?|operations\/[A-Za-z0-9._:-]+)$/.test(url.pathname)
     || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
     || /^\/v1\/tasks\/[a-zA-Z0-9._:-]+\/activity$/.test(url.pathname)
     || /^\/v1\/messages\/[a-zA-Z0-9._:-]+(?:\/effects)?$/.test(url.pathname)
     || /^\/v1\/timers\/(?:[a-zA-Z0-9._:-]+\/)?effects$/.test(url.pathname);
   if (method !== 'POST') return false;
+  if (/^\/v1\/sessions\/[A-Za-z0-9._:-]+\/continue$/.test(url.pathname)) {
+    return Boolean(body && typeof body.text === 'string' && body.text.trim().length > 0 && body.text.length <= 32_000
+      && typeof body.client_id === 'string' && /^[a-f0-9]{32}$/.test(body.client_id)
+      && (body.conversation === undefined || typeof body.conversation === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(body.conversation))
+      && Object.keys(body).every(key => ['text','client_id','conversation'].includes(key)));
+  }
   if (url.pathname === '/v1/voice' || url.pathname === '/v1/images') {
     const binary = body?._relay_binary, type = body?.content_type;
     return typeof binary === 'string' && binary.length <= 3_734_000 && /^[A-Za-z0-9_-]+$/.test(binary)
@@ -364,6 +370,8 @@ export class PeerNetwork implements RuntimeTransport {
     const isVoice = method === 'POST' && path.startsWith('/v1/voice?');
     const voiceURL = isVoice ? new URL(path, 'http://localhost') : undefined;
     const key = isVoice ? 'voice:' + peerId + '/' + (voiceURL?.searchParams.get('conversation') || 'default') + '/' + voiceURL?.searchParams.get('client_id')
+      : method === 'POST' && /^\/v1\/sessions\/[A-Za-z0-9._:-]+\/continue$/.test(path)
+      ? 'continue:' + peerId + '/' + path + '/' + String(payload?.conversation || 'default') + '/' + String(payload?.client_id)
       : method === 'POST' && path === '/v1/messages'
       ? 'submit:' + peerId + '/' + String(payload?.conversation || 'default') + '/' + String(payload?.client_id)
       : 'rpc:' + peerId + '/' + request;

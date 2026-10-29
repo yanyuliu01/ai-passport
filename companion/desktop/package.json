@@ -1,6 +1,6 @@
 {
   "name": "xiaoyu-desktop",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "private": true,
   "description": "Xiaoyu desktop companion",
   "author": "AI Passport contributors",
@@ -17,11 +17,12 @@
     "package:mac": "npm run build && electron-builder --mac dir dmg --arm64",
     "package:win": "npm run build && electron-builder --win nsis --x64",
     "package:win-preview": "npm run build && electron-builder --config tools/windows-preview-builder.cjs --win nsis --x64",
-    "relay": "node dist-main/relay/server.js"
+    "relay": "node dist-main/relay/server.js",
+    "bundle:agents": "python3 tools/bundle_agents.py"
   },
   "build": {
     "appId": "com.folotoy.xiaoyu",
-    "productName": "小鱼",
+    "productName": "\u5c0f\u9c7c",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
@@ -36,6 +37,10 @@
       {
         "from": "runtime-dist",
         "to": "runtime"
+      },
+      {
+        "from": "agents-dist",
+        "to": "agent-tools"
       }
     ],
     "beforePack": "./tools/check-package.cjs",
@@ -57,7 +62,8 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "afterPack": "./tools/check-packed-agents.cjs"
   },
   "dependencies": {
     "hpke-js": "1.8.0",

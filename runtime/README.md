@@ -44,9 +44,19 @@ Status: verification stage, intended to run on your own computer. The same
 code is meant to move to a virtual machine later; nothing in it assumes a
 particular host. See [What is and is not verified](#what-is-and-is-not-verified).
 
-## Xiaoyu identity and character (0.27.0 source)
+## Xiaoyu identity and character (0.27.1 source)
 
 The canonical package is `xiaoyu_runtime`. The character calls her creator the boss, values her own reactions and curiosity, and develops her story from actual interactions and exploration. The fixed execution contract remains independent. See [character and migration boundaries](../docs/development/persona-boundaries.md) for legacy command/configuration compatibility and deployment limits. This source candidate does not replace separately developed or installed Runtime work.
+
+## Shared session continuation
+
+Runtime 0.26.0 uses one gateway for Xiaoyu tools, authenticated session lookup
+(`GET /v1/sessions?conversation=default&query=project&limit=8`) and continuation
+(`POST /v1/sessions/<target>/continue`, JSON fields `text`, `client_id`, and optional
+`conversation`). Send the normal Runtime bearer token; reuse `client_id` on retry.
+Choose a returned target explicitly. The gateway preserves the original task or
+native session and execution environment, or reports why it cannot resume.
+See [capabilities, compatibility and validation limits](../docs/development/agent-gateway.md#session-continuation-gateway-0260-source).
 
 ## Unified request synchronization (0.24.0)
 

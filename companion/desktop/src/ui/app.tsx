@@ -121,7 +121,7 @@ function App() {
   const latestTaskMessage = new Map<string, string>();
   for (const message of messages) if (message.task && message.author?.kind !== 'owner') latestTaskMessage.set(String(message._runtimeId) + '/' + message.task, message.id);
   if (!loaded) return <main className="app-loading" role="status">{problem || '正在读取本机设置…'}</main>;
-  if (!view.account?.signedIn || !view.setup?.confirmed || setupOpen) return <Onboarding view={view} onDone={() => { setSetupOpen(false); setPage('chat'); }} />;
+  if (!view.account?.signedIn || !view.setup?.confirmed || view.setup.firstRun?.required || setupOpen) return <Onboarding key={view.account?.username || 'signed-out'} view={view} onDone={() => { setSetupOpen(false); setPage('chat'); }} />;
   return <div className={'shell ' + (sidebarOpen ? 'sidebar-is-open' : '')}>
     {sidebarOpen && <button className="sidebar-shade" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)} />}
     <aside className="sidebar" aria-label="小鱼导航">

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,8 +20,10 @@ for platform, relative in [('darwin', 'mac-arm64/小鱼.app/Contents/Resources/a
 artifacts = []
 for path in sorted(release.iterdir()):
     if path.suffix not in ('.dmg', '.exe', '.zip'): continue
+    if not re.search(r'(?<![0-9.])' + re.escape(package['version']) + r'(?![0-9.])', path.stem): continue
     platform = 'darwin' if path.suffix == '.dmg' else 'win32'
     if platform not in builds: raise RuntimeError('Missing packed provenance for ' + path.name)
+    if builds[platform].get('version') != package['version']: raise RuntimeError('Packed version mismatch for ' + path.name)
     digest = hashlib.sha256()
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
