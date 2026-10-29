@@ -111,6 +111,53 @@ class DshStreamTests(TempDirCase):
                                {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None, opener)
         self.assertAlmostEqual(.2, opener.call_args.kwargs["timeout"])
 
+    def test_request_timing_separates_headers_events_text_and_cache_usage(self):
+        now = [0.0]
+
+        class TimedResponse(io.BytesIO):
+            def __iter__(self):
+                now[0] = 0.3
+                yield b'data: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":80,"secret":"NO_LOG"}}}\n'
+                now[0] = 1.4
+                yield b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"PRIVATE_REPLY"}}\n'
+                now[0] = 1.6
+                yield b'data: {"type":"message_delta","usage":{"output_tokens":3}}\n'
+                now[0] = 1.7
+                yield b'data: {"type":"message_stop"}\n'
+
+        def opener(request, timeout):
+            now[0] = 0.2
+            return TimedResponse()
+
+        log = io.StringIO()
+        with patch.object(dsh_stream.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(dsh_stream.sys, "stderr", log):
+            dsh_stream.run(dsh_spec(self.folder), Job(text="PRIVATE_REQUEST", plain=True),
+                           {"DEEPSEEK_API_KEY": "PRIVATE_KEY"}, "m", lambda text: None, opener)
+        record = json.loads(next(line.split("timing=", 1)[1] for line in log.getvalue().splitlines()
+                                 if line.startswith("DeepSeek request timing=")))
+        self.assertEqual([record[key] for key in
+                          ("headers_s", "first_event_s", "first_text_s", "total_s")],
+                         [0.2, 0.3, 1.4, 1.7])
+        self.assertEqual(record["usage"], {"input_tokens": 20, "cache_read_input_tokens": 80,
+                                           "output_tokens": 3})
+        self.assertEqual(record["status"], "completed")
+        self.assertNotIn("PRIVATE", log.getvalue())
+        self.assertNotIn("NO_LOG", log.getvalue())
+
+    def test_failed_request_records_missing_text_and_usage_without_fake_zero(self):
+        log = io.StringIO()
+        with patch.object(dsh_stream.sys, "stderr", log):
+            with self.assertRaises(AgentError):
+                dsh_stream.run(dsh_spec(self.folder), Job(text="x", plain=True),
+                               {"DEEPSEEK_API_KEY": "k"}, "m", lambda text: None,
+                               FakeOpener(urllib.error.URLError("offline")))
+        record = json.loads(log.getvalue().split("timing=", 1)[1])
+        self.assertEqual(record["status"], "failed")
+        self.assertIsNone(record["headers_s"])
+        self.assertIsNone(record["first_text_s"])
+        self.assertEqual(record["usage"], {})
+
     def test_silent_response_is_cancelled_without_waiting_for_an_event(self):
         closed = threading.Event()
 

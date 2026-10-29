@@ -166,10 +166,20 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     url = base if base.endswith("/v1") else base + "/v1"
     first_text: List[Optional[float]] = [None]
     cut = [False]  # 主人插话，这一次被打断了
+    trace_id = uuid.uuid4().hex
+    request_round = 0
 
     def ask(prefix: str) -> Tuple[str, List[Dict[str, Any]], bool]:
         """问一轮。返回（这一轮写的文字，这一轮的工具调用，是不是停在要调工具）。
         prefix 是前几轮已经说过的话：交给 on_text 的是到目前为止的全文。"""
+        nonlocal request_round
+        request_round += 1
+        request_began = time.monotonic()
+        timing: Dict[str, Any] = {
+            "trace_id": trace_id, "round": request_round,
+            "headers_s": None, "first_event_s": None, "first_text_s": None,
+            "status": "failed", "usage": {},
+        }
         body: Dict[str, Any] = {
             "model": model, "stream": True, "max_tokens": MAX_TOKENS,
             "thinking": {"type": "disabled"}, "messages": messages,
@@ -205,6 +215,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             if remaining <= 0:
                 check_deadline()
             with opener(request, timeout=remaining) as response:
+                timing["headers_s"] = round(time.monotonic() - request_began, 6)
                 check_deadline()
 
                 def stop_reading() -> None:
@@ -224,6 +235,20 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 timer.daemon = True
                 timer.start()
                 for event in events(response, check_deadline):
+                    if timing["first_event_s"] is None:
+                        timing["first_event_s"] = round(time.monotonic() - request_began, 6)
+                    # Both Messages-compatible and native DeepSeek counters are
+                    # optional. Missing cache data stays absent, never a zero hit.
+                    message = event.get("message")
+                    usage = (message.get("usage") if event.get("type") == "message_start"
+                             and isinstance(message, dict) else event.get("usage"))
+                    if isinstance(usage, dict):
+                        for name in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                                     "cache_creation_input_tokens", "prompt_cache_hit_tokens",
+                                     "prompt_cache_miss_tokens"):
+                            value = usage.get(name)
+                            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                                timing["usage"][name] = value
                     if job.interrupt is not None and job.interrupt.is_set():
                         cut[0] = True  # 主人插话了：不再往下读，已经说出的部分照样算
                         stopped_early(job.interrupt)
@@ -247,6 +272,8 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                         if delta.get("type") == "text_delta" and isinstance(delta.get("text"), str) \
                                 and delta["text"]:
                             said += delta["text"]
+                            if timing["first_text_s"] is None:
+                                timing["first_text_s"] = round(time.monotonic() - request_began, 6)
                             if first_text[0] is None:
                                 first_text[0] = time.monotonic() - began
                             on_text((prefix + JOIN + said) if prefix else said)
@@ -263,6 +290,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                     if time.monotonic() - began > timeout:
                         raise AgentError("DeepSeek 超过 %d 秒还没说完" % timeout)
                 check_deadline()
+                timing["status"] = "interrupted" if cut[0] else "completed" if stopped else "incomplete"
         except urllib.error.HTTPError as error:
             detail = ""
             try:
@@ -276,6 +304,10 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         finally:
             if timer is not None:
                 timer.cancel()
+            timing["total_s"] = round(time.monotonic() - request_began, 6)
+            # Only generated identity, durations and allowlisted counters. No
+            # owner text, system prompt, tool payload, endpoint or credentials.
+            sys.stderr.write("DeepSeek request timing=" + json.dumps(timing, sort_keys=True) + "\n")
         if cut[0]:
             return said.strip(), [], False
         if not stopped:

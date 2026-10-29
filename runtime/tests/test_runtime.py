@@ -923,6 +923,28 @@ class ShapeTests(unittest.TestCase):
         self.assertNotIn("- start", nothing)
         self.assertNotIn("正看着", nothing)
 
+    def test_changing_context_preserves_the_complete_instruction_prefix(self):
+        for tools in (False, True):
+            with self.subTest(tools=tools):
+                options = dict(persona="PERSONA", brief_max_chars=60,
+                               helpers=[Scripted("codex")], focus="c1", tools=tools)
+                first = xiaoyou_module.lane_prompt(
+                    **options, now=0, cards=[], memory=["MEMORY_BEFORE"])
+                second = xiaoyou_module.lane_prompt(
+                    **options, now=3600, memory=["MEMORY_AFTER"], cards=[
+                        {"id": "c1", "title": "TASK_AFTER", "state": "done",
+                         "agent": None, "started_at": None}])
+                prefix, context = first.split("## 本轮上下文", 1)
+                self.assertEqual(prefix, second.split("## 本轮上下文", 1)[0])
+                self.assertIn(xiaoyou_module.CHAT_STYLE, prefix)
+                self.assertIn("MEMORY_BEFORE", context)
+                self.assertNotIn("MEMORY_BEFORE", second)
+                self.assertIn("MEMORY_AFTER", second)
+                self.assertIn("TASK_AFTER", second)
+                self.assertIn("正看着 c1", second)
+                self.assertIn("现在是 ", context)
+                self.assertNotEqual(context, second.split("## 本轮上下文", 1)[1])
+
 
 class ClaudeCodeAgentTests(TempDirCase):
     def setUp(self):

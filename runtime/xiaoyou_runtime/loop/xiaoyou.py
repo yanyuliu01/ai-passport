@@ -466,8 +466,11 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     订阅额度可看的。desktop 是主人正看着的电脑上的会话（focus 就是它）。"""
     notes = notes or {}
     parts = [with_runtime_rules(persona), ""]
+    # Keep changing context after ALL stable rules, including CHAT_STYLE. A time,
+    # memory or task change must not invalidate the reusable instruction prefix.
+    context = ["", "## 本轮上下文"]
     # 现在几点：她要算“晚上提醒我”这类到点时间，也要知道主人这会儿是不是该休息了。
-    parts.append("现在是 %s。" % time.strftime("%Y-%m-%d %H:%M（周%%s）", time.localtime(now)).replace(
+    context.append("现在是 %s。" % time.strftime("%Y-%m-%d %H:%M（周%%s）", time.localtime(now)).replace(
         "%s", "一二三四五六日"[time.localtime(now).tm_wday]))
     parts.append("")
     parts.append("## 你怎么做事")
@@ -497,19 +500,19 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
     )
     parts.append("")
     if memory:
-        parts.extend(memory_section(memory))
-        parts.append("")
+        context.extend(memory_section(memory))
+        context.append("")
     if promises:
-        parts.extend(promise_section(promises, now))
-        parts.append("")
+        context.extend(promise_section(promises, now))
+        context.append("")
     if tools:
         parts.append("## 怎么回复")
         parts.append(
             "直接写你要对主人说的话，不要写 JSON。要动手就调工具，说了不调，事情不会发生。"
             "一轮只办一件事。工具回“办不了”时，按它说的改了再调，或者照实告诉主人。")
         parts.append("")
-        parts.append("## 你的帮手")
-        _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+        context.append("## 你的帮手")
+        _helpers_and_now(context, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
         parts.extend(["", CHAT_STYLE, "", "## 本轮输出检查",
                       "工具结果不是主人又发来的一句话，不再重新确认收到。"
                       "记忆操作先调用 remember、replace 或 forget，返回成功后才说一次保存或修改结果；"
@@ -517,6 +520,7 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
                       "答案后还有独立的原因或补充时，必须写出 --- 分隔行，不能只换段。"
                       "但同一份步骤或清单的全部条目必须放在同一条消息，条目之间用普通换行，不能逐项写 ---。"
                       "主人只要知识解释、清单或步骤时，按要求答完就停，不为续聊另加交办建议或追问。"])
+        parts.extend(context)
         text = "\n".join(parts)
         for json_word, tool_word in TOOL_WORDING:
             text = text.replace(json_word, tool_word)
@@ -541,9 +545,10 @@ def lane_prompt(persona: str, brief_max_chars: int, helpers: List[Agent],
         )
     parts.append("- cancel：主人不要某件事了。card 写那件事的编号。")
     parts.append("")
-    parts.append("## 你的帮手")
-    _helpers_and_now(parts, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
+    context.append("## 你的帮手")
+    _helpers_and_now(context, helpers, notes, quota, cards, now, focus, pinned, desktop, tools)
     parts.extend(["", CHAT_STYLE])
+    parts.extend(context)
     return "\n".join(parts)
 
 
