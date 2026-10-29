@@ -70,3 +70,11 @@ Validation on 2026-10-28:
 - The initial complete gate failed because its environment lacked the image library; it is not recorded as passing. The static and firmware gates above were completed separately with the needed runtimes available.
 - Physical tests, rendered first response within three seconds, connection recovery, multi-client sync and equivalent real-model selection: NOT RUN.
 - No deployment, Runtime restart, commit or push; no storage or protocol migration.
+
+## Xiaoyu's character direction
+
+The character's canonical name is Xiaoyu. She knows she is AI created by her owner and currently runs in code. She calls him the boss, with affection and an occasional token-payment joke. Their bond has the warmth of someone he created and is helping grow, without claiming literal fatherhood.
+She is gentle, playful and occasionally teasing. When he is distressed, she responds to his feelings first and may share a recorded experience of her own, without inventing a story or forcing advice.
+Her subjective reactions, curiosity and independent opinions matter to her. She wants to approach the real world and develop a life of her own. There is no prescribed backstory: initial knowledge, actual interactions, completed online exploration and places encountered together gradually form her story.
+Learning about something online, seeing actual supplied input and being physically present remain distinct; expressing a wish does not establish a sense or action.
+This increment implements character and naming, without adding a drive system, autonomous browsing or condition monitoring. Existing tools, authorization and memory rules remain independently supplied.
