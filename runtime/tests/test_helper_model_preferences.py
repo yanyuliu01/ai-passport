@@ -3,16 +3,16 @@ import json
 import os
 from unittest.mock import patch
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, start_runtime
 from test_helpers import HttpTests
-from xiaoyou_runtime.api.service import Service, RequestError
-from xiaoyou_runtime.helpers.model_preferences import Preferences, options
+from xiaoyu_runtime.api.service import Service, RequestError
+from xiaoyu_runtime.helpers.model_preferences import Preferences, options
 
 
 class ModelPreferenceTests(TempDirCase):
     def test_switch_is_durable_and_old_agent_keeps_its_model(self):
         old = Scripted("codex", kind="codex", model="expensive")
-        x, store = make_xiaoyou(self.folder, [old])
+        x, store = make_xiaoyu(self.folder, [old])
         service = Service(x, store)
         self.addCleanup(x.close)
         self.addCleanup(service.close)
@@ -20,7 +20,7 @@ class ModelPreferenceTests(TempDirCase):
         self.assertEqual(old.spec.model, "expensive")
         self.assertEqual(x.agents()[0].spec.model, "gpt-6.1-sol")
         self.assertEqual(service.agents()[0]["configured_model"], "gpt-6.1-sol")
-        x2, _ = make_xiaoyou(self.folder, [Scripted("codex", kind="codex", model="expensive")])
+        x2, _ = make_xiaoyu(self.folder, [Scripted("codex", kind="codex", model="expensive")])
         self.addCleanup(x2.close)
         self.assertEqual(x2.agents()[0].spec.model, "gpt-6.1-sol")
         for bad in (None, "", "--unsafe", "model\ncommand", 123, "a" * 129):
@@ -28,7 +28,7 @@ class ModelPreferenceTests(TempDirCase):
                 service.helper_model("codex", {"model": bad})
         self.assertEqual(Preferences(x._config.state_dir).values, {"codex": "gpt-6.1-sol"})
         with patch.object(x.model_preferences, "save", side_effect=OSError("disk full")):
-            from xiaoyou_runtime.api.service import UnavailableError
+            from xiaoyu_runtime.api.service import UnavailableError
             with self.assertRaises(UnavailableError):
                 service.helper_model("codex", {"model": "another-model"})
         self.assertEqual(x.agents()[0].spec.model, "gpt-6.1-sol")

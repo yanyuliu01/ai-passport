@@ -85,10 +85,10 @@
 ### 管理（已实现）
 
 ```bash
-python3 -m xiaoyou_runtime events types        # 登记的事件类型、字段、隐私级别、保留期
-python3 -m xiaoyou_runtime events summary      # 各客户端、各类型最近多少条，存在哪
-python3 -m xiaoyou_runtime events export --since 7d
-python3 -m xiaoyou_runtime events delete --type rage_tap --before 2026-10-01
+python3 -m xiaoyu_runtime events types        # 登记的事件类型、字段、隐私级别、保留期
+python3 -m xiaoyu_runtime events summary      # 各客户端、各类型最近多少条，存在哪
+python3 -m xiaoyu_runtime events export --since 7d
+python3 -m xiaoyu_runtime events delete --type rage_tap --before 2026-10-01
 ```
 
 ## 外层循环：每批一个版本方案（设计）
@@ -204,7 +204,7 @@ python3 -m xiaoyou_runtime events delete --type rage_tap --before 2026-10-01
 | `observer` | 发布 + 新信号 → 结论 | `theme_compare` | 设计 |
 | `triage` / `planner` | 单问题选题 / 单问题方案 | `score_by_impact` / `template_plan` | 已实现，会被上面的外层循环取代，保留作单问题修复的备用 |
 
-内置插件在 `runtime/xiaoyou_runtime/iterate/builtin/`；自己写的放在 `iterate.plugin_dirs` 里，每个 `.py` 放一个 `PLUGINS` 列表。同名插件后加载的覆盖先加载的；加载失败只记一条错误：
+内置插件在 `runtime/xiaoyu_runtime/iterate/builtin/`；自己写的放在 `iterate.plugin_dirs` 里，每个 `.py` 放一个 `PLUGINS` 列表。同名插件后加载的覆盖先加载的；加载失败只记一条错误：
 
 ```python
 def detect(ctx, signals):              # ctx 只开放这个插件声明过的权限
@@ -230,7 +230,7 @@ PLUGINS = [{"name": "rage_tap", "kind": "detector", "version": 1,
   "providers": {
     "local":    {"protocol": "openai", "base_url": "http://127.0.0.1:11434/v1"},
     "deepseek": {"protocol": "openai", "base_url": "https://api.deepseek.com/v1",
-                 "key_file": "~/.config/xiaoyou/deepseek.key", "price": {"input": 2, "output": 8}}
+                 "key_file": "~/.config/xiaoyu/deepseek.key", "price": {"input": 2, "output": 8}}
   },
   "routes": {
     "default":              ["local/qwen2.5:7b"],
@@ -251,9 +251,9 @@ PLUGINS = [{"name": "rage_tap", "kind": "detector", "version": 1,
 - 密钥用 `key_file` 或 `key_env`，不写进 `config.json`。
 
 ```bash
-python3 -m xiaoyou_runtime models list
-python3 -m xiaoyou_runtime models test iterate.plan
-python3 -m xiaoyou_runtime models usage
+python3 -m xiaoyu_runtime models list
+python3 -m xiaoyu_runtime models test iterate.plan
+python3 -m xiaoyu_runtime models usage
 ```
 
 ## 让本地小模型也跑得动：harness 承担的事
@@ -296,22 +296,22 @@ python3 -m xiaoyou_runtime models usage
 
 ```bash
 # 已实现
-python3 -m xiaoyou_runtime iterate plugins
-python3 -m xiaoyou_runtime iterate run --dry-run --force   # 试跑，不存状态
-python3 -m xiaoyou_runtime iterate run [--force]
-python3 -m xiaoyou_runtime iterate status
-python3 -m xiaoyou_runtime iterate issues [--all]
-python3 -m xiaoyou_runtime iterate issue <编号前缀> --open|--ignore
-python3 -m xiaoyou_runtime events types|summary|export|delete
+python3 -m xiaoyu_runtime iterate plugins
+python3 -m xiaoyu_runtime iterate run --dry-run --force   # 试跑，不存状态
+python3 -m xiaoyu_runtime iterate run [--force]
+python3 -m xiaoyu_runtime iterate status
+python3 -m xiaoyu_runtime iterate issues [--all]
+python3 -m xiaoyu_runtime iterate issue <编号前缀> --open|--ignore
+python3 -m xiaoyu_runtime events types|summary|export|delete
 # 设计
-python3 -m xiaoyou_runtime iterate map                     # 问题地图：分组、根因
-python3 -m xiaoyou_runtime iterate replay <run> --stage <步骤> --plugin <别的插件>
-python3 -m xiaoyou_runtime iterate rollback <run>
+python3 -m xiaoyu_runtime iterate map                     # 问题地图：分组、根因
+python3 -m xiaoyu_runtime iterate replay <run> --stage <步骤> --plugin <别的插件>
+python3 -m xiaoyu_runtime iterate rollback <run>
 ```
 
 ## 和之前方案的关系
 
-10-16 和 Codex 讨论的"采集主人和小幽的对话、批量优化主 Agent 的分工和 DSH loop"，用的是同一套骨架：同一个采集网关、同一个问题簿、同样的外层循环。把 `areas` 换成 `agent`，实现步骤换成改提示词、路由配置的插件，就是主流程优化。所以不另建系统。
+10-16 和 Codex 讨论的"采集主人和小鱼的对话、批量优化主 Agent 的分工和 DSH loop"，用的是同一套骨架：同一个采集网关、同一个问题簿、同样的外层循环。把 `areas` 换成 `agent`，实现步骤换成改提示词、路由配置的插件，就是主流程优化。所以不另建系统。
 
 ## 分期
 

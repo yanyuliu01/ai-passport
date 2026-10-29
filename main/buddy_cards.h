@@ -1,7 +1,7 @@
 /* main/buddy_cards.h - the cards the hub has sent, kept in RAM.
  *
- * Every request to Xiaoyou is one "thing" with a card: what the owner first said
- * and the latest thing Xiaoyou said about it. Cards stay in the order they were
+ * Every request to Xiaoyu is one "thing" with a card: what the owner first said
+ * and the latest thing Xiaoyu said about it. Cards stay in the order they were
  * opened. Their words share a fixed byte budget; when a card does not fit, the
  * oldest are dropped. A card that arrives again under the same id is updated in
  * place. Header-only and free of ESP-IDF and LVGL so the state machine, the
@@ -39,7 +39,7 @@ static inline int buddy_cards_find(const buddy_cards_t *cards, const char *id)
 }
 
 /* A card is a task when it was handed to a helper; the rest is conversation,
- * which Xiaoyou answered herself. The conversation screen pages through the
+ * which Xiaoyu answered herself. The conversation screen pages through the
  * conversation only; tasks have the task screen. */
 static inline bool buddy_cards_is_task(const buddy_cards_t *cards, int index)
 {

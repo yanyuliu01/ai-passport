@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { ClientView, LocalAgent, SetupScan } from '../shared';
-import xiaoyou from './images/xiaoyou.png';
+import xiaoyu from './images/xiaoyu.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
 import './onboarding.css';
@@ -24,28 +24,28 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
   const stage = step === 'welcome' ? 0 : ['detect', 'agents'].includes(step) ? 1 : ['review'].includes(step) ? 2 : 3;
   async function detect() {
     setError(''); setStep('detect');
-    try { const value = await window.xiaoyou.scanLocal(); setScan(value); setService(''); setSelected([]); setStep('agents'); }
+    try { const value = await window.xiaoyu.scanLocal(); setScan(value); setService(''); setSelected([]); setStep('agents'); }
     catch { setError('检测未完成，请重试。已有服务和记录没有改动。'); setStep('agents'); }
   }
   async function start() {
     setError(''); setReturnStep('review'); setStep('starting');
     try {
-      await window.xiaoyou.enableLocal({ ...(service ? { service } : {}), agents: service ? [] : selected,
+      await window.xiaoyu.enableLocal({ ...(service ? { service } : {}), agents: service ? [] : selected,
         ...(key ? { deepseekKey: key } : {}) });
       setKey('');
       setStep('result');
-      if (loginStart) try { await window.xiaoyou.loginStart(true); } catch { setError('服务已连接，但登录时启动未开启，可在设置中重试。'); }
+      if (loginStart) try { await window.xiaoyu.loginStart(true); } catch { setError('服务已连接，但登录时启动未开启，可在设置中重试。'); }
     } catch (problem) { setKey(''); setError(cleanError(problem)); setStep('review'); }
   }
   const canReview = Boolean(scan && (service || (main?.installed && (scan.hasDeepSeekKey || key.trim().length >= 12))));
-  const heading: Record<Step, string> = { welcome: local ? '启用这台电脑的小幽' : '把小幽带到这台电脑', detect: '看看你已经有哪些帮手',
+  const heading: Record<Step, string> = { welcome: local ? '启用这台电脑的小鱼' : '把小鱼带到这台电脑', detect: '看看你已经有哪些帮手',
     agents: '让熟悉的帮手一起加入', review: '确认这次启用的内容', starting: '正在启用本机服务', result: connected ? '连接已经建立' : '正在补齐最近的对话' };
   return <main className="onboarding">
-    <header className="onboarding-title"><span>小幽</span><small>{view.setup?.device || '这台电脑'} · 首次连接</small>
-      {view.setup?.confirmed && !busy && <button onClick={onDone}>返回小幽</button>}</header>
+    <header className="onboarding-title"><span>小鱼</span><small>{view.setup?.device || '这台电脑'} · 首次连接</small>
+      {view.setup?.confirmed && !busy && <button onClick={onDone}>返回小鱼</button>}</header>
     <div className="onboarding-body">
-      <aside className="onboarding-aside"><img src={xiaoyou} alt="小幽" /><h2>换个地方，<br />接着聊。</h2><p>你的对话、正在做的事，<br />都留在同一个小幽里。</p>
-        <ol aria-label="启用步骤">{['登录小幽账号', '检测与选择', '确认启用', '连接与同步'].map((label, index) => <li key={label} aria-current={stage === index ? 'step' : undefined}><span>{index < stage ? '✓' : index + 1}</span>{label}</li>)}</ol>
+      <aside className="onboarding-aside"><img src={xiaoyu} alt="小鱼" /><h2>换个地方，<br />接着聊。</h2><p>你的对话、正在做的事，<br />都留在同一个小鱼里。</p>
+        <ol aria-label="启用步骤">{['登录小鱼账号', '检测与选择', '确认启用', '连接与同步'].map((label, index) => <li key={label} aria-current={stage === index ? 'step' : undefined}><span>{index < stage ? '✓' : index + 1}</span>{label}</li>)}</ol>
       </aside>
       <section className="onboarding-panel" aria-busy={busy}>
         <small>开始使用 · {Math.min(stage + 1, 4)} / 4</small><h1 tabIndex={-1}>{heading[step]}</h1>
@@ -61,10 +61,10 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
           {scan?.services.length ? <div className="onboarding-services"><label className={'onboarding-radio ' + (!service ? 'selected' : '')}>
             <input type="radio" name="local-service" checked={!service} onChange={() => setService('')} /><span><strong>启用新的内置服务</strong><small>dsh + DeepSeek · 新的独立空间</small></span></label>
             {scan.services.map(item => <label className={'onboarding-radio ' + (service === item.id ? 'selected' : '')} key={item.id}>
-              <input type="radio" name="local-service" checked={service === item.id} onChange={() => setService(item.id)} /><span><strong>复用已有小幽 · {item.name}</strong><small>{item.managed ? '本客户端已有配置' : '外部服务 · 不接管进程'} · {item.agents.join(' / ')}</small><details className="onboarding-location"><summary>配置位置</summary><code>{item.source}</code></details></span></label>)}</div> : null}
+              <input type="radio" name="local-service" checked={service === item.id} onChange={() => setService(item.id)} /><span><strong>复用已有小鱼 · {item.name}</strong><small>{item.managed ? '本客户端已有配置' : '外部服务 · 不接管进程'} · {item.agents.join(' / ')}</small><details className="onboarding-location"><summary>配置位置</summary><code>{item.source}</code></details></span></label>)}</div> : null}
           {!service && <>
             <article className="onboarding-agent main"><span className="onboarding-agent-icon">D</span><div><strong>dsh + DeepSeek <em>默认主服务</em></strong><p>{main ? authLabel(main) : '未检测到'}</p><small>日常聊天 DeepSeek Flash · 执行任务 DeepSeek V4 Pro</small>{main?.location && <details className="onboarding-location"><summary>安装位置</summary><code>{main.location}</code></details>}</div></article>
-            {!main?.installed && scan && <div className="onboarding-note">尚未安装 DeepSeek Harness。安装并完成配置后重新检测，或返回连接已有小幽。</div>}
+            {!main?.installed && scan && <div className="onboarding-note">尚未安装 DeepSeek Harness。安装并完成配置后重新检测，或返回连接已有小鱼。</div>}
             <h3 className="onboarding-subtitle">可选帮手</h3>
             {scan?.agents.filter(agent => agent.id !== 'dsh').map(agent => <label className={'onboarding-agent ' + (selected.includes(agent.id) ? 'selected' : '')} key={agent.id}>
               <img src={agent.id === 'codex' ? codex : claude} alt="" /><div><strong>{agent.name} {agent.version && <small>{agent.version}</small>}</strong><p>{authLabel(agent)}</p>
@@ -84,17 +84,17 @@ export function Onboarding({ view, onDone, local = false }: { view: ClientView; 
             <dt>连接方式</dt><dd>本机回环连接 · 不向公网开放 Runtime</dd><dt>后台运行</dt><dd>关闭窗口继续运行；退出客户端时停止自有服务</dd>
           </dl>
           {!current && chosen.length > 0 && <p className="onboarding-footnote">本客户端调用帮手时：Codex 使用 gpt-6.1-sol，Claude Code 使用 Sonnet。执行范围为本客户端工作目录，需要确认的操作仍会询问你。</p>}
-          {current && <p className="onboarding-footnote">{current.managed ? '客户端会恢复自己已有的服务。' : '原服务继续由原来的方式管理，小幽不会停止或重启它。'}</p>}
-          <label className="onboarding-check"><input type="checkbox" checked={loginStart} onChange={event => setLoginStart(event.target.checked)} />系统登录后启动小幽（可选）</label>
+          {current && <p className="onboarding-footnote">{current.managed ? '客户端会恢复自己已有的服务。' : '原服务继续由原来的方式管理，小鱼不会停止或重启它。'}</p>}
+          <label className="onboarding-check"><input type="checkbox" checked={loginStart} onChange={event => setLoginStart(event.target.checked)} />系统登录后启动小鱼（可选）</label>
           <footer><button onClick={() => setStep('agents')}>上一步</button><button className="primary" onClick={() => void start()}>{current ? '确认连接这个服务' : '确认并启用本机服务'}</button></footer>
         </>}
         {step === 'starting' && <div className="onboarding-wait" role="status"><span className="onboarding-spinner" />{view.runtime.message}<p>正在核对服务身份，随后同步会话记录。</p></div>}
         {step === 'result' && <>
-          <p className="onboarding-description">{view.setup?.service === 'none' ? '这台电脑通过已配对设备使用小幽。' : view.runtime.message}</p>
+          <p className="onboarding-description">{view.setup?.service === 'none' ? '这台电脑通过已配对设备使用小鱼。' : view.runtime.message}</p>
           <ul className="onboarding-status"><li><span>✓</span><div><strong>连接已确认</strong><p>{view.setup?.service === 'bundled' ? '本机服务由客户端管理' : view.setup?.service === 'external' ? '复用本机已有服务，不接管进程' : '使用已确认的设备与连接'}</p></div></li>
             <li><span>{connected ? '✓' : '…'}</span><div><strong>{connected ? '最近记录已同步' : '记录同步中，尚未确认完成'}</strong><p>{view.spaces.map(space => space.error || space.runtimeName).join(' · ') || '正在等待服务提供会话记录'}</p></div></li>
             <li><span>○</span><div><strong>模型实际回复待验证</strong><p>尚未发送测试消息，也未产生模型调用；可以进入聊天后验证。</p></div></li></ul>
-          <footer><button onClick={() => setStep(returnStep)}>查看连接设置</button><button className="primary" onClick={onDone}>{connected ? '进入小幽 →' : '查看缓存与连接状态 →'}</button></footer>
+          <footer><button onClick={() => setStep(returnStep)}>查看连接设置</button><button className="primary" onClick={onDone}>{connected ? '进入小鱼 →' : '查看缓存与连接状态 →'}</button></footer>
         </>}
       </section>
     </div>

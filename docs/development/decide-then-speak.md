@@ -5,23 +5,23 @@
 # Decide, then speak
 
 Status: opt-in implementation (2026-10-20), Runtime 0.19.0. Phase 1 is implemented
-behind `xiaoyou.decide_first`, default off. Mac baseline collection and live
+behind `xiaoyu.decide_first`, default off. Mac baseline collection and live
 acceptance are pending; this is not the default path. The owner asked to redesign
-how the Runtime keeps what Xiaoyou says consistent with what she does. It must satisfy the
+how the Runtime keeps what Xiaoyu says consistent with what she does. It must satisfy the
 [cross-stack reliability rules](cross-stack-reliability.md), above all the 3-second first-response
 contract.
 
 ## Where this came from
 
 A screen recording from the owner's phone (App 0.25.1, Runtime 0.18.1) of one exchange: the owner asked her to
-look back over the past month as well. Xiaoyou handed the work to the `project` helper and later retold its result. The
+look back over the past month as well. Xiaoyu handed the work to the `project` helper and later retold its result. The
 recording showed three problems:
 
 | Seen | Cause | Fixed in |
 | --- | --- | --- |
 | Two acknowledgements in a row ("OK, I'll have project look" then "Done, project is on it") | After a successful hand-off the tool-talking loop asked her for one more round, and she reworded what she had already said | Runtime 0.18.2 (`dsh_stream.run`: once she has spoken and a hand-off succeeds, the turn ends) |
 | The retold result appeared two or three times while it was being written, each with its own task card | The Runtime sends the words being written both as the message `<run>-summary:reply` and as the card's `summary_partial`; the App drew both | App 0.25.2 (`ChatHistory`: the card's copy is used only when no such message exists) |
-| One task card under every reply of the task | `chatRow` attached a receipt to every Xiaoyou message of a dispatched card | App 0.25.2 (the card is shown only under the task's latest reply) |
+| One task card under every reply of the task | `chatRow` attached a receipt to every Xiaoyu message of a dispatched card | App 0.25.2 (the card is shown only under the task's latest reply) |
 | The second bubble of a reply vanished for half a second and came back | A task state change rebuilt the row and replayed the bubble fade-in (the second bubble waits 450 ms) | App 0.25.2 (rows rebuilt in place do not fade in again) |
 
 The Runtime fix in 0.18.2 is a stopgap of the same kind as the reminder discussed below. This design
@@ -54,7 +54,7 @@ The phone conversations from 10-20 evening onward live on the Mac Runtime only. 
 tool sessions and its log ends on 10-17. Before changing behavior, collect on the Mac:
 
 ```bash
-python3 tools/reminder_stats.py <config_dir or workdir>/xiaoyou-stream-sessions \
+python3 tools/reminder_stats.py <config_dir or workdir>/xiaoyu-stream-sessions \
   --log runtime/state/runtime-stderr.log
 ```
 
@@ -149,7 +149,7 @@ If they do not, two fallbacks keep the contract, chosen by measurement:
 
 1. **Phase 0: evidence.** Run the script on the Mac and write the numbers into this document.
 2. **Phase 1: telemetry and flag.** Add the per-turn log line, and implement D/S behind a config flag
-   (`xiaoyou.decide_first`, default off). Unit tests (`runtime/tests/test_decision.py`
+   (`xiaoyu.decide_first`, default off). Unit tests (`runtime/tests/test_decision.py`
    and `runtime/tests/test_streaming.py`) cover:
    - a hand-off spoken once;
    - a lookup followed by words;
@@ -191,7 +191,7 @@ Each phase reports in the delivery format of the [reliability rules](cross-stack
   rerun together. The static and complete gates stop at actionlint's unsupported
   Windows platform; ESP-IDF 5.5.3 is also unavailable. Do not claim a full gate
   pass. First response <=3s, device recovery, multi-end sync and phone install
-  remain NOT RUN. Evidence logs are under `%LOCALAPPDATA%/XiaoyouBuild/`.
+  remain NOT RUN. Evidence logs are under `%LOCALAPPDATA%/XiaoyuBuild/`.
 - **Windows deployment (2026-10-21).** Runtime 0.19.0 is healthy under the existing
   keepalive supervisor, listening on loopback and Tailscale; authenticated agent
   and feed reads passed. `decide_first` remains off. App 0.26.1 and the four-file
@@ -207,7 +207,7 @@ Each phase reports in the delivery format of the [reliability rules](cross-stack
   These are single API samples, not client-rendered TTFT or a rollout baseline;
   no owner conversation or task was changed by the probes.
 - **Recovery.** State files were copied to
-  `%LOCALAPPDATA%/XiaoyouBuild/runtime-backup-pre-0.19.0-20261020` before the
+  `%LOCALAPPDATA%/XiaoyuBuild/runtime-backup-pre-0.19.0-20261020` before the
   idle service restart. No local configuration or state schema was changed.
   Keep the opt-in flag off; the existing legacy path is the current recovery
   route. Do not restore a snapshot over live work without a separate review.

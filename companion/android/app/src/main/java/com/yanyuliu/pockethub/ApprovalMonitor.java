@@ -32,7 +32,7 @@ final class ApprovalMonitor {
         RuntimeClient.Target selected = RuntimeClient.selected(context);
         synchronized (ApprovalMonitor.class) {
         if (app == null) { start(context); return; }
-        // 每组只盯一个地址（同一个小幽网络、同一台 Runtime 的几个地址是一组）：同一个授权只出现一次。
+        // 每组只盯一个地址（同一个小鱼网络、同一台 Runtime 的几个地址是一组）：同一个授权只出现一次。
         // 优先现在选中的那个，其次没在连续失败的，再其次排在前面的。
         Map<String, RuntimeClient.Target> chosen = new java.util.LinkedHashMap<>();
         for (int index = 0; index < Math.min(targets.size(), RuntimeClient.MAX_TARGETS); index++) {
@@ -80,7 +80,7 @@ final class ApprovalMonitor {
                 RuntimeClient.Target origin = target;
                 try {
                     if (!known) {
-                        // 先问一次它是谁（属于哪台 Runtime、哪个小幽网络），好按组只盯一个。
+                        // 先问一次它是谁（属于哪台 Runtime、哪个小鱼网络），好按组只盯一个。
                         RuntimeClient.learn(app, origin);
                         known = true;
                     }

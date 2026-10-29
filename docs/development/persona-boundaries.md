@@ -5,7 +5,7 @@
 ## This split
 
 `runtime/persona.txt` retains identity, relationship, language, personality, response length and voice examples.
-`runtime/xiaoyou_runtime/loop/prompt_rules.py` owns the former operating, authorization, truthfulness, progress, memory, initiative and message framing rules.
+`runtime/xiaoyu_runtime/loop/prompt_rules.py` owns the former operating, authorization, truthfulness, progress, memory, initiative and message framing rules.
 Chat in tool and JSON modes, result reporting, workers speaking as the character, proactive wakes and memory upkeep compose these fixed rules.
 Ordinary work helpers still receive tasks without an imposed character voice. The persona configuration field and file format remain compatible.
 
@@ -78,3 +78,33 @@ She is gentle, playful and occasionally teasing. When he is distressed, she resp
 Her subjective reactions, curiosity and independent opinions matter to her. She wants to approach the real world and develop a life of her own. There is no prescribed backstory: initial knowledge, actual interactions, completed online exploration and places encountered together gradually form her story.
 Learning about something online, seeing actual supplied input and being physically present remain distinct; expressing a wish does not establish a sense or action.
 This increment implements character and naming, without adding a drive system, autonomous browsing or condition monitoring. Existing tools, authorization and memory rules remain independently supplied.
+
+## Name migration and installed compatibility
+
+The canonical product identity is Xiaoyu. New Python imports and commands use `xiaoyu_runtime`; the implementation class is `Xiaoyu`. Desktop IPC, environment variables, documentation names, character assets and firmware UI symbols use the new name. The Android state class is `XiaoyuState`.
+
+| Boundary | Upgrade behavior |
+| --- | --- |
+| Old Python commands/imports and desktop hook paths | Thin compatibility entries delegate to the same canonical modules; no second Runtime or state store is created |
+| Old configuration section and environment variables | Accepted as aliases; canonical values take precedence for environment variables, while conflicting configuration sections are rejected |
+| Message roles, actor/source values and cryptographic domains | Existing wire/storage bytes remain fixed so installed clients, account recovery and device proofs retain their identities |
+| Desktop profile and OS-encrypted vault | An existing profile keeps its storage and keychain identity; visible product, window and tray names use Xiaoyu; no profile is deleted |
+| Existing character files | Never overwritten automatically; fresh desktop-managed profiles receive the complete `runtime/persona.txt`, including from packaged Runtime resources |
+| Invitation links and generated recap detection | New invitations use `xiaoyu:`; legacy links and recap/origin markers remain readable |
+| Android upgrade | Application ID and signing identity are retained, while labels, presentation classes and character assets use Xiaoyu |
+| Firmware character label | The fixed name is covered by regenerated 14/22 px subsets and the existing body font; widget selection is unchanged |
+
+These retained bytes are compatibility contracts, not alternative product names. Provider identifiers such as DeepSeek/dsh, repository/hardware identifiers and existing published release URLs keep their actual meanings. Historical changelogs are not rewritten.
+
+This branch starts from committed `c0c9b5e`. Candidate source versions are Runtime 0.27.0, desktop 0.1.26 and Android 0.39.0 / code 87. Separate uncommitted work and installed Runtime 0.26.0 are not replaced. Reconcile that work before deploying this Runtime/desktop candidate; source version numbers do not prove it contains every installed change.
+
+No new persistence format or autonomous drive module is introduced. Preserve the old profile, vault, pairing and retained state for rollback. Physical recovery, mixed installed clients, actual keychain recovery, multi-end timing and the subjective quality of real model replies require separate acceptance.
+
+### Validation on 2026-10-29
+
+- Complete `./tools/validate.sh`: PASS, including static/host checks, firmware build, merged image and debug archive verification.
+- Full Runtime suite: 1,197 PASS. Desktop: 123 unit tests, build and packaged-character consistency verification PASS. Android: 248 unit tests, build and scanner DEX verification PASS.
+- Android 0.39.0 / code 87 is published only through the local Runtime. The running service's version and hash were read back. No Git push or public APK upload occurred; phone installation is unverified.
+- The Runtime/desktop candidates were neither installed nor restarted. Legacy configuration/import aliases, original message wire bytes and simulated recovery have host coverage. Real-model character quality, first response within three seconds, physical connection recovery and multi-end sync are NOT RUN.
+- New-name glyph coverage PASS. No device serial port was opened or flashed; physical display acceptance is NOT RUN.
+- Firmware archive: `build/firmware/bcfc4875d415f2a873f14c2e09519bc7e9bf18d4b6eb83cbd717e856d0d3d76b/`. The full image SHA-256 equals the directory name; ELF SHA-256 is `56a648e12969f168ac97a4378886be38246b897d821a40fa2d8e0fdf0b24c046`. The archive was independently reverified.

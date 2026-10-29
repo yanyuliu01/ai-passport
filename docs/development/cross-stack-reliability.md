@@ -6,7 +6,7 @@
 
 ## Scope and authority
 
-Every agent changing Pocket Hub (`companion/`), Xiaoyou Runtime (`runtime/`), or
+Every agent changing Pocket Hub (`companion/`), Xiaoyu Runtime (`runtime/`), or
 firmware (`main/`, `components/`, and firmware configuration/tools) must read
 this document before editing. It also applies to changes in prompts, models,
 dependencies, persistence, routing, permissions, or deployment that affect these

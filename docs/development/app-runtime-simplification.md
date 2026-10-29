@@ -7,7 +7,7 @@ here and not yet implemented. The evidence is a reading of the Android App and R
 (current working tree, uncommitted changes included) seven device screenshots from the owner
 (sections 6 and 7), Runtime records and Windows session records (section 9). **Not every flow was walked through on the device.** Items marked "unverified" are inferred from code and must be reproduced before a fix.
 
-The complete plan is the [Xiaoyou complete plan](xiaoyou-agent-model.md); this list records
+The complete plan is the [Xiaoyu complete plan](xiaoyu-agent-model.md); this list records
 only issues and evidence, and the plan decides how and in what order they are fixed.
 
 Related: [unified message model](unified-message-model.md),
@@ -53,10 +53,10 @@ Runtime owns state.**
 
 | ID | Issue | Evidence | Root |
 | --- | --- | --- | --- |
-| U1 | The user must understand the system: pairing asks to paste an invite or a connection string; the empty state tells the user to run `python3 -m xiaoyou_runtime --pair`; pairing has a plain and an encrypted mode; the UI shows Runtime, token, relay, source computer, other end | Pairing and empty-state text in `MainActivity` | R2 |
+| U1 | The user must understand the system: pairing asks to paste an invite or a connection string; the empty state tells the user to run `python3 -m xiaoyu_runtime --pair`; pairing has a plain and an encrypted mode; the UI shows Runtime, token, relay, source computer, other end | Pairing and empty-state text in `MainActivity` | R2 |
 | U2 | "Not connected" has 6-7 wordings; offline screens repeat "cached data" and "quota may have changed" disclaimers; switching from LAN to Funnel is only logged | `refreshDrawer`, usage page, `watchLoop` | R2 |
 | U3 | Errors are written for developers: a Java exception after "cannot reach Runtime", "Runtime returned 500", "wrong token (401)", "old Runtime may not support this" | Exception text in `RuntimeClient` | R2 |
-| U4 | Sending is blocked: while Xiaoyou replies, the composer says to wait for the previous reply although the transport is concurrent; images upload first and a failure must be retried or removed before sending; voice exposes where recognition runs and model download state, with a matching settings switch | Composer, image drafts and voice in `MainActivity` | R1 |
+| U4 | Sending is blocked: while Xiaoyu replies, the composer says to wait for the previous reply although the transport is concurrent; images upload first and a failure must be retried or removed before sending; voice exposes where recognition runs and model download state, with a matching settings switch | Composer, image drafts and voice in `MainActivity` | R1 |
 | U5 | Multi-end rules are explained only after the user acts: toasts saying a desktop session must continue on its source computer, desktop conversations are read-only, a request was handled elsewhere, a source approval is being verified | Several toasts | R3 |
 | U6 | Too many "in progress" wordings: thinking, speaking, responding, helper stage text, waiting for your confirmation, working on a title | Chat and helper status | R2 |
 
@@ -65,7 +65,7 @@ Runtime owns state.**
 | ID | Issue | Evidence | Root |
 | --- | --- | --- | --- |
 | I1 | Task detail has 7 header buttons; 5 answer the same question "what did this task do" (activity, full activity, original session, shared history, full native record), plus "view all N records", "pending supplements" and "pending confirmations" | Task detail in `MainActivity` | R1 |
-| I2 | Two entry points for talking to Xiaoyou: home (`TAB_HOME`) and main chat (`TAB_CHAT`) | Drawer avatar row and main-chat row | R1 |
+| I2 | Two entry points for talking to Xiaoyu: home (`TAB_HOME`) and main chat (`TAB_CHAT`) | Drawer avatar row and main-chat row | R1 |
 | I3 | Too many nouns: main chat, side chat, work records, task, helper, native session, shared history, unified directory, execution directory, source, archived; to the user there are only "chats" and "work in progress" | Drawer and page titles | R2 |
 | I4 | Management features sit in the main flow: unified directory and sync-local-marks on the work page, add-source on home, send/clear test messages | `MainActivity` | - |
 | I5 | One confirmation has several paths: notification approval, allow/deny dialog, "pending confirmations" on the task page, "view source task" in the dialog, and a "verifying source approval" state | Approval code | R1 |
@@ -93,7 +93,7 @@ U1 (paste an invite or connection string) and how C8 shows up on screen. New fin
 | V2 | Task detail | Source info (host name, agent, working directory, first prompt) sits between buttons; seven full-width buttons of equal size are stacked with no hierarchy | R1 R4 |
 | V3 | Unified directory | The same items appear in three places: drawer side chats, work records and the unified directory (which also lists the main chat); the directory is a bottom sheet with a manual refresh button | R1 |
 | V4 | Unified directory, drawer | Many untitled items: several "Untitled Codex session" rows (some with the same project) and several "New side chat" rows. Side chats should be titled from their first message (the Runtime's `conversations.py` has this logic) but this did not happen, or empty side chats are never cleaned up (unverified) | R2 |
-| V5 | Unified directory | Each row repeats the host name; empty fields leave a trailing separator dot; the internal code name "DS" appears; rows are grey default system buttons, unlike the white outlined buttons elsewhere | R4 |
+| V5 | Unified directory | Each row repeats the host name; empty fields leave a trailing separator dot; the internal code name "Xiaoyu" appears; rows are grey default system buttons, unlike the white outlined buttons elsewhere | R4 |
 | V6 | Quick review | About ten lines of policy text in one dialog; "allow this batch only", "auto-allow read-only tools" and "confirm one by one" are mixed; a duration dropdown plus "turn off auto-allow" and "reapply with the chosen duration" control one switch; it says the page refreshes every 3 seconds yet offers an "update status" button; all controls show even when nothing is pending | R1 R4 |
 | V7 | Devices and computers | The computer list shows raw IP and tailnet addresses, and the same Mac appears twice (by IP and by domain), which is C8 on screen; delete is a hidden long press; pairing has three ways: a text field, scan, and a paste-invite button | R2 R4 |
 | V8 | Devices and computers | The firmware section shows build ids, hashes and free memory ("lowest ever 31 KB"), and the version list uses release notes as button text; the header lists Bluetooth permission, notification access and "unprocessed messages: 0" like a debug panel | R4 |
@@ -111,32 +111,32 @@ The owner asked in the main chat to test the new Runtime. The screenshot and the
 | --- | --- | --- | --- |
 | M1 | Old information treated as current: the reply said the last restart was 0.20.0 and the image work was not yet built, while the Runtime was already on 0.22.x and a new version had just gone live. Current-state facts (version, deployment, which machine runs what) have no "answer from a live query" rule and are inferred from old reports in chat and shared history; long-term memory `owner.md` holds only 3 notes, and such facts do not belong there anyway | c348 reply text | R3 |
 | M2 | Asking about itself needs a helper: "which version is the Runtime" is something the Runtime knows, yet CC was dispatched to check on the Mac. There is no self-inspection (version, deployment state, running cards, recently finished cards) | c348 dispatched to cc | R1 |
-| M3 | What is said does not match the actual state: c348 was cancelled, yet c349 still says CC was dispatched and Xiaoyou is watching. A helper's cancellation does not reach the conversation, so the owner waits for a result that will never come | c348 state cancelled, c349 reply | R1 |
-| M4 | One request sent twice produced two cards and two overlapping replies: the first showed no progress, so the owner sent it again (different message ids); the first became c348 and its interim reply was written into the main chat as Xiaoyou, then the reply to the second said the same thing again | Two owner messages; c348 reply authored as xiaoyou | R1 |
-| M5 | "This" is not resolved: asked to let Claude finish "this", Xiaoyou could not find the card and asked the owner for an id like "c3". The just-finished c340 was in the recent record; the conversation carries only the last 6-8 turns and references are not linked to recently active or finished cards; asking the user for a card id also hands internal ids to the user | Shared-history conversation; `BACKGROUND_TURNS`, `SEED_TURNS` in `xiaoyou.py` | R2 R4 |
+| M3 | What is said does not match the actual state: c348 was cancelled, yet c349 still says CC was dispatched and Xiaoyu is watching. A helper's cancellation does not reach the conversation, so the owner waits for a result that will never come | c348 state cancelled, c349 reply | R1 |
+| M4 | One request sent twice produced two cards and two overlapping replies: the first showed no progress, so the owner sent it again (different message ids); the first became c348 and its interim reply was written into the main chat as Xiaoyu, then the reply to the second said the same thing again | Two owner messages; c348 reply authored as xiaoyu | R1 |
+| M5 | "This" is not resolved: asked to let Claude finish "this", Xiaoyu could not find the card and asked the owner for an id like "c3". The just-finished c340 was in the recent record; the conversation carries only the last 6-8 turns and references are not linked to recently active or finished cards; asking the user for a card id also hands internal ids to the user | Shared-history conversation; `BACKGROUND_TURNS`, `SEED_TURNS` in `xiaoyu.py` | R2 R4 |
 | M6 | Under the bubble a link opens the source and attachments of the cancelled check card without showing that it was cancelled; the send button keeps spinning while the composer is empty | Screenshot | R4 |
 | M7 | One message popped two bubbles, the second answering a hidden system nudge: the owner said they just wanted to see how she replies; her first segment said she would align on what to test "before acting", which the "said it would act but called no tool" regex took as a promise, so the Runtime silently appended a nudge the owner cannot see (`PROMISE_NUDGE`) and asked again. She called no tool and only said she would just chat and not touch any tools. The code drops post-nudge text only when a tool is called after the nudge; otherwise that line is joined into the reply (`JOIN`, i.e. `---`) and becomes a second bubble | `nudged` branch of the tool loop in `dsh_stream.py`; c352 reply | R1 |
 | M8 | Slow: that turn made two serial model calls, and the second is not streamed (`show=False`), so the reply completes only after the second call and both bubbles appear together. Earlier logs already show 1.9-3.9 s to first text for one call; a second serial call clearly breaks the 3-second first-response rule | `first_text` in `restart-runtime-*.log`; same branch | R1 |
-| M9 | Multi-bubble splitting relies on the prompt asking her to write `---`, and the tool loop uses the same joiner: one separator means both "she wants two messages" and "this is another model call's output", so the UI cannot tell them apart | Splitting prompt in `xiaoyou.py`, `voice_tools.JOIN` | R2 |
+| M9 | Multi-bubble splitting relies on the prompt asking her to write `---`, and the tool loop uses the same joiner: one separator means both "she wants two messages" and "this is another model call's output", so the UI cannot tell them apart | Splitting prompt in `xiaoyu.py`, `voice_tools.JOIN` | R2 |
 | M10 | In c351 she still says the Runtime status check has not come back, although c350 was already cancelled: A1 again | c351 reply | R1 R3 |
 
 Conclusion (owner agreed, 2026-10-22): the hidden nudge is unsound in itself (guessing by regex
 after the fact, injecting a hidden message into the session, an extra serial call, speaking first
 and patching later), so it is removed entirely; see step 1 in section 6 of the
-[complete plan](xiaoyou-agent-model.md).
+[complete plan](xiaoyu-agent-model.md).
 
 Direction: remove the hidden "said it would act but called no tool" nudge and let
 [decide, then speak](decide-then-speak.md) keep words and actions consistent; split bubbles with a
 marker independent of the tool loop. Answer current state from live queries, and let the Runtime answer about itself; a
 helper's cancellation or failure must return to the originating conversation as one line from
-Xiaoyou; one request gets one reply; "this" defaults to the most recently active or finished
+Xiaoyu; one request gets one reply; "this" defaults to the most recently active or finished
 task, and the owner is never asked for an id.
 
-## 8. Main agent (Xiaoyou) state
+## 8. Main agent (Xiaoyu) state
 
 ### 8.1 Inventory
 
-What Xiaoyou knows and is doing is spread across several places with no single state model:
+What Xiaoyu knows and is doing is spread across several places with no single state model:
 
 | Layer | Stored in | Values / content |
 | --- | --- | --- |
@@ -155,9 +155,9 @@ forces them to agree.
 
 | ID | Issue | Evidence | Root |
 | --- | --- | --- | --- |
-| A1 | Cancellation is not told to her: `cancel()` only changes the card and stops the task; `_finished` and `_close` return early on a cancelled card, so `transcript` never gains a line saying the task was cancelled. Her view stays at "dispatched, waiting for the result" | `cancel`, `_finished`, `_close` in `xiaoyou.py`; the c349 reply after c348 was cancelled | R1 R3 |
-| A2 | Every chat turn opens a card: when she dispatches nothing, `task_open` still opens a `done` card for the turn (c349 is such a card with no helper, its brief being the whole reply). 15 of the 100 retained cards are like this. Work records fill with chat, and because she sees only the last 5 finished cards, a few chat turns push the task that just finished out of view, which is likely why M5 could not resolve "this" (inferred) | `kind == "none"` branch in `xiaoyou.py`; `cards.json` | R2 |
-| A3 | A conversation turn and a task are not separated: the owner's words, her reply, the dispatched task and its result hang on one card; in c348 the owner's message was filed under the task card and the helper's interim reply was written into the main chat as Xiaoyou | c348 messages in `cards.log.jsonl` | R2 |
+| A1 | Cancellation is not told to her: `cancel()` only changes the card and stops the task; `_finished` and `_close` return early on a cancelled card, so `transcript` never gains a line saying the task was cancelled. Her view stays at "dispatched, waiting for the result" | `cancel`, `_finished`, `_close` in `xiaoyu.py`; the c349 reply after c348 was cancelled | R1 R3 |
+| A2 | Every chat turn opens a card: when she dispatches nothing, `task_open` still opens a `done` card for the turn (c349 is such a card with no helper, its brief being the whole reply). 15 of the 100 retained cards are like this. Work records fill with chat, and because she sees only the last 5 finished cards, a few chat turns push the task that just finished out of view, which is likely why M5 could not resolve "this" (inferred) | `kind == "none"` branch in `xiaoyu.py`; `cards.json` | R2 |
+| A3 | A conversation turn and a task are not separated: the owner's words, her reply, the dispatched task and its result hang on one card; in c348 the owner's message was filed under the task card and the helper's interim reply was written into the main chat as Xiaoyu | c348 messages in `cards.log.jsonl` | R2 |
 | A4 | Cancellation does not record who initiated it: c348 was cancelled 11 seconds after it started and c350 after 19 seconds; the record only says Claude Code was stopped. Possible sources are the App stop button (behind a confirmation), her own decision, another Runtime in the mesh, the desktop client, or a test script calling `/v1/cards/{id}/cancel`; they cannot be told apart today | End of both cards in `state/audit` | R3 |
 | A5 | The same request repeats: the owner sent "test the new runtime" three times (c348, c349, c350); each time she decided and dispatched again, and in the third reply she first said the check was still running and then, in the same reply, that it had been cancelled | Three owner messages; c350 reply | R1 |
 | A6 | Too many state values, one set per module, so each screen translates them its own way (see the many "in progress" wordings in U6) | Inventory in 8.1 | R2 |
@@ -193,17 +193,17 @@ unstable.
 | N3 | Too many route kinds: Tailscale direct IP, Funnel domain, encrypted relay node (WSS over IPv6, needing a firewall rule for port 18795), LAN. Each behaves differently (the relay has no event stream), which one works depends on the network (apartment Wi-Fi, cellular, Mac egress in the US), and the user picks from raw addresses | "Devices and computers" screenshot; Windows record | R1 R4 |
 | N4 | Pairing is fragile: the QR code lasts 2 minutes and must be regenerated by an agent on the computer; the 0.30.1 scan page crashed on open (AndroidX classes missing from the APK, fixed in 0.31.2), and the release flow has no check that the final APK contains required classes | Windows record | R4 |
 | N5 | Versions differ across nodes and nothing stops it: Mac runs 0.23.1, Windows runs 0.20.0, the GitHub default branch is 0.20.0, and App update channels are published per Runtime (0.30.1 / 0.31.2). There is no version negotiation or minimum version between App and Runtime or among mesh peers | Windows record; version comparison record | R3 |
-| N6 | Unclear which computer does the work: with the phone on Windows, Xiaoyou asked whether the code was on the Mac or Windows and said the Mac's codex cannot reach Windows (c375); the dispatched codex timed out reading source (c373). Which machine a helper runs on is not part of the state she sees | c373, c375 | R2 R3 |
+| N6 | Unclear which computer does the work: with the phone on Windows, Xiaoyu asked whether the code was on the Mac or Windows and said the Mac's codex cannot reach Windows (c375); the dispatched codex timed out reading source (c373). Which machine a helper runs on is not part of the state she sees | c373, c375 | R2 R3 |
 | N7 | Updated without restart or notice: the source is updated while the running service stays old, mentioned only in an agent's report; the UI does not show that a computer runs an old version | End of the Windows record | R3 R4 |
 | N8 | Desktop session observation has chain side effects: around 21:47 on 10-22, nine Codex sessions appeared at once (c359-c367, session ids starting `01a163dd`), opening with recap preambles ("the owner recently talked about this elsewhere...") nested 4-5 levels deep, plus other sessions' opening prompts (c365 carries the first prompt of this Claude Code session yet is labelled codex). `project_brief.recap_text` takes the latest session as recap material without excluding sessions that start with a recap, so it nests deeper each time; who started this batch is not yet known (unverified) | `project_brief.py`; c359-c368 in `cards.json` | R1 R3 |
 | N9 | In the synced Windows session record every message carries the same time, 22:53 (import time), losing the original order and times | `state/mesh/history/Windows-a620ba/codex-01a1641a...md` | R4 |
 | N10 | Sync restarts from zero and results cannot reach the phone until it catches up: after an App restart or a switch to another computer the sync cursor starts over (sync progress lives only in memory; `presentation_v1` can also reset it); the Mac needs 415 pages, about 10 minutes over Funnel. The App used to fetch the feed once right after a task finished, which bypassed this; once cleanup batch 3 removed that step, a Mac task result never reached the phone in the 10-23 device test although the Runtime had it. The owner decided not to restore it in the App and to fix it on the Runtime side (complete plan section 6, "one state / automatic connection"). It is also part of why "refresh is slow". **Fixed on the Runtime side in R4.1 (the snapshot comes in one page); not yet verified on the device** | 10-23 device test; a local catch-up from zero took 415 pages | R1 R3 |
 | N11 | Observed desktop sessions leak into the phone's main-chat history: several replies from this Claude Code session and one owner question appear in the phone's record of the Windows conversation, two of them stuck at "generating". This is likely why the send button keeps spinning (the App thinks a reply is unfinished) (unverified) | Phone `conversation_history.xml`, 10-23 | R1 R3 |
-| N12 | Words and state disagree again: the task had already finished when the owner said to stop it; Xiaoyou replied that it had stopped, and the task result then appeared in the chat | c379, c382 | R1 |
+| N12 | Words and state disagree again: the task had already finished when the owner said to stop it; Xiaoyu replied that it had stopped, and the task result then appeared in the chat | c379, c382 | R1 |
 | N13 | Markdown is shown raw: `**`, backticks and similar appear in the home card and main chat instead of bold or code styling. **The Runtime part is fixed in R5 (runs no longer contain markers, and `presentation.plain` covers the home card); the App drawing the new styles and the device check are pending** | 10-23 device screenshots | R4 R5 |
 
 The interaction design is in sections 1 (automatic connection after first pairing) and 3
-(several computers still do the work once) of the [complete plan](xiaoyou-agent-model.md).
+(several computers still do the work once) of the [complete plan](xiaoyu-agent-model.md).
 
 Direction: the user sees computers, not addresses; the App probes routes, switches by health and
 retires dead routes automatically, and new routes arrive through the mesh without another scan;
@@ -213,7 +213,7 @@ an auxiliary failure never poses as a disconnect; recap material never quotes re
 
 ### 9.1 History across computers (2026-10-27, Windows main chat)
 
-In the main chat on the Windows Runtime the owner asked whether Xiaoyou could see the chats on
+In the main chat on the Windows Runtime the owner asked whether Xiaoyu could see the chats on
 the Mac. She first said "only what is local to this Mac", then said a helper had to be sent to
 the Mac, and finally asked the owner to choose "which computer". The owner's expectation: **after
 signing in with one account, every end has the same history.** Evidence: Windows
@@ -222,8 +222,8 @@ of problem as N6.
 
 | ID | Problem | Evidence | Root cause |
 | --- | --- | --- | --- |
-| H1 | She gets her own location wrong: the main chat is shared by both Runtimes through the mesh, but a turn does not record which Runtime answered it. A 10-26 answer given on the Mac ("I can see the records kept on this Mac") entered the Windows transcript, and Xiaoyou on Windows repeated "this Mac". No statement of "which computer you are on now" was found in the prompt (inferred, not checked section by section) | The same turn in the Mac mesh log and the Windows `transcript.json`; replies at 10-27 23:0x | R2 R3 |
-| H2 | She cannot see history that has already been synced: read-only copies of the Mac's Claude Code and Codex sessions are on Windows under `state/mesh/history/weihaos-MacBook-Air-b067ca/` (7 updated on 10-27), but only helpers are told about them, through `elsewhere()` in `api/shared_history.py`. Her own `recall` (`loop/xiaoyou.py`) searches only local transcript segments, memory and this chat's cards, so she said a helper had to look on the Mac. Same problem as M2 | `delivery/mesh_share.py`, `api/shared_history.py`, `recall` in `loop/xiaoyou.py` | R1 |
+| H1 | She gets her own location wrong: the main chat is shared by both Runtimes through the mesh, but a turn does not record which Runtime answered it. A 10-26 answer given on the Mac ("I can see the records kept on this Mac") entered the Windows transcript, and Xiaoyu on Windows repeated "this Mac". No statement of "which computer you are on now" was found in the prompt (inferred, not checked section by section) | The same turn in the Mac mesh log and the Windows `transcript.json`; replies at 10-27 23:0x | R2 R3 |
+| H2 | She cannot see history that has already been synced: read-only copies of the Mac's Claude Code and Codex sessions are on Windows under `state/mesh/history/weihaos-MacBook-Air-b067ca/` (7 updated on 10-27), but only helpers are told about them, through `elsewhere()` in `api/shared_history.py`. Her own `recall` (`loop/xiaoyu.py`) searches only local transcript segments, memory and this chat's cards, so she said a helper had to look on the Mac. Same problem as M2 | `delivery/mesh_share.py`, `api/shared_history.py`, `recall` in `loop/xiaoyu.py` | R1 |
 | H3 | "History" has several layers and she mixes them: the main chat (mesh-synced, on both), each computer's desktop sessions (read-only copies elsewhere), each computer's cards (copies only). She finally asked the owner to pick "the Mac's or the Windows'", handing the internal structure to the user | Replies at 23:1x | R2 R4 |
 | H4 | Synced data is noisy: on 10-27 the Mac mesh log carried 821 messages, 327 of them automation `<heartbeat>` entries in the `__desktop__` conversation, which nobody said | `state/mesh/b067ca….jsonl` | R4 |
 
@@ -253,7 +253,7 @@ helper; heartbeats and other automatic messages stay out of chats and sync.
 | Debug information | Log, test buttons, firmware hashes in user settings | Behind one hidden "developer" entry |
 | Quick review | About 10 lines of text and 5 controls | One switch with a duration plus the pending list; at most one line of explanation |
 | Current-state answers | From old records, possibly stale | From live queries; say so when unavailable |
-| Helper cancel / failure | Invisible in chat; Xiaoyou still says it is checking | One line in the originating chat; promises updated |
+| Helper cancel / failure | Invisible in chat; Xiaoyu still says it is checking | One line in the originating chat; promises updated |
 | Replies per request | Possibly two cards and two overlapping replies | One |
 | Cards opened by chat turns | One per turn | 0 |
 | Task state values | 7 card states plus a dozen more across modules | 6 |
@@ -266,7 +266,7 @@ helper; heartbeats and other automatic messages stay out of chats and sync.
 ## 11. Suggested order
 
 > Overall execution follows the implementation order in section 6 of the
-> [complete plan](xiaoyou-agent-model.md); the order below applies to this list alone.
+> [complete plan](xiaoyu-agent-model.md); the order below applies to this list alone.
 
 1. Low-risk cleanup: remove feed and old-version compatibility (C3, part of S4), unify the send
    entry point and the background request wrapper (C4-C7), unify the identity key (C8).
@@ -286,7 +286,7 @@ helper; heartbeats and other automatic messages stay out of chats and sync.
 - ~~Whether merging home and main chat (I2) conflicts with section 7 of
   [conversation presentation](conversation-presentation.md), which gives the phone home a voice
   bar and generated content, and which one wins.~~ Decided 10-24: one entry and one conversation
-  in voice and text forms; see section 8 of the [complete plan](xiaoyou-agent-model.md).
+  in voice and text forms; see section 8 of the [complete plan](xiaoyu-agent-model.md).
 - Whether sync delivers unfinished messages often enough to replace the per-message event stream
   (the precondition for C1; measure first).
 - Whether the phone still needs to upload history (C10); remove it if not.

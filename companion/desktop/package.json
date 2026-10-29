@@ -1,8 +1,8 @@
 {
-  "name": "xiaoyou-desktop",
-  "version": "0.1.20",
+  "name": "xiaoyu-desktop",
+  "version": "0.1.26",
   "private": true,
-  "description": "Xiaoyou desktop companion",
+  "description": "Xiaoyu desktop companion",
   "author": "AI Passport contributors",
   "license": "MIT",
   "type": "module",
@@ -20,8 +20,8 @@
     "relay": "node dist-main/relay/server.js"
   },
   "build": {
-    "appId": "com.folotoy.xiaoyou",
-    "productName": "小幽",
+    "appId": "com.folotoy.xiaoyu",
+    "productName": "小鱼",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"

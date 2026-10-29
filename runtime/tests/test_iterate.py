@@ -9,15 +9,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from test_runtime import TOKEN, TempDirCase, start_runtime
-from xiaoyou_runtime.iterate import plugins as plugins_module
-from xiaoyou_runtime.iterate.builtin import planner, sources
-from xiaoyou_runtime.iterate.objects import Issue
-from xiaoyou_runtime.iterate.pipeline import Runner
-from xiaoyou_runtime.iterate.scheduler import Scheduler
-from xiaoyou_runtime.iterate.settings import IterateConfigError, parse
-from xiaoyou_runtime.iterate.events import EventError, EventStore, EventType, Types, flat
-from xiaoyou_runtime.iterate.store import IssueBook, Lock, Busy, Runs
-from xiaoyou_runtime.helpers.model_gateway import Completion, GatewayError
+from xiaoyu_runtime.iterate import plugins as plugins_module
+from xiaoyu_runtime.iterate.builtin import planner, sources
+from xiaoyu_runtime.iterate.objects import Issue
+from xiaoyu_runtime.iterate.pipeline import Runner
+from xiaoyu_runtime.iterate.scheduler import Scheduler
+from xiaoyu_runtime.iterate.settings import IterateConfigError, parse
+from xiaoyu_runtime.iterate.events import EventError, EventStore, EventType, Types, flat
+from xiaoyu_runtime.iterate.store import IssueBook, Lock, Busy, Runs
+from xiaoyu_runtime.helpers.model_gateway import Completion, GatewayError
 
 NOW = 1_800_000_000.0
 JAVA = "companion/android/app/src/main/java/com/yanyuliu/pockethub/MainActivity.java"
@@ -172,7 +172,7 @@ class ReportCardTest(IterateCase):
         self.assertEqual(task["conversation"], "default")
         texts = [m["text"] for m in page["messages"] if m.get("task") == card]
         self.assertIn("改过的内容", texts)
-        from xiaoyou_runtime.iterate.notify import plain
+        from xiaoyu_runtime.iterate.notify import plain
         self.assertEqual(plain("# 标题\n\n## 版本方案\n内容"), "标题\n\n【版本方案】\n内容")
 
 
@@ -202,10 +202,10 @@ class MeshEventsTest(IterateCase):
         self.addCleanup(lambda: [mesh.close() for mesh in network.nodes.values()])
         a = Node(self, network, "Mac")
         b = Node(self, network, "Windows", peers=[a.url])
-        stored = EventStore(a.xiaoyou._config.state_dir, origin=a.service.runtime_id).accept(
+        stored = EventStore(a.xiaoyu._config.state_dir, origin=a.service.runtime_id).accept(
             {"events": [event("crash", 1, exception="Boom")]})
         a.mesh.publish_events(stored["events"])
-        b_store = EventStore(b.xiaoyou._config.state_dir)
+        b_store = EventStore(b.xiaoyu._config.state_dir)
         self.assertTrue(until(lambda: len(b_store.all()) == 1))
         self.assertEqual(b_store.all()[0]["origin"], a.service.runtime_id)
 
@@ -399,7 +399,7 @@ class ChatFeedbackTest(IterateCase):
         self.assertEqual(signals[0].data["category"], "app_bug")
         self.assertAlmostEqual(signals[0].data["confidence"], 0.67)
         self.assertEqual(cursor, {"at": NOW - 5})
-        self.assertEqual(sources.heuristic_category("小幽你又派错人了"), "agent_behavior")
+        self.assertEqual(sources.heuristic_category("小鱼你又派错人了"), "agent_behavior")
 
 
 class SchedulerTest(IterateCase):
@@ -464,8 +464,8 @@ class VersionPlanTest(IterateCase):
         self.assertEqual(IssueBook(self.state).issues[covered].status, "planned")
 
     def test_complaints_made_before_the_running_app_version_are_left_out(self):
-        from xiaoyou_runtime.iterate.builtin import detectors
-        from xiaoyou_runtime.iterate.objects import Signal
+        from xiaoyu_runtime.iterate.builtin import detectors
+        from xiaoyu_runtime.iterate.objects import Signal
         old = Signal("a", "chat.feedback", NOW, "chat_feedback", {"category": "app_ui", "text": "头像偏右", "before_release": True})
         new = Signal("b", "chat.feedback", NOW, "chat_feedback", {"category": "app_slow", "text": "同步有点慢", "before_release": False})
         issues = detectors.complaint_cluster(None, [old, new])
@@ -474,7 +474,7 @@ class VersionPlanTest(IterateCase):
 
 class ReleasePhaseTest(IterateCase):
     def test_use_right_after_a_release_or_before_installing_one_is_set_aside(self):
-        from xiaoyou_runtime.iterate.releases import phase
+        from xiaoyu_runtime.iterate.releases import phase
         releases = [{"at": NOW - 10 * 3600, "version": "0.20.0"}, {"at": NOW, "version": "0.21.0"}]
         self.assertEqual(phase(NOW - 9 * 3600, "0.20.0", releases), "settling")     # new version, 1 h in
         self.assertIsNone(phase(NOW - 3600, "0.20.0", releases))                    # ordinary use
@@ -483,8 +483,8 @@ class ReleasePhaseTest(IterateCase):
         self.assertIsNone(phase(NOW - 11 * 3600, "0.19.0", releases))               # before any known release
 
     def test_low_confidence_themes_become_not_doing(self):
-        from xiaoyou_runtime.iterate.builtin import version
-        from xiaoyou_runtime.iterate.objects import Issue
+        from xiaoyu_runtime.iterate.builtin import version
+        from xiaoyu_runtime.iterate.objects import Issue
         issue = Issue(fingerprint="quick_exit:1", detector="quick_exit", area="app", title="t", severity=3, count=5,
                       first_seen=NOW, last_seen=NOW, hints={"screen": "mine"})
         theme = {"title": "改我的页面", "covers": ["quick_exit:1"], "root_cause": "r", "evidence": "e",

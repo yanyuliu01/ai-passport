@@ -18,7 +18,7 @@ export function Directory({ space, onClose }: { space: SpaceView; onClose(): voi
   async function load(append=false) {
     const version=++generation.current; setBusy(true); setProblem('');
     const outcomes=await Promise.allSettled(sources.filter(id=>!append||cursors[id]).map(async runtime=>{
-      const page=await window.xiaoyou.directory({space:space.id,runtime,query,cursor:append?cursors[runtime]:undefined});
+      const page=await window.xiaoyu.directory({space:space.id,runtime,query,cursor:append?cursors[runtime]:undefined});
       return {runtime,page};
     }));
     if(version!==generation.current)return;
@@ -38,7 +38,7 @@ export function Directory({ space, onClose }: { space: SpaceView; onClose(): voi
   function select(row: Row){setSelected(row);setTitle(row.title);setProject(String(row.project||''));}
   async function edit(fields: Json) {
     if(!selected)return; const version=generation.current; setBusy(true);setProblem('');
-    try {const result=await window.xiaoyou.directoryEdit({space:space.id,runtime:selected.directory_runtime,id:selected.uid,revision:Number(selected.metadata_revision||0),fields});
+    try {const result=await window.xiaoyu.directoryEdit({space:space.id,runtime:selected.directory_runtime,id:selected.uid,revision:Number(selected.metadata_revision||0),fields});
       if(version!==generation.current)return;
       if(result.status==='queued'){setProblem('已排队，来源电脑尚未确认应用。');setBusy(false);return;}
       setSelected(undefined);await load();
@@ -57,10 +57,10 @@ export function Directory({ space, onClose }: { space: SpaceView; onClose(): voi
         <button disabled={busy} onClick={()=>void edit({pinned:!selected.pinned})}>{selected.pinned?'取消置顶':'置顶'}</button>
         {!(selected.kind==='conversation'&&selected.conversation_id==='default')&&<button disabled={busy} onClick={()=>void edit({archived:!selected.archived})}>{selected.archived?'恢复记录':'归档记录'}</button>}
         <button disabled={busy} onClick={()=>setHistory(selected)}>查看来源记录</button>
-        <button disabled={busy} onClick={()=>{const version=generation.current;setBusy(true);void window.xiaoyou.directoryMetadata({space:space.id,runtime:selected.directory_runtime,id:selected.uid}).then(result=>{if(version===generation.current){setProblem(result.status==='ready'?'摘要已生成，返回目录刷新后查看。':'已请求生成摘要，稍后刷新目录查看。');setBusy(false);}}).catch(error=>{if(version===generation.current){setProblem(errorText(error));setBusy(false);}});}}>生成标题与摘要建议</button>
+        <button disabled={busy} onClick={()=>{const version=generation.current;setBusy(true);void window.xiaoyu.directoryMetadata({space:space.id,runtime:selected.directory_runtime,id:selected.uid}).then(result=>{if(version===generation.current){setProblem(result.status==='ready'?'摘要已生成，返回目录刷新后查看。':'已请求生成摘要，稍后刷新目录查看。');setBusy(false);}}).catch(error=>{if(version===generation.current){setProblem(errorText(error));setBusy(false);}});}}>生成标题与摘要建议</button>
       </div>
       {Boolean(selected.generated)&&<article><small>{(selected.generated as Json).stale?'摘要待更新':'摘要'} · {String((selected.generated as Json).source)}</small><p>{String((selected.generated as Json).summary||'')}</p><button onClick={()=>setTitle(String((selected.generated as Json).title||title))}>使用建议名称</button></article>}
-      {Boolean((selected.native_open as Json)?.supported)?<button disabled={busy} onClick={()=>{const version=generation.current;void window.xiaoyou.directoryOpen({space:space.id,runtime:selected.directory_runtime,id:selected.uid}).then(()=>{if(version===generation.current)setProblem('已请求来源电脑打开原会话，请在原生应用核对。');}).catch(error=>{if(version===generation.current)setProblem(errorText(error));});}}>在来源电脑打开原生会话</button>:<p className="directory-provenance">{String((selected.native_open as Json)?.reason||'')}</p>}
+      {Boolean((selected.native_open as Json)?.supported)?<button disabled={busy} onClick={()=>{const version=generation.current;void window.xiaoyu.directoryOpen({space:space.id,runtime:selected.directory_runtime,id:selected.uid}).then(()=>{if(version===generation.current)setProblem('已请求来源电脑打开原会话，请在原生应用核对。');}).catch(error=>{if(version===generation.current)setProblem(errorText(error));});}}>在来源电脑打开原生会话</button>:<p className="directory-provenance">{String((selected.native_open as Json)?.reason||'')}</p>}
       {Boolean(selected.native_presentation) && <p role="status">{String((selected.native_presentation as Json).label || '')}</p>}
       <small>归档只影响目录展示。名称和分类不会改变真实工作目录。原生会话的控制接管需来源支持；此处的记录为只读。</small>
     </>:<>
@@ -76,7 +76,7 @@ function History({space,row,onBack}:{space:string;row:Row;onBack():void}) {
   const [messages,setMessages]=useState<Json[]>([]),[cursor,setCursor]=useState<string>(),[more,setMore]=useState(true),[busy,setBusy]=useState(false),[problem,setProblem]=useState('');
   const generation=useRef(0);
   async function load(reset=false){const version=++generation.current;setBusy(true);setProblem('');try{
-    const page=await window.xiaoyou.directoryHistory({space,runtime:row.directory_runtime,id:row.uid,cursor:reset?undefined:cursor});
+    const page=await window.xiaoyu.directoryHistory({space,runtime:row.directory_runtime,id:row.uid,cursor:reset?undefined:cursor});
     if(version!==generation.current)return;
     if(page.status==='queued'){setProblem('来源电脑尚未返回记录，可稍后重试。');setBusy(false);return;}
     const merged=new Map((reset?[]:messages).map(m=>[String(m.mesh_origin||'')+':'+m.id,m]));

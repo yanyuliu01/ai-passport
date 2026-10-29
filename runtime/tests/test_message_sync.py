@@ -1,6 +1,6 @@
 """收下的话落盘、重启后恢复、按对话去重，以及 feed 用一个游标同时给卡和消息。
 
-对应审查文档 docs/assets/xiaoyou-harness-review.zh_CN.md 里的 R1（收下的话只在内存）、
+对应审查文档 docs/assets/xiaoyu-harness-review.zh_CN.md 里的 R1（收下的话只在内存）、
 R2（排着的补充满了被悄悄丢掉）、R3（去重只看 client_id）和 R6（电脑会话传播太慢）。
 """
 
@@ -12,23 +12,23 @@ import unittest
 from unittest import mock
 
 import test_runtime
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, start_runtime, until
 
-import xiaoyou_runtime.events.desktop_sync as desktop_sync
-import xiaoyou_runtime.events.ledger as ledger_module
-import xiaoyou_runtime.api.service as service_module
-from xiaoyou_runtime.api.service import ConflictError, RESTART_NOTE, Service, UnavailableError
-from xiaoyou_runtime.helpers.tasks import MAX_PENDING, Task, Tasks
+import xiaoyu_runtime.events.desktop_sync as desktop_sync
+import xiaoyu_runtime.events.ledger as ledger_module
+import xiaoyu_runtime.api.service as service_module
+from xiaoyu_runtime.api.service import ConflictError, RESTART_NOTE, Service, UnavailableError
+from xiaoyu_runtime.helpers.tasks import MAX_PENDING, Task, Tasks
 
 
 class MessageLedgerTests(TempDirCase):
     def start(self, folder=None):
         agent = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(folder or self.folder, [agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(folder or self.folder, [agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.addCleanup(agent.gate.set)
-        return service, agent, xiaoyou, store
+        return service, agent, xiaoyu, store
 
     def ledger(self, store):
         """盘上的消息记录：快照 + 之后的日志（R3.3 起 messages.json 只是定期快照）。"""
@@ -45,11 +45,11 @@ class MessageLedgerTests(TempDirCase):
         self.assertTrue(until(check))
 
     @staticmethod
-    def crash(service, xiaoyou):
+    def crash(service, xiaoyu):
         """这一台“断电”了：之后它的线程再怎么跑，也写不进同一份记录。"""
         service._ledger.save = lambda *args: None
-        xiaoyou.cards._save = lambda: None
-        xiaoyou.cards._journal._append = lambda entry: None  # 任务日志也写不进去了
+        xiaoyu.cards._save = lambda: None
+        xiaoyu.cards._journal._append = lambda entry: None  # 任务日志也写不进去了
 
     def test_an_accepted_message_is_on_disk_before_the_caller_hears_back(self):
         service, agent, _, store = self.start()
@@ -69,13 +69,13 @@ class MessageLedgerTests(TempDirCase):
 
         # 第一台卡在模型里时断电，用同一份记录起一台新的：等于 Runtime 被重启。
         self.crash(service, first)
-        again, again_agent, xiaoyou, _ = self.start(self.folder)
+        again, again_agent, xiaoyu, _ = self.start(self.folder)
         done = again.get(queued["id"], wait=5)
         self.assertEqual((done["status"], done["reply"]), ("done", "re:第二句"))
         # 已经开始处理的不知道做到哪一步：不重做，标成没做完，并在对话里留下这句话和原因。
         lost = again.get(running["id"])
         self.assertEqual((lost["status"], lost["error"]), ("failed", RESTART_NOTE))
-        card = xiaoyou.cards.get(lost["card"])
+        card = xiaoyu.cards.get(lost["card"])
         self.assertEqual([(entry["role"], entry["text"], entry["id"]) for entry in card["entries"]],
                          [("you", "第一句 slow", running["id"] + ":you"),
                           ("xiaoyou", RESTART_NOTE, running["id"] + ":reply")])
@@ -91,12 +91,12 @@ class MessageLedgerTests(TempDirCase):
         inside = service.submit("在里面补一句 slow", card=done["card"], pin=True)
         self.saved(store, inside["id"], "running")
         self.crash(service, first)
-        again, _, xiaoyou, _ = self.start(self.folder)
+        again, _, xiaoyu, _ = self.start(self.folder)
         lost = again.get(inside["id"])
         self.assertEqual((lost["status"], lost["card"]), ("failed", done["card"]))
-        texts = [entry["text"] for entry in xiaoyou.cards.get(done["card"])["entries"]]
+        texts = [entry["text"] for entry in xiaoyu.cards.get(done["card"])["entries"]]
         self.assertEqual(texts[-2:], ["在里面补一句 slow", RESTART_NOTE])
-        self.assertEqual(len([card for card in xiaoyou.cards.recent("default")
+        self.assertEqual(len([card for card in xiaoyu.cards.recent("default")
                               if card["state"] == "failed"]), 0)
 
     def test_a_reply_already_on_its_card_is_not_reported_lost_after_a_crash(self):
@@ -114,11 +114,11 @@ class MessageLedgerTests(TempDirCase):
         done = service.get(message["id"], wait=5)
         self.assertEqual(done["status"], "done")
         self.crash(service, first)
-        again, _, xiaoyou, _ = self.start(self.folder)
+        again, _, xiaoyu, _ = self.start(self.folder)
         recovered = again.get(message["id"])
         self.assertEqual((recovered["status"], recovered["reply"], recovered["card"]),
                          ("done", "re:答完了才断电", done["card"]))
-        self.assertEqual([card["state"] for card in xiaoyou.cards.recent("default")], ["done"])
+        self.assertEqual([card["state"] for card in xiaoyu.cards.recent("default")], ["done"])
 
     def test_a_message_that_cannot_be_written_down_is_not_accepted(self):
         service, agent, _, _ = self.start()
@@ -235,11 +235,11 @@ class MessageLedgerTests(TempDirCase):
 class FeedMessagesTests(TempDirCase):
     def start(self, folder=None):
         agent = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(folder or self.folder, [agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(folder or self.folder, [agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.addCleanup(agent.gate.set)
-        return service, agent, xiaoyou
+        return service, agent, xiaoyu
 
     def test_another_client_sees_a_question_while_it_is_still_being_answered(self):
         service, agent, _ = self.start()
@@ -272,13 +272,13 @@ class FeedMessagesTests(TempDirCase):
         self.assertGreater(final["seq"], feed["seq"])
 
     def test_old_clients_get_exactly_what_they_got_before(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         feed = service.feed("default")
         self.assertNotIn("messages", feed)
         self.assertEqual(feed["cards"], [])
         service.get(service.submit("一句")["id"], wait=5)
         self.assertTrue(until(lambda: service.feed("default", 0)["cards"]))
-        old = xiaoyou.cards.changed("default", 0, include_desktop=True,
+        old = xiaoyu.cards.changed("default", 0, include_desktop=True,
                                     budget=service_module.FEED_BUDGET_BYTES)
         new = service.feed("default", 0)
         self.assertEqual((new["seq"], new["cards"]), (old["seq"], old["cards"]))
@@ -290,10 +290,10 @@ class FeedMessagesTests(TempDirCase):
         self.assertGreaterEqual(time.monotonic() - started, 0.25)
 
     def test_one_cursor_keeps_going_across_a_restart_and_the_epoch_tells_a_new_record(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         first = service.submit("一")
         service.get(first["id"], wait=5)
-        ledger = xiaoyou._config.state_dir / "messages.json"
+        ledger = xiaoyu._config.state_dir / "messages.json"
         self.assertTrue(until(lambda: '"status": "done"' in json.dumps(ledger_module.current(ledger))))
         before = service.feed("default", 0, 0, messages=True)
         again, _, _ = self.start(self.folder)
@@ -306,7 +306,7 @@ class FeedMessagesTests(TempDirCase):
         self.assertEqual([item["id"] for item in later["messages"]], [newer["id"]])
         self.assertGreater(later["messages"][0]["seq"], before["seq"])
 
-        (xiaoyou._config.state_dir / "cards.json").unlink()
+        (xiaoyu._config.state_dir / "cards.json").unlink()
         replaced, _, _ = self.start(self.folder)
         self.assertNotEqual(replaced.feed("default")["epoch"], before["epoch"])
 
@@ -334,7 +334,7 @@ class FeedMessagesTests(TempDirCase):
 class SequenceReservationTests(TempDirCase):
     def test_a_failed_write_does_not_count_as_reserving_numbers(self):
         from unittest import mock as _mock
-        import xiaoyou_runtime.world.cards as cards_module
+        import xiaoyu_runtime.world.cards as cards_module
         cards = cards_module.Cards(self.folder / "cards.json")
         on_disk = json.loads((self.folder / "cards.json").read_text(encoding="utf-8"))["seq"]
         with _mock.patch.object(cards_module.world, "durable_write", side_effect=OSError("disk full")):
@@ -389,7 +389,7 @@ class HttpSyncTests(TempDirCase):
 
 class QuickFixTests(TempDirCase):
     def test_a_full_follow_up_queue_says_so_instead_of_pretending(self):
-        tasks = Tasks(make_xiaoyou(self.folder, [Scripted("claude")])[1], lambda *args: None)
+        tasks = Tasks(make_xiaoyu(self.folder, [Scripted("claude")])[1], lambda *args: None)
         task = Task("c1", "default", Scripted("worker", speaks=False), "做事")
         tasks._active[task.card] = task
         results = [tasks.amend(task.card, "after", "补充 %d" % index) for index in range(MAX_PENDING + 1)]
@@ -398,7 +398,7 @@ class QuickFixTests(TempDirCase):
 
     def test_desktop_tool_changes_are_published_within_three_seconds(self):
         from pathlib import Path
-        from xiaoyou_runtime.world.cards import Cards
+        from xiaoyu_runtime.world.cards import Cards
         cards = Cards(self.folder / "observed.json")
         sync = desktop_sync.DesktopSync(cards, self.folder, home=self.folder, clock=lambda: 100)
         session = desktop_sync.Session("codex", "s1", cwd=str(self.folder), status="idle",

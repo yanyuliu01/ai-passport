@@ -6,7 +6,7 @@
 
 Status: 2026-10-24, source changes only. The capability gateway, desktop helper registration, per-helper grant editor and Magpie model-service bindings are implemented. MCP server registration, connection editing, OAuth and cross-computer catalog replication remain pending. pi is not installed on this computer; its adapter has host tests only.
 
-Xiaoyou manages which external tools the helpers (Claude Code, Codex, dsh, pi) can use. The approach follows [Raft](https://raft.build/)'s managed MCP ([MCP Apps docs](https://github.com/botiverse/raft-docs/blob/main/content/features/apps/mcp/index.md)), adapted to our structure of one Runtime per computer with helpers running locally, and is not copied.
+Xiaoyu manages which external tools the helpers (Claude Code, Codex, dsh, pi) can use. The approach follows [Raft](https://raft.build/)'s managed MCP ([MCP Apps docs](https://github.com/botiverse/raft-docs/blob/main/content/features/apps/mcp/index.md)), adapted to our structure of one Runtime per computer with helpers running locally, and is not copied.
 
 ## 1. What we take from Raft
 
@@ -15,13 +15,13 @@ Xiaoyou manages which external tools the helpers (Claude Code, Codex, dsh, pi) c
 | An MCP server is registered once and shared by the whole space; its tools become available to agents | Each computer has one **capability library**; a server is registered once and shared by the helpers on that computer |
 | A "connection" is the account or key the server uses; Raft keeps it and **agents never see it** | Connections stay on this computer (a file only the local account can read), are not synced and are never given to helpers |
 | After registration every agent can use it by default; access can be revoked or the connection changed per agent | Every helper on this computer can use it by default; access can be revoked per helper or limited to some tools |
-| The local service injects one local MCP proxy into every runtime; tool names carry a server prefix | Xiaoyou injects **one** MCP server (the capability gateway) into each helper, listing the tools it is granted, with prefixed names |
+| The local service injects one local MCP proxy into every runtime; tool names carry a server prefix | Xiaoyu injects **one** MCP server (the capability gateway) into each helper, listing the tools it is granted, with prefixed names |
 | Every call carries a configuration version and an assignment version and is refused on mismatch | Every call checks the current grant and versions; UI grant edits and connection-file rotation affect the next call, while config.json changes require a Runtime restart |
-| Unusable servers are listed too, so the agent can say "X needs reconnecting" | Unavailable servers are listed with the reason; Xiaoyou tells the owner in the conversation |
+| Unusable servers are listed too, so the agent can say "X needs reconnecting" | Unavailable servers are listed with the reason; Xiaoyu tells the owner in the conversation |
 | At most 200 tools, results over 512 KB refused, a 20-second timeout per call | Similar limits, see section 4 |
 | Skills stay on the runtime side; Raft only discovers and shows them | The same: discover and show the skills each harness already has; helpers may also be given skill directories |
 
-**Differences:** Raft supports only remote (Streamable HTTP) MCP; we run locally and must also support MCP servers started as local commands (stdio). Raft's agents collaborate with each other; to the owner we have one voice, Xiaoyou (product principle P1), and collaboration between helpers is deferred.
+**Differences:** Raft supports only remote (Streamable HTTP) MCP; we run locally and must also support MCP servers started as local commands (stdio). Raft's agents collaborate with each other; to the owner we have one voice, Xiaoyu (product principle P1), and collaboration between helpers is deferred.
 
 ## 2. Structure
 
@@ -40,9 +40,9 @@ The capability gateway's Runtime end (loopback, the same server as the approval 
                    call the real server on the helper's behalf
         |
         v
-The capability gateway's entry, injected into each turn (python -m xiaoyou_runtime.permission_mcp, stdio)
+The capability gateway's entry, injected into each turn (python -m xiaoyu_runtime.permission_mcp, stdio)
   Claude Code: --mcp-config (together with the approve permission tool)
-  Codex: -c mcp_servers.xiaoyou.command / args / env
+  Codex: -c mcp_servers.xiaoyu.command / args / env
   dsh: mcpServers in ACP session/new
   pi: only global `pi mcp add`; not injected yet (to be checked on a computer with pi installed:
       whether pi passes the environment to MCP servers)

@@ -6,7 +6,7 @@ services:
     command: ['node', 'start-ip.mjs']
     restart: unless-stopped
     environment:
-      XIAOYOU_RELAY_TOKEN: ${XIAOYOU_RELAY_TOKEN:?Missing relay master secret}
+      XIAOYU_RELAY_TOKEN: ${XIAOYU_RELAY_TOKEN:?Missing relay master secret}
     ports: ['443:8443']
     volumes:
       - ./app:/app:ro

@@ -2,7 +2,7 @@
 """Report send-to-first-bubble times against the 3,000 ms first-response rule.
 
 Read-only evidence for docs/development/first-response-measurement.md. The
-phone's XiaoyouTiming logcat lines are the measurement: send and first bubble
+phone's XiaoyuTiming logcat lines are the measurement: send and first bubble
 on the phone's own uptime clock. The Runtime's message records and its
 Decide/speak log lines only explain where the time went; they never replace the
 phone's numbers, and no two machines' clocks are subtracted. Output carries
@@ -10,7 +10,7 @@ random ids and times only, never message text.
 
 Usage:
   adb logcat -c
-  adb logcat -s XiaoyouTiming > phone.txt        (stop with Ctrl+C after the run)
+  adb logcat -s XiaoyuTiming > phone.txt        (stop with Ctrl+C after the run)
   python3 tools/ttft_report.py phone.txt \\
       [--state runtime/state] [--runtime-log runtime/state/runtime-stderr.log] \\
       [--scenario cold-start] [--record ttft-results.jsonl] [--note "..."]
@@ -60,7 +60,7 @@ def runtime_messages(state):
     if state is None:
         return {}
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime"))
-    from xiaoyou_runtime.events import ledger
+    from xiaoyu_runtime.events import ledger
     path = Path(state) / "messages.json"
     if not path.exists():
         raise SystemExit("No messages.json under %s" % state)
@@ -133,7 +133,7 @@ def show(found, scenario):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("logcat", help="file captured with adb logcat -s XiaoyouTiming")
+    parser.add_argument("logcat", help="file captured with adb logcat -s XiaoyuTiming")
     parser.add_argument("--state", help="Runtime state folder, for kinds, failures and turn ids")
     parser.add_argument("--runtime-log", help="Runtime stderr log, for Decide/speak stage times")
     parser.add_argument("--scenario", default="", help="label for this run, such as cold-start")

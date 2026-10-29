@@ -14,7 +14,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 /**
- * 首页上的小幽：每种动作对应一个真实状态，不放纯装饰的动画。
+ * 首页上的小鱼：每种动作对应一个真实状态，不放纯装饰的动画。
  * idle 轻轻呼吸；listening 侧头、身后光圈外扩；thinking 上下浮、旁边三个点；talking 说话时轻弹；
  * working 帮手在做时专注；happy 刚做完。系统关了动画或偏好里关了呼吸时只换表情不动。
  */

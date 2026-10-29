@@ -74,4 +74,4 @@
 ### yanyuliu01
 
 - [AI 拟人角色参考收集](yanyuliu01/ai-character-references.zh_CN.md) — 大肥鱼女仆、Claude、Codex 等角色的立绘、三视图、表情与动画来源，用于工作状态展示。
-- [AI 伙伴形象设计素材包](yanyuliu01/ai-companion-design.zh_CN.md) — 生成的工作姿态图集、像素大头头像和小幽质感豆豆眼备选，DSH 与 Claude 对齐优雅 Codex 画风。
+- [AI 伙伴形象设计素材包](yanyuliu01/ai-companion-design.zh_CN.md) — 生成的工作姿态图集、像素大头头像和小鱼质感豆豆眼备选，DSH 与 Claude 对齐优雅 Codex 画风。

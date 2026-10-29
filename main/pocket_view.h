@@ -95,18 +95,18 @@ int pocket_usage_cells(int left, int cells);
 // 换固件这件事现在要不要占着屏幕：正在收、正在核对、马上重启。
 // 收到一半连接断了（等手机回来）时不占，照常显示别的。
 bool pocket_update_shown(pocket_update_phase_t phase);
-// 小幽此刻的表情：跟随当前视图（换固件、审批、配对、确认、说话）或第一屏的情形。
+// 小鱼此刻的表情：跟随当前视图（换固件、审批、配对、确认、说话）或第一屏的情形。
 pocket_pet_mood_t pocket_pet_for(const buddy_ui_snapshot_t *snapshot);
-// 小幽此刻的动作：在听时晃、在想时浮、刚说完蹦一下，其余只呼吸。和手机首页同一套。
+// 小鱼此刻的动作：在听时晃、在想时浮、刚说完蹦一下，其余只呼吸。和手机首页同一套。
 pocket_pet_motion_t pocket_motion_for(const buddy_ui_snapshot_t *snapshot);
 // message 里那行字现在要不要显示。连的是手机中枢时它只是一条提示，出现几秒就收起；
 // 连的是 Claude 桌面端时它是对面的状态行，一直显示。
 bool pocket_notice_visible(const buddy_ui_snapshot_t *snapshot);
 
-// 颜色只回答一个问题：现在是谁在做事。小幽自己一个颜色，每个帮手一个颜色。
+// 颜色只回答一个问题：现在是谁在做事。小鱼自己一个颜色，每个帮手一个颜色。
 // 认识的名字有固定的颜色，其余按名字算出来，同一个名字永远同一个颜色。
-// 名字不分大小写；空名字返回小幽自己的颜色。返回 0xRRGGBB。
-#define POCKET_COLOR_XIAOYOU 0x7CC8F2u
+// 名字不分大小写；空名字返回小鱼自己的颜色。返回 0xRRGGBB。
+#define POCKET_COLOR_XIAOYU 0x7CC8F2u
 uint32_t pocket_helper_color(const char *name);
 
 // 以下格式化函数都保证 out 以 NUL 结尾（size 为 0 时除外），返回写入的字节数。

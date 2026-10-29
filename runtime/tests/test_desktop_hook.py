@@ -15,7 +15,7 @@ from unittest import mock
 RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.events import desktop_hook as hook  # noqa: E402
+from xiaoyu_runtime.events import desktop_hook as hook  # noqa: E402
 
 
 class DesktopHookTests(unittest.TestCase):

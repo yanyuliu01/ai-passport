@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 
 from test_runtime import TempDirCase
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.events.record import Record, RecordError
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.events.record import Record, RecordError
 
-PACKAGE = Path(__file__).resolve().parent.parent / "xiaoyou_runtime"
+PACKAGE = Path(__file__).resolve().parent.parent / "xiaoyu_runtime"
 # The hub itself and the stores underneath it.
 ALLOWED = {"record.py", "cards.py", "message_log.py"}
 WRITES = {"open", "update", "add_attachments", "bump", "request", "request_changed", "replica",
@@ -88,12 +88,12 @@ class TranscriptFromLogTest(TempDirCase):
     """Step 4: the model's conversation record takes its text from the message log."""
 
     def test_turns_are_projected_without_a_second_transcript_write(self):
-        from test_runtime import Scripted, make_xiaoyou
+        from test_runtime import Scripted, make_xiaoyu
         import json
         claude = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(self.folder, [claude, Scripted("codex", speaks=False)])
-        self.addCleanup(xiaoyou.close)
-        xiaoyou.hear("你好", "default", "t1")
+        xiaoyu, store = make_xiaoyu(self.folder, [claude, Scripted("codex", speaks=False)])
+        self.addCleanup(xiaoyu.close)
+        xiaoyu.hear("你好", "default", "t1")
         turn = store.transcript.turns("default")[-1]
         self.assertEqual(("你好", "re:你好"), (turn["text"], turn["reply"]))
         self.assertFalse((self.folder / "state" / "transcript.json").exists())
@@ -102,7 +102,7 @@ class TranscriptFromLogTest(TempDirCase):
         self.assertNotIn("你好", json.dumps(saved, ensure_ascii=False))
 
     def test_text_not_in_the_log_is_kept_and_missing_log_entries_are_dropped(self):
-        from xiaoyou_runtime.world.store import Transcript
+        from xiaoyu_runtime.world.store import Transcript
         log = {"a:you": "问", "a:reply": "答"}
         transcript = Transcript(self.folder / "transcript.json")
         transcript.resolve_with(log.get)

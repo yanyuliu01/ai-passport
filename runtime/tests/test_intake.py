@@ -21,10 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime.world import world  # noqa: E402
-from xiaoyou_runtime.events.intake import Intake, Writer, WRITES  # noqa: E402
-from xiaoyou_runtime.api.service import Service  # noqa: E402
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until  # noqa: E402
+from xiaoyu_runtime.world import world  # noqa: E402
+from xiaoyu_runtime.events.intake import Intake, Writer, WRITES  # noqa: E402
+from xiaoyu_runtime.api.service import Service  # noqa: E402
 
 GOLDEN = Path(__file__).resolve().parent / "intake_golden.json"
 VOLATILE = re.compile(r"[0-9a-f]{12,32}")
@@ -56,8 +56,8 @@ class IntakeTests(TempDirCase):
         super().setUp()
         self.voice = Scripted("claude")
         self.codex = Scripted("codex", speaks=False)
-        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.voice, self.codex])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(self.folder, [self.voice, self.codex])
+        self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.codex.gate.set)
 
@@ -71,7 +71,7 @@ class IntakeTests(TempDirCase):
         """固定剧本。每一步都等它停稳，日志的先后才是确定的。"""
         # Production workers remain concurrent. Only the golden scenario queues their
         # start until the HTTP/request lane has persisted its handoff reply.
-        tasks = self.xiaoyou._tasks
+        tasks = self.xiaoyu._tasks
         pending = []
         start = tasks.start
         if controlled:
@@ -92,7 +92,7 @@ class IntakeTests(TempDirCase):
         self.finish(self.service.submit("你好", client_id="m1"))
         handed = self.finish(self.service.submit("查日志", client_id="m2", agent="codex"))
         release_start()
-        settled = self.xiaoyou.settle(handed["card"], 5)
+        settled = self.xiaoyu.settle(handed["card"], 5)
         self.assertEqual(settled["state"], "done")
         self.assertTrue(self.until_quiet(handed["card"]))
         self.assertTrue(until(lambda: not self.service._busy))
@@ -106,10 +106,10 @@ class IntakeTests(TempDirCase):
         # 等被停的帮手线程自己收完尾（它会记一条 cancelled 的进展）。
         log = self.store.state_dir / "cards.log.jsonl"
         self.assertTrue(until(lambda: '"phase": "cancelled"' in log.read_text(encoding="utf-8")))
-        self.assertTrue(until(lambda: not self.xiaoyou._tasks.active(slow["card"])))
+        self.assertTrue(until(lambda: not self.xiaoyu._tasks.active(slow["card"])))
         for card_id in (handed["card"], slow["card"]):
             self.assertTrue(until(lambda card_id=card_id: all(
-                attempt.get("ended_at") for attempt in self.xiaoyou.cards.get(card_id).get("execution_attempts", []))))
+                attempt.get("ended_at") for attempt in self.xiaoyu.cards.get(card_id).get("execution_attempts", []))))
         self.assertTrue(self.until_still(log))
 
     @staticmethod
@@ -129,15 +129,15 @@ class IntakeTests(TempDirCase):
     def until_quiet(self, card_id):
         """转述那句话写上卡才算这件事收尾了。"""
         return until(lambda: any(entry["kind"] == "summary"
-                                 for entry in self.xiaoyou.cards.get(card_id)["entries"]))
+                                 for entry in self.xiaoyu.cards.get(card_id)["entries"]))
 
     def snapshot(self):
         state = self.store.state_dir
         log = [json.loads(line) for line in (state / "cards.log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
         # cards.json 是定期快照（R3.2）：先看快照 + 日志重放出来的，再写一份快照对拍。
         live = world.current(state / "cards.json")
-        with self.xiaoyou.cards._changed:
-            self.xiaoyou.cards._save()
+        with self.xiaoyu.cards._changed:
+            self.xiaoyu.cards._save()
         cards = json.loads((state / "cards.json").read_text(encoding="utf-8"))
         self.assertEqual(live, cards["cards"])
         cards.pop("journal")
@@ -152,7 +152,7 @@ class IntakeTests(TempDirCase):
         self.assertEqual(json.loads(GOLDEN.read_text(encoding="utf-8")), got)
 
     def test_a_writer_stamps_where_a_write_came_from(self):
-        writer = self.xiaoyou.intake.writer("owner", actor="app")
+        writer = self.xiaoyu.intake.writer("owner", actor="app")
         self.assertIsInstance(writer, Writer)
         card = writer.task_open("default", "试一下", "working", "codex")
         self.assertEqual(card["changed_by"], {"source": "owner", "actor": "app"})
@@ -160,9 +160,9 @@ class IntakeTests(TempDirCase):
         stamped = [entry["provenance"] for entry in card["entries"]]
         self.assertEqual(stamped, [{"source": "owner", "actor": "app", "cause": "m9"}] * 2)
         # Outside a writer nothing is stamped; reads pass straight through.
-        plain = self.xiaoyou.record.task_open("default", "不经 Intake", "done")
+        plain = self.xiaoyu.record.task_open("default", "不经 Intake", "done")
         self.assertNotIn("changed_by", plain)
-        self.assertEqual(writer.cards, self.xiaoyou.record.cards)
+        self.assertEqual(writer.cards, self.xiaoyu.record.cards)
         # The log carries the same provenance on the messages.
         log = (self.store.state_dir / "cards.log.jsonl").read_text(encoding="utf-8")
         self.assertIn('"provenance": {"actor": "app", "cause": "m9", "source": "owner"}',
@@ -175,7 +175,7 @@ class IntakeTests(TempDirCase):
         sequences = [event["seq"] for event in events]
         self.assertEqual(sequences, sorted(set(sequences)))
         self.assertTrue(all(event["rev"] == event["seq"] for event in events))
-        cards = self.xiaoyou.cards.recent("default", 10)
+        cards = self.xiaoyu.cards.recent("default", 10)
         self.assertEqual([card["state"] for card in cards], ["done", "done", "cancelled"])
         completed, cancelled = cards[1:]
         self.assertEqual(sum(e.get("kind") == "worker_result" for e in completed["entries"]), 1)
@@ -185,10 +185,10 @@ class IntakeTests(TempDirCase):
         self.assertEqual(cancelled["cancelled_by"], "app")
 
     def test_writer_context_is_isolated_and_restored_after_failure(self):
-        cards = self.xiaoyou.cards
+        cards = self.xiaoyu.cards
         barrier = threading.Barrier(2)
         def write(source):
-            writer = self.xiaoyou.intake.writer(source, actor=source, cause=source + "-event")
+            writer = self.xiaoyu.intake.writer(source, actor=source, cause=source + "-event")
             # Force concurrent contexts across a barrier, not just sequential calls.
             with cards.provenance(source=source, actor=source):
                 barrier.wait(timeout=5)
@@ -199,7 +199,7 @@ class IntakeTests(TempDirCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(write, ("owner", "helper")))
         self.assertEqual([c["changed_by"]["source"] for c in results], ["owner", "helper"])
-        writer = self.xiaoyou.intake.writer("helper", actor="codex")
+        writer = self.xiaoyu.intake.writer("helper", actor="codex")
         with cards.provenance(source="owner", actor="app", cause="owner-event"):
             with self.assertRaises(ValueError):
                 writer.task(results[0]["id"], invalid_field=True)
@@ -221,26 +221,26 @@ class IntakeTests(TempDirCase):
         self.assertTrue(all(e["provenance"]["actor"] == "codex" for e in activity))
 
     def test_observed_sessions_cannot_write_the_main_chat(self):
-        writer = self.xiaoyou.intake.writer("desktop", actor="observer")
+        writer = self.xiaoyu.intake.writer("desktop", actor="observer")
         with self.assertRaises(ValueError):
             writer.observed_open("default", "wrong", "unknown", "codex")
         card = writer.observed_open("__desktop__", "session", "unknown", "codex")
         self.assertTrue(card["monitoring_only"])
         writer.observed(card["id"], entries=[{"id": "d1", "role": "you", "text": "observed", "at": 1}])
-        self.assertEqual(self.xiaoyou.cards.recent("default"), [])
-        restored = type(self.xiaoyou.cards)(self.store.state_dir / "cards.json").get(card["id"])
+        self.assertEqual(self.xiaoyu.cards.recent("default"), [])
+        restored = type(self.xiaoyu.cards)(self.store.state_dir / "cards.json").get(card["id"])
         self.assertEqual(restored["entries"][0]["provenance"]["source"], "desktop")
         self.assertEqual(restored["changed_by"]["source"], "desktop")
 
     def test_unknown_sources_are_refused(self):
         with self.assertRaises(ValueError):
-            Intake(self.xiaoyou.record).writer("somewhere")
+            Intake(self.xiaoyu.record).writer("somewhere")
 
 
 class IntakeBoundaryTests(unittest.TestCase):
     def test_production_cannot_bypass_intake(self):
         offenders = []
-        for path in sorted((ROOT / "xiaoyou_runtime").rglob("*.py")):
+        for path in sorted((ROOT / "xiaoyu_runtime").rglob("*.py")):
             if path.name in ("intake.py", "record.py"):
                 continue
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -253,7 +253,7 @@ class IntakeBoundaryTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_record_mutator_is_wrapped(self):
-        from xiaoyou_runtime.events.record import Record
+        from xiaoyu_runtime.events.record import Record
         methods = {name for name, value in vars(Record).items()
                    if not name.startswith("_") and callable(value)}
         self.assertEqual(methods - {"opening"}, set(WRITES))

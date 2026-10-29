@@ -6,7 +6,7 @@
 
 ## 适用范围与权威入口
 
-所有修改 Pocket Hub（`companion/`）、小幽 Runtime（`runtime/`）或固件
+所有修改 Pocket Hub（`companion/`）、小鱼 Runtime（`runtime/`）或固件
 （`main/`、`components/` 及固件配置／工具）的 Agent，必须在修改前阅读本文。
 影响这三个项目的提示词、模型、依赖、持久化、路由、权限及部署改动同样适用。
 [根目录 AGENTS.md](../../AGENTS.zh_CN.md) 仍是指令入口；目录内的 `AGENTS.md`

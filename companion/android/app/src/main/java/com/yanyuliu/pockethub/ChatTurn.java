@@ -3,9 +3,9 @@ package com.yanyuliu.pockethub;
 import java.util.List;
 
 /**
- * 一轮已经完成的对话：我说了什么，小幽答了什么。纯 Java，不依赖安卓。
+ * 一轮已经完成的对话：我说了什么，小鱼答了什么。纯 Java，不依赖安卓。
  *
- * 手机记着最近的若干轮。换一台 Runtime 时把它们带过去，那台电脑上的小幽就能接上话。
+ * 手机记着最近的若干轮。换一台 Runtime 时把它们带过去，那台电脑上的小鱼就能接上话。
  */
 final class ChatTurn {
     /** 带给 Runtime 的轮数上限，以及每轮文字的长度上限（和 Runtime 的限制一致）。 */

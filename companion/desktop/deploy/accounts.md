@@ -12,7 +12,7 @@ and forwarding still follow the Runtime mesh configuration.
 
 ## First use
 
-Sign in or create a Xiaoyou account, then configure the computer
+Sign in or create a Xiaoyu account, then configure the computer
 from the account panel. Existing accounts recover their original matching Runtime. The desktop already knows the public relay address and its
 certificate fingerprint; no domain or JSON import is needed. These are public
 routing data, not an embedded access credential. The account is independent of
@@ -166,7 +166,7 @@ three-second response, multi-end message convergence and BLE remain unverified.
 
 ### Android recipient selection: 0.35.0
 
-Android 0.35.0 (code 76) promotes recipient selection into the Xiaoyou account
+Android 0.35.0 (code 76) promotes recipient selection into the Xiaoyu account
 sheet. Login uses the same bottom sheet, rounded fields and blue action as the
 existing app. Validation and login failures stay inline, with retry available.
 Known authenticated Runtime computers appear with their heartbeat availability;

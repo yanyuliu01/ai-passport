@@ -2,7 +2,7 @@ import { quotaLeft } from '../core/presentation';
 import React from 'react';
 import type { HelperView, Json } from '../shared';
 import { activeTask, helperMatchesTask } from '../core/presentation';
-import xiaoyou from './images/xiaoyou.png';
+import xiaoyu from './images/xiaoyu.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
 const paths: Record<string, React.ReactNode> = {
@@ -21,8 +21,8 @@ const paths: Record<string, React.ReactNode> = {
   quote: <><path d="M4 4v9a3 3 0 0 0 3 3h13M15 11l5 5-5 5" /></>, more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
 };
 export function Icon({ name }: { name: string }) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.info}</svg>; }
-export function Avatar({ type = 'xiaoyou', size = 32 }: { type?: string; size?: number }) {
-  const source = type.includes('codex') ? codex : /claude|^cc$/.test(type) ? claude : xiaoyou;
+export function Avatar({ type = 'xiaoyu', size = 32 }: { type?: string; size?: number }) {
+  const source = type.includes('codex') ? codex : /claude|^cc$/.test(type) ? claude : xiaoyu;
   return <img className="portrait" src={source} width={size} height={size} alt="" />;
 }
 export const taskKey = (task: Json) => String(task._runtimeId) + '/' + String(task.id);

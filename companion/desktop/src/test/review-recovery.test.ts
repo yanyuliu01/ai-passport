@@ -20,7 +20,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 function fixture(t: { after(callback: () => void): void }, request: RuntimeTransport['request']) {
-  const folder = mkdtempSync(join(tmpdir(), 'xiaoyou-review-recovery-'));
+  const folder = mkdtempSync(join(tmpdir(), 'xiaoyu-review-recovery-'));
   const db = new ClientDatabase(join(folder, 'cache.sqlite'));
   const vault = new Map<string, unknown>();
   const secrets: SecretStore = { load: <T>(key: string) => vault.get(key) as T | undefined,

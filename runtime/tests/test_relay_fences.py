@@ -2,10 +2,10 @@
 import unittest
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.agents import AgentError, Outcome
-from xiaoyou_runtime.loop.effects import EffectFenceError
-from xiaoyou_runtime.helpers.tasks import Task
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.agents import AgentError, Outcome
+from xiaoyu_runtime.loop.effects import EffectFenceError
+from xiaoyu_runtime.helpers.tasks import Task
 
 
 class RelayFenceTests(TempDirCase):
@@ -13,7 +13,7 @@ class RelayFenceTests(TempDirCase):
         super().setUp()
         self.voice = Scripted("voice")
         self.worker = Scripted("worker", speaks=False)
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice, self.worker])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice, self.worker])
         self.addCleanup(self.x.close)
         self.x.mesh = mock.Mock(runtime_id="local")
         self.x.mesh.owner_of.return_value = {"owner": "local", "generation": 1}
@@ -154,7 +154,7 @@ class RelayFenceTests(TempDirCase):
         self.assertEqual("", self.x.cards.get(self.task.card)["summary_partial"])
 
     def test_formatting_cannot_cross_an_owner_change_before_publication(self):
-        from xiaoyou_runtime.loop import xiaoyou as module
+        from xiaoyu_runtime.loop import xiaoyu as module
         shape = module.shape
         def format_text(*args, **kwargs):
             self.change_owner()
@@ -219,7 +219,7 @@ class RelayFenceTests(TempDirCase):
             self.finish()
         self.assert_saved_only()
         self.x.close()
-        candidate, _ = make_xiaoyou(self.folder, [self.voice, self.worker])
+        candidate, _ = make_xiaoyu(self.folder, [self.voice, self.worker])
         self.addCleanup(candidate.close)
         with mock.patch.object(self.voice, "run") as voice, mock.patch.object(self.worker, "run") as worker:
             candidate.recover_tasks(ready=True)

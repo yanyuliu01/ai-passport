@@ -21,14 +21,14 @@ final class RelayManager {
     private static final Map<String,RelayConnection> links=new ConcurrentHashMap<>();
     private static Context app;
     private static SharedPreferences storage;
-    private static final String ALIAS="xiaoyou-relay-v1";
+    private static final String ALIAS="xiaoyu-relay-v1";
     static synchronized void init(Context context) throws Exception {
         if(app!=null){AccountManager.init(context);return;}app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
         ArtifactDownload.relayBytes=RelayManager::binary;
         AccountManager.init(context);
     }
     static synchronized String join(Context context,String invitation) {
-        return "连接已统一，请登录小幽账号；原配对记录保留";
+        return "连接已统一，请登录小鱼账号；原配对记录保留";
     }
     static synchronized void retainAccount(Set<String> urls) {
         for(String url:new ArrayList<>(links.keySet()))if(!urls.contains(url)){RelayConnection link=links.remove(url);if(link!=null)link.close();}
@@ -62,7 +62,7 @@ final class RelayManager {
     }
     static String request(String method,String address,byte[] bytes,String contentType,int seconds,
                           java.util.function.BooleanSupplier current) throws IOException {
-        URI uri=URI.create(address);String target=RelayConnection.target(uri);if(!AccountManager.allowed(target))throw new IOException("请登录小幽账号，等待这台电脑恢复连接");RelayConnection link=links.get(target);if(link==null)throw new IOException("加密连接尚未恢复，请重新打开 App");
+        URI uri=URI.create(address);String target=RelayConnection.target(uri);if(!AccountManager.allowed(target))throw new IOException("请登录小鱼账号，等待这台电脑恢复连接");RelayConnection link=links.get(target);if(link==null)throw new IOException("加密连接尚未恢复，请重新打开 App");
         Map<String,Object> body=null;
         if(bytes!=null){
             if(contentType!=null && contentType.startsWith("application/json")){body=Json.parseObject(new String(bytes,StandardCharsets.UTF_8));if(body==null)throw new IOException("请求格式无效");}

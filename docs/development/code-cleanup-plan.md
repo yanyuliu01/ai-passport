@@ -3,7 +3,7 @@
 # Code cleanup execution plan (phase one)
 
 Status: execution plan, 2026-10-23, starts after the owner approves. Based on the
-[Xiaoyou complete plan](xiaoyou-agent-model.md) and the
+[Xiaoyu complete plan](xiaoyu-agent-model.md) and the
 [interaction simplification issue list](app-runtime-simplification.md).
 
 ## Scope
@@ -53,11 +53,11 @@ the baseline is recorded.
 
 | Remove | Where |
 | --- | --- |
-| The nudge prompt `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/loop/voice_tools.py` |
-| The `nudged` branch of the tool loop and its special handling | `runtime/xiaoyou_runtime/helpers/dsh_stream.py`, around lines 280-325 |
+| The nudge prompt `PROMISE_NUDGE` | `runtime/xiaoyu_runtime/loop/voice_tools.py` |
+| The `nudged` branch of the tool loop and its special handling | `runtime/xiaoyu_runtime/helpers/dsh_stream.py`, around lines 280-325 |
 | Test assertions about the nudge | `runtime/tests/test_decision.py` |
 
-Keep: the `promised()` regex as a counter only (as `xiaoyou.py` already uses it);
+Keep: the `promised()` regex as a counter only (as `xiaoyu.py` already uses it);
 `promises.mark_nudged` is the due-reminder mechanism, unrelated to the nudge, and stays.
 
 Checks: all Runtime tests, plus one new test: a reply the regex would take as a promise, with no

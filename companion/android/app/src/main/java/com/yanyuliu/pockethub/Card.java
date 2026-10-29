@@ -11,7 +11,7 @@ import java.util.Map;
  * 内容来自 Runtime 的 /v1/feed，不可变；卡变了就换一个新的对象。
  */
 final class Card {
-    /** 一句话：role 是 you（主人）或 xiaoyou。 */
+    /** 一句话：role 是 you（主人）或 xiaoyu。 */
     static final class Entry {
         final String role;
         final String text;
@@ -107,7 +107,7 @@ final class Card {
     /** talking、working、waiting、done、failed、cancelled；电脑观察还可能是 unknown。 */
     final String state;
     Presentation presentation;
-    /** 谁在做或做的；小幽自己答的是空串。 */
+    /** 谁在做或做的；小鱼自己答的是空串。 */
     final String agent;
     final String brief;
     final String mood;
@@ -312,7 +312,7 @@ final class Card {
 
     /**
      * “codex · gpt-6.1-sol · 高档 · 约用了 5 小时额度的 3%”：谁、用哪个模型、哪一档做的，
-     * 花了多少。小幽自己答的、什么都没记的，是空串。
+     * 花了多少。小鱼自己答的、什么都没记的，是空串。
      */
     String spentLine() {
         if (agent.isEmpty()) {
@@ -379,7 +379,7 @@ final class Card {
         return title;
     }
 
-    /** 小幽最新的一句话；一句都没有时是空串。 */
+    /** 小鱼最新的一句话；一句都没有时是空串。 */
     String lastSay() {
         for (int index = entries.size() - 1; index >= 0; index--) {
             if (entries.get(index).role.equals("xiaoyou")) {

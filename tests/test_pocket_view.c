@@ -103,13 +103,13 @@ static void test_home_status(void)
     snapshot.connection = BUDDY_CONNECTION_OFFLINE;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_LINKING);
 
-    /* 连着手机中枢：第一屏跟着和小幽的对话走。 */
+    /* 连着手机中枢：第一屏跟着和小鱼的对话走。 */
     snapshot = connected_snapshot();
     snapshot.host_hub = true;
     snapshot.host_chat = true;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_QUIET);
     assert(!pocket_home_is_talk(POCKET_HOME_QUIET));
-    /* 中枢心跳里的数字说的是别的 App 的通知，不是小幽在忙。 */
+    /* 中枢心跳里的数字说的是别的 App 的通知，不是小鱼在忙。 */
     snapshot.waiting = 2;
     snapshot.running = 1;
     assert(pocket_home_for(&snapshot) == POCKET_HOME_QUIET);
@@ -171,7 +171,7 @@ static void test_pet_mood(void)
     snapshot.character = BUDDY_CHARACTER_HEART;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_HAPPY);
 
-    /* 和小幽的对话：在等的时候忙，答完时一律开心，没成是沮丧。 */
+    /* 和小鱼的对话：在等的时候忙，答完时一律开心，没成是沮丧。 */
     snapshot = connected_snapshot();
     snapshot.chat.phase = BUDDY_CHAT_SENT;
     assert(pocket_pet_for(&snapshot) == POCKET_PET_BUSY);
@@ -270,10 +270,10 @@ static void test_helper_colour(void)
     assert(pocket_helper_color("claude") == 0xE08A63u);
     assert(pocket_helper_color("Claude") == 0xE08A63u);
     assert(pocket_helper_color("CODEX") == 0x6FD3B0u);
-    /* 没有名字就是小幽自己。 */
-    assert(pocket_helper_color(NULL) == POCKET_COLOR_XIAOYOU);
-    assert(pocket_helper_color("") == POCKET_COLOR_XIAOYOU);
-    /* 不认识的名字：同一个名字永远同一个颜色，而且不会撞上小幽和认识的那两个。 */
+    /* 没有名字就是小鱼自己。 */
+    assert(pocket_helper_color(NULL) == POCKET_COLOR_XIAOYU);
+    assert(pocket_helper_color("") == POCKET_COLOR_XIAOYU);
+    /* 不认识的名字：同一个名字永远同一个颜色，而且不会撞上小鱼和认识的那两个。 */
     {
         static const char *const names[] = {
             "local", "gemini", "pc", "\xE4\xB9\xA6\xE6\x88\xBF\xE7\x94\xB5\xE8\x84\x91",
@@ -285,7 +285,7 @@ static void test_helper_colour(void)
             uint32_t color = pocket_helper_color(names[index]);
 
             assert(color == pocket_helper_color(names[index]));
-            assert(color != POCKET_COLOR_XIAOYOU && color != 0xE08A63u && color != 0x6FD3B0u);
+            assert(color != POCKET_COLOR_XIAOYU && color != 0xE08A63u && color != 0x6FD3B0u);
         }
         assert(pocket_helper_color("PC") == pocket_helper_color("pc"));
     }

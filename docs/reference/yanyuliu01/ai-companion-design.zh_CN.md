@@ -6,9 +6,9 @@
 
 本轮以用户选中的优雅 Codex 图集为画风基准，DSH 和 Claude 的全身图、头像及大肥鱼情绪扩展均更新为 v2。推荐源图共 15 张、208 个绘制姿态（包含画风备选，不是 176 种不同情绪）；之前版本保留为草稿。
 
-## 接近小幽质感的豆豆眼备选
+## 接近小鱼质感的豆豆眼备选
 
-这版沿用现有固件小幽的质感：大像素方块、豆豆眼或竖条眼、小嘴巴、极少颜色。[风格参考](../../../assets/images/ai-companions/reference-xiaoyou-style.png)直接从 `main/pocket_pet.c` 渲染，没有修改固件。
+这版沿用现有固件小鱼的质感：大像素方块、豆豆眼或竖条眼、小嘴巴、极少颜色。[风格参考](../../../assets/images/ai-companions/reference-xiaoyu-style.png)直接从 `main/pocket_pet.c` 渲染，没有修改固件。
 
 - [三角色豆豆眼对比](../../../assets/images/ai-companions/avatar-dot-eyes-elegant-v1.png)：每位八种表情，三行依次为大肥鱼、Claude、优雅 Codex。
 - [大肥鱼全身豆豆眼概念](../../../assets/images/ai-companions/fw-whale-dot-eyes-v1.png)：十二个工作状态姿态。
@@ -73,10 +73,10 @@
 
 ![app 大肥鱼情绪扩展](../../../assets/images/ai-companions/app-whale-emotions-v2.png)
 
-## DS 像素大头接入（2026-10-13）
+## Xiaoyu 像素大头接入（2026-10-13）
 
 用户选择之前的[鲸鱼像素大头](../../../assets/images/ai-companions/avatar-whale-v1.png)
-用于 DS App 和固件，原图保持不变。逐个检查的头像边界提供八种 App 姿态和六种
+用于 Xiaoyu App 和固件，原图保持不变。逐个检查的头像边界提供八种 App 姿态和六种
 固件情绪。固件采用 60×60 索引 C 图集（21,856 字节 Flash），没有 PNG 解码缓冲；
 App 按源图边界绘制并禁用位图滤波。见[素材转换记录](../../../assets/README.zh_CN.md#ai-伙伴形象设计素材包)
 和[伴侣说明](../../../companion/README.zh_CN.md#设备固件)。实际设备显示和手机验收仍待进行。
@@ -107,13 +107,13 @@ Build: NOT RUN（仅素材设计）。Host tests: FAIL（静态门禁在 macOS �
 
 ## Codex app 像素头像替换（0.14.1）
 
-用户确认以 ChatGPT 白龙形象替换 app 中的 Codex 头像，DS 与 Claude 保持原样。新增[像素源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)，其中待命、开心、思考、专注四格经 `companion/android/tools/PreparePortraits.java` 生成透明 256×256 资源；支持尾随 `codex` 参数只生成这一角色。Codex 绘制使用最近邻缩放保留像素边缘，沿用原有角色身份、状态映射和呼吸动画。只改头像，不改连接、消息、审批或固件协议。
+用户确认以 ChatGPT 白龙形象替换 app 中的 Codex 头像，Xiaoyu 与 Claude 保持原样。新增[像素源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)，其中待命、开心、思考、专注四格经 `companion/android/tools/PreparePortraits.java` 生成透明 256×256 资源；支持尾随 `codex` 参数只生成这一角色。Codex 绘制使用最近邻缩放保留像素边缘，沿用原有角色身份、状态映射和呼吸动画。只改头像，不改连接、消息、审批或固件协议。
 
 ![Codex 像素头像源图](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)
 
 ### App 接入验证
 
-App 0.14.1（26）基于现有工作区构建。Runtime 源码基线为 `e1f5238` 加已有未提交改动，固件没有修改、未核对设备已装版本。修改前 Android 测试任务通过；修改后强制重跑全部 95 项单元测试并构建所有 ABI，零失败。完整 `./tools/validate.sh` 通过（ESP-IDF 5.5.3）。DS 和 Claude 八个头像哈希不变，APK 中四个 Codex PNG 与生成资源逐像素一致。运行中的本机 Runtime 已提供版本 26 及验证过的安装包哈希，没有重启服务。
+App 0.14.1（26）基于现有工作区构建。Runtime 源码基线为 `e1f5238` 加已有未提交改动，固件没有修改、未核对设备已装版本。修改前 Android 测试任务通过；修改后强制重跑全部 95 项单元测试并构建所有 ABI，零失败。完整 `./tools/validate.sh` 通过（ESP-IDF 5.5.3）。Xiaoyu 和 Claude 八个头像哈希不变，APK 中四个 Codex PNG 与生成资源逐像素一致。运行中的本机 Runtime 已提供版本 26 及验证过的安装包哈希，没有重启服务。
 
 Build: PASS。Host tests: PASS。Device tests: NOT RUN。Regression: PASS（主机测试与资源一致性）；手机邻接流程未验收。First response <= 3s: NOT RUN。Connection recovery: NOT RUN。Multi-end sync: NOT RUN。未采集真实客户端延迟或同步收敛样本。
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "runtime"))
-from xiaoyou_runtime.api.shared_history import hook_config, _write_private
+from xiaoyu_runtime.api.shared_history import hook_config, _write_private
 
 
 def merge(existing, addition, project):
@@ -52,7 +52,7 @@ def merge(existing, addition, project):
                     args = shlex.split(command) if isinstance(command, str) else []
                 except ValueError:
                     args = []
-                reader = str((REPO / "runtime" / "xiaoyou_runtime" / "shared_history.py").resolve())
+                reader = str((REPO / "runtime" / "xiaoyu_runtime" / "shared_history.py").resolve())
                 ours = (reader in args and "--hook" in args
                         and "--project" in args and len(args) > args.index("--project") + 1
                         and args[args.index("--project") + 1] == str(Path(project).resolve()))

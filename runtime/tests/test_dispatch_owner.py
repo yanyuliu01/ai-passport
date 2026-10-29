@@ -4,8 +4,8 @@ import threading
 import unittest
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.helpers.agents import Outcome
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until
+from xiaoyu_runtime.helpers.agents import Outcome
 
 
 class Blocking(Scripted):
@@ -24,7 +24,7 @@ class DispatchOwnerTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.agent = Blocking("codex", speaks=False)
-        self.x, _ = make_xiaoyou(self.folder, [self.agent], max_parallel=1)
+        self.x, _ = make_xiaoyu(self.folder, [self.agent], max_parallel=1)
         self.addCleanup(self.x.close)
         self.addCleanup(self.agent.release.set)
         self.x.mesh = mock.Mock(runtime_id="local")

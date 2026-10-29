@@ -11,17 +11,17 @@ from unittest import mock
 import urllib.error
 import urllib.request
 
-from test_runtime import GateTalker, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.loop.effects import EffectUncertain, SavedWake
-from xiaoyou_runtime.world.promises import wake_source
-from xiaoyou_runtime.api.service import Service, ConflictError, RequestError, UnavailableError
+from test_runtime import GateTalker, TempDirCase, make_xiaoyu, until
+from xiaoyu_runtime.loop.effects import EffectUncertain, SavedWake
+from xiaoyu_runtime.world.promises import wake_source
+from xiaoyu_runtime.api.service import Service, ConflictError, RequestError, UnavailableError
 
 
 class TimerReviewTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
 
@@ -155,7 +155,7 @@ class TimerReviewTests(TempDirCase):
         self.assertEqual("recorded", self.service.timer_effect_review(event_id)["status"])
         self.service.close()
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
         with mock.patch.object(self.voice, "run", side_effect=AssertionError("no model")):
@@ -242,7 +242,7 @@ class TimerReviewTests(TempDirCase):
         self.assertIn("timer_effect_review", self.service.info()["capabilities"])
 
     def test_http_requires_auth_binds_device_actor_and_rejects_revoked_credentials(self):
-        from xiaoyou_runtime.api.server import make_server
+        from xiaoyu_runtime.api.server import make_server
         event_id = self.promise()
         server = make_server(replace(self.x._config, host="127.0.0.1", port=0), self.service)
         server.RequestHandlerClass.log_message = lambda *args: None
@@ -288,7 +288,7 @@ class TimerReviewTests(TempDirCase):
                 self.service.review_timer_effects(event_id, body)
         self.service.close()
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
         with mock.patch.object(self.voice, "run", side_effect=AssertionError("no model")):
@@ -312,7 +312,7 @@ class TimerReviewTests(TempDirCase):
         event_id = self.promise(every="day")
         first = self.review(event_id)
         item = next(item for item in self.x.promises.open() if item["every"] == "day")
-        with mock.patch("xiaoyou_runtime.loop.proactive.time.time", return_value=item["due"] + 1):
+        with mock.patch("xiaoyu_runtime.loop.proactive.time.time", return_value=item["due"] + 1):
             self.x._pulse.tick()
             self.assertTrue(until(lambda: not self.service._busy))
         self.assertEqual(first, self.service.timer_effect_review(event_id))

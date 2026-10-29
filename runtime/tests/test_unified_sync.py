@@ -9,13 +9,13 @@ import time
 import unittest
 
 import test_runtime
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, start_runtime, until
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, start_runtime, until
 
-import xiaoyou_runtime.events.message_log as message_log
-from xiaoyou_runtime.api import conformance
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.events.desktop_sync import CONVERSATION, DesktopSync, Session
-from xiaoyou_runtime.api.service import RequestError, Service
+import xiaoyu_runtime.events.message_log as message_log
+from xiaoyu_runtime.api import conformance
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.events.desktop_sync import CONVERSATION, DesktopSync, Session
+from xiaoyu_runtime.api.service import RequestError, Service
 
 
 class ConformanceTests(TempDirCase):
@@ -60,11 +60,11 @@ class ConformanceTests(TempDirCase):
 class UnifiedSyncTests(TempDirCase):
     def start(self, folder=None):
         agent = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(folder or self.folder, [agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(folder or self.folder, [agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.addCleanup(agent.gate.set)
-        return service, agent, xiaoyou
+        return service, agent, xiaoyu
 
     def all_messages(self, service, conversation="default"):
         page, found = service.sync(conversation, 0), {}
@@ -75,19 +75,19 @@ class UnifiedSyncTests(TempDirCase):
             page = service.sync(conversation, page["seq"])
 
     def test_a_desktop_session_that_finished_its_turn_is_turn_ended_only_in_sync(self):
-        service, _, xiaoyou = self.start()
-        card = xiaoyou.cards.open(CONVERSATION, "电脑上的会话", "unknown", "codex")
-        xiaoyou.cards.update(card["id"], state="done", monitoring_only=True, source="desktop",
+        service, _, xiaoyu = self.start()
+        card = xiaoyu.cards.open(CONVERSATION, "电脑上的会话", "unknown", "codex")
+        xiaoyu.cards.update(card["id"], state="done", monitoring_only=True, source="desktop",
                              desktop_status="idle", session_id="s1")
         task = next(item for item in service.sync("default", 0)["tasks"] if item["id"] == card["id"])
         self.assertEqual("turn_ended", task["state"])
         # Older apps keep seeing done on /v1/feed, and the card itself is unchanged.
         fed = next(item for item in service.feed("default", 0)["cards"] if item["id"] == card["id"])
         self.assertEqual("done", fed["state"])
-        self.assertEqual("done", xiaoyou.cards.get(card["id"])["state"])
+        self.assertEqual("done", xiaoyu.cards.get(card["id"])["state"])
         # A session whose state can no longer be seen is unavailable in sync, unknown on the feed.
-        lost = xiaoyou.cards.open(CONVERSATION, "看不到的会话", "unknown", "codex")
-        xiaoyou.cards.update(lost["id"], state="unknown", monitoring_only=True, source="desktop",
+        lost = xiaoyu.cards.open(CONVERSATION, "看不到的会话", "unknown", "codex")
+        xiaoyu.cards.update(lost["id"], state="unknown", monitoring_only=True, source="desktop",
                              desktop_status="unknown", session_id="s2", stale=True)
         self.assertEqual("unavailable", next(item for item in service.sync("default", 0, states=["unavailable"])["tasks"]
                                              if item["id"] == lost["id"])["state"])
@@ -96,12 +96,12 @@ class UnifiedSyncTests(TempDirCase):
         self.assertEqual("unknown", next(item for item in service.feed("default", 0)["cards"]
                                          if item["id"] == lost["id"])["state"])
         # A task the runtime itself finished is simply done.
-        own = xiaoyou.cards.open("default", "自己的事", "done", "codex")
+        own = xiaoyu.cards.open("default", "自己的事", "done", "codex")
         self.assertEqual("done", next(item for item in service.sync("default", 0)["tasks"]
                                       if item["id"] == own["id"])["state"])
 
     def test_subject_is_separate_from_the_runtime_and_records_carry_their_origin(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         info = service.info()
         self.assertRegex(info["subject_id"], "^[0-9a-f]{32}$")
         self.assertNotEqual(info["subject_id"], info["runtime_id"])
@@ -123,29 +123,29 @@ class UnifiedSyncTests(TempDirCase):
                          (again.info()["subject_id"], again.info()["runtime_id"]))
 
     def test_approvals_come_by_sequence_with_their_outcome(self):
-        service, _, xiaoyou = self.start()
-        card = xiaoyou.cards.open("default", "要确认的事", "working", "claude")
+        service, _, xiaoyu = self.start()
+        card = xiaoyu.cards.open("default", "要确认的事", "working", "claude")
         cursor = self.all_seq(service)
-        asked = xiaoyou.approvals.ask(card["id"], "default", "claude", "Bash", "ls")
+        asked = xiaoyu.approvals.ask(card["id"], "default", "claude", "Bash", "ls")
         page = service.sync("default", cursor)
         item = next(entry for entry in page["approvals"] if entry["id"] == asked)
         self.assertEqual(("pending", "Bash"), (item["status"], item["tool"]))
         self.assertGreater(item["seq"], cursor)
         # An approval that appears and is answered between two syncs still shows its outcome.
-        quick = xiaoyou.approvals.ask(card["id"], "default", "claude", "Write", "x")
-        xiaoyou.approvals.answer(quick, "allow")
-        xiaoyou.approvals.withdraw(asked)
+        quick = xiaoyu.approvals.ask(card["id"], "default", "claude", "Write", "x")
+        xiaoyu.approvals.answer(quick, "allow")
+        xiaoyu.approvals.withdraw(asked)
         later = {entry["id"]: entry for entry in service.sync("default", page["seq"])["approvals"]}
         self.assertEqual(("allowed", "phone"), (later[quick]["status"], later[quick]["by"]))
         self.assertEqual(("withdrawn", "unanswered"), (later[asked]["status"], later[asked]["reason"]))
         self.assertGreater(later[asked]["seq"], later[quick]["seq"])
         # Another conversation's approvals are not included.
-        other = xiaoyou.cards.open("other", "别的对话", "working", "claude")
-        hidden = xiaoyou.approvals.ask(other["id"], "other", "claude", "Bash", "pwd")
+        other = xiaoyu.cards.open("other", "别的对话", "working", "claude")
+        hidden = xiaoyu.approvals.ask(other["id"], "other", "claude", "Bash", "pwd")
         self.assertNotIn(hidden, {entry["id"] for entry in service.sync("default", 0)["approvals"]})
         # Only an approval change still wakes a waiting sync.
         seq = max(self.all_seq(service), max(entry["seq"] for entry in service.sync("default", 0)["approvals"]))
-        timer = threading.Timer(0.3, lambda: xiaoyou.approvals.ask(card["id"], "default", "claude", "Edit", "y"))
+        timer = threading.Timer(0.3, lambda: xiaoyu.approvals.ask(card["id"], "default", "claude", "Edit", "y"))
         timer.start()
         self.addCleanup(timer.cancel)
         started = time.monotonic()
@@ -160,19 +160,19 @@ class UnifiedSyncTests(TempDirCase):
         return page["seq"]
 
     def test_sync_carries_usage_and_wakes_up_when_it_changes(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         page = service.sync("default", 0)
-        self.assertEqual(xiaoyou.usage.rev, page["usage"]["rev"])
+        self.assertEqual(xiaoyu.usage.rev, page["usage"]["rev"])
         seq = service.sync("default", page["seq"])["seq"]
         # Nothing changed and the caller already has this usage: it waits the whole time.
         started = time.monotonic()
-        service.sync("default", seq, None, 0.3, xiaoyou.usage.rev)
+        service.sync("default", seq, None, 0.3, xiaoyu.usage.rev)
         self.assertGreaterEqual(time.monotonic() - started, 0.25)
         # An older usage revision returns at once, with the current usage.
         started = time.monotonic()
-        quick = service.sync("default", seq, None, 5, xiaoyou.usage.rev - 1)
+        quick = service.sync("default", seq, None, 5, xiaoyu.usage.rev - 1)
         self.assertLess(time.monotonic() - started, 1.0)
-        self.assertEqual(xiaoyou.usage.rev, quick["usage"]["rev"])
+        self.assertEqual(xiaoyu.usage.rev, quick["usage"]["rev"])
         with self.assertRaises(RequestError):
             service.sync("default", seq, None, 0, "3")
 
@@ -202,16 +202,16 @@ class UnifiedSyncTests(TempDirCase):
         self.assertEqual(task["members"], [message["id"] + ":you", message["id"] + ":reply"])
         self.assertNotIn("entries", task)
         # 定稿之后，请求那边再报什么都不会让它退回生成中。
-        service._xiaoyou.cards.request(dict(service.get(message["id"]), status="running",
+        service._xiaoyu.cards.request(dict(service.get(message["id"]), status="running",
                                             partial="旧的一段"))
         self.assertEqual(self.all_messages(service)[message["id"] + ":reply"]["status"], "final")
 
     def test_identity_survives_restarts_and_the_log_wins_over_card_copies(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         done = service.get(service.submit("记住这句")["id"], wait=5)
         self.assertTrue(until(lambda: done["id"] + ":reply" in self.all_messages(service)))
         before = service.info()
-        state = xiaoyou._config.state_dir
+        state = xiaoyu._config.state_dir
         # 把卡文件里的副本改坏：重启后以日志为准。
         raw = json.loads((state / "cards.json").read_text(encoding="utf-8"))
         for card in raw["cards"]:
@@ -219,10 +219,10 @@ class UnifiedSyncTests(TempDirCase):
                 if entry["id"] == done["id"] + ":reply":
                     entry["text"] = "被改坏的副本"
         (state / "cards.json").write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        again, _, xiaoyou_again = self.start(self.folder)
+        again, _, xiaoyu_again = self.start(self.folder)
         self.assertEqual((again.info()["runtime_id"], again.info()["epoch"]),
                          (before["runtime_id"], before["epoch"]))
-        card = xiaoyou_again.cards.get(done["card"])
+        card = xiaoyu_again.cards.get(done["card"])
         self.assertEqual(card["entries"][-1]["text"], "re:记住这句")
         other, _, _ = self.start(self.folder / "elsewhere")
         self.assertNotEqual(other.info()["runtime_id"], before["runtime_id"])
@@ -235,7 +235,7 @@ class UnifiedSyncTests(TempDirCase):
             "entries": [{"role": "you", "text": "旧问题", "at": 1.0},
                         {"role": "xiaoyou", "text": "旧回答", "at": 2.0}]}]},
             ensure_ascii=False), encoding="utf-8")
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         first = self.all_messages(service)
         self.assertEqual(sorted(item["text"] for item in first.values()), ["旧回答", "旧问题"])
         self.assertTrue(all(key.startswith("c1-") for key in first))
@@ -243,8 +243,8 @@ class UnifiedSyncTests(TempDirCase):
         self.assertEqual(sorted(self.all_messages(again)), sorted(first))
 
     def test_desktop_sessions_are_read_only_messages_with_their_own_source(self):
-        service, _, xiaoyou = self.start()
-        sync = DesktopSync(xiaoyou.cards, self.folder, home=self.folder, clock=lambda: 100)
+        service, _, xiaoyu = self.start()
+        sync = DesktopSync(xiaoyu.cards, self.folder, home=self.folder, clock=lambda: 100)
         session = Session("codex", "s1", cwd=str(self.folder), status="running", observed_at=100)
         sync._content(session, "you", "电脑上问的", 99, identity="u1")
         sync._content(session, "xiaoyou", "电脑上答的", 100, identity="a1")
@@ -256,19 +256,19 @@ class UnifiedSyncTests(TempDirCase):
                          sorted([("电脑上问的", "owner", "desktop"), ("电脑上答的", "desktop", "desktop")]))
 
     def test_a_streaming_summary_becomes_the_message_that_finally_lands_on_the_card(self):
-        service, _, xiaoyou = self.start()
-        card = xiaoyou.cards.open("default", "后台的事", "working", "codex")
-        xiaoyou.cards.update(card["id"], run_id="r1", summary_partial="转述到一半")
+        service, _, xiaoyu = self.start()
+        card = xiaoyu.cards.open("default", "后台的事", "working", "codex")
+        xiaoyu.cards.update(card["id"], run_id="r1", summary_partial="转述到一半")
         live = self.all_messages(service)["r1-summary:reply"]
         self.assertEqual((live["status"], live["partial"]), ("streaming", "转述到一半"))
-        xiaoyou.cards.update(card["id"], say="转述完了", turn_id="r1-summary", kind="summary",
+        xiaoyu.cards.update(card["id"], say="转述完了", turn_id="r1-summary", kind="summary",
                              state="done", summary_partial="")
         final = self.all_messages(service)["r1-summary:reply"]
         self.assertEqual((final["status"], final["text"], final["partial"]),
                          ("final", "转述完了", ""))
 
     def test_revisions_never_go_back_even_for_streaming_that_was_never_written(self):
-        service, agent, xiaoyou = self.start()
+        service, agent, xiaoyu = self.start()
         agent.gate.clear()
         message = service.submit("说很久 slow")
         until(lambda: service.get(message["id"])["status"] == "running")
@@ -278,8 +278,8 @@ class UnifiedSyncTests(TempDirCase):
         self.assertEqual(before["status"], "streaming")
         # 断电：之后旧的这一台什么都写不进去了。
         service._ledger.save = lambda *args: None
-        xiaoyou.cards._save = lambda: None
-        xiaoyou.cards._log._append = lambda records: None
+        xiaoyu.cards._save = lambda: None
+        xiaoyu.cards._log._append = lambda records: None
         again, _, _ = self.start(self.folder)
         after = self.all_messages(again)[message["id"] + ":reply"]
         self.assertEqual(after["status"], "failed")
@@ -303,17 +303,17 @@ class UnifiedSyncTests(TempDirCase):
         self.assertGreater(again.message("n1:you")["seq"], highest)
 
     def test_a_summary_that_never_lands_is_closed_when_its_task_ends(self):
-        service, _, xiaoyou = self.start()
-        card = xiaoyou.cards.open("default", "后台的事", "working", "codex")
-        xiaoyou.cards.update(card["id"], run_id="r2", summary_partial="说到一半")
-        xiaoyou.cards.update(card["id"], state="cancelled", summary_partial="")
+        service, _, xiaoyu = self.start()
+        card = xiaoyu.cards.open("default", "后台的事", "working", "codex")
+        xiaoyu.cards.update(card["id"], run_id="r2", summary_partial="说到一半")
+        xiaoyu.cards.update(card["id"], state="cancelled", summary_partial="")
         closed = self.all_messages(service)["r2-summary:reply"]
         self.assertEqual((closed["status"], closed["partial"]), ("cancelled", ""))
 
     def test_a_torn_last_line_does_not_swallow_the_next_message(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         service.get(service.submit("一")["id"], wait=5)
-        log = xiaoyou._config.state_dir / "cards.log.jsonl"
+        log = xiaoyu._config.state_dir / "cards.log.jsonl"
         with log.open("a", encoding="utf-8") as handle:
             handle.write('{"id": "torn", "text": "半')
         second, _, _ = self.start(self.folder)
@@ -329,22 +329,22 @@ class UnifiedSyncTests(TempDirCase):
         old = message_log.MAX_MESSAGES
         message_log.MAX_MESSAGES = 6
         self.addCleanup(setattr, message_log, "MAX_MESSAGES", old)
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         early = service.sync("default", 0)["seq"]
         for index in range(70):  # 卡只留 50 张：前面那些卡上的消息就不再受保护
-            card = xiaoyou.cards.open("default", "第 %d 件" % index)
-            xiaoyou.cards.update(card["id"], said="问 %d" % index, say="答 %d" % index,
+            card = xiaoyu.cards.open("default", "第 %d 件" % index)
+            xiaoyu.cards.update(card["id"], said="问 %d" % index, say="答 %d" % index,
                                  turn_id="t%d" % index)
-        self.assertGreater(xiaoyou.cards.log_floor, early)
+        self.assertGreater(xiaoyu.cards.log_floor, early)
         self.assertTrue(service.sync("default", early + 1)["reset"])
         # 还在卡上的消息不会被日志挤掉（快照只放最近的，见 test_sync_window.py）。
-        on_cards = {entry["id"] for card in xiaoyou.cards.recent(None, 1000) for entry in card["entries"]}
-        self.assertTrue(all(xiaoyou.cards._log.get(message_id) for message_id in on_cards))
+        on_cards = {entry["id"] for card in xiaoyu.cards.recent(None, 1000) for entry in card["entries"]}
+        self.assertTrue(all(xiaoyu.cards._log.get(message_id) for message_id in on_cards))
 
     def test_a_half_written_last_line_loses_only_that_line(self):
-        service, _, xiaoyou = self.start()
+        service, _, xiaoyu = self.start()
         service.get(service.submit("一")["id"], wait=5)
-        log = xiaoyou._config.state_dir / "cards.log.jsonl"
+        log = xiaoyu._config.state_dir / "cards.log.jsonl"
         self.assertTrue(until(lambda: log.exists() and log.stat().st_size > 0))
         with log.open("a", encoding="utf-8") as handle:
             handle.write('{"id": "broken", "text": "半')

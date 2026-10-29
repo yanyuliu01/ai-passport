@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 和小幽设备之间的蓝牙连接：扫描、配对、订阅、收发一行行的文本。
+ * 和小鱼设备之间的蓝牙连接：扫描、配对、订阅、收发一行行的文本。
  *
  * 设备是外设，暴露 Nordic UART Service，三个特征都要求加密，所以流程是：
  * 连接 → 配对（设备屏幕显示六位数字，在手机上输入）→ 发现服务 → 订阅 TX → 就绪。
@@ -196,7 +196,7 @@ final class BleLink {
             return;
         }
         scanning = true;
-        HubStore.get().setLinkState("正在找小幽…");
+        HubStore.get().setLinkState("正在找小鱼…");
         main.postDelayed(scanTimeout, SCAN_TIMEOUT_MS);
     }
 
@@ -371,7 +371,7 @@ final class BleLink {
                 if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                     source.discoverServices();
                 } else if (device.getBondState() == BluetoothDevice.BOND_NONE) {
-                    HubStore.get().setLinkState("请输入小幽屏幕上的六位数字");
+                    HubStore.get().setLinkState("请输入小鱼屏幕上的六位数字");
                     if (!device.createBond()) {
                         HubStore.get().log("没能发起配对");
                     }
@@ -392,7 +392,7 @@ final class BleLink {
                 rx = service == null ? null : service.getCharacteristic(RX);
                 BluetoothGattDescriptor cccd = tx == null ? null : tx.getDescriptor(CCCD);
                 if (rx == null || cccd == null) {
-                    HubStore.get().setLinkState("这台设备不是小幽");
+                    HubStore.get().setLinkState("这台设备不是小鱼");
                     closeGatt();
                     retryLater();
                     return;

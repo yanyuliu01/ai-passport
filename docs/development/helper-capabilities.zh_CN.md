@@ -6,7 +6,7 @@
 
 状态：2026-10-24，仅源码变更。能力网关、桌面帮手登记、逐帮手授权编辑和 Magpie 模型服务绑定已实现。MCP 服务登记、连接编辑、OAuth 和跨电脑目录同步待做。这台电脑没装 pi，仅有适配器主机测试。
 
-帮手（Claude Code、Codex、dsh、pi）能用哪些外部工具，由小幽统一管。做法参考 [Raft](https://raft.build/zh-cn/) 的托管 MCP（[MCP Apps 文档](https://github.com/botiverse/raft-docs/blob/main/content/features/apps/mcp/index.md)），按我们“每台电脑一个 Runtime、帮手跑在本机”的结构改写，不照搬。
+帮手（Claude Code、Codex、dsh、pi）能用哪些外部工具，由小鱼统一管。做法参考 [Raft](https://raft.build/zh-cn/) 的托管 MCP（[MCP Apps 文档](https://github.com/botiverse/raft-docs/blob/main/content/features/apps/mcp/index.md)），按我们“每台电脑一个 Runtime、帮手跑在本机”的结构改写，不照搬。
 
 ## 1. 学 Raft 的什么
 
@@ -15,13 +15,13 @@
 | MCP 服务登记一次，整个空间共用；它的工具对 agent 可用 | 每台电脑一个**能力库**，登记一次，这台电脑上的帮手共用 |
 | “连接”是这个服务用的账号或 Key，由 Raft 保存，**agent 永远看不到** | 连接只存在这台电脑上（只有本机账号能读的文件），不进同步记录，不交给帮手 |
 | 登记后默认所有 agent 都能用，可以按 agent 收回、换连接 | 默认这台电脑上的帮手都能用；可以按帮手收回，或只开放部分工具 |
-| 本机服务给每个运行时注入同一个本地 MCP 代理，工具名带服务前缀 | 小幽给每个帮手注入**一个** MCP 服务（能力网关），列出它被授权的工具，名字统一加前缀 |
+| 本机服务给每个运行时注入同一个本地 MCP 代理，工具名带服务前缀 | 小鱼给每个帮手注入**一个** MCP 服务（能力网关），列出它被授权的工具，名字统一加前缀 |
 | 每次调用带配置版本号和授权版本号，对不上就拒绝 | 每次核对当前授权和版本；界面改授权、连接文件轮换影响下一次调用，config.json 修改需重启 Runtime |
-| 用不了的服务也列出来，agent 能说“X 需要重新连接” | 同样列出不可用的服务和原因；小幽在对话里提示主人 |
+| 用不了的服务也列出来，agent 能说“X 需要重新连接” | 同样列出不可用的服务和原因；小鱼在对话里提示主人 |
 | 工具最多 200 个，结果超过 512 KB 拒绝，单次调用 20 秒超时 | 同样设上限，数值见第 4 节 |
 | skill 留在运行时自己那边，Raft 只找出来显示 | 同样：找出各 harness 已有的 skill 并显示；另外允许给帮手指定 skill 目录 |
 
-**不一样的地方：** Raft 只支持远程（Streamable HTTP）MCP；我们是本机程序，本机命令启动的 MCP（stdio）也要支持。Raft 的 agent 之间可以互相协作；我们对主人只有小幽一个声音（产品原则 P1），帮手之间的协作以后再说。
+**不一样的地方：** Raft 只支持远程（Streamable HTTP）MCP；我们是本机程序，本机命令启动的 MCP（stdio）也要支持。Raft 的 agent 之间可以互相协作；我们对主人只有小鱼一个声音（产品原则 P1），帮手之间的协作以后再说。
 
 ## 2. 结构
 
@@ -37,9 +37,9 @@
   POST /mcp/call   带钥匙、工具名、参数、期望的版本 → 核对授权 → 替帮手调用真正的服务
         |
         v
-能力网关的入口：每一轮注入帮手（python -m xiaoyou_runtime.permission_mcp，stdio）
+能力网关的入口：每一轮注入帮手（python -m xiaoyu_runtime.permission_mcp，stdio）
   Claude Code：--mcp-config（同时带权限询问工具 approve）
-  Codex：-c mcp_servers.xiaoyou.command / args / env
+  Codex：-c mcp_servers.xiaoyu.command / args / env
   dsh：ACP session/new 的 mcpServers
   pi：只有全局 pi mcp add，暂不注入（等在装了 pi 的电脑上核对它会不会把环境变量带给 MCP）
 ```

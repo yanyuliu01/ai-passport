@@ -11,7 +11,7 @@ import java.util.TimeZone;
 /**
  * 卡在手机上怎么分、怎么写成字。纯 Java，不依赖安卓。
  *
- * 卡分两种：小幽自己直接答的是“对话”，交给过帮手的是“任务”。对话那一页把对话连着
+ * 卡分两种：小鱼自己直接答的是“对话”，交给过帮手的是“任务”。对话那一页把对话连着
  * 显示，任务只留一行指路的；任务各有各的页面，在里面说的话只归到它自己。
  */
 final class CardViews {
@@ -20,7 +20,7 @@ final class CardViews {
     private CardViews() {
     }
 
-    /** 交给过帮手的事是任务；小幽自己答的（包括没答成的）是对话。 */
+    /** 交给过帮手的事是任务；小鱼自己答的（包括没答成的）是对话。 */
     static boolean isTask(Card card) {
         return card.monitoringOnly || !card.agent.isEmpty();
     }
@@ -62,7 +62,7 @@ final class CardViews {
         return null;
     }
 
-    /** 一张卡里可见的话：Runtime 是我/小幽，电脑观察是你/Codex 或 Claude。 */
+    /** 一张卡里可见的话：Runtime 是我/小鱼，电脑观察是你/Codex 或 Claude。 */
     static String thread(Card card) {
         StringBuilder out = new StringBuilder();
         for (Card.Entry entry : card.entries) {

@@ -98,7 +98,7 @@ export async function identify(transport: RuntimeTransport, url: string, token: 
   // A Runtime that declares host proofs must answer one for this credential; otherwise it is not ours.
   const host = info.host as Json | undefined;
   if (info.capabilities.includes('host_proof') && !proofMatches(token, host?.id, nonce, host?.proof))
-    throw new RuntimeError('需要重新配对：这台电脑上的服务没能证明自己是你的小幽', 401);
+    throw new RuntimeError('需要重新配对：这台电脑上的服务没能证明自己是你的小鱼', 401);
   return { ...candidate, runtimeId: info.runtime_id, spaceId: info.subject_id,
     capabilities: info.capabilities.filter(item => typeof item === 'string') };
 }

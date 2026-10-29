@@ -3,8 +3,8 @@ import {accountFixture,loginShell,SHELL_MESH_SECRET,shellSpace} from './account-
 import {createRequire} from 'node:module';import {createServer} from 'node:http';
 import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';
 import {resolve,dirname,join} from 'node:path';import {fileURLToPath} from 'node:url';import assert from 'node:assert/strict';
-const require=createRequire(process.env.XIAOYOU_QA_PLAYWRIGHT||import.meta.url),{_electron}=require('playwright');
-const desktop=resolve(dirname(fileURLToPath(import.meta.url)),'..'),folder=mkdtempSync(join(tmpdir(),'xiaoyou-helper-ui-')),bin=join(folder,'bin');mkdirSync(bin);
+const require=createRequire(process.env.XIAOYU_QA_PLAYWRIGHT||import.meta.url),{_electron}=require('playwright');
+const desktop=resolve(dirname(fileURLToPath(import.meta.url)),'..'),folder=mkdtempSync(join(tmpdir(),'xiaoyu-helper-ui-')),bin=join(folder,'bin');mkdirSync(bin);
 for(const name of ['dsh','codex','claude'])writeFileSync(join(bin,name),`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${name} fixture"; else echo '{"loggedIn":true}'; fi\n`,{mode:0o700});
 const runtime='a'.repeat(32),token='synthetic-helper-token',names=new Set(['codex']),writes=[],errors=[];let seq=1,app,qa;
 const agents=()=>[...[...names].map(name=>({name,type:'codex',model:'synthetic-model'})),{name:'cc@Windows',type:'mesh'}];
@@ -28,8 +28,8 @@ try{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const port=server.address().port,config=join(folder,'config.json');
  writeFileSync(config,JSON.stringify({server:{port,token,name:'Synthetic Mac'},mesh:{secret:SHELL_MESH_SECRET},agents:{deepseek:{type:'dsh'}}}));
  qa=await accountFixture(folder,{runtimeId:runtime,spaceId:shellSpace,name:'Synthetic Mac',url:'http://127.0.0.1:'+port,token,capabilities:['sync','all_conversations']});
- const env={...process.env,...qa.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
- app=await _electron.launch({executablePath:process.env.XIAOYOU_SHELL_PACKAGED||join(desktop,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'),args:process.env.XIAOYOU_SHELL_PACKAGED?[]:[desktop],env});
+ const env={...process.env,...qa.env,PATH:bin+':'+process.env.PATH,XIAOYU_CONFIG:config,XIAOYU_DESKTOP_TEST_DATA:join(folder,'profile')};delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
+ app=await _electron.launch({executablePath:process.env.XIAOYU_SHELL_PACKAGED||join(desktop,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'),args:process.env.XIAOYU_SHELL_PACKAGED?[]:[desktop],env});
  const page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await loginShell(page);
  await page.locator('.quota-value').first().getByText('28%',{exact:true}).waitFor();assert.equal(await page.locator('.side-helpers').getByText('cc@Windows',{exact:true}).count(),0);await page.getByRole('button',{name:'Codex 的用量',exact:true}).first().click();
  for(const value of ['82%','28%'])await page.locator('.usage-modal').getByText(value,{exact:true}).waitFor();await page.getByRole('button',{name:'关闭用量',exact:true}).click();
@@ -40,5 +40,5 @@ try{
  await page.getByRole('dialog').getByRole('button',{name:'移除',exact:true}).click();await row.waitFor({state:'detached'});
  assert.equal(writes.length,2);assert.equal(writes[0].body.name,'extra');assert.equal(writes[1].path,'/v1/helpers/extra/remove');assert.deepEqual(errors,[]);
  await page.screenshot({path:join(folder,'helper-settings.png')});
- console.log(JSON.stringify({desktop:await app.evaluate(({app})=>app.getVersion()),packaged:Boolean(process.env.XIAOYOU_SHELL_PACKAGED),quotaRing:28,fiveHour:82,weekly:28,add:true,remove:true,sourceLabel:true,screenshot:join(folder,'helper-settings.png'),realModelTTFT:'NOT RUN'}));
+ console.log(JSON.stringify({desktop:await app.evaluate(({app})=>app.getVersion()),packaged:Boolean(process.env.XIAOYU_SHELL_PACKAGED),quotaRing:28,fiveHour:82,weekly:28,add:true,remove:true,sourceLabel:true,screenshot:join(folder,'helper-settings.png'),realModelTTFT:'NOT RUN'}));
 }finally{if(app)await app.close();await qa?.close();server.closeAllConnections();await new Promise(r=>server.close(r));}

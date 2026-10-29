@@ -2,7 +2,7 @@
   <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# DS companion (Pocket Hub)
+# Xiaoyu companion (Pocket Hub)
 
 Agents changing this project must first read the [root instructions](../AGENTS.md)
 and [mandatory App/Runtime/firmware reliability rules](../docs/development/cross-stack-reliability.md).
@@ -10,18 +10,18 @@ They define regression, 3-second first-response, connection recovery, and
 multi-end consistency acceptance. The capability descriptions below do not
 establish that these requirements have passed validation.
 
-The Android companion is built around DS: you talk to her, she hands work to helpers, and a left sidebar shows every task and helper. It sits between the phone's AI assistants and
+The Android companion is built around Xiaoyu: you talk to her, she hands work to helpers, and a left sidebar shows every task and helper. It sits between the phone's AI assistants and
 the Claude Pocket device. It reads the notifications of registered apps
 (Claude and Codex by default), keeps the recent ones as a small feed, and sends
 that feed to the device over Bluetooth LE. The app speaks the same Hardware
 Buddy wire protocol that the Claude desktop app does, plus the hub extension
 described in the [firmware documentation](../docs/claude-pocket.md#the-conversation).
 
-The app also has a chat box for talking to DS. A message typed there goes
+The app also has a chat box for talking to Xiaoyu. A message typed there goes
 to the [Runtime](../runtime/README.md) over HTTP. Every request you
 make is one thing with a card on the runtime; the app keeps waiting for the
 runtime to synchronize messages and task state (`/v1/sync`), shows them, and reports them
-to the device: what DS is doing right now, the card of every thing, the
+to the device: what Xiaoyu is doing right now, the card of every thing, the
 things being worked on and their two latest steps. When a helper wants to do
 something that needs your consent, the app shows a banner under the top bar and full
 operation detail; the device also shows its prompt, and either side can answer. The app also tells
@@ -38,6 +38,10 @@ The hub is its own participant, not a Claude feature. It knows nothing about
 any particular assistant; a source is just an Android package name and a
 display label, and more can be added in the app.
 
+## Xiaoyu naming (Android 0.39.0 / code 87)
+
+The App labels, character artwork identifiers and state class now use Xiaoyu. Existing account, application/signing identity and message-role compatibility are retained. This update does not install the Runtime character on another computer. The verified packages are published locally through Runtime; phone installation remains unverified.
+
 ## Account-only remote connection (Android 0.35.0 source)
 
 Phone and desktop sign in to the same account on the existing self-hosted
@@ -46,7 +50,7 @@ before discovering computers; it no longer offers QR pairing or raw connection
 strings. Retained legacy routes remain inactive and their history is preserved.
 See the [account guide](desktop/deploy/accounts.md) for migration and boundaries.
 
-In Android 0.35.0, open **Xiaoyou account** to select the receiving computer for new messages. The choice persists per account, and an offline selection never silently falls back to another computer. Accepted requests remain bound to their original source. Login and account selection use the existing bottom sheet, rounded cards and blue primary action.
+In Android 0.35.0, open **Xiaoyu account** to select the receiving computer for new messages. The choice persists per account, and an offline selection never silently falls back to another computer. Accepted requests remain bound to their original source. Login and account selection use the existing bottom sheet, rounded cards and blue primary action.
 
 ## Cache persistence (App 0.38.3)
 
@@ -104,7 +108,7 @@ of the message that was sent, instead of drawing it as a new row.
 Since 0.32.8 the sync loop serializes its saved sync cache after releasing the
 store lock, so the main thread no longer waits for it on every sync page.
 
-Since 0.32.7, `adb shell setprop debug.xiaoyou.slowmain 1` (then restart the App)
+Since 0.32.7, `adb shell setprop debug.xiaoyu.slowmain 1` (then restart the App)
 also logs `slow_main ms=<n> at=<handler and callback class>` for every main-thread
 message of 100 ms or more. It is off by default and records class names and
 durations only.
@@ -112,16 +116,16 @@ durations only.
 ### 0.32.4
 
 For the 3-second first-response check, the App writes one logcat line per turn
-under the tag `XiaoyouTiming`: `send key=<client id> t=<uptime ms>` when a
+under the tag `XiaoyuTiming`: `send key=<client id> t=<uptime ms>` when a
 message is sent and `bubble key=<client id> t=<uptime ms> elapsed_ms=<n>` when
 the first complete reply bubble is added. Both use the phone's uptime clock; a
 retry keeps the original start. Lines carry only the random client id and
 times, never message text. Read them with
-`adb logcat -s XiaoyouTiming`. The bubble's pop-in animation is not included.
+`adb logcat -s XiaoyuTiming`. The bubble's pop-in animation is not included.
 
 ## Replies cut short (App 0.32.3)
 
-When the owner sends a message while Xiaoyou is still replying, the part she
+When the owner sends a message while Xiaoyu is still replying, the part she
 already said stays in the chat. With a Runtime that marks it
 (`presentation.interrupted`), the bubble shows the localized "interrupted" status line under
 it, so a cut-short reply is not mistaken for a complete answer. The desktop
@@ -166,7 +170,7 @@ the phone no longer applies its own separator/Markdown rules to these records.
 Older Runtimes keep the legacy path. An unsupported policy is explicitly labelled.
 The new version preserves pairing, drafts, images, approvals and retry identities.
 
-The same contract is consumed by Xiaoyou desktop 0.1.6. Native source history uses
+The same contract is consumed by Xiaoyu desktop 0.1.6. Native source history uses
 it too, while Codex/Claude native-window display and continuation convergence
 remain incomplete and labelled in the directory. Shared records do not establish
 native-window acceptance. Phone installation, real rendered timing and live
@@ -219,18 +223,18 @@ response timing, and real multi-client acceptance remain separate checks.
 
 The following section describes versions before 0.28.0; the current navigation is described above.
 
-DS is the main thread: she keeps you company, takes requests and hands them to
+Xiaoyu is the main thread: she keeps you company, takes requests and hands them to
 helpers. You only talk and watch, so the app offers no helper or effort picker;
-say "let Codex do it, carefully" and DS arranges it. The ☰ button at the top
+say "let Codex do it, carefully" and Xiaoyu arranges it. The ☰ button at the top
 left opens a sidebar with every place in the app:
 
-- **Chat with DS** — a persistent message timeline. Sent messages appear immediately;
+- **Chat with Xiaoyu** — a persistent message timeline. Sent messages appear immediately;
   each short message of a reply pops in whole once it is written, like a messaging app. Hand-off replies stay visible with a task
   link, and completion summaries arrive as new messages without changing pages.
   Conversations started on the computer never appear here. Older messages can be
   loaded above the visible window; deleting or pruning a task card does not remove
   messages already saved on this phone.
-- **Tasks** — work DS handed to a helper, grouped by creation date in the phone's
+- **Tasks** — work Xiaoyu handed to a helper, grouped by creation date in the phone's
   time zone (Today, Yesterday, then calendar dates), newest first within each day.
   Each row shows its creation time. Pinned tasks have their own section with a full
   date and time. Completion, approvals and subsequent task runs never change the
@@ -239,13 +243,13 @@ left opens a sidebar with every place in the app:
   archived tasks can be restored from the "Archived" row. Titles come from the
   runtime so the device, phone and computer agree.
 - **Helpers** — one row per helper (Codex, Claude, then others) with its state.
-  A helper's page lists what DS handed to it, each linking back to its task, and
+  A helper's page lists what Xiaoyu handed to it, each linking back to its task, and
   the conversations opened on the computer; its composer hands work to that helper
-  directly, without DS arranging it.
+  directly, without Xiaoyu arranging it.
 - **Connection and settings** — the device and computer connection, companion
   look, usage, firmware, notifications and preferences.
 
-The app opens on DS herself. Her portrait moves with what is really happening:
+The app opens on Xiaoyu herself. Her portrait moves with what is really happening:
 she breathes while idle, tilts her head with rings while listening, floats with
 three dots while thinking, bounces lightly while her streamed reply appears,
 and hops when a helper finishes. Tap her and she answers locally. A handed-off
@@ -269,10 +273,10 @@ yet, the home screen offers to connect one. The device page mirrors the wrist
 screen, connects or disconnects it, links to firmware, and keeps a placeholder
 for what later firmware adds.
 
-A task's page shows its steps (DS splits the request, the helper works with its
-latest progress, DS reports back), then the task's conversation; messages sent
+A task's page shows its steps (Xiaoyu splits the request, the helper works with its
+latest progress, Xiaoyu reports back), then the task's conversation; messages sent
 there appear immediately and continue that task. A worker's original final result
-and DS's summary are separate entries, with long originals saved as attachments.
+and Xiaoyu's summary are separate entries, with long originals saved as attachments.
 Files and original results become available while the summary is still being
 prepared; its streaming bubble is independent of any current chat reply. New
 message IDs, scope and result metadata are additive and old runtimes remain
@@ -284,15 +288,15 @@ own project directory, so the reply also appears on the computer; the work gets 
 own task, titled after that conversation. While the turn is still running on the computer, sending is
 refused so two sides never edit one session. Needs runtime 0.8.1.
 Status is written as one coloured word: blue in progress, amber waiting for
-you, nothing for ended tasks. The companion look only changes how DS appears in
+you, nothing for ended tasks. The companion look only changes how Xiaoyu appears in
 the chat; it does not decide which helper gets work. The plus button for
 attachments stays hidden until the runtime can receive files from the phone.
 Draft text is kept separately for each computer and task.
 
-DS, Codex and Claude portraits are transparent 256px crops from the retained
+Xiaoyu, Codex and Claude portraits are transparent 256px crops from the retained
 source atlases. `android/tools/PreparePortraits.java` regenerates them with JDK 17.
 Claude/cc aliases share one image; other helpers get a named placeholder. Desktop
-messages show their observed author, while DS relay replies retain DS's portrait.
+messages show their observed author, while Xiaoyu relay replies retain Xiaoyu's portrait.
 Optional breathing animation stops for hidden/detached portraits.
 
 Pending approvals show one banner under the top bar, only while something is waiting.
@@ -322,10 +326,10 @@ are viewed on the phone, not transferred to the device over BLE.
 The Runtime HTTP request and attachment fields are documented in
 [HTTP interface](../runtime/README.md#http-interface) and
 [task images and downloadable files](../runtime/README.md#task-images-and-downloadable-files).
-Their implementations are `runtime/xiaoyou_runtime/api/server.py`, `cards.py`, and
+Their implementations are `runtime/xiaoyu_runtime/api/server.py`, `cards.py`, and
 `artifacts.py`; the agent reply schemas are `reply_schema()` and `lane_schema()`
-in `runtime/xiaoyou_runtime/loop/xiaoyou.py`. Display branding does not rename Python
-modules, the Android package, JSON roles such as `xiaoyou`, or the BLE device name
+in `runtime/xiaoyu_runtime/loop/xiaoyu.py`. Display branding does not rename Python
+modules, the Android package, JSON roles such as `xiaoyu`, or the BLE device name
 `Claude-XXXXXX`.
 
 Usage is available under Connection and settings. It shows the
@@ -340,11 +344,11 @@ when the selected source has no data, clearing the previous computer's values.
 
 | On the phone | On the device |
 | --- | --- |
-| A message sent to DS from the chat box | Screen 1: what you said, DS thinking, the agent she handed the work to, then a brief of a sentence or two |
-| The cards on the runtime | Screen 2 pages through conversation only (what DS answered herself): the 8 most recent, plus every one still being worked on or on screen 3's list; on firmware that shows them apart a task's card carries that thing's latest exchange (at most 480 bytes), for the page opened from screen 3. Each holds the first sentence of the thing and the latest thing DS said (the first 959 bytes; the full exchange stays on the phone) |
+| A message sent to Xiaoyu from the chat box | Screen 1: what you said, Xiaoyu thinking, the agent she handed the work to, then a brief of a sentence or two |
+| The cards on the runtime | Screen 2 pages through conversation only (what Xiaoyu answered herself): the 8 most recent, plus every one still being worked on or on screen 3's list; on firmware that shows them apart a task's card carries that thing's latest exchange (at most 480 bytes), for the page opened from screen 3. Each holds the first sentence of the thing and the latest thing Xiaoyu said (the first 959 bytes; the full exchange stays on the phone) |
 | The things handed to helpers | Screen 3: at most four, those in progress first (who is doing it, for how long and the two latest steps, tool names and commands verbatim), followed on firmware that announced `threads` by the latest that ended (the brief of the conclusion); the count in the top bar. A sentence said while holding the key on screen 3 carries `pin`, which the app passes to the runtime as it is: it is always filed on the selected thing |
 | Independently running desktop conversations discovered by the runtime | The same task/card pages show the agent, project, state and latest activity; opening a task shows the latest visible request and reply excerpts (at most 480 bytes). Continuing or stopping these sessions stays on the computer; a live bridged approval is a separate response channel |
-| An operation a helper wants confirmed | DS asks, who wants what is shown verbatim; `OK` says yes, `DOWN` says no, and the answer goes back to the runtime |
+| An operation a helper wants confirmed | Xiaoyu asks, who wants what is shown verbatim; `OK` says yes, `DOWN` says no, and the answer goes back to the runtime |
 | A voice message recorded on the device | The same as a typed message; what was heard appears on the device and in the chat box once the runtime has transcribed it |
 | The agents of the selected runtime | The helpers page in the menu (the first four) |
 | Usage from the selected runtime | Screen 4: subscription windows, reset times, helper models and tiers; the screen remains available before data arrives and after disconnect |
@@ -352,7 +356,7 @@ when the selected source has no data, clearing the previous computer's values.
 | Notifications not yet dismissed | The idle first screen says how many |
 | A notification with both an allow-like and a deny-like button | The pet asks; `OK` presses the allow button, `DOWN` the deny button |
 | Nothing new | A keepalive every 10 seconds so the device stays connected |
-| A version of the device firmware chosen on the computer | The device shows DS "changing into something new" with a progress bar and restarts by itself when done; see [Device firmware](#device-firmware) below |
+| A version of the device firmware chosen on the computer | The device shows Xiaoyu "changing into something new" with a progress bar and restarts by itself when done; see [Device firmware](#device-firmware) below |
 
 When the app introduces itself the device announces what it understands. One
 that announces `cards` supports card and task screens and gets everything
@@ -447,8 +451,8 @@ In the app, in order:
 2. Enable notification access for the app in system settings.
 3. Connect. When the device shows a six-digit passkey, type it on the phone.
 
-To talk to DS, start the runtime on a computer on the same network, run
-`python3 -m xiaoyou_runtime --pair` there, paste the printed line
+To talk to Xiaoyu, start the runtime on a computer on the same network, run
+`python3 -m xiaoyu_runtime --pair` there, paste the printed line
 (`http://<address>:<port>#<token>`) into the app, and add it. Several computers
 can be added; tap one to choose which answers, long-press to remove it. The
 app keeps the 20 most recent turns on the phone and hands the latest ones to
@@ -589,7 +593,7 @@ App-controlled CLI/harness installation; no installer is included in this versio
 
 ## App fixes (0.18.0)
 
-- Computers in one Xiaoyou mesh (runtime 0.10.0 or newer, same `subject_id`) count
+- Computers in one Xiaoyu mesh (runtime 0.10.0 or newer, same `subject_id`) count
   as one: when the selected one cannot be reached, the app tries its other
   addresses and then another member, which holds the same conversation and tasks.
   Approvals are watched once per mesh (and once per computer for several addresses),
@@ -598,7 +602,7 @@ App-controlled CLI/harness installation; no installer is included in this versio
 
 ## App fixes (0.17.4)
 
-- What you say inside a computer session goes to Xiaoyou first: she explains or
+- What you say inside a computer session goes to Xiaoyu first: she explains or
   summarizes it herself, and the session only continues when you name its helper
   ("let cc continue…") or she decides it should do work. The composer no longer
   refuses while the computer is still running a turn; the hint and the notice
@@ -721,7 +725,7 @@ engine's Android binding.
 
 ## App updates
 
-When the computer has published a newer build (`python3 -m xiaoyou_runtime app
+When the computer has published a newer build (`python3 -m xiaoyu_runtime app
 publish`, see the runtime README), the app says so once and the sidebar footer
 shows that a new app is available. Connections and settings → App update downloads it through
 the runtime, checks its SHA-256 and opens Android's installer; the first time,
@@ -769,13 +773,13 @@ way, not as an APK file to sideload:
 
    ```bash
    apk_dir=../companion/android/app/build/outputs/apk/debug
-   python3 -m xiaoyou_runtime app publish "$apk_dir/app-universal-debug.apk" \
+   python3 -m xiaoyu_runtime app publish "$apk_dir/app-universal-debug.apk" \
      --variant "arm64-v8a=$apk_dir/app-arm64-v8a-debug.apk" \
      --variant "armeabi-v7a=$apk_dir/app-armeabi-v7a-debug.apk" \
      --variant "x86=$apk_dir/app-x86-debug.apk" \
      --variant "x86_64=$apk_dir/app-x86_64-debug.apk" \
      --note "one line the owner understands"
-   python3 -m xiaoyou_runtime app status
+   python3 -m xiaoyu_runtime app status
    ```
 
    Publishing now uploads every supplied APK to GitHub Releases by default
@@ -786,7 +790,7 @@ way, not as an APK file to sideload:
    never Git commits. Publish the speech pack again only when its files change:
 
    ```bash
-   python3 -m xiaoyou_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr
+   python3 -m xiaoyu_runtime app pack speech ../companion/android/app/build/phone-speech/assets/asr
    ```
 
    Pack files are stored and uploaded by checksum: unchanged files are never uploaded
@@ -893,7 +897,7 @@ the runtime can therefore have the app write any image to the device.
 | --- | --- |
 | `android/app/src/main/java/.../BuddyProtocol.java` | Wire format; plain Java, unit tested |
 | `.../Sources.java` | Registry of sources (package name, label, enabled) |
-| `.../HubStore.java` | In-memory feed, what DS is doing right now, the runtime's cards and approvals, pending questions, log |
+| `.../HubStore.java` | In-memory feed, what Xiaoyu is doing right now, the runtime's cards and approvals, pending questions, log |
 | `.../Card.java`, `.../Json.java` | The card of one thing and an approval, and the JSON parser that reads them; plain Java, unit tested |
 | `.../NotifyListener.java` | Notification listener service |
 | `.../BleLink.java`, `.../LinkService.java` | BLE central and the foreground service that keeps it alive |
@@ -917,7 +921,7 @@ visually accepted on a phone; keyboard layout, navigation, companion selection
 and live approval round trips still need device acceptance.
 
 For 0.10.0, the Android build, host tests, and complete repository validation
-gate passed. DS attendance, task pinning, multi-Runtime approval routing, and
+gate passed. Xiaoyu attendance, task pinning, multi-Runtime approval routing, and
 attachment integrity have host coverage. On the development computer, the
 Codex and Claude Code hook handlers were merged while preserving existing
 configuration; Codex still requires the user to review and trust the current
@@ -977,7 +981,7 @@ a shared alias does not rewrite native agent databases or prove safe native take
 
 ## Helper management and quota alignment (Android 0.36.0)
 
-Settings > Helper management operates on the computer selected in Xiaoyou account.
+Settings > Helper management operates on the computer selected in Xiaoyu account.
 The sheet names that computer and supports adding through its native subscription,
 API key or model service, removing a helper, and restoring removed config helpers.
 Credentials stay on the target computer; pending requests and history are retained.

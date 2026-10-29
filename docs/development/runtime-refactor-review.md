@@ -4,7 +4,7 @@
 
 Date: 2026-10-23. The owner accepted these design corrections and requested a handoff for Claude Code.
 
-This review covers the Raft and DS-Bot-App lessons in section 8 of the [refactor design](runtime-refactor-design.md) at commit `99cf439`. This is a bounded review handoff, not a second architecture specification. CC should merge the corrections below into the main design before implementing the affected contracts, then record their destination here. Repository rules and the [cross-stack reliability requirements](cross-stack-reliability.md) remain applicable.
+This review covers the Raft and Xiaoyu-Bot-App lessons in section 8 of the [refactor design](runtime-refactor-design.md) at commit `99cf439`. This is a bounded review handoff, not a second architecture specification. CC should merge the corrections below into the main design before implementing the affected contracts, then record their destination here. Repository rules and the [cross-stack reliability requirements](cross-stack-reliability.md) remain applicable.
 
 At writing time CC is changing R3's `world.py`, `cards.py`, tests and main design. This document neither reviews nor accepts that new implementation, and does not require discarding it. Do not redo R2 because of this review or restart the live Runtime. The owner will give CC this document; its creation does not mean a message was sent.
 
@@ -73,7 +73,7 @@ Serialize membership changes through the designated identity/permission authorit
 
 If the permission authority has not been selected, record it as an unresolved R4 prerequisite. One-change-at-a-time is not a substitute for a consistency protocol.
 
-## 6. Limits of the DS-Bot-App lessons
+## 6. Limits of the Xiaoyu-Bot-App lessons
 
 | Topic | Corrected requirement |
 | --- | --- |
@@ -100,9 +100,9 @@ Report evidence and remaining gaps for each item. Unimplemented checks or unavai
 ## 8. Primary references and incorporation record
 
 - [etcd-io/raft README](https://github.com/etcd-io/raft/blob/main/README.md): deterministic state machines, I/O boundaries, Ready persistence/application constraints and lease prerequisites.
-- [DS-Bot-App overview](https://github.com/QingJ01/DS-Bot-App/blob/main/README.zh.md): host/mobile structure, segments and task bindings.
-- [DS-Bot-App connection guide](https://github.com/QingJ01/DS-Bot-App/blob/main/docs/mobile-install.zh.md): LAN, HTTPS tunnels and Tailscale reachability.
-- [DS-Bot-App feature guide](https://github.com/QingJ01/DS-Bot-App/blob/main/docs/mobile-features.zh.md): operation receipts, browser snapshots and background-notification limitations.
+- [Xiaoyu-Bot-App overview](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/README.zh.md): host/mobile structure, segments and task bindings.
+- [Xiaoyu-Bot-App connection guide](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/docs/mobile-install.zh.md): LAN, HTTPS tunnels and Tailscale reachability.
+- [Xiaoyu-Bot-App feature guide](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/docs/mobile-features.zh.md): operation receipts, browser snapshots and background-notification limitations.
 
 These are design references, not an audit of their entire implementations. Recommendations here are engineering judgments for this repository.
 
@@ -114,7 +114,7 @@ Status (2026-10-23, merged into the main design by CC, documentation only):
 | Section 3 (three generations, deltas first, bounded retention) | 1.2 "Three generations and positions"; 2.2 gaps, snapshots and the bounded retention window; 8.1 rows 3-4 ("the epoch plays the role of the term" removed) |
 | Section 4 (the deterministic core never re-calls models) | 3.1 "Deterministic core"; 8.1 rows 1-2; 8.3 item 2 |
 | Section 5 (catch-up and membership) | 8.3 items 3-4 (the permission authority is an open R4 condition) |
-| Section 6 (scope of the DS-Bot-App lessons) | 8.2 table; 8.3 items 5-6 |
+| Section 6 (scope of the Xiaoyu-Bot-App lessons) | 8.2 table; 8.3 items 5-6 |
 | Section 7 (order and fault cases) | "Required fault cases" at the end of 8.3; R3 continues with R3.1-R3.4 in the section 7 handoff |
 
 Verification: repository document checks pass. Implementation and fault-case acceptance are reported

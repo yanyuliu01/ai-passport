@@ -1,8 +1,8 @@
-// main/pocket_ui.c —— 小幽界面实现（240×320 竖屏，三键操作）。
+// main/pocket_ui.c —— 小鱼界面实现（240×320 竖屏，三键操作）。
 //
 // 四屏，确认键短按轮着切：
-//   第一屏 形象：大的小幽和她此刻在干什么。
-//   第二屏 对话：一屏一件事——你说的那句和小幽最新的话；上下键在这件事里翻，翻到头
+//   第一屏 形象：大的小鱼和她此刻在干什么。
+//   第二屏 对话：一屏一件事——你说的那句和小鱼最新的话；上下键在这件事里翻，翻到头
 //               再按就换到上一件 / 下一件。
 //   第三屏 任务：正在做的事，和选中那件的最近两步。
 //   第四屏 用量：每个订阅账号还剩多少、每个帮手用的是哪个模型；未同步时保留占位。
@@ -31,15 +31,15 @@
 #include "pocket_text.h"
 #include "pocket_view.h"
 
-// ---- 配色：夜色。DS 使用蓝白鲸鱼大头，底色是夜空的墨蓝。
-// 彩色只回答一个问题——现在是谁在做事：DS 是海蓝，每个帮手有自己的颜色
+// ---- 配色：夜色。Xiaoyu 使用蓝白鲸鱼大头，底色是夜空的墨蓝。
+// 彩色只回答一个问题——现在是谁在做事：Xiaoyu 是海蓝，每个帮手有自己的颜色
 // （pocket_helper_color）。绿、红、黄只表示可以、不行、要你留意。
 #define C_BG       0x15172A
 #define C_CARD     0x232646
 #define C_LINE     0x3A3E68
 #define C_TEXT     0xF2F0FA
 #define C_DIM      0x8E90B5
-#define C_XIAOYOU  POCKET_COLOR_XIAOYOU
+#define C_XIAOYU  POCKET_COLOR_XIAOYU
 #define C_OK       0x86D19A
 #define C_WARN     0xF2C265
 #define C_DANGER   0xF0736A
@@ -64,7 +64,7 @@
 #define ENTRY_ROW_H    50
 #define ENTRY_ROW_GAP  3
 
-// 小幽出现的地方：第一屏（大的）、第二屏顶上那一条（小的），和五个占满屏幕的场景。
+// 小鱼出现的地方：第一屏（大的）、第二屏顶上那一条（小的），和五个占满屏幕的场景。
 enum {
     PET_SOLO,
     PET_TALK,
@@ -87,8 +87,8 @@ enum {
 #define DOT_X(count)    (SCREEN_W / 2 - ((count) * DOT_SIZE + ((count) - 1) * DOT_GAP) / 2)
 #define DOT_Y           15
 
-// 第一屏。小幽下面是标题，再下面最多三行。她把活交给帮手时，第一行换成
-// “小幽 ···✉··· [帮手]”，下面是这件事的标题和计时。
+// 第一屏。小鱼下面是标题，再下面最多三行。她把活交给帮手时，第一行换成
+// “小鱼 ···✉··· [帮手]”，下面是这件事的标题和计时。
 #define HOME_TITLE_Y    132
 #define HOME_SUB_Y      164
 #define HOME_ROW_X      40
@@ -96,7 +96,7 @@ enum {
 #define TAG_PAD         8
 #define TAG_H           22
 
-// 第二屏。顶上一条：左边是缩小的小幽，右边第一行是“小幽 ···✉··· [帮手]”，第二行是
+// 第二屏。顶上一条：左边是缩小的小鱼，右边第一行是“小鱼 ···✉··· [帮手]”，第二行是
 // 这件事现在怎么样和计时。一条细线下面一行小字：第几件、几点开始的、是谁做的；
 // 再下面是这件事的话，一屏八行。
 #define HEAD_PET_X      14
@@ -240,7 +240,7 @@ static struct {
     lv_obj_t *notice;
     // 页面容器，下标为 buddy_page_t
     lv_obj_t *pages[BUDDY_PAGE_COUNT];
-    // 小幽
+    // 小鱼
     pet_t pets[PET_COUNT];
     unsigned pet_frame;
     unsigned motion_tick;
@@ -508,7 +508,7 @@ static lv_obj_t *make_title(lv_obj_t *parent, const char *text)
 static void style_scrollbar(lv_obj_t *obj)
 {
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_style_bg_color(obj, lv_color_hex(C_XIAOYOU), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(C_XIAOYU), LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_SCROLLBAR);
     lv_obj_set_style_width(obj, 3, LV_PART_SCROLLBAR);
     lv_obj_set_style_radius(obj, 2, LV_PART_SCROLLBAR);
@@ -551,7 +551,7 @@ static lv_obj_t *make_action_bar(lv_obj_t *parent, int y, uint32_t color, bool s
     return bar;
 }
 
-// 画一个实心小方块。所有像素风的东西（小幽、按键图标、信封、等待的点）都用它拼。
+// 画一个实心小方块。所有像素风的东西（小鱼、按键图标、信封、等待的点）都用它拼。
 static void draw_block(lv_layer_t *layer, lv_draw_rect_dsc_t *dsc, int x, int y, int w, int h,
                        uint32_t color)
 {
@@ -566,7 +566,7 @@ static void draw_block(lv_layer_t *layer, lv_draw_rect_dsc_t *dsc, int x, int y,
 }
 
 // ---------------------------------------------------------------------------
-// DS: nearest-neighbour source pixels, kept in the existing screen footprints.
+// Xiaoyu: nearest-neighbour source pixels, kept in the existing screen footprints.
 // ---------------------------------------------------------------------------
 
 static void pet_draw_cb(lv_event_t *event)
@@ -676,7 +676,7 @@ static void pet_timer_cb(lv_timer_t *timer)
     lv_obj_invalidate(s.home_link);
 }
 
-// 审批、配对、确认的上半部分：左边小幽的头像，右边它说话的气泡。返回气泡容器，
+// 审批、配对、确认的上半部分：左边小鱼的头像，右边它说话的气泡。返回气泡容器，
 // *text_out 是气泡里的文字标签（固定文案，最多三行）。
 static lv_obj_t *make_speech(lv_obj_t *parent, int which, lv_obj_t **text_out)
 {
@@ -693,7 +693,7 @@ static lv_obj_t *make_speech(lv_obj_t *parent, int which, lv_obj_t **text_out)
 }
 
 // ---------------------------------------------------------------------------
-// 像素风的小图：按键图标、小幽递出去的信、音量条
+// 像素风的小图：按键图标、小鱼递出去的信、音量条
 // ---------------------------------------------------------------------------
 
 // 11×11 的格子里画一个键：上、下是三角，确认是一个圈。
@@ -837,7 +837,7 @@ static void update_bar_draw_cb(lv_event_t *event)
     dsc.bg_opa = LV_OPA_COVER;
     for (index = 0; index < UPDATE_CELLS; ++index) {
         draw_block(layer, &dsc, coords.x1 + index * (UPDATE_CELL_W + UPDATE_CELL_GAP), coords.y1,
-                   UPDATE_CELL_W, UPDATE_BAR_H, index < lit ? C_XIAOYOU : C_LINE);
+                   UPDATE_CELL_W, UPDATE_BAR_H, index < lit ? C_XIAOYU : C_LINE);
     }
 }
 
@@ -864,7 +864,7 @@ static void build_top_bar(lv_obj_t *root)
         s.dot_count = 3;
     }
     // 后台在做几件事：没有就不显示。
-    s.doing = make_label(root, &pocket_font_14, C_XIAOYOU, "");
+    s.doing = make_label(root, &pocket_font_14, C_XIAOYU, "");
     lv_obj_set_pos(s.doing, DOT_X(3) + 3 * (DOT_SIZE + DOT_GAP) + 4, 8);
     lv_obj_add_flag(s.doing, LV_OBJ_FLAG_HIDDEN);
 
@@ -900,9 +900,9 @@ static void build_bottom(lv_obj_t *root)
 static void make_tag(lv_obj_t *parent, tag_t *tag, int x, int y)
 {
     tag->box = make_box(parent, x, y, LV_SIZE_CONTENT, TAG_H);
-    outline(tag->box, C_XIAOYOU, TAG_H / 2, 2);
+    outline(tag->box, C_XIAOYU, TAG_H / 2, 2);
     lv_obj_set_style_pad_hor(tag->box, TAG_PAD, 0);
-    tag->label = make_label(tag->box, &pocket_font_16, C_XIAOYOU, "");
+    tag->label = make_label(tag->box, &pocket_font_16, C_XIAOYU, "");
     lv_obj_align(tag->label, LV_ALIGN_LEFT_MID, 0, 0);
     tag->name[0] = '\0';
     tag->who[0] = '\0';
@@ -920,9 +920,9 @@ static void build_home(lv_obj_t *page)
     lv_obj_set_width(s.home_title, INNER_W);
     lv_obj_set_style_text_align(s.home_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s.home_title, SIDE, HOME_TITLE_Y);
-    // 她把活交给了帮手：小幽 ···✉··· [帮手]
+    // 她把活交给了帮手：小鱼 ···✉··· [帮手]
     s.home_row = make_box(page, HOME_ROW_X, HOME_SUB_Y - 2, SCREEN_W - HOME_ROW_X - SIDE, TAG_H);
-    name = make_label(s.home_row, &pocket_font_14, C_XIAOYOU, PT_XIAOYOU);
+    name = make_label(s.home_row, &pocket_font_14, C_XIAOYU, PT_XIAOYU);
     lv_obj_set_pos(name, 0, 3);
     s.home_link = make_box(s.home_row, 34, 5, LINK_W, 13);
     lv_obj_add_event_cb(s.home_link, link_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
@@ -931,12 +931,12 @@ static void build_home(lv_obj_t *page)
     s.home_sub = make_text_block(page, &pocket_font_16, C_DIM, SIDE, HOME_SUB_Y, INNER_W,
                                  LINES_16(3));
     lv_obj_set_style_text_align(s.home_sub, LV_TEXT_ALIGN_CENTER, 0);
-    s.home_timer = make_label(page, &pocket_font_16, C_XIAOYOU, "");
+    s.home_timer = make_label(page, &pocket_font_16, C_XIAOYU, "");
     lv_obj_set_width(s.home_timer, INNER_W);
     lv_obj_set_style_text_align(s.home_timer, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s.home_timer, SIDE, HOME_SUB_Y);
     lv_obj_add_flag(s.home_timer, LV_OBJ_FLAG_HIDDEN);
-    s.link_color = C_XIAOYOU;
+    s.link_color = C_XIAOYU;
 }
 
 static lv_obj_t *make_talk_text(lv_obj_t *parent, uint32_t color, bool quote)
@@ -946,10 +946,10 @@ static lv_obj_t *make_talk_text(lv_obj_t *parent, uint32_t color, bool quote)
     lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(label, TL_TEXT_W);
     if (quote) {
-        // 你说的话：左边一条小幽颜色的竖线，像引用。
+        // 你说的话：左边一条小鱼颜色的竖线，像引用。
         lv_obj_set_style_border_side(label, LV_BORDER_SIDE_LEFT, 0);
         lv_obj_set_style_border_width(label, 3, 0);
-        lv_obj_set_style_border_color(label, lv_color_hex(C_XIAOYOU), 0);
+        lv_obj_set_style_border_color(label, lv_color_hex(C_XIAOYU), 0);
         lv_obj_set_style_border_opa(label, LV_OPA_COVER, 0);
         lv_obj_set_style_pad_left(label, 6, 0);
     }
@@ -973,17 +973,17 @@ static void build_talk(lv_obj_t *page)
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(label, SIDE, 122);
 
-    // 顶上一条：缩小的小幽，谁在做（小幽 ···✉··· [帮手]），这件事现在怎么样。
+    // 顶上一条：缩小的小鱼，谁在做（小鱼 ···✉··· [帮手]），这件事现在怎么样。
     s.talk = make_box(page, 0, 0, SCREEN_W, AREA_H);
     make_pet(s.talk, PET_TALK, HEAD_PET_X, HEAD_PET_Y, PET_TALK_SCALE);
-    name = make_label(s.talk, &pocket_font_14, C_XIAOYOU, PT_XIAOYOU);
+    name = make_label(s.talk, &pocket_font_14, C_XIAOYU, PT_XIAOYU);
     lv_obj_set_pos(name, HEAD_TEXT_X, 3);
     s.head_link = make_box(s.talk, HEAD_LINK_X, 5, LINK_W, 13);
     lv_obj_add_event_cb(s.head_link, link_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
     make_tag(s.talk, &s.head_tag, HEAD_TAG_X, 0);
     s.head_status = make_text_block(s.talk, &pocket_font_16, C_DIM, HEAD_TEXT_X, HEAD_ROW2_Y,
                                     HEAD_TEXT_W, LINES_16(1));
-    s.head_elapsed = make_label(s.talk, &pocket_font_16, C_XIAOYOU, "");
+    s.head_elapsed = make_label(s.talk, &pocket_font_16, C_XIAOYU, "");
     lv_obj_set_width(s.head_elapsed, HEAD_ELAPSED_W);
     lv_obj_set_style_text_align(s.head_elapsed, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(s.head_elapsed, SCREEN_W - SIDE - HEAD_ELAPSED_W, HEAD_ROW2_Y);
@@ -1021,7 +1021,7 @@ static void build_tasks(lv_obj_t *page)
         lv_obj_t *row = make_box(s.task_list, 0, index * TASK_STEP, INNER_W, TASK_ROW_H);
 
         fill(row, C_CARD, 9);
-        lv_obj_set_style_border_color(row, lv_color_hex(C_XIAOYOU), 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(C_XIAOYU), 0);
         lv_obj_set_style_border_width(row, 2, 0);
         lv_obj_set_style_border_opa(row, LV_OPA_TRANSP, 0);
         s.task_rows[index] = row;
@@ -1039,10 +1039,10 @@ static void build_tasks(lv_obj_t *page)
         lv_obj_set_x(s.task_days[index], 4);
         lv_obj_add_flag(s.task_days[index], LV_OBJ_FLAG_HIDDEN);
     }
-    // 选中那件的最近两步：工具名和命令原样，不由小幽转述。
+    // 选中那件的最近两步：工具名和命令原样，不由小鱼转述。
     s.task_detail = make_box(page, 0, 0, SCREEN_W, AREA_H);
     fill(make_box(s.task_detail, SIDE, TASK_RULE_Y, INNER_W, 1), C_LINE, 0);
-    s.task_title = make_text_block(s.task_detail, &pocket_font_16, C_XIAOYOU, SIDE + 2,
+    s.task_title = make_text_block(s.task_detail, &pocket_font_16, C_XIAOYU, SIDE + 2,
                                    TASK_LINE_Y, INNER_W - 4 - TASK_COUNT_W, LINES_16(1));
     s.task_place = make_label(s.task_detail, &pocket_font_14, C_DIM, "");
     lv_obj_set_width(s.task_place, TASK_COUNT_W);
@@ -1124,10 +1124,10 @@ static void build_helpers(lv_obj_t *page)
         fill(row, C_CARD, 10);
         s.helper_rows[index] = row;
         s.helper_tags[index] = make_box(row, 8, 4, LV_SIZE_CONTENT, 22);
-        outline(s.helper_tags[index], C_XIAOYOU, 11, 2);
+        outline(s.helper_tags[index], C_XIAOYU, 11, 2);
         lv_obj_set_style_pad_hor(s.helper_tags[index], 8, 0);
         s.helper_names[index] =
-            make_label(s.helper_tags[index], &pocket_font_16, C_XIAOYOU, "");
+            make_label(s.helper_tags[index], &pocket_font_16, C_XIAOYU, "");
         lv_obj_align(s.helper_names[index], LV_ALIGN_LEFT_MID, 0, 0);
         s.helper_abouts[index] = make_text_block(row, &pocket_font_16, C_DIM, 9, 27,
                                                  INNER_W - 18, LINES_16(1));
@@ -1137,14 +1137,14 @@ static void build_helpers(lv_obj_t *page)
     lv_obj_align(s.helpers_empty, LV_ALIGN_TOP_MID, 0, 96);
 }
 
-// 一行菜单：左边名字，右边可选的当前值。选中时整行铺小幽的颜色。
+// 一行菜单：左边名字，右边可选的当前值。选中时整行铺小鱼的颜色。
 static void make_row(lv_obj_t *page, int index, const char *name, lv_obj_t **row_out,
                      lv_obj_t **label_out, lv_obj_t **value_out)
 {
     lv_obj_t *row = make_box(page, SIDE, 36 + index * ROW_H, INNER_W, ROW_H - 2);
 
     lv_obj_set_style_radius(row, 9, 0);
-    lv_obj_set_style_bg_color(row, lv_color_hex(C_XIAOYOU), 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(C_XIAOYU), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     *row_out = row;
     *label_out = make_label(row, &pocket_font_16, C_TEXT, name);
@@ -1198,7 +1198,7 @@ static void build_guide(lv_obj_t *page)
     lv_obj_t *body;
 
     make_title(page, PT_GUIDE_TITLE);
-    s.guide_name = make_text_block(page, &pocket_font_16, C_XIAOYOU, SIDE + 2, 32,
+    s.guide_name = make_text_block(page, &pocket_font_16, C_XIAOYU, SIDE + 2, 32,
                                    INNER_W - 4, LINES_16(1));
     s.guide_scroll = make_scroll_card(page, 58, LINES_16(8) + 8, &body);
     lv_label_set_text(body, PT_GUIDE_BODY);
@@ -1217,7 +1217,7 @@ static void build_approval(lv_obj_t *root)
     s.approval_tool = make_text_block(bubble, &pocket_font_16, C_WARN, BUBBLE_PAD_X,
                                       BUBBLE_PAD_Y + 2 * LINE_16,
                                       BUBBLE_W - 2 * BUBBLE_PAD_X, LINES_16(1));
-    // 参数原文：照原样显示，不由小幽转述。
+    // 参数原文：照原样显示，不由小鱼转述。
     s.approval_scroll = make_scroll_card(s.approval, BUBBLE_H + 6, LINES_16(4) + 8,
                                          &s.approval_hint);
     s.approval_allow = make_action_bar(s.approval, ACTION_Y1, C_OK, true, PT_KEY_OK,
@@ -1225,7 +1225,7 @@ static void build_approval(lv_obj_t *root)
     s.approval_deny = make_action_bar(s.approval, ACTION_Y2, C_DANGER, false, PT_KEY_DOWN,
                                       PT_APPROVAL_DENY);
 
-    // 按键之后：你的回答变成右边的气泡，小幽在下面回一句。
+    // 按键之后：你的回答变成右边的气泡，小鱼在下面回一句。
     s.approval_reply = make_box(s.approval, 0, ACTION_Y1, LV_SIZE_CONTENT, 32);
     fill(s.approval_reply, C_OK, 14);
     lv_obj_set_style_pad_hor(s.approval_reply, 14, 0);
@@ -1244,7 +1244,7 @@ static void build_pairing(lv_obj_t *root)
 {
     s.pairing = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     (void)make_speech(s.pairing, PET_PAIRING, &s.pairing_text);
-    s.pairing_code = make_label(s.pairing, &pocket_font_num_44, C_XIAOYOU, "");
+    s.pairing_code = make_label(s.pairing, &pocket_font_num_44, C_XIAOYU, "");
     lv_obj_align(s.pairing_code, LV_ALIGN_TOP_MID, 0, BUBBLE_H + 40);
 }
 
@@ -1284,7 +1284,7 @@ static void build_update(lv_obj_t *root)
     s.update = make_box(root, 0, AREA_Y, SCREEN_W, AREA_H + 8);
     make_pet(s.update, PET_UPDATE, (SCREEN_W - POCKET_PET_LAYOUT_GRID * PET_SOLO_SCALE) / 2, 0,
              PET_SOLO_SCALE);
-    s.update_title = make_label(s.update, &pocket_font_22, C_XIAOYOU, PT_UPDATE_RECEIVING);
+    s.update_title = make_label(s.update, &pocket_font_22, C_XIAOYU, PT_UPDATE_RECEIVING);
     lv_obj_set_width(s.update_title, INNER_W);
     lv_obj_set_style_text_align(s.update_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s.update_title, SIDE, 128);
@@ -1421,7 +1421,7 @@ static void render_top_bar(const buddy_ui_snapshot_t *snap, int screen)
     // 小点：只在这几屏上显示，亮着的那个是现在这一屏。
     for (index = 0; index < DOT_MAX; ++index) {
         set_visible(s.page_dots[index], screen >= 0 && index < count);
-        set_bg_color(s.page_dots[index], index == screen ? C_XIAOYOU : C_LINE);
+        set_bg_color(s.page_dots[index], index == screen ? C_XIAOYU : C_LINE);
     }
     set_visible(s.doing, screen >= 0 && snap->doing > 0U);
     if (snap->doing > 0U) {
@@ -1573,7 +1573,7 @@ static void render_home(const buddy_ui_snapshot_t *snap)
     const char *sub = "";
     uint32_t title_color = C_TEXT;
     uint32_t sub_color = C_DIM;
-    uint32_t color = C_XIAOYOU;
+    uint32_t color = C_XIAOYU;
     int sub_lines = 3;
     int sub_y = HOME_SUB_Y;
     char elapsed[12];
@@ -1854,7 +1854,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
     uint32_t status_color = C_DIM;
     uint32_t note_color = C_DIM;
     uint32_t reply_color = C_TEXT;
-    uint32_t color = C_XIAOYOU;
+    uint32_t color = C_XIAOYU;
     pocket_pet_mood_t mood = POCKET_PET_IDLE;
     bool working = false;
     bool timer = false;
@@ -1974,7 +1974,7 @@ static bool render_talk(const buddy_ui_snapshot_t *snap)
             reply_color = C_DIM;
             (void)snprintf(meta, sizeof(meta), "%s", card->at);
         } else {
-            // 第几句对话：只数小幽自己答的。
+            // 第几句对话：只数小鱼自己答的。
             unsigned number = 0;
             unsigned total = 0;
             unsigned each;
@@ -2704,7 +2704,7 @@ static void render_voice(const buddy_ui_snapshot_t *snap, bool entered)
     pet_move(PET_VOICE, pocket_motion_for(snap));
     set_text(s.voice_title, listening ? PT_VOICE_LISTENING
                                       : (sending ? PT_VOICE_SENDING : PT_VOICE_PREPARING));
-    set_text_color(s.voice_title, listening ? C_OK : (sending ? C_XIAOYOU : C_WARN));
+    set_text_color(s.voice_title, listening ? C_OK : (sending ? C_XIAOYU : C_WARN));
     set_visible(s.voice_sub, !listening);
     set_visible(s.voice_bars, listening);
     set_visible(s.voice_timer, listening);
@@ -2738,7 +2738,7 @@ static void render_update(const buddy_ui_snapshot_t *snap)
     pet_set(PET_UPDATE, pocket_pet_for(snap));
     set_text(s.update_title, restarting ? PT_UPDATE_RESTARTING
                                         : (checking ? PT_UPDATE_CHECKING : PT_UPDATE_RECEIVING));
-    set_text_color(s.update_title, restarting ? C_OK : C_XIAOYOU);
+    set_text_color(s.update_title, restarting ? C_OK : C_XIAOYU);
     set_text(s.update_sub, restarting ? PT_UPDATE_SUB_RESTARTING
                                       : (checking ? PT_UPDATE_SUB_CHECKING
                                                   : PT_UPDATE_SUB_RECEIVING));

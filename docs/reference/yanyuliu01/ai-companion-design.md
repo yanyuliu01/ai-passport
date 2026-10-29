@@ -8,7 +8,7 @@ The user-selected elegant Codex sheets are the style master. DSH and Claude full
 
 ## Dot-eye alternative matching XiaoYou
 
-The requested alternative follows the current firmware mascot: very large pixel blocks, bead/bar eyes, a tiny mouth and minimal colors. A [style reference](../../../assets/images/ai-companions/reference-xiaoyou-style.png) was rendered directly from `main/pocket_pet.c` without changing firmware.
+The requested alternative follows the current firmware mascot: very large pixel blocks, bead/bar eyes, a tiny mouth and minimal colors. A [style reference](../../../assets/images/ai-companions/reference-xiaoyu-style.png) was rendered directly from `main/pocket_pet.c` without changing firmware.
 
 - [Three-character dot-eye comparison](../../../assets/images/ai-companions/avatar-dot-eyes-elegant-v1.png): eight expressions per character, rows ordered whale, Claude, elegant Codex.
 - [Whale full-body dot-eye concept](../../../assets/images/ai-companions/fw-whale-dot-eyes-v1.png): twelve work-state poses.
@@ -73,10 +73,10 @@ Whale expansion order: shy, proud, frustrated, surprised; tired, apologetic, dis
 
 ![App whale emotion expansion](../../../assets/images/ai-companions/app-whale-emotions-v2.png)
 
-## DS pixel-head integration (2026-10-13)
+## Xiaoyu pixel-head integration (2026-10-13)
 
 The user chose the earlier [whale pixel heads](../../../assets/images/ai-companions/avatar-whale-v1.png)
-for the DS App and firmware. The original sheet is unchanged. Reviewed portrait
+for the Xiaoyu App and firmware. The original sheet is unchanged. Reviewed portrait
 rectangles supply eight App poses and six firmware moods. Firmware uses a
 60×60 indexed C atlas (21,856 Flash bytes) with no PNG decode buffer; the App
 draws the source rectangles without bitmap filtering. See the
@@ -112,13 +112,13 @@ The [user-provided identity reference](../../../assets/images/ai-companions/refe
 
 ## Codex app pixel portrait replacement (0.14.1)
 
-The owner selected the ChatGPT white-dragon design to replace the app Codex portraits, preserving DS and Claude. The new [pixel source sheet](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png) supplies reviewed idle, happy, thinking and focused cells. `companion/android/tools/PreparePortraits.java` generates transparent 256-by-256 resources; its optional trailing `codex` argument scopes regeneration to this role. Codex rendering uses nearest-neighbor scaling, preserving existing role identity, mood mapping and breathing animation. This changes portraits only, not connections, messages, approvals or firmware protocols.
+The owner selected the ChatGPT white-dragon design to replace the app Codex portraits, preserving Xiaoyu and Claude. The new [pixel source sheet](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png) supplies reviewed idle, happy, thinking and focused cells. `companion/android/tools/PreparePortraits.java` generates transparent 256-by-256 resources; its optional trailing `codex` argument scopes regeneration to this role. Codex rendering uses nearest-neighbor scaling, preserving existing role identity, mood mapping and breathing animation. This changes portraits only, not connections, messages, approvals or firmware protocols.
 
 ![Codex pixel portrait source](../../../assets/images/ai-companions/avatar-chatgpt-pixel-v1.png)
 
 ### App integration validation
 
-App 0.14.1 (26) was built from the existing working tree. Runtime source baseline is `e1f5238` plus pre-existing uncommitted work; firmware is unchanged and the installed device version was not inspected. The Android test task passed before editing. After editing, all 95 unit tests and all ABI builds were forcibly rerun with zero failures. The complete `./tools/validate.sh` passed under ESP-IDF 5.5.3. All eight DS and Claude portrait hashes remained unchanged, and the four Codex PNGs packaged in the APK match the generated resources pixel for pixel. The running local Runtime advertises version 26 with the verified APK hash; no restart was needed.
+App 0.14.1 (26) was built from the existing working tree. Runtime source baseline is `e1f5238` plus pre-existing uncommitted work; firmware is unchanged and the installed device version was not inspected. The Android test task passed before editing. After editing, all 95 unit tests and all ABI builds were forcibly rerun with zero failures. The complete `./tools/validate.sh` passed under ESP-IDF 5.5.3. All eight Xiaoyu and Claude portrait hashes remained unchanged, and the four Codex PNGs packaged in the APK match the generated resources pixel for pixel. The running local Runtime advertises version 26 with the verified APK hash; no restart was needed.
 
 Build: PASS. Host tests: PASS. Device tests: NOT RUN. Regression: PASS for host tests and resource invariants; adjacent phone journeys remain unaccepted. First response <= 3s: NOT RUN. Connection recovery: NOT RUN. Multi-end sync: NOT RUN. No real-client latency or convergence samples were collected.
 

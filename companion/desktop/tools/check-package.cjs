@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 
 module.exports = async function (context) {
   if (!['win32', 'darwin'].includes(context.electronPlatformName)) throw new Error('Only Mac and Windows targets are supported');
-  const bundle = process.env.XIAOYOU_RUNTIME_BUNDLE || join(__dirname, '../runtime-dist');
+  const bundle = process.env.XIAOYU_RUNTIME_BUNDLE || join(__dirname, '../runtime-dist');
   const manifest = JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8'));
   const target = context.electronPlatformName === 'win32' ? 'win32' : 'darwin';
   if (![1, 3].includes(context.arch)) throw new Error('Only x64 and arm64 bundles are currently supported');
@@ -12,7 +12,11 @@ module.exports = async function (context) {
   if (manifest.platform !== target || !architecture.includes(manifest.architecture)) {
     throw new Error('Runtime bundle does not match target OS/architecture. Prepare the correct native bundle first.');
   }
-  const source = join(__dirname, '../../../runtime/xiaoyou_runtime');
+  const characterHash = createHash('sha256').update(readFileSync(join(__dirname, '../../../runtime/persona.txt'))).digest('hex');
+  if (manifest.persona_sha256 !== characterHash
+    || createHash('sha256').update(readFileSync(join(bundle, 'persona.txt'))).digest('hex') !== characterHash)
+    throw new Error('Character source changed or was omitted; rebuild the Runtime bundle');
+  const source = join(__dirname, '../../../runtime/xiaoyu_runtime');
   const files = [];
   function collect(folder, prefix = '') {
     for (const item of readdirSync(folder, { withFileTypes: true })) {

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ClientView, DesktopAPI } from './shared.js';
 
-const call = (method: string, value?: unknown) => ipcRenderer.invoke('xiaoyou:' + method, value);
+const call = (method: string, value?: unknown) => ipcRenderer.invoke('xiaoyu:' + method, value);
 const api: DesktopAPI = {
   accountLogin: value => call('account-login', value), accountLogout: () => call('account-logout'), accountRefresh: () => call('account-refresh'),
   startRelayHost: value => call('start-relay-host', value), stopRelayHost: () => call('stop-relay-host'), checkRelayHost: () => call('check-relay-host'),
@@ -29,8 +29,8 @@ const api: DesktopAPI = {
   loginStart: value => call('login-start', value),
   subscribe(listener) {
     const handler = (_event: unknown, view: ClientView) => listener(view);
-    ipcRenderer.on('xiaoyou:view', handler);
-    return () => { ipcRenderer.removeListener('xiaoyou:view', handler); };
+    ipcRenderer.on('xiaoyu:view', handler);
+    return () => { ipcRenderer.removeListener('xiaoyu:view', handler); };
   },
 };
-contextBridge.exposeInMainWorld('xiaoyou', api);
+contextBridge.exposeInMainWorld('xiaoyu', api);

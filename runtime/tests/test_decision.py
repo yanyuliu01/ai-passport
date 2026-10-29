@@ -9,12 +9,12 @@ import unittest
 from unittest.mock import patch
 
 from test_streaming import FakeOpener, dsh_spec, sse, tool_sse
-from test_runtime import TempDirCase, Scripted, make_xiaoyou, write_config
-from xiaoyou_runtime import config
-from xiaoyou_runtime.loop import decision
-from xiaoyou_runtime.helpers import dsh_stream
-from xiaoyou_runtime.helpers.agents import DshAgent, Job
-from xiaoyou_runtime.loop.voice_tools import Toolbox
+from test_runtime import TempDirCase, Scripted, make_xiaoyu, write_config
+from xiaoyu_runtime import config
+from xiaoyu_runtime.loop import decision
+from xiaoyu_runtime.helpers import dsh_stream
+from xiaoyu_runtime.helpers.agents import DshAgent, Job
+from xiaoyu_runtime.loop.voice_tools import Toolbox
 
 
 def selected(name="just_reply", args=None, count=1):
@@ -33,9 +33,9 @@ class DecisionTests(TempDirCase):
 
     def test_default_is_off_and_config_is_strict(self):
         self.assertFalse(config.load(write_config(self.folder), {}).decide_first)
-        self.assertTrue(config.load(write_config(self.folder, xiaoyou={"decide_first": True}), {}).decide_first)
+        self.assertTrue(config.load(write_config(self.folder, xiaoyu={"decide_first": True}), {}).decide_first)
         with self.assertRaises(config.ConfigError):
-            config.load(write_config(self.folder, xiaoyou={"decide_first": "yes"}), {})
+            config.load(write_config(self.folder, xiaoyu={"decide_first": "yes"}), {})
 
     def test_one_nonstreamed_decision_has_commitments_only(self):
         opener = FakeOpener(selected("start_task", {"agent": "codex", "title": "日志", "task": "检查日志"}))
@@ -103,19 +103,19 @@ class DecisionTests(TempDirCase):
             body = json.loads(request.data)
             if body["stream"]:
                 self.assertEqual(len(launched), 1)
-                card = xiaoyou.cards.get(launched[0])
+                card = xiaoyu.cards.get(launched[0])
                 self.assertEqual([entry["role"] for entry in card["entries"]], ["you"])
                 self.assertNotIn("start_task", {tool["name"] for tool in body.get("tools", [])})
             return base(request, timeout)
 
         voice = DshAgent(dsh_spec(self.folder), opener=opener)
-        xiaoyou, store = make_xiaoyou(self.folder, [voice, helper], decide_first=True)
-        self.addCleanup(xiaoyou.close)
-        with patch.object(xiaoyou, "_launch", side_effect=lambda card, *a, **k: launched.append(card)):
-            turn = xiaoyou._converse(voice, "检查一下日志", "default", "r1", None, [helper], 0,
+        xiaoyu, store = make_xiaoyu(self.folder, [voice, helper], decide_first=True)
+        self.addCleanup(xiaoyu.close)
+        with patch.object(xiaoyu, "_launch", side_effect=lambda card, *a, **k: launched.append(card)):
+            turn = xiaoyu._converse(voice, "检查一下日志", "default", "r1", None, [helper], 0,
                                      lambda kind, agent, text: owner.append((kind, text)))
         self.assertEqual(turn.reply, "日志检查已交给 codex。")
-        entries = xiaoyou.cards.get(turn.card)["entries"]
+        entries = xiaoyu.cards.get(turn.card)["entries"]
         self.assertEqual([entry["id"] for entry in entries], ["r1:you", "r1:reply"])
         self.assertEqual(len(store.transcript.turns("default")), 1)
         history = dsh_stream._load(dsh_stream.sessions_dir(voice.spec), store.session("default", voice.name))
@@ -134,11 +134,11 @@ class DecisionTests(TempDirCase):
         opener = FakeOpener(selected(), tool_sse("", "task_detail", {"card": "c1"}), sse("这件事仍在做。"))
         voice = DshAgent(dsh_spec(self.folder), opener=opener)
         helper = Scripted("codex", speaks=False)
-        xiaoyou, store = make_xiaoyou(self.folder, [voice, helper], decide_first=True)
-        self.addCleanup(xiaoyou.close)
-        card = xiaoyou.record.task_open("default", "检查", "working", "codex")
+        xiaoyu, store = make_xiaoyu(self.folder, [voice, helper], decide_first=True)
+        self.addCleanup(xiaoyu.close)
+        card = xiaoyu.record.task_open("default", "检查", "working", "codex")
         self.assertEqual(card["id"], "c1")
-        turn = xiaoyou._converse(voice, "检查得怎样", "default", "r1", None, [helper], 0, lambda *args: None)
+        turn = xiaoyu._converse(voice, "检查得怎样", "default", "r1", None, [helper], 0, lambda *args: None)
         self.assertEqual((turn.card, turn.reply), (card["id"], "这件事仍在做。"))
         self.assertEqual(len(opener.requests), 3)
 
@@ -157,10 +157,10 @@ class DecisionTests(TempDirCase):
 
         voice = DshAgent(dsh_spec(self.folder), opener=opener)
         helper = Scripted("codex", speaks=False)
-        xiaoyou, store = make_xiaoyou(self.folder, [voice, helper], decide_first=True)
-        self.addCleanup(xiaoyou.close)
-        with patch.object(decision, "DEADLINE_SECONDS", .02), patch.object(xiaoyou, "_launch") as launch:
-            turn = xiaoyou._converse(voice, "检查日志", "default", "r1", None, [helper], 0, lambda *args: None)
+        xiaoyu, store = make_xiaoyu(self.folder, [voice, helper], decide_first=True)
+        self.addCleanup(xiaoyu.close)
+        with patch.object(decision, "DEADLINE_SECONDS", .02), patch.object(xiaoyu, "_launch") as launch:
+            turn = xiaoyu._converse(voice, "检查日志", "default", "r1", None, [helper], 0, lambda *args: None)
             ready.set()
             self.assertTrue(late_done.wait(.2))
             launch.assert_not_called()
@@ -173,14 +173,14 @@ class DecisionTests(TempDirCase):
                             sse("这个帮手不可用，我还没有安排任务。"))
         voice = DshAgent(dsh_spec(self.folder), opener=opener)
         helper = Scripted("codex", speaks=False)
-        xiaoyou, store = make_xiaoyou(self.folder, [voice, helper], decide_first=True)
-        self.addCleanup(xiaoyou.close)
-        with patch.object(xiaoyou, "_launch") as launch:
-            turn = xiaoyou._converse(voice, "检查日志", "default", "r1", None, [helper], 0, lambda *args: None)
+        xiaoyu, store = make_xiaoyu(self.folder, [voice, helper], decide_first=True)
+        self.addCleanup(xiaoyu.close)
+        with patch.object(xiaoyu, "_launch") as launch:
+            turn = xiaoyu._converse(voice, "检查日志", "default", "r1", None, [helper], 0, lambda *args: None)
             launch.assert_not_called()
         self.assertIn("办不了", opener.requests[1][1]["system"])
         self.assertFalse(turn.started)
-        self.assertEqual(len(xiaoyou.cards.get(turn.card)["entries"]), 2)
+        self.assertEqual(len(xiaoyu.cards.get(turn.card)["entries"]), 2)
 
 
 if __name__ == "__main__":

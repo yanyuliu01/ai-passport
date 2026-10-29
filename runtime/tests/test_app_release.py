@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the phone App update package kept by the Xiaoyou runtime. Standard library only.
+"""Tests for the phone App update package kept by the Xiaoyu runtime. Standard library only.
 
 They prove that a published APK is served back byte for byte with its version
 and checksum. They do not prove that a phone installs it: Android asks the
@@ -21,9 +21,9 @@ sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import TOKEN, TempDirCase, start_runtime, write_config  # noqa: E402
-from xiaoyou_runtime.__main__ import main  # noqa: E402
-from xiaoyou_runtime.app_release import AppRelease, AppReleaseError, MAX_APK_BYTES, byte_range  # noqa: E402
-from xiaoyou_runtime.config import load  # noqa: E402
+from xiaoyu_runtime.__main__ import main  # noqa: E402
+from xiaoyu_runtime.app_release import AppRelease, AppReleaseError, MAX_APK_BYTES, byte_range  # noqa: E402
+from xiaoyu_runtime.config import load  # noqa: E402
 
 APK = b"PK\x03\x04" + bytes(range(256)) * 40
 

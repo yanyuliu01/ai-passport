@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, safeStorage, shell, Tray } from 'electron';
 import { mkdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,13 +24,22 @@ let quitting = false, connecting = false;
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const ui = resolve(directory, '../dist-ui/index.html');
 const rendererURL = pathToFileURL(ui).href;
-if (process.env.XIAOYOU_DESKTOP_TEST_DATA)
-  app.setPath('userData', process.env.XIAOYOU_DESKTOP_TEST_DATA);
+// Old encrypted profiles keep their storage/keychain identity across the rename.
+for (const [key, value] of Object.entries(process.env))
+  if (key.startsWith('XIAOYOU_') && process.env[key.replace('XIAOYOU_', 'XIAOYU_')] === undefined)
+    process.env[key.replace('XIAOYOU_', 'XIAOYU_')] = value;
+const legacyProfile = join(app.getPath('appData'), '小幽');
+if (!process.env.XIAOYU_DESKTOP_TEST_DATA && existsSync(legacyProfile)) {
+  app.setName('小幽'); // Existing OS-protected safeStorage key identity, not a UI label.
+  app.setPath('userData', legacyProfile);
+}
+if (process.env.XIAOYU_DESKTOP_TEST_DATA)
+  app.setPath('userData', process.env.XIAOYU_DESKTOP_TEST_DATA);
 
 function snapshot() {
   const view = client.snapshot(), state = account?.view();
   return { ...view, version: app.getVersion(), setup: setup?.view(), account: state,
-    pairing: state ? { ...state.pairing, requests: state.pairing.requests.map(request => ({ ...request, id: 'account:' + request.id })) } : { joined: 0, relayState: '请登录小幽账号', requests: [] } };
+    pairing: state ? { ...state.pairing, requests: state.pairing.requests.map(request => ({ ...request, id: 'account:' + request.id })) } : { joined: 0, relayState: '请登录小鱼账号', requests: [] } };
 }
 let notificationTimer: ReturnType<typeof setTimeout> | undefined;
 function notify(): void {
@@ -39,7 +49,7 @@ function notify(): void {
   if (notificationTimer) return;
   notificationTimer = setTimeout(() => {
     notificationTimer = undefined;
-    if (window && !window.isDestroyed()) window.webContents.send('xiaoyou:view', snapshot());
+    if (window && !window.isDestroyed()) window.webContents.send('xiaoyu:view', snapshot());
   }, 100);
 }
 function moonIcon() {
@@ -59,7 +69,7 @@ function moonIcon() {
 function showWindow(): void {
   if (!window || window.isDestroyed()) {
     window = new BrowserWindow({ width: 1120, height: 780, minWidth: 840, minHeight: 620,
-      title: '小幽', backgroundColor: '#f6f7f9',
+      title: '小鱼', backgroundColor: '#f6f7f9',
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
       webPreferences: { preload: join(directory, 'preload.cjs'), contextIsolation: true,
         nodeIntegration: false, sandbox: true, webSecurity: true, devTools: !app.isPackaged } });
@@ -79,11 +89,11 @@ function object(value: unknown): Json {
   return value as Json;
 }
 function ipc(name: string, callback: (value: unknown) => unknown): void {
-  ipcMain.handle('xiaoyou:' + name, async (event, value) => {
+  ipcMain.handle('xiaoyu:' + name, async (event, value) => {
     if (event.sender !== window?.webContents || event.senderFrame?.url !== rendererURL) throw new Error('请求来源无效');
     try {
       if (!['snapshot', 'account-login', 'account-logout', 'account-refresh', 'login-start'].includes(name) && !account?.view().signedIn)
-        throw new Error('请先登录小幽账号');
+        throw new Error('请先登录小鱼账号');
       return await callback(value);
     }
     catch (error) {
@@ -94,9 +104,9 @@ function ipc(name: string, callback: (value: unknown) => unknown): void {
 }
 function localCandidates(): string[] {
   return [join(app.getPath('userData'), 'runtime/config.json'), db.get<string>('runtime-config', ''),
-    process.env.XIAOYOU_CONFIG || '',
-    ...(!process.env.XIAOYOU_DESKTOP_TEST_DATA ? [
-      join(homedir(), 'ai-passport/runtime/config.json'), join(homedir(), 'xiaoyou/ai-passport/runtime/config.json'),
+    process.env.XIAOYU_CONFIG || '',
+    ...(!process.env.XIAOYU_DESKTOP_TEST_DATA ? [
+      join(homedir(), 'ai-passport/runtime/config.json'), join(homedir(), 'xiaoyu/ai-passport/runtime/config.json'), join(homedir(), 'xiaoyou/ai-passport/runtime/config.json'),
       join(homedir(), 'Documents/GitHub/ai-passport/runtime/config.json'),
       ...(!app.isPackaged ? [resolve(app.getAppPath(), '../../runtime/config.json')] : []),
     ] : [])];
@@ -121,7 +131,7 @@ async function quit(): Promise<void> {
   const busy = host?.ownedRunning() && client?.snapshot().spaces.some(space => space.tasks.some(task => ['talking', 'working', 'waiting'].includes(String(task.state))));
   if (busy) {
     const answer = await dialog.showMessageBox({ type: 'question', title: '仍有任务在运行',
-      message: '退出会停止本机客户端管理的服务。', buttons: ['继续后台运行', '退出小幽'], defaultId: 0, cancelId: 0 });
+      message: '退出会停止本机客户端管理的服务。', buttons: ['继续后台运行', '退出小鱼'], defaultId: 0, cancelId: 0 });
     if (answer.response !== 1) return;
   }
   quitting = true; client?.stop(); await account?.stop(); host?.stopOwned(); tray?.destroy();
@@ -130,6 +140,17 @@ async function quit(): Promise<void> {
 
 async function main(): Promise<void> {
   await app.whenReady();
+  app.setAboutPanelOptions({ applicationName: '小鱼', applicationVersion: app.getVersion() });
+  // Explicit labels keep OS menus on the new name even with a legacy vault identity.
+  if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: '小鱼', submenu: [{ label: '关于小鱼', role: 'about' }, { type: 'separator' },
+      { label: '隐藏小鱼', role: 'hide' }, { label: '隐藏其他', role: 'hideOthers' },
+      { label: '全部显示', role: 'unhide' }, { type: 'separator' },
+      { label: '退出小鱼', accelerator: 'CmdOrCtrl+Q', click: () => { void quit(); } }] },
+    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'front' }] },
+  ]));
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储暂不可用，请解锁系统钥匙串后重试');
   const dataDir = app.getPath('userData');
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -154,12 +175,12 @@ async function main(): Promise<void> {
     ? bundledRuntimeLaunch(runtimeRoot, process.platform, dataDir,
       JSON.parse(await readFile(join(runtimeRoot, 'manifest.json'), 'utf8')))
     : { command: await findExecutable(process.platform === 'win32' ? 'python' : 'python3') || process.execPath,
-      args: ['-m', 'xiaoyou_runtime'], cwd: resolve(app.getAppPath(), '../../runtime') };
+      args: ['-m', 'xiaoyu_runtime'], cwd: resolve(app.getAppPath(), '../../runtime') };
   host = new RuntimeHost(dataDir, launch, local);
   setup = new Setup(db, secrets, host, localCandidates(), hostname(), join(dataDir, 'runtime/config.json'));
   // An isolated QA profile may use a synthetic pinned account service; normal launches use the fixed server.
-  const testServer = process.env.XIAOYOU_DESKTOP_TEST_DATA && process.env.XIAOYOU_ACCOUNT_TEST_SERVER
-    ? JSON.parse(process.env.XIAOYOU_ACCOUNT_TEST_SERVER) as { url: string; tlsFingerprint: string } : undefined;
+  const testServer = process.env.XIAOYU_DESKTOP_TEST_DATA && process.env.XIAOYU_ACCOUNT_TEST_SERVER
+    ? JSON.parse(process.env.XIAOYU_ACCOUNT_TEST_SERVER) as { url: string; tlsFingerprint: string } : undefined;
   account = new AccountConnection(dataDir, secrets, local, getLocal, notify, endpoint => {
     setup.confirm(endpoint); setup.confirmRelay();
     const current = client.endpoints.get(endpoint.runtimeId);
@@ -170,7 +191,7 @@ async function main(): Promise<void> {
     showWindow();
     const result = await dialog.showMessageBox(window!, { type: 'question', title: request.computer ? '电脑请求连接' : '手机请求连接',
       message: `允许「${request.name}」连接这台电脑吗？`,
-      detail: '连接后，可以在这部手机上与小幽聊天，并查看已授权的对话和任务。',
+      detail: '连接后，可以在这部手机上与小鱼聊天，并查看已授权的对话和任务。',
       buttons: ['允许连接', '取消'], defaultId: 1, cancelId: 1, noLink: true });
     return result.response === 0;
   }, async (request, allowed) => {
@@ -246,7 +267,7 @@ async function main(): Promise<void> {
   ipc('connect-local', connectAccountLocal);
   for (const retired of ['phone-connection', 'copy-phone-connection', 'restore-connections', 'configure-relay', 'set-relay',
     'start-relay-host', 'stop-relay-host', 'check-relay-host', 'join', 'invite', 'invitation-qr', 'import-config'])
-    ipc(retired, () => { throw new Error('连接方式已统一，请登录小幽账号；原连接资料和记录保留'); });
+    ipc(retired, () => { throw new Error('连接方式已统一，请登录小鱼账号；原连接资料和记录保留'); });
   ipc('approve', value => { const input = object(value); return client.approve(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.decision, 5), requiredString(input.runtime, 100)); });
   ipc('cancel', value => { const input = object(value); return client.cancel(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100)); });
   ipc('effect-review', value => { const input = object(value); return client.effectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140)); });
@@ -260,9 +281,9 @@ async function main(): Promise<void> {
     app.setLoginItemSettings({ openAtLogin: value, args: ['--background'] });
     db.set('login-start', value);
   });
-  tray = new Tray(moonIcon()); tray.setToolTip('小幽 · 在后台陪着你');
-  tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开小幽', click: showWindow },
-    { type: 'separator' }, { label: '退出小幽', click: () => { void quit(); } }]));
+  tray = new Tray(moonIcon()); tray.setToolTip('小鱼 · 在后台陪着你');
+  tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开小鱼', click: showWindow },
+    { type: 'separator' }, { label: '退出小鱼', click: () => { void quit(); } }]));
   tray.on('click', showWindow);
   app.on('activate', showWindow);
   powerMonitor.on('resume', () => { account.reconnect(); client.refresh(); });
@@ -284,5 +305,5 @@ async function main(): Promise<void> {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { void app.whenReady().then(showWindow); });
-  void main().catch(() => { dialog.showErrorBox('小幽暂未启动', '无法初始化客户端。请确认系统安全存储可用，已有记录不会被清除。'); app.exit(1); });
+  void main().catch(() => { dialog.showErrorBox('小鱼暂未启动', '无法初始化客户端。请确认系统安全存储可用，已有记录不会被清除。'); app.exit(1); });
 }

@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.world.task_titles import MAX_TITLE_CHARS, canonical_title, select_title
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.world.task_titles import MAX_TITLE_CHARS, canonical_title, select_title
 
 
 class TaskTitleTests(unittest.TestCase):

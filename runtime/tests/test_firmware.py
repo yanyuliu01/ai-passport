@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the firmware library kept by the Xiaoyou runtime. Standard library only.
+"""Tests for the firmware library kept by the Xiaoyu runtime. Standard library only.
 
 The images here are built by hand in the ESP application image format (header,
 segments, checksum, appended SHA-256, application description), so these tests
@@ -26,11 +26,11 @@ sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import TOKEN, TempDirCase, start_runtime, write_config  # noqa: E402
-from xiaoyou_runtime import config as config_module  # noqa: E402
-from xiaoyou_runtime import firmware as firmware_module  # noqa: E402
-from xiaoyou_runtime import firmware_cli  # noqa: E402
-from xiaoyou_runtime.__main__ import main  # noqa: E402
-from xiaoyou_runtime.firmware import FirmwareError, FirmwareStore, parse_image  # noqa: E402
+from xiaoyu_runtime import config as config_module  # noqa: E402
+from xiaoyu_runtime import firmware as firmware_module  # noqa: E402
+from xiaoyu_runtime import firmware_cli  # noqa: E402
+from xiaoyu_runtime.__main__ import main  # noqa: E402
+from xiaoyu_runtime.firmware import FirmwareError, FirmwareStore, parse_image  # noqa: E402
 
 
 def make_app(version="v1", seed=1, updatable=True, chip=5, payload=3000, hashed=True):

@@ -10,7 +10,7 @@ root = Path(__file__).resolve().parents[1]
 package = json.loads((root / 'package.json').read_text())
 release = root / 'release'
 builds = {}
-for platform, relative in [('darwin', 'mac-arm64/小幽.app/Contents/Resources/app.asar'), ('win32', 'win-unpacked/resources/app.asar')]:
+for platform, relative in [('darwin', 'mac-arm64/小鱼.app/Contents/Resources/app.asar'), ('win32', 'win-unpacked/resources/app.asar')]:
     archive = release / relative
     if not archive.exists(): continue
     output = subprocess.check_output(['node', '--input-type=module', '-e',

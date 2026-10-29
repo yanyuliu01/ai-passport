@@ -19,12 +19,12 @@
 /* Latest assistant reply kept for display; bytes, cut on a UTF-8 boundary.
  * About 320 Chinese characters; the home page scrolls through all of it. */
 #define BUDDY_REPLY_MAX 960
-/* The conversation with Xiaoyou as a hub host reports it (see buddy_chat_t). */
+/* The conversation with Xiaoyu as a hub host reports it (see buddy_chat_t). */
 #define BUDDY_AGENT_MAX 24
 #define BUDDY_STAGE_MAX 160
 #define BUDDY_HELPER_COUNT 4
 #define BUDDY_HELPER_ABOUT_MAX 64
-/* Cards the hub has sent, kept in RAM: every request to Xiaoyou is one "thing"
+/* Cards the hub has sent, kept in RAM: every request to Xiaoyu is one "thing"
  * with a card of its own. A byte budget for the words and a cap on the number of
  * cards. One card is at most BUDDY_MESSAGE_MAX + BUDDY_REPLY_MAX bytes of words,
  * so the newest always fits. */
@@ -71,7 +71,7 @@ typedef enum {
 } buddy_character_t;
 
 typedef enum {
-    BUDDY_PAGE_HOME,    /* first screen: Xiaoyou herself and what she is doing */
+    BUDDY_PAGE_HOME,    /* first screen: Xiaoyu herself and what she is doing */
     BUDDY_PAGE_TALK,    /* second screen: the conversation, one thing at a time */
     BUDDY_PAGE_TASKS,   /* third screen: the things in progress */
     BUDDY_PAGE_USAGE,   /* fourth screen: what is left of each subscription, and
@@ -79,7 +79,7 @@ typedef enum {
                          * once the hub has sent usage */
     BUDDY_PAGE_MENU,    /* double press OK */
     BUDDY_PAGE_NOTICES, /* recent entries from the host */
-    BUDDY_PAGE_HELPERS, /* the agents Xiaoyou can hand work to */
+    BUDDY_PAGE_HELPERS, /* the agents Xiaoyu can hand work to */
     BUDDY_PAGE_MORE,    /* rarely used and destructive settings */
     BUDDY_PAGE_GUIDE,
     BUDDY_PAGE_COUNT,
@@ -110,11 +110,11 @@ typedef enum {
     BUDDY_MORE_COUNT,
 } buddy_more_item_t;
 
-/* Where a turn of the conversation with Xiaoyou stands. */
+/* Where a turn of the conversation with Xiaoyu stands. */
 typedef enum {
     BUDDY_CHAT_NONE,     /* nothing has been said on this connection */
     BUDDY_CHAT_SENT,     /* a recording left the device; the host has not said anything yet */
-    BUDDY_CHAT_THINKING, /* Xiaoyou has the question */
+    BUDDY_CHAT_THINKING, /* Xiaoyu has the question */
     BUDDY_CHAT_HELPER,   /* she handed work to another agent (chat.agent) */
     BUDDY_CHAT_DONE,     /* her answer is in reply */
     BUDDY_CHAT_FAILED,   /* the turn did not work; reply says why */
@@ -301,13 +301,13 @@ typedef struct {
     int32_t timezone_offset_seconds;
 } buddy_time_sync_t;
 
-/* One turn with Xiaoyou, as a hub host reports it. Her words travel in the
+/* One turn with Xiaoyu, as a hub host reports it. Her words travel in the
  * event's (and the state's) reply field. */
 typedef struct {
     buddy_chat_phase_t phase;
     buddy_mood_t mood;
     char said[BUDDY_MESSAGE_MAX];  /* what the owner said; empty until transcribed */
-    char agent[BUDDY_AGENT_MAX];   /* who is working on it, when it is not Xiaoyou herself */
+    char agent[BUDDY_AGENT_MAX];   /* who is working on it, when it is not Xiaoyu herself */
     char stage[BUDDY_STAGE_MAX];   /* the title of the thing she handed over */
     char card[BUDDY_CARD_ID_MAX];  /* the card this turn went onto; empty when there is none */
     unsigned doing;                /* how many things are in progress in the background */
@@ -318,9 +318,9 @@ typedef struct {
 typedef struct {
     char id[BUDDY_CARD_ID_MAX];
     char at[BUDDY_CARD_AT_MAX];    /* when it began, "HH:MM" */
-    char agent[BUDDY_AGENT_MAX];   /* who is or was on it; empty: Xiaoyou answered herself */
+    char agent[BUDDY_AGENT_MAX];   /* who is or was on it; empty: Xiaoyu answered herself */
     uint16_t said;                 /* offset of the first thing the owner said; may be empty */
-    uint16_t reply;                /* offset of the latest thing Xiaoyou said */
+    uint16_t reply;                /* offset of the latest thing Xiaoyu said */
     uint8_t state;                 /* buddy_card_state_t */
     uint8_t edits;                 /* how many times it was added to or changed */
     bool cut;                      /* reply was longer than the device keeps */
@@ -392,7 +392,7 @@ typedef struct {
     uint8_t who_count;
 } buddy_usage_t;
 
-/* An agent Xiaoyou can hand work to. */
+/* An agent Xiaoyu can hand work to. */
 typedef struct {
     char name[BUDDY_AGENT_MAX];
     char about[BUDDY_HELPER_ABOUT_MAX];
@@ -562,7 +562,7 @@ typedef struct {
     /* The host introduced itself as a hub (the phone), not the Claude desktop app. */
     bool host_hub;
     /* The hub reports the conversation itself; heartbeat counters are then only
-     * about notifications and say nothing about Xiaoyou being busy. */
+     * about notifications and say nothing about Xiaoyu being busy. */
     bool host_chat;
     /* When the text in message last changed. */
     uint64_t message_since_ms;

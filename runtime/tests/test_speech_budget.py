@@ -4,17 +4,17 @@ import threading
 import unittest
 from unittest import mock
 
-from test_runtime import ToolTalker, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.base import AgentError, Outcome
-from xiaoyou_runtime.helpers.deadline import Deadline
-from xiaoyou_runtime.loop.effects import Effects
+from test_runtime import ToolTalker, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.base import AgentError, Outcome
+from xiaoyu_runtime.helpers.deadline import Deadline
+from xiaoyu_runtime.loop.effects import Effects
 
 
 class SpeechBudgetTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.voice = ToolTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice], voice_timeout_seconds=10)
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice], voice_timeout_seconds=10)
         self.addCleanup(self.x.close)
         self.now = 0.0
         self.cut = threading.Event()

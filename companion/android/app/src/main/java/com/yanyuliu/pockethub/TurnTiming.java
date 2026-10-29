@@ -14,7 +14,7 @@ import java.util.function.LongSupplier;
  * "final" marks when the complete reply reached the phone, so delivery and drawing can be told apart.
  */
 final class TurnTiming {
-    static final String TAG = "XiaoyouTiming";
+    static final String TAG = "XiaoyuTiming";
     private static final int MAX_OPEN = 64;
     private static final Map<String, Long> started = new LinkedHashMap<>();
     private static final Set<String> arrived = new HashSet<>();

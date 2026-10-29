@@ -1,13 +1,17 @@
 <p align="right"><strong>简体中文</strong> · <a href="README.md">English</a></p>
 
-# 小幽桌面客户端
+# 小鱼桌面客户端
 
-正在实现，源码版本 0.1.17。遵循[开发方案](../../docs/development/xiaoyou-desktop-plan.zh_CN.md)
+正在实现，源码版本 0.1.26。遵循[开发方案](../../docs/development/xiaoyu-desktop-plan.zh_CN.md)
 和[可靠性契约](../../docs/development/cross-stack-reliability.zh_CN.md)。
 源码/构建可用不代表已安装客户端验收通过。
 
 主人已于 2026-10-21 确认 v8 交互参考稿。首次启用增量沿用现有形象、灰蓝底和蓝色
 操作按钮。0.1.2 已实现下述聊天与工作记录主体，源码可用不代表完整的跨平台验收通过。
+
+## 小鱼身份与人设打包（0.1.26 源码）
+
+产品、IPC 和新内部名称使用小鱼。已有加密资料保留存储与钥匙串身份；新建受管理 Runtime 读取完整共享人设，打包同时核对人设哈希与 Runtime 源码。本源码候选没有替换已安装客户端，也没有并入其他工作区的未提交改动。
 
 ## 服务器账号连接（0.1.17 源码）
 
@@ -115,7 +119,7 @@ IPv6 防火墙端口，节点双栈监听。不会自动修改路由器、防火
 但不能连接这个新的自签名节点；该角色两端均需支持指纹的新版本。
 手机安装、真实公网恢复、Windows 原生运行和模型首个有效回答 ≤3 秒仍待验证。
 本地 WSS／Java 协议与原生 Mac 生命周期证据记录于
-`build/xiaoyou-node-validation.json`。
+`build/xiaoyu-node-validation.json`。
 
 本轮验证：Mac arm64 构建及 DMG 完整性通过；52 项桌面测试、161 项 Android
 单元测试、完整仓库门禁、6 项补充 Pillow 测试通过。完整门禁重跑通过；
@@ -151,15 +155,15 @@ Android 提供「扫码连接电脑」，显示手机指纹供核对，等待电
 这台 Mac 尚无已验证的公网直连路径；路由器没有返回 UPnP／NAT-PMP 信息，不代表已证明所有
 打洞方案都失败。扫码不能创建公网路由。已有可达主机时不必另买服务器。部署模板在
 [deploy/](deploy/README.zh_CN.md)，生成的模板归档位于忽略的
-`build/xiaoyou-relay-deployment-0.1.3.tar.gz`。外部部署和手机使用蜂窝数据的实测均未运行，
+`build/xiaoyu-relay-deployment-0.1.3.tar.gz`。外部部署和手机使用蜂窝数据的实测均未运行，
 不能将本检查点描述为已验证稳定的手机异地通信。
 
 验证：桌面构建与 45 项测试通过；Android 构建和 159 项单元测试通过。桌面二维码经 Android
 使用的 ZXing 核心成功解码。真实 Java 协议实现完成桌面配对、同时保持两个独立电脑连接、
 传输合成文字／语音／图片，以及中继重启并丢失回执后的恢复；原消息只执行一次。
 这些测试使用本机合成中继，不等于真实手机或公网验收。Mac 打包二维码／设置／onboarding
-检查通过。证据位于 `build/xiaoyou-android-relay-interop.json`、
-`build/xiaoyou-remote-shell-qa.json` 和 `build/xiaoyou-remote-onboarding-packaged-qa.json`。
+检查通过。证据位于 `build/xiaoyu-android-relay-interop.json`、
+`build/xiaoyu-remote-shell-qa.json` 和 `build/xiaoyu-remote-onboarding-packaged-qa.json`。
 HPKE 使用 Bouncy Castle 1.86，WSS 使用 OkHttp 4.12.0，扫码使用 ZXing Embedded 4.3.0／core 3.5.4。
 
 Android 0.29.0（版本号 54）已通过现有 Runtime 本地发布，手机可通过已有连接获取更新，
@@ -170,7 +174,7 @@ App 0.28.1、缓存、待发编号及安全凭据作为恢复候选；旧版 App
 
 ## 主对话与工作记录（0.1.2）
 
-桌面首页就是主对话。侧边栏保留平铺旁聊、独立工作记录、帮手形象和连接设置；主人／小幽
+桌面首页就是主对话。侧边栏保留平铺旁聊、独立工作记录、帮手形象和连接设置；主人／小鱼
 分别显示完整的蓝／白气泡，工具活动和私有原生会话不混入普通聊天。帮手胶囊展示服务上报的
 模型、额度窗口和更新时间，缺失时显示未知。点头像看用量，点胶囊正文看当前工作。
 输入栏右侧「＋」提供照片／文件入口。
@@ -188,9 +192,9 @@ App 0.28.1、缓存、待发编号及安全凭据作为恢复候选；旧版 App
 未刷机），六项 Pillow 图片测试另行通过。Mac 0.1.2 打包实例通过首次确认、检测登记、自有服务
 启动、加密配对、后台与重启、主／旁聊隔离、原任务补充、一次审批收敛、只读原会话、窄窗口
 侧栏及凭据隔离。使用 CLI／HTTP 测试替身，未调用真实模型；源码 Runtime 的加密互操作也通过。
-证据位于忽略的 `build/xiaoyou-main-validation.json`、`build/xiaoyou-shell-qa.json` 和
-`build/xiaoyou-main-onboarding-packaged-qa.json`，本轮完整 gate 日志为
-`/tmp/xiaoyou-shell-full-gate.log`。离线 `build/desktop-main-preview/` 明确标注模拟数据，不连接服务。
+证据位于忽略的 `build/xiaoyu-main-validation.json`、`build/xiaoyu-shell-qa.json` 和
+`build/xiaoyu-main-onboarding-packaged-qa.json`，本轮完整 gate 日志为
+`/tmp/xiaoyu-shell-full-gate.log`。离线 `build/desktop-main-preview/` 明确标注模拟数据，不连接服务。
 
 版本／配置：桌面 0.1.2、Electron 44.9.3、Mac arm64；内置 Runtime 0.20.0／`62cc399`，
 固件未改，测试使用本机回环和加密本地中继。上述范围的回归通过；主机故障路径和打包重启恢复
@@ -208,7 +212,7 @@ Runtime 0.20.0 包，不混入并行 Runtime 任务的修改。安装包 SHA-256
 
 ## 首次连接与本机帮手（0.1.1）
 
-首次启动先选择启用本机小幽或配对已有小幽，不再静默连接旧 Runtime，也不自动恢复
+首次启动先选择启用本机小鱼或配对已有小鱼，不再静默连接旧 Runtime，也不自动恢复
 未经确认的端点和中继。旧连接需要明确查看确认，原历史、待发送请求、游标和暂未启用的
 端点设置均保留。以后启动只恢复已确认的 Runtime 身份和已启用的本机服务。
 
@@ -226,7 +230,7 @@ Key 或 `DEEPSEEK_API_KEY`。任意供应商凭据存储的导入尚未实现。
 人工审批。本客户端调用分别使用确认页说明的 gpt-6.1-sol／Sonnet，不修改其全局设置，
 不导入旧会话。
 
-加入已有小幽需要原设备批准，再补齐记录，不另建无关本机主体。加入后为同一空间
+加入已有小鱼需要原设备批准，再补齐记录，不另建无关本机主体。加入后为同一空间
 配置新的本机 Runtime 尚未开放，代码明确阻止这种误建。结果页分别说明连接／记录
 就绪和实际模型回复状态；首次真实请求前不会把模型标为已验证，也不自动进行付费探测。
 完整的帮手模型／供应商管理留待后续实现。
@@ -246,7 +250,7 @@ Key 或 `DEEPSEEK_API_KEY`。任意供应商凭据存储的导入尚未实现。
 独立 onboarding 预览明确标注模拟检测，不发网络请求，不保存输入的 Key。
 
 0.1.1 安装包、打包来源和校验值位于 `release/onboarding-0.1.1/`，隔离打包验收证据为
-仓库根目录的 `build/xiaoyou-onboarding-packaged-qa.json`。安装包 SHA-256：
+仓库根目录的 `build/xiaoyu-onboarding-packaged-qa.json`。安装包 SHA-256：
 `10a1ea594de43309418f8e6fd0783d9c295096db76105c8dae5945fd1cf5b2ca`。
 
 Mac 0.1.1 包采用隔离源码快照，复用已验证的 `62cc399` Runtime 0.20.0 分发包，不将
@@ -263,7 +267,7 @@ Electron 客户端提供中文聊天/任务/连接界面、本地 SQLite 缓存�
 DeepSeek，并可接入所选帮手；不自动安装帮手或复制其登录凭据。实际 provider 就绪必须测试；
 缺少帮手/登录属于配置限制，不能宣称 AI 已可用。
 
-按需检测已知的 `~/ai-passport`、`~/xiaoyou/ai-passport` 或
+按需检测已知的 `~/ai-passport`、`~/xiaoyu/ai-passport` 或
 `~/Documents/GitHub/ai-passport` 配置。检测只读元数据，确认来源后才通过本机回环接入。
 其他位置可在高级连接设置中选择；隔离 QA 资料跳过这些旧路径。
 
@@ -325,7 +329,7 @@ Windows x64 在本目录的 PowerShell 中运行 `./tools/build-windows.ps1`，�
 ```bash
 python3 tools/bundle_windows_embedded.py
 node tools/download_windows_electron.mjs
-XIAOYOU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
+XIAOYU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
 python3 tools/release_manifest.py
 ```
 
@@ -344,7 +348,7 @@ Windows Electron 下载未获执行授权（`owner denied`），没有生成 Win
 
 ```bash
 npm run build:main
-XIAOYOU_RELAY_TOKEN='<random-access-token>' npm run relay
+XIAOYU_RELAY_TOKEN='<random-access-token>' npm run relay
 ```
 
 默认监听 `127.0.0.1:8795`，CLI 拒绝公网明文监听。TLS 代理转发 `/v1/connect`，
@@ -371,8 +375,8 @@ XIAOYOU_RELAY_TOKEN='<random-access-token>' npm run relay
 不能因来源不可达就改去其他电脑重新执行。两台电脑都不可达时的在线服务与独立
 密钥恢复不属于日常常开基线。
 
-隔离原生测试时，在启动前将 `XIAOYOU_DESKTOP_TEST_DATA` 设为新的临时目录，
-并设置 `XIAOYOU_DESKTOP_SKIP_DISCOVERY=1`；打包程序也支持，避免冒烟测试碰到
+隔离原生测试时，在启动前将 `XIAOYU_DESKTOP_TEST_DATA` 设为新的临时目录，
+并设置 `XIAOYU_DESKTOP_SKIP_DISCOVERY=1`；打包程序也支持，避免冒烟测试碰到
 日常资料。测试资料中不要导入真实配置或登记登录启动。
 
 ## 先前 0.1.0 验证检查点，2026-10-21
@@ -433,7 +437,7 @@ archive_verification: PASS
 未过期剩余比例。
 
 原生窗口隔离验收脚本为 `node tools/test-helper-management-shell.mjs`，
-必要时通过 `XIAOYOU_QA_PLAYWRIGHT` 指定 Playwright。它经过真实渲染器／IPC
+必要时通过 `XIAOYU_QA_PLAYWRIGHT` 指定 Playwright。它经过真实渲染器／IPC
 检查 82%／28% 额度、目标标记、添加和移除，不代表真实模型首响或 Windows／手机验收。
 
 Windows 预览构建固定使用 NSIS 工具集 1.2.1，其 Apple Silicon 原生编译器

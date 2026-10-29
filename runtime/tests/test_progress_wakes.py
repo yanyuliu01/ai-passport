@@ -6,12 +6,12 @@ import time
 import unittest
 from unittest import mock
 
-from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.agents import AgentError, Outcome
-from xiaoyou_runtime.loop import proactive
-from xiaoyou_runtime.world import world
-from xiaoyou_runtime.loop.proactive import Pulse
-from xiaoyou_runtime.api.service import Service
+from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.agents import AgentError, Outcome
+from xiaoyu_runtime.loop import proactive
+from xiaoyu_runtime.world import world
+from xiaoyu_runtime.loop.proactive import Pulse
+from xiaoyu_runtime.api.service import Service
 
 
 class ProgressWakeTests(TempDirCase):
@@ -22,7 +22,7 @@ class ProgressWakeTests(TempDirCase):
             patch.start()
             self.addCleanup(patch.stop)
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice, Scripted("codex", speaks=False)])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice, Scripted("codex", speaks=False)])
         self.addCleanup(self.x.close)
         self.card = self.x._writer.task_open("side-progress", "original task", "working", "codex")["id"]
         self.x._writer.task(self.card, run_id="run-progress", started_at=time.time() - 120)
@@ -247,7 +247,7 @@ class ProgressWakeTests(TempDirCase):
         saved = self.watch()
         self.x.close()
         voice = GateTalker()
-        restored, _ = make_xiaoyou(self.folder, [voice, Scripted("codex", speaks=False)])
+        restored, _ = make_xiaoyu(self.folder, [voice, Scripted("codex", speaks=False)])
         self.addCleanup(restored.close)
         self.assertEqual(saved, restored.cards._cards[self.card]["progress_watch"])
         restored._pulse.tick()

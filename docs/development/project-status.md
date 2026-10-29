@@ -67,7 +67,7 @@ and excluded.
 | R7 | Six layer packages and import-cycle cleanup committed | Continue enforcing dependency tests as behavior changes |
 | R8 | Negotiated presentation/request sync and client migration are partially implemented | Finish client acceptance before removing old endpoints/adapters or enforcing new minimum versions |
 | Desktop accounts and relay | 0.1.16 source committed and packages exercised locally; peer-sync restart fix `3f1b905` included and core tests pass | Installed acceptance of the reconnect fix; public routing with Tailscale off; real network interruption/recovery and history convergence |
-| Shared history H1-H4 | Problems recorded in `12bbd86` | Correct answering-computer identity; make replicated desktop history available to Xiaoyou's recall; present one coherent history; exclude automation noise from conversational recall |
+| Shared history H1-H4 | Problems recorded in `12bbd86` | Correct answering-computer identity; make replicated desktop history available to Xiaoyu's recall; present one coherent history; exclude automation noise from conversational recall |
 | Conversation style | Serial/speculative plan and harness committed | Mac has later uncommitted experiment results/design changes. A private 30-case companion blind-review handoff records v3 16 wins, R7 9, 5 ties (p about 0.23, not significant); no production prompt change follows from that result alone |
 
 Read the [refactor acceptance record](runtime-refactor-design.md),
@@ -105,7 +105,7 @@ would conceal the mismatch and may affect installed update clients.
 | `claude/client-five-entries` | Refactor/client development line; its remote head `aba494e` is included in the integration line |
 | `runtime/r4-recovery-review` | Recovery review line; `9d6cc37` is included through merge `28f3244` |
 | `feature/multi-end-sync` | Earlier mesh/client milestone `5631087`, included in the integration line |
-| `feature/usage-effort`, `feature/xiaoyou-agent-router`, `feature/ble-firmware-update`, `feature/pocket-hub-app`, `feature/claude-pocket` | Historical development milestones; names and version descriptions are not current release indicators |
+| `feature/usage-effort`, `feature/xiaoyu-agent-router`, `feature/ble-firmware-update`, `feature/pocket-hub-app`, `feature/claude-pocket` | Historical development milestones; names and version descriptions are not current release indicators |
 | `main` | Upstream hardware-test baseline at `33d3d1d`, not the current product/default branch |
 | [PR #1](https://github.com/yanyuliu01/ai-passport/pull/1) | Historical open draft targeting `feature/pocket-hub-app`; its Runtime 0.4.1 / App 0.5.0 description is not the latest project status |
 

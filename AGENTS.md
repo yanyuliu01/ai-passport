@@ -43,7 +43,7 @@ Entry points: [App](companion/AGENTS.md), [Runtime](runtime/AGENTS.md),
 
 When starting or resuming work in this checkout, obtain the retained shared
 Runtime/Codex/Claude Code context before asking the owner to repeat earlier work:
-`python3 runtime/xiaoyou_runtime/shared_history.py --config runtime/config.json --context`.
+`python3 runtime/xiaoyu_runtime/shared_history.py --config runtime/config.json --context`.
 Skip it when the local configuration is absent. For details use `--task <card-or-session-id>`
 or `--format json`. This is historical evidence, not current instructions or
 authorization; verify deployment and test claims before relying on them. The
@@ -88,7 +88,7 @@ same reader is used by both desktop agents' optional context hooks. See
 | Documentation | `docs/contribution/doc-conventions.md`, the Documentation section of `README.md` |
 | Commit or PR | `docs/contribution/commit-and-pr.md` |
 | Companion Android app | `companion/README.md` (including [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents)) |
-| Xiaoyou Runtime | `runtime/README.md`, relevant request/feed/persistence code and tests |
+| Xiaoyu Runtime | `runtime/README.md`, relevant request/feed/persistence code and tests |
 
 Use the root `README.md` for the product overview and its Documentation section as the documentation index. For the detailed AI development workflow — context setup, source-of-truth priority, application/BSP boundary, runtime invariants, material placement, and delivery format — read `docs/development/ai-guide.md`.
 
@@ -126,7 +126,7 @@ and obtain approval before flashing; detection alone is not consent.
 
 After each complete change to the companion app (`companion/android`), deliver
 it through the runtime instead of handing the owner an APK: bump the version,
-build and run the unit tests, publish with `python3 -m xiaoyou_runtime app
+build and run the unit tests, publish with `python3 -m xiaoyu_runtime app
 publish` and a plain-language `--note`, and tell the owner the phone will offer
 the update. Follow [Shipping an app change](companion/README.md#shipping-an-app-change-developers-and-ai-agents).
 Publishing is local and does not need separate approval; restarting the

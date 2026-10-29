@@ -15,7 +15,7 @@ test('phone routes match actual local listener and do not invent LAN or public r
   assert.equal(phoneAddresses('203.0.113.1', 8765, addresses).length, 0);
 });
 test('phone connection checks identity, bounds routes and never returns pairing credentials', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'xiaoyou-phone-')), file = join(dir, 'config.json');
+  const dir = mkdtempSync(join(tmpdir(), 'xiaoyu-phone-')), file = join(dir, 'config.json');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(file, JSON.stringify({ server: { host: '0.0.0.0', port: 8765, token: endpoint.token } }));
   const urls: string[] = [];

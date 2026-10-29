@@ -39,7 +39,7 @@ async function stop(child: ChildProcess) {
 }
 
 test('two real isolated Runtimes: encrypted mesh context, remote continuation and relay recovery', { timeout: 45000 }, async t => {
-  const folder = mkdtempSync(join(tmpdir(), 'xiaoyou-real-runtimes-'));
+  const folder = mkdtempSync(join(tmpdir(), 'xiaoyu-real-runtimes-'));
   const transport = new HTTPRuntimeTransport();
   const meshToken = randomBytes(32).toString('hex'), relayToken = randomBytes(32).toString('hex');
   const children: ChildProcess[] = [];
@@ -60,20 +60,20 @@ test('two real isolated Runtimes: encrypted mesh context, remote continuation an
     const config = join(home, 'config.json');
     writeFileSync(config, JSON.stringify({ server: { host: '127.0.0.1', port: number, token, name },
       state_dir: 'state', persona_file: 'persona.txt', desktop_sync: false,
-      agents: { echo: { type: 'echo' } }, xiaoyou: { default_agent: 'echo', voice_agent: null },
+      agents: { echo: { type: 'echo' } }, xiaoyu: { default_agent: 'echo', voice_agent: null },
       mesh: { secret: meshToken, peers: [], advertise: [] }, usage: { enabled: false } }));
     writeFileSync(join(home, 'persona.txt'), 'Synthetic transport fixture.');
     // Source tests must not silently pick up an older ignored build directory.
-    const bundle = process.env.XIAOYOU_TEST_BUNDLE ? resolve(process.env.XIAOYOU_TEST_BUNDLE) : undefined;
+    const bundle = process.env.XIAOYU_TEST_BUNDLE ? resolve(process.env.XIAOYU_TEST_BUNDLE) : undefined;
     const manifest = bundle ? JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8')) : undefined;
     if (bundle) assert.equal(manifest.platform, process.platform, 'Explicit Runtime bundle must match the test platform');
     const launch = bundle ? bundledRuntimeLaunch(bundle, process.platform, home, manifest) : undefined;
-    const frozen = process.env.XIAOYOU_TEST_RUNTIME ? resolve(process.env.XIAOYOU_TEST_RUNTIME) : launch?.command;
-    const executable = frozen || process.env.XIAOYOU_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
-    const args = [...(frozen ? process.env.XIAOYOU_TEST_RUNTIME ? [] : launch!.args : ['-m', 'xiaoyou_runtime']), '--config', config];
-    const env = { ...process.env, XIAOYOU_BACKEND: 'echo', XIAOYOU_HOST: '127.0.0.1',
-      XIAOYOU_PORT: String(number), XIAOYOU_TOKEN: token, XIAOYOU_STATE_DIR: join(home, 'state'),
-      XIAOYOU_MESH_SECRET: meshToken, XIAOYOU_MESH_PEERS: '', XIAOYOU_MESH_ADVERTISE: '',
+    const frozen = process.env.XIAOYU_TEST_RUNTIME ? resolve(process.env.XIAOYU_TEST_RUNTIME) : launch?.command;
+    const executable = frozen || process.env.XIAOYU_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+    const args = [...(frozen ? process.env.XIAOYU_TEST_RUNTIME ? [] : launch!.args : ['-m', 'xiaoyu_runtime']), '--config', config];
+    const env = { ...process.env, XIAOYU_BACKEND: 'echo', XIAOYU_HOST: '127.0.0.1',
+      XIAOYU_PORT: String(number), XIAOYU_TOKEN: token, XIAOYU_STATE_DIR: join(home, 'state'),
+      XIAOYU_MESH_SECRET: meshToken, XIAOYU_MESH_PEERS: '', XIAOYU_MESH_ADVERTISE: '',
       PYTHONPATH: join(root, 'runtime'), PYTHONUNBUFFERED: '1' };
     const child = spawn(executable, args, { cwd: home, env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     let diagnostics = '', lastError = '';

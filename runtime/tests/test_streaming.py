@@ -19,14 +19,14 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS.parent))
 sys.path.insert(0, str(TESTS))
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, write_config  # noqa: E402
-from xiaoyou_runtime import config as config_module  # noqa: E402
-from xiaoyou_runtime.helpers import dsh_stream  # noqa: E402
-from xiaoyou_runtime.loop import xiaoyou as xiaoyou_module  # noqa: E402
-from xiaoyou_runtime.helpers.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
-from xiaoyou_runtime.api.service import Service  # noqa: E402
-from xiaoyou_runtime.api.server import make_server  # noqa: E402
-from xiaoyou_runtime.loop.xiaoyou import reply_so_far  # noqa: E402
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, write_config  # noqa: E402
+from xiaoyu_runtime import config as config_module  # noqa: E402
+from xiaoyu_runtime.helpers import dsh_stream  # noqa: E402
+from xiaoyu_runtime.loop import xiaoyu as xiaoyu_module  # noqa: E402
+from xiaoyu_runtime.helpers.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
+from xiaoyu_runtime.api.service import Service  # noqa: E402
+from xiaoyu_runtime.api.server import make_server  # noqa: E402
+from xiaoyu_runtime.loop.xiaoyu import reply_so_far  # noqa: E402
 
 
 def sse(*chunks, stop=True):
@@ -264,7 +264,7 @@ class ToolTalkTests(TempDirCase):
     """说的话直接写、做事调工具：一轮里可以说话、调工具、看结果、接着说。"""
 
     def toolbox(self, problem=None):
-        from xiaoyou_runtime.loop.voice_tools import Toolbox
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
         return Toolbox(["codex"], [], [], lambda fields: problem,
                        lambda card: "c3 · 正在做" if card == "c3" else None)
 
@@ -369,8 +369,8 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual(saved[-1], {"role": "assistant", "content": "还在做。"})
 
     def test_saying_she_will_remember_without_remembering_is_counted(self):
-        from xiaoyou_runtime.world.memory import OwnerMemory
-        from xiaoyou_runtime.loop.voice_tools import Toolbox
+        from xiaoyu_runtime.world.memory import OwnerMemory
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
         memory = OwnerMemory(self.folder / "owner.md")
         tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
         self.assertTrue(tools.promised("明白，这个我记下了，后面按这个来。"))
@@ -386,8 +386,8 @@ class ToolTalkTests(TempDirCase):
 
     def test_she_can_remember_and_forget_through_tools(self):
         opener = FakeOpener(tool_sse("", "remember", {"note": "回复别太长"}), sse("好，记住了。"))
-        from xiaoyou_runtime.world.memory import OwnerMemory
-        from xiaoyou_runtime.loop.voice_tools import Toolbox
+        from xiaoyu_runtime.world.memory import OwnerMemory
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
         memory = OwnerMemory(self.folder / "owner.md")
         tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: None, memory)
         names = [tool["name"] for tool in tools.definitions()]
@@ -438,15 +438,15 @@ class ToolTalkTests(TempDirCase):
         self.assertEqual("好的。", outcome.text)
         self.assertFalse(cut.took_effect)
 
-    def test_xiaoyou_interrupt_only_hits_a_reply_in_progress(self):
-        xiaoyou, _ = make_xiaoyou(self.folder / "cut", [Scripted("claude")])
-        self.addCleanup(xiaoyou.close)
-        self.assertFalse(xiaoyou.interrupt("default"))
+    def test_xiaoyu_interrupt_only_hits_a_reply_in_progress(self):
+        xiaoyu, _ = make_xiaoyu(self.folder / "cut", [Scripted("claude")])
+        self.addCleanup(xiaoyu.close)
+        self.assertFalse(xiaoyu.interrupt("default"))
         cut = threading.Event()
-        xiaoyou._speaking["default"] = cut
-        self.assertTrue(xiaoyou.interrupt("default"))
+        xiaoyu._speaking["default"] = cut
+        self.assertTrue(xiaoyu.interrupt("default"))
         self.assertTrue(cut.is_set())
-        self.assertFalse(xiaoyou.interrupt("default"))
+        self.assertFalse(xiaoyu.interrupt("default"))
 
     def test_old_json_replies_in_the_history_become_plain_words(self):
         history = [{"role": "user", "content": "hi"},
@@ -594,7 +594,7 @@ class Streaming(Scripted):
             for piece in self.pieces:
                 raw += piece
                 job.on_text(raw)
-                time.sleep(xiaoyou_module.PARTIAL_SECONDS + 0.02)
+                time.sleep(xiaoyu_module.PARTIAL_SECONDS + 0.02)
             self.finish.wait(5)
         return super().run(job)
 
@@ -604,8 +604,8 @@ class ServiceStreamTests(TempDirCase):
         agent = Streaming("ds")
         agent.pieces = ['{"reply": "我', '在想', '这件事"', ', "brief": "b"}']
         agent.script = [{"reply": "我在想这件事", "brief": "b", "mood": "idle"}]
-        xiaoyou, store = make_xiaoyou(self.folder, [agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.addCleanup(agent.finish.set)
         message = service.submit("hi")
@@ -624,8 +624,8 @@ class ServiceStreamTests(TempDirCase):
         done = service.get(message["id"], wait=5)
         self.assertEqual((done["status"], done["reply"], done["partial"]),
                          ("done", "我在想这件事", ""))
-        self.assertEqual(xiaoyou.cards.get(done["card"])["entries"][-1]["text"], "我在想这件事")
-        entries = xiaoyou.cards.get(done["card"])["entries"]
+        self.assertEqual(xiaoyu.cards.get(done["card"])["entries"][-1]["text"], "我在想这件事")
+        entries = xiaoyu.cards.get(done["card"])["entries"]
         self.assertEqual([entry["id"] for entry in entries], [done["id"] + ":you", done["id"] + ":reply"])
         self.assertTrue(all(entry["scope"] == "main" for entry in entries))
 
@@ -633,9 +633,9 @@ class ServiceStreamTests(TempDirCase):
         agent = Streaming("ds")
         agent.pieces = ['{"reply": "我', '在想"}']
         agent.script = [{"reply": "我在想", "brief": "b", "mood": "idle"}]
-        xiaoyou, store = make_xiaoyou(self.folder, [agent])
-        service = Service(xiaoyou, store)
-        config = dataclasses.replace(xiaoyou._config, host="127.0.0.1", port=0)
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
+        config = dataclasses.replace(xiaoyu._config, host="127.0.0.1", port=0)
         server = make_server(config, service)
         server.RequestHandlerClass.log_message = lambda *args: None
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -676,7 +676,7 @@ class ServiceStreamTests(TempDirCase):
 
     def test_a_retried_reply_takes_back_what_was_shown(self):
         said = []
-        stream = xiaoyou_module.Xiaoyou._streamer(
+        stream = xiaoyu_module.Xiaoyu._streamer(
             "ds", lambda kind, agent, text: said.append((kind, text)))
         stream('{"reply": "要删')
         stream("")

@@ -117,7 +117,7 @@ public final class ProtocolSelfTest {
         conversation();
     }
 
-    /** 和小幽的对话、她的帮手：发给设备的两行，以及读 Runtime 回来的记录。 */
+    /** 和小鱼的对话、她的帮手：发给设备的两行，以及读 Runtime 回来的记录。 */
     private static void conversation() {
         String chat = BuddyProtocol.chat("helper", "看看 \"retry\"", "", "codex", "我让 codex 看看", "busy");
         check(chat.equals("{\"cmd\":\"chat\",\"phase\":\"helper\",\"said\":\"看看 \\\"retry\\\"\","
@@ -383,13 +383,13 @@ public final class ProtocolSelfTest {
         check(approval.id.equals("a3") && approval.card.equals("c7")
                 && approval.tool.equals("codex · Bash") && approval.detail.equals("rm -rf build")
                 && approval.createdAt == 1760000049L, "approval");
-        // 小幽自己答的：agent 是 null，没有进展。
+        // 小鱼自己答的：agent 是 null，没有进展。
         Card plain = Card.from(Json.parseObject("{\"id\":\"c8\",\"state\":\"done\",\"agent\":null,"
                 + "\"title\":\"几点了\",\"entries\":[],\"started_at\":null}"));
         check(plain.agent.isEmpty() && !plain.active() && plain.said().equals("几点了")
                 && plain.lastSay().isEmpty() && plain.startedAt == 0, "plain card");
 
-        // 对话和任务分开：交给过帮手的是任务，小幽自己答的是对话。
+        // 对话和任务分开：交给过帮手的是任务，小鱼自己答的是对话。
         check(CardViews.isTask(parsed) && !CardViews.isTask(plain), "task or talk");
         Card finished = Card.from(Json.parseObject("{\"id\":\"c9\",\"state\":\"done\","
                 + "\"agent\":\"claude\",\"title\":\"写周报\",\"brief\":\"写好了\\n在桌面\","
@@ -567,7 +567,7 @@ public final class ProtocolSelfTest {
                 "desktop content metadata is optional and visible roles only are accepted");
         check(CardViews.thread(content).equals("你：之前的需求\n\nCodex：之前的回复\n\n"
                         + "你：修复登录\n保留设置\n\nCodex：已修复\n测试通过")
-                && !CardViews.thread(content).contains("小幽"),
+                && !CardViews.thread(content).contains("小鱼"),
                 "observed content names the actual desktop assistant and keeps visible text");
         check(CardViews.thread(card("{\"id\":\"c95\",\"source\":\"desktop\",\"agent\":\"claude\","
                         + "\"entries\":[{\"role\":\"xiaoyou\",\"text\":\"正在检查\"}]}"))
@@ -661,8 +661,8 @@ public final class ProtocolSelfTest {
                 && CardViews.deviceTitle(request).equals("需求回退")
                 && CardViews.titleNotice(card("{\"id\":\"c102\",\"source\":\"desktop\"}")).isEmpty(),
                 "title fallbacks and older runtime do not pretend to supply an exact desktop title");
-        Card local = card("{\"id\":\"c103\",\"title\":\"小幽的任务\",\"title_source\":\"task\"}");
-        check(CardViews.deviceTitle(local).equals("小幽的任务")
+        Card local = card("{\"id\":\"c103\",\"title\":\"小鱼的任务\",\"title_source\":\"task\"}");
+        check(CardViews.deviceTitle(local).equals("小鱼的任务")
                 && CardViews.titleNotice(local).isEmpty(), "runtime-owned task titles are unchanged");
         for (String agent : Arrays.asList("claude", "Dsh", "remote-helper", "")) {
             for (String source : Arrays.asList("desktop", "runtime", "")) {
@@ -750,7 +750,7 @@ public final class ProtocolSelfTest {
         check(tokensOnly.spentLine().equals("deepseek · deepseek-v4-pro · 42k token"),
                 "spent, pay as you go: " + tokensOnly.spentLine());
         check(card("{\"id\":\"c1\",\"state\":\"done\",\"model\":\"x\"}").spentLine().isEmpty(),
-                "Xiaoyou's own answers have no helper line");
+                "Xiaoyu's own answers have no helper line");
         check(Card.effortLabel("xhigh").equals("特高档") && Card.effortLabel("odd").equals("odd")
                 && Card.effortLabel(null).isEmpty(), "tier words");
 
@@ -862,11 +862,11 @@ public final class ProtocolSelfTest {
 
         // ---- 用量：Runtime 给的那份 ----
         String feed = "{\"usage\":{\"rev\":7,\"at\":1791615000,\"accounts\":["
-                + "{\"id\":\"codex:/home/u/.codex-xiaoyou\",\"kind\":\"codex\",\"agents\":[\"codex\"],"
+                + "{\"id\":\"codex:/home/u/.codex-xiaoyu\",\"kind\":\"codex\",\"agents\":[\"codex\"],"
                 + "\"state\":\"ok\",\"windows\":[{\"kind\":\"5h\",\"left\":58,\"resets_at\":1791620400},"
                 + "{\"kind\":\"7d\",\"left\":81.4,\"resets_at\":1791939600}],\"plan\":\"pro\","
                 + "\"source\":\"app_server\",\"updated_at\":1791614880,\"note\":\"\"},"
-                + "{\"id\":\"claude:/home/u/.claude-xiaoyou\",\"kind\":\"claude\","
+                + "{\"id\":\"claude:/home/u/.claude-xiaoyu\",\"kind\":\"claude\","
                 + "\"agents\":[\"claude\",\"tailor\",\"third\"],\"state\":\"warn\","
                 + "\"windows\":[{\"kind\":\"5h\",\"left\":12,\"resets_at\":null},"
                 + "{\"kind\":\"7d\",\"left\":null,\"resets_at\":1791939600},{\"kind\":\"opus\",\"left\":3}],"
@@ -874,13 +874,13 @@ public final class ProtocolSelfTest {
                 + "\"agents\":["
                 + "{\"name\":\"claude\",\"type\":\"claude_code\",\"model\":\"claude-sonnet-5-5-20260301\","
                 + "\"effort\":\"medium\",\"efforts\":[\"low\",\"medium\",\"high\"],\"models\":[],"
-                + "\"account\":\"claude:/home/u/.claude-xiaoyou\",\"running\":0,\"now\":null},"
+                + "\"account\":\"claude:/home/u/.claude-xiaoyu\",\"running\":0,\"now\":null},"
                 + "{\"name\":\"tailor\",\"type\":\"claude_code\",\"model\":null,\"effort\":\"high\","
-                + "\"efforts\":[\"high\"],\"models\":[],\"account\":\"claude:/home/u/.claude-xiaoyou\","
+                + "\"efforts\":[\"high\"],\"models\":[],\"account\":\"claude:/home/u/.claude-xiaoyu\","
                 + "\"running\":0,\"now\":null},"
                 + "{\"name\":\"codex\",\"type\":\"codex\",\"model\":\"gpt-6.1-sol\",\"effort\":\"medium\","
                 + "\"efforts\":[\"low\",\"medium\",\"high\"],\"models\":[\"gpt-6.1-mini\"],"
-                + "\"account\":\"codex:/home/u/.codex-xiaoyou\",\"running\":2,\"now\":\"gpt-6.1-mini\"},"
+                + "\"account\":\"codex:/home/u/.codex-xiaoyu\",\"running\":2,\"now\":\"gpt-6.1-mini\"},"
                 + "{\"name\":\"deepseek\",\"type\":\"claude_code\",\"model\":\"deepseek-v4-pro\","
                 + "\"effort\":null,\"efforts\":[],\"models\":[],\"account\":null,\"running\":1,\"now\":null},"
                 + "{\"name\":\"echo\",\"type\":\"echo\",\"model\":null,\"effort\":null,\"efforts\":[],"

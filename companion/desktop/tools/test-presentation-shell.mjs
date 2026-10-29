@@ -7,10 +7,10 @@ import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
-const require=createRequire(process.env.XIAOYOU_QA_PLAYWRIGHT||import.meta.url);
+const require=createRequire(process.env.XIAOYU_QA_PLAYWRIGHT||import.meta.url);
 const {_electron}=require('playwright');
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../../..'),desktop=join(root,'companion/desktop');
-const folder=mkdtempSync(join(tmpdir(),'xiaoyou-display-qa-')),bin=join(folder,'bin');mkdirSync(bin);
+const folder=mkdtempSync(join(tmpdir(),'xiaoyu-display-qa-')),bin=join(folder,'bin');mkdirSync(bin);
 for(const id of ['dsh','codex','claude'])writeFileSync(join(bin,id),`#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${id} 1.2.3"; else echo '{"loggedIn":true}'; fi\n`,{mode:0o700});
 const cases=JSON.parse(readFileSync(join(root,'tests/fixtures/presentation-v1.json'),'utf8')).cases;
 const sample=name=>structuredClone(cases.find(row=>row.name===name).wire);
@@ -52,7 +52,7 @@ const server=createServer(async(req,res)=>{
  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(value));
 });
 async function launch(env){
- const packaged=process.env.XIAOYOU_SHELL_PACKAGED;
+ const packaged=process.env.XIAOYU_SHELL_PACKAGED;
  const instance=await _electron.launch({executablePath:packaged||desktop+'/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron',args:packaged?[]:[desktop],env,timeout:30000});
  const page=await instance.firstWindow();page.on('pageerror',error=>errors.push(error.message));return [instance,page];
 }
@@ -62,7 +62,7 @@ try{
  const port=server.address().port,config=join(folder,'fixture.json');
  writeFileSync(config,JSON.stringify({server:{name:'显示规则隔离测试',port,token},mesh:{secret:SHELL_MESH_SECRET},agents:{deepseek:{type:'dsh'}}}));
  accountQA=await accountFixture(folder,{runtimeId:runtime,spaceId:space,name:'Fixture computer',url:'http://127.0.0.1:'+port,token,capabilities:['sync']});
- const env={...process.env,...accountQA.env,PATH:bin+':'+process.env.PATH,XIAOYOU_CONFIG:config,XIAOYOU_DESKTOP_TEST_DATA:join(folder,'profile')};
+ const env={...process.env,...accountQA.env,PATH:bin+':'+process.env.PATH,XIAOYU_CONFIG:config,XIAOYU_DESKTOP_TEST_DATA:join(folder,'profile')};
  delete env.ELECTRON_RUN_AS_NODE;delete env.DEEPSEEK_API_KEY;
  let page;[app,page]=await launch(env);
  await loginShell(page);
@@ -114,7 +114,7 @@ try{
  await until(()=>reply.locator('[data-block-id]').count().then(n=>n===2));
  assert.equal(await page.locator('[data-message-id="turn:reply"]').count(),1);
  assert.deepEqual(errors,[]);
- const result={desktop:await app.evaluate(({app})=>app.getVersion()),platform:process.platform,packaged:Boolean(process.env.XIAOYOU_SHELL_PACKAGED),provider:'synthetic-shared-wire-fixture',partialCompleteBlock:'PASS',emptyRetraction:'PASS',
+ const result={desktop:await app.evaluate(({app})=>app.getVersion()),platform:process.platform,packaged:Boolean(process.env.XIAOYU_SHELL_PACKAGED),provider:'synthetic-shared-wire-fixture',partialCompleteBlock:'PASS',emptyRetraction:'PASS',
   finalBlockBoundaries:'PASS',canonicalOrder:'PASS',formattingRuns:'PASS',futurePolicyWarning:'PASS',restartSameMessage:'PASS',
   acceptedWait:'PASS',ownerOnlyWait:'PASS',acceptedRestart:'PASS',offlineWait:'PASS',liveReplyDuringHistoryReplay:'PASS',recoveryMs,
   nativeCodexWindow:'NOT RUN',nativeClaudeWindow:'NOT RUN',phone:'NOT RUN',realModelTTFT:'NOT RUN'};

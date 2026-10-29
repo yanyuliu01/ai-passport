@@ -7,11 +7,11 @@ from dataclasses import replace
 from copy import deepcopy
 from unittest import mock
 
-from test_runtime import Scripted, ToolTalker, TempDirCase, make_xiaoyou, start, until
-from xiaoyou_runtime.helpers.agents import AgentError
-from xiaoyou_runtime.loop.effects import Effects, EffectFenceError, EffectUncertain
-from xiaoyou_runtime.events.ledger import current
-from xiaoyou_runtime.api.service import Service
+from test_runtime import Scripted, ToolTalker, TempDirCase, make_xiaoyu, start, until
+from xiaoyu_runtime.helpers.agents import AgentError
+from xiaoyu_runtime.loop.effects import Effects, EffectFenceError, EffectUncertain
+from xiaoyu_runtime.events.ledger import current
+from xiaoyu_runtime.api.service import Service
 
 
 class EffectBoundaryTests(unittest.TestCase):
@@ -64,7 +64,7 @@ class RequestEffectsTests(TempDirCase):
     def runtime(self, voice=None, **settings):
         voice = voice or ToolTalker()
         helper = Scripted("codex", speaks=False)
-        x, store = make_xiaoyou(self.folder, [voice, helper], **settings)
+        x, store = make_xiaoyu(self.folder, [voice, helper], **settings)
         server = Service(x, store)
         self.addCleanup(server.close)
         self.addCleanup(helper.gate.set)
@@ -197,7 +197,7 @@ class RequestEffectsTests(TempDirCase):
         voice.calls = [("start_task", {"agent": "codex", "title": "inspect", "task": "inspect"})]
         with mock.patch.object(helper, "run", side_effect=run):
             done = server.get(server.submit("inspect")["id"], wait=5)
-            server._xiaoyou.settle(done["card"], 5)
+            server._xiaoyu.settle(done["card"], 5)
         self.assertEqual(1, len(helper.jobs))
         self.assertEqual(1, len(observed))
         self.assertIn(observed[0], ("running", "succeeded"))
@@ -259,7 +259,7 @@ class RequestEffectsTests(TempDirCase):
         server.retry_effects()
         done = server.get(sent["id"], wait=5)
         self.assertEqual("done", done["status"])
-        self.assertEqual(["recover locally"], server._xiaoyou.memory.texts())
+        self.assertEqual(["recover locally"], server._xiaoyu.memory.texts())
         self.assertEqual(1, len(voice.tool_jobs))
 
     def test_a_post_commit_receipt_failure_does_not_retract_the_effect_result(self):

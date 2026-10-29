@@ -47,7 +47,7 @@ final class HelperManagement {
         }).show(anchor);
     }
     void open() {
-        if(target==null){notice("请先在小幽账号中选择并连接电脑");return;}
+        if(target==null){notice("请先在小鱼账号中选择并连接电脑");return;}
         RuntimeClient.helperRequest(activity,target,"/v1/helpers/options",null,(options,error)->{
             if(activity.isFinishing())return;
             if(error!=null){notice(error);return;}
@@ -76,7 +76,7 @@ final class HelperManagement {
                         .setMessage("从 "+target.name+" 移除，已有任务和历史保留。")
                         .setNegativeButton("取消",null).setPositiveButton("移除",(dialog,which)->
                             mutate("/v1/helpers/"+name+"/remove",new LinkedHashMap<>())).show());
-                else details.message("当前 Runtime 不支持移除此帮手，或它用于小幽的主对话。");
+                else details.message("当前 Runtime 不支持移除此帮手，或它用于小鱼的主对话。");
                 details.show();
             });
         }

@@ -57,7 +57,7 @@
       "description": "Claude Code 的外壳，模型换成 DeepSeek V4。",
       "command": ["claude"],
       "workdir": "workdir",
-      "config_dir": "~/.claude-xiaoyou-deepseek",
+      "config_dir": "~/.claude-xiaoyu-deepseek",
       "model": "deepseek-v4-pro",
       "permission_mode": "dontAsk",
       "allowed_tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
@@ -65,7 +65,7 @@
         "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
       },
       "env_files": {
-        "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
+        "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyu/deepseek.key"
       }
     },
     "codex": {
@@ -100,7 +100,7 @@
       "allowed_tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
       "extra_args": [
         "--append-system-prompt",
-        "这是小幽转交过来的、关于随身设备屏幕或固件版本的请求。严格按仓库里的 skills/pocket-screen-update/SKILL.zh_CN.md 去做；最后用两三句话说清楚改了什么、大约多久到设备上、怎么撤销。"
+        "这是小鱼转交过来的、关于随身设备屏幕或固件版本的请求。严格按仓库里的 skills/pocket-screen-update/SKILL.zh_CN.md 去做；最后用两三句话说清楚改了什么、大约多久到设备上、怎么撤销。"
       ],
       "timeout_seconds": 1800
     }

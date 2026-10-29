@@ -56,7 +56,7 @@ final class WorkRecords {
             case "relay_queued": case "queued": return "补充要求等本轮结束后转交";
             case "relayed": return "补充要求已转交原会话";
             case "executing": return "正在执行补充要求";
-            case "interrupted": return "小幽重启过，补充要求还留着，等你确认后再转交";
+            case "interrupted": return "小鱼重启过，补充要求还留着，等你确认后再转交";
             default: return "补充要求状态：" + state;
         }
     }

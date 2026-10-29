@@ -7,8 +7,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.api.service import Service
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.api.service import Service
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "ttft_report.py"
 spec = importlib.util.spec_from_file_location("ttft_report", TOOL)
@@ -19,7 +19,7 @@ spec.loader.exec_module(report)
 class TtftReportTests(TempDirCase):
     def setUp(self):
         super().setUp()
-        self.x, store = make_xiaoyou(self.folder, [Scripted("voice")])
+        self.x, store = make_xiaoyu(self.folder, [Scripted("voice")])
         self.addCleanup(self.x.close)
         self.service = Service(self.x, store)
         self.addCleanup(self.service.close)
@@ -41,7 +41,7 @@ class TtftReportTests(TempDirCase):
         return code, out.getvalue()
 
     def phone(self, *lines):
-        prefix = "10-26 12:00:00.000  1234  1250 I XiaoyouTiming: "
+        prefix = "10-26 12:00:00.000  1234  1250 I XiaoyuTiming: "
         return self.write("phone.txt", "".join(prefix + line + "\n" for line in lines))
 
     def test_every_sample_must_pass_and_none_are_dropped(self):

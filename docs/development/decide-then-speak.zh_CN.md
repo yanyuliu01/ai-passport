@@ -5,20 +5,20 @@
 # 先定，再说
 
 状态：已提供可选实现（2026-10-20），Runtime 0.19.0。阶段 1 位于默认关闭的
-`xiaoyou.decide_first` 开关后；Mac 基线采集和实机验收尚未完成，目前不是默认通道。
-主人要求重新设计 Runtime 怎么让小幽说的和做的对得上。它必须满足
+`xiaoyu.decide_first` 开关后；Mac 基线采集和实机验收尚未完成，目前不是默认通道。
+主人要求重新设计 Runtime 怎么让小鱼说的和做的对得上。它必须满足
 [跨端可靠性规则](cross-stack-reliability.zh_CN.md)，尤其是 3 秒首响应的约定。
 
 ## 起因
 
 主人手机上的一段录屏（App 0.25.1，Runtime 0.18.1），录的是一轮对话：主人问“再看看这一个月的事情吧?”，
-小幽把活交给 `project` 帮手，之后转述它的结果。录屏里有三个问题：
+小鱼把活交给 `project` 帮手，之后转述它的结果。录屏里有三个问题：
 
 | 看到的 | 原因 | 修在 |
 | --- | --- | --- |
 | 连着两句确认（“好，我让 project…”接着“好嘞，已经让 project…”） | 带工具说话时，交办成功后循环又问了她一轮，她把说过的话换个说法再说一遍 | Runtime 0.18.2（`dsh_stream.run`：她已经开口、交办又成功了，这一轮就结束） |
 | 转述结果在写的过程中出现两三份，每份下面各挂一张任务卡 | Runtime 把正在写的话同时作为消息 `<run>-summary:reply` 和卡上的 `summary_partial` 发出，App 两份都画了 | App 0.25.2（`ChatHistory`：只有没有那条消息时才用卡上那份） |
-| 一件事的每条回复下面都挂一张任务卡 | `chatRow` 给已交办的卡的每条小幽消息都挂了卡 | App 0.25.2（卡只挂在这件事最新的那条回复下面） |
+| 一件事的每条回复下面都挂一张任务卡 | `chatRow` 给已交办的卡的每条小鱼消息都挂了卡 | App 0.25.2（卡只挂在这件事最新的那条回复下面） |
 | 一条回复的第二个气泡消失半秒又出来 | 任务状态一变就重建那一行，气泡淡入重放（第二个气泡要等 450 ms） | App 0.25.2（原地重建的行不再重新淡入） |
 
 Runtime 0.18.2 的修法是临时补丁，和下面说的提醒机制是同一类。这份设计会把两者都替换掉。
@@ -46,7 +46,7 @@ Runtime 0.18.2 的修法是临时补丁，和下面说的提醒机制是同一�
 改行为之前，先在 Mac 上收集：
 
 ```bash
-python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions \
+python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyu-stream-sessions \
   --log runtime/state/runtime-stderr.log
 ```
 
@@ -128,7 +128,7 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
 ## 阶段与验收
 
 1. **阶段 0：数据。** 在 Mac 上跑脚本，把数字写进这份文档。
-2. **阶段 1：日志和开关。** 加每轮一行的日志，用配置开关实现 D/S（`xiaoyou.decide_first`，默认关）。
+2. **阶段 1：日志和开关。** 加每轮一行的日志，用配置开关实现 D/S（`xiaoyu.decide_first`，默认关）。
    单元测试（`runtime/tests/test_decision.py` 和 `runtime/tests/test_streaming.py`）要覆盖：
    - 交办只说一次；
    - 先查看再说；
@@ -161,7 +161,7 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
   错误、2 项跳过。基线的 63 个失败／错误标识全部保留；另有两个 HTTP 测试遇到
   Windows 连接中断，单独一起重跑通过。静态和完整门禁都停在 actionlint 不支持
   Windows，且当前未安装 ESP-IDF 5.5.3，不能写完整门禁通过。三秒首答、设备恢复、
-  多端同步及手机安装均未实测。证据日志位于 `%LOCALAPPDATA%/XiaoyouBuild/`。
+  多端同步及手机安装均未实测。证据日志位于 `%LOCALAPPDATA%/XiaoyuBuild/`。
 - **Windows 部署（2026-10-21）。** Runtime 0.19.0 已由原有 keepalive 守护程序
   保持运行，回环和 Tailscale 均已监听，健康检查及鉴权后的代理、消息读取通过。
   `decide_first` 保持关闭。App 0.26.1 和四文件语音包已通过本 Runtime 发布；
@@ -173,7 +173,7 @@ python3 tools/reminder_stats.py <config_dir 或 workdir>/xiaoyou-stream-sessions
   秒，整轮 8.502 秒。这个候选通道未达到三秒预算，继续关闭。这只是各一个 API
   样本，不是客户端显示 TTFT 或推广基线；探测没有改动主人的对话或任务。
 - **恢复。** 空闲服务重启前，状态文件已复制到
-  `%LOCALAPPDATA%/XiaoyouBuild/runtime-backup-pre-0.19.0-20261020`。
+  `%LOCALAPPDATA%/XiaoyuBuild/runtime-backup-pre-0.19.0-20261020`。
   未改动本地配置或状态结构。保持可选开关关闭，当前仍使用原有通道；不能未经
   单独核验就把快照覆盖到正在进行的工作上。
 

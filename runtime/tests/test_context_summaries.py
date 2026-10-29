@@ -5,13 +5,13 @@ import time
 import unittest
 from unittest import mock
 
-from test_runtime import GateTalker, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.base import Outcome
-from xiaoyou_runtime.loop.context import bind
-from xiaoyou_runtime.world.store import Store
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.events.intake import Intake
-from xiaoyou_runtime.api.service import Service
+from test_runtime import GateTalker, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.base import Outcome
+from xiaoyu_runtime.loop.context import bind
+from xiaoyu_runtime.world.store import Store
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.events.intake import Intake
+from xiaoyu_runtime.api.service import Service
 
 
 class ContextSummaryTests(TempDirCase):
@@ -40,7 +40,7 @@ class ContextSummaryTests(TempDirCase):
         return self.context.save_summary("side", candidate, self.response(candidate))
 
     def test_summary_reservation_reuses_identical_evidence_search(self):
-        from xiaoyou_runtime.loop import recall
+        from xiaoyu_runtime.loop import recall
         for index in range(97):
             self.exchange("s%02d" % index, text="quartz marker" if index == 0 else "question %d" % index)
         candidate = self.context.summary_candidate("side", now=time.time() + 3600)
@@ -52,7 +52,7 @@ class ContextSummaryTests(TempDirCase):
         self.assertEqual(1, search.call_count)
 
     def test_search_reuse_preserves_quotes_receipts_and_budget_selection(self):
-        from xiaoyou_runtime.loop import context_window
+        from xiaoyu_runtime.loop import context_window
         for index in range(97):
             self.exchange("s%02d" % index,
                           text=("quartz" if index == 0 else "topaz" if index == 1 else "question"),
@@ -83,7 +83,7 @@ class ContextSummaryTests(TempDirCase):
         self.assertEqual("", self.context.window("side", "reader", query="amethyst")["body"])
 
     def test_lookup_recomputes_when_candidate_order_changes(self):
-        from xiaoyou_runtime.loop import context_window
+        from xiaoyu_runtime.loop import context_window
         turns = [{"_key": "a", "text": "quartz", "reply": ""},
                  {"_key": "b", "text": "quartz", "reply": ""}]
         lookup = context_window.prepare_lookup("quartz", turns)
@@ -155,7 +155,7 @@ class ContextSummaryTests(TempDirCase):
 
     def test_failed_cache_write_does_not_create_a_claim_or_hide_history(self):
         candidate = self.seed()
-        with mock.patch("xiaoyou_runtime.loop.context_summaries.durable_write", side_effect=OSError("disk full")):
+        with mock.patch("xiaoyu_runtime.loop.context_summaries.durable_write", side_effect=OSError("disk full")):
             self.assertFalse(self.context.begin_summary("side", candidate, now=1000))
         self.assertTrue(self.context.begin_summary("side", candidate, now=1000))
         self.assertEqual(65, len(self.context.history("side")))
@@ -200,7 +200,7 @@ class ContextSummaryTests(TempDirCase):
             if page["next"] is None:
                 break
             query = page["next"]
-        self.assertEqual("主人：original question\n小幽：" + "abcdefghij" * 600, "".join(chunks))
+        self.assertEqual("主人：original question\n小鱼：" + "abcdefghij" * 600, "".join(chunks))
         self.context.clear("side")
         self.assertNotIn("original question", self.context.recall("side", first))
 
@@ -236,7 +236,7 @@ class SummaryWakeTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.addCleanup(self.x.close)
         card = self.x._writer.task_open("default", "history")
         for index in range(65):

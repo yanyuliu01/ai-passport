@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 小幽固件说的蓝牙协议（Hardware Buddy 线协议）：一行一个 UTF-8 JSON 对象，以 \n 结尾。
+ * 小鱼固件说的蓝牙协议（Hardware Buddy 线协议）：一行一个 UTF-8 JSON 对象，以 \n 结尾。
  * 这个类只做字符串和字节处理，不依赖 Android，可以在电脑上直接跑测试。
  *
  * 各字段的字节上限与固件 main/buddy_types.h 一致；超出的在这里按字符边界截断，
@@ -129,14 +129,14 @@ public final class BuddyProtocol {
         return "{\"time\":[" + epochSeconds + "," + offsetSeconds + "]}\n";
     }
 
-    /** 连上后告诉设备：这头是小幽中枢，能接收语音。旧固件不认识这一行，会回一个错误应答。 */
+    /** 连上后告诉设备：这头是小鱼中枢，能接收语音。旧固件不认识这一行，会回一个错误应答。 */
     public static String hubHello() {
         return "{\"cmd\":\"hub\",\"voice\":true}\n";
     }
 
     /**
-     * 和小幽的对话现在走到哪一步了。phase 是 idle、thinking、helper、done、failed 之一；
-     * said 是我说的话，reply 是小幽的话，agent 是正在替她干活的帮手，stage 是她转交时说的那句，
+     * 和小鱼的对话现在走到哪一步了。phase 是 idle、thinking、helper、done、failed 之一；
+     * said 是我说的话，reply 是小鱼的话，agent 是正在替她干活的帮手，stage 是她转交时说的那句，
      * mood 是 idle、busy、ask、happy、oops 之一。只有连接时声明了 chat 的固件认识这一行。
      */
     public static String chat(String phase, String said, String reply, String agent,
@@ -201,7 +201,7 @@ public final class BuddyProtocol {
     /**
      * 一件事的卡：at 是开始的“时:分”，state 是 working、waiting、done、failed、cancelled、
      * talking 之一，声明 desktop 的固件还认识 unknown、idle。said 是这件事的第一句话，
-     * reply 是小幽最新的话，edits 是补充或改过几次。
+     * reply 是小鱼最新的话，edits 是补充或改过几次。
      * 编号太长时返回 null（不发）。
      */
     public static String card(String id, String at, String state, String agent, int edits,
@@ -507,7 +507,7 @@ public final class BuddyProtocol {
         return shortText + "\n\n" + fullText;
     }
 
-    /** 小幽能找的帮手：每项是 {名字, 一句说明}，最多带 HELPER_COUNT 个，没有名字的跳过。 */
+    /** 小鱼能找的帮手：每项是 {名字, 一句说明}，最多带 HELPER_COUNT 个，没有名字的跳过。 */
     public static String helpers(List<String[]> helpers) {
         StringBuilder out = new StringBuilder(256);
         out.append("{\"cmd\":\"helpers\",\"list\":[");

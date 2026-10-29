@@ -7,7 +7,7 @@ const java=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin/java'):'java',j
 const cache=process.env.GRADLE_USER_HOME||join(homedir(),'.gradle');
 function jar(group,artifact,version){const base=join(cache,'caches/modules-2/files-2.1',group,artifact,version);for(const folder of readdirSync(base)){const file=readdirSync(join(base,folder)).find(f=>f.endsWith('.jar'));if(file)return join(base,folder,file)}throw Error('Missing '+artifact)}
 const cp=[jar('org.bouncycastle','bcprov-jdk18on','1.86'),jar('com.squareup.okhttp3','okhttp','4.12.0'),jar('com.squareup.okio','okio-jvm','3.6.0'),jar('org.jetbrains.kotlin','kotlin-stdlib','1.9.20')].join(':');
-const folder=mkdtempSync(join(tmpdir(),'xiaoyou-java-relay-')),classes=join(folder,'classes');
+const folder=mkdtempSync(join(tmpdir(),'xiaoyu-java-relay-')),classes=join(folder,'classes');
 const run=(command,args)=>new Promise((resolve,reject)=>{const p=spawn(command,args,{stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',d=>output+=d);p.stderr.on('data',d=>output+=d);p.on('error',reject);p.on('close',code=>code?reject(Error(output)):resolve(output))});
 await run(javac,['-cp',cp,'-d',classes,...['Json.java','RelayCrypto.java','PinnedRelayTLS.java','PeerAvailability.java','SharedRelaySocket.java','RelayConnection.java'].map(f=>join(root,'companion/android/app/src/main/java/com/yanyuliu/pockethub',f)),...['RelayProtocolHarness.java','PinnedRelayTLSHarness.java'].map(f=>join(root,'companion/android/app/src/test/java/com/yanyuliu/pockethub',f))]);
 const pems=await generate([{name:'commonName',value:'synthetic-node'}],{keyType:'ec',curve:'P-256',algorithm:'sha256'}),tls={key:pems.private,cert:pems.cert},tlsFingerprint=createHash('sha256').update(new X509Certificate(pems.cert).raw).digest('hex');
@@ -35,5 +35,5 @@ await network2.start();network2.configure({url:'wss://127.0.0.1:'+relay.address(
 writeFileSync(join(folder,'invitation2.txt'),await network2.invite());
 await run(java,['-cp',classes+':'+cp,'com.yanyuliu.pockethub.RelayProtocolHarness',join(folder,'invitation.txt'),join(folder,'result.json'),join(folder,'invitation2.txt')]);
 if(posts!==1||voice!==1||image!==1||!sync)throw Error('Expected one execution and bounded polling: '+JSON.stringify({posts,voice,image,sync}));
-const result={pinnedWSS:true,javaWrongPinBlockedBeforeHeaders:true,qrDecodedByAndroidCore:true,...JSON.parse(readFileSync(join(folder,'result.json'))),singleMessageExecution:posts===1};writeFileSync(join(root,'build/xiaoyou-android-relay-interop.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+const result={pinnedWSS:true,javaWrongPinBlockedBeforeHeaders:true,qrDecodedByAndroidCore:true,...JSON.parse(readFileSync(join(folder,'result.json'))),singleMessageExecution:posts===1};writeFileSync(join(root,'build/xiaoyu-android-relay-interop.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{clearTimeout(restart);network?.stop();network2?.stop();if(relay?.listening)await new Promise(r=>relay.close(r));await new Promise(r=>server.close(r));db?.close();db2?.close();rmSync(folder,{recursive:true,force:true})}

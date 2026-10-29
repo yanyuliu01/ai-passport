@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count how Xiaoyou's tool-talking turns went, from the DeepSeek session files.
+"""Count how Xiaoyu's tool-talking turns went, from the DeepSeek session files.
 
 Read-only evidence for the decide-then-speak redesign
 (docs/development/decide-then-speak.md). It prints counts and turn shapes only,
@@ -8,7 +8,7 @@ never message text, so the output can be pasted into a report.
 Usage (on the computer that runs the Runtime):
   python3 tools/reminder_stats.py <sessions folder> [--log runtime/state/runtime-stderr.log]
 
-The sessions folder is <agent config_dir or workdir>/xiaoyou-stream-sessions.
+The sessions folder is <agent config_dir or workdir>/xiaoyu-stream-sessions.
 Each file keeps only the newest 40 messages (dsh_stream.trim), so older turns are gone.
 """
 

@@ -19,7 +19,7 @@ All files are in `/Users/weihaoliu/ai-passport` on branch `feature/usage-history
 ## 2. Do not
 
 - Change Runtime code, configuration or persona; restart or replace the live Runtime; deploy.
-- Write results or review files inside the repository (the harness refuses). Use something like `~/xiaoyou-experiments/decide-speak/`.
+- Write results or review files inside the repository (the harness refuses). Use something like `~/xiaoyu-experiments/decide-speak/`.
 - Print, log or commit the key.
 - Drop slow or failed samples, or rerun selected runs to improve the numbers.
 - Open `blind-review-key.json`, or tell the owner which side is S or P, before the owner finishes the blind review.
@@ -30,14 +30,14 @@ All files are in `/Users/weihaoliu/ai-passport` on branch `feature/usage-history
 ### 3.1 Prepare
 
 1. Python 3.9 or later: `python3 --version`. The harness uses only the standard library.
-2. The key file exists: `~/.config/xiaoyou/deepseek.key`. The harness reads `DEEPSEEK_API_KEY` first, then this file.
+2. The key file exists: `~/.config/xiaoyu/deepseek.key`. The harness reads `DEEPSEEK_API_KEY` first, then this file.
 3. Check the models. In the live `runtime/config.json`, `agents.deepseek.chat_model` is `deepseek-flash`. In R7's `helpers/agents.py`, talking calls (including the decision) use `chat_model`, so both steps default to `deepseek-flash`. If you find otherwise, set `--decide-model` and `--speak-model` and say so in the report.
 4. Record the version combination: repository commit (`git rev-parse --short HEAD`), models and persona file. Put it in every result line with `--note`.
 
 ### 3.2 Offline dry run
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --dry-run --repeats 1 --pause 0 --decide-wait 3 --out ~/xiaoyou-experiments/decide-speak/dry.jsonl
+python3 tools/experiments/decide_speak_compare.py run --dry-run --repeats 1 --pause 0 --decide-wait 3 --out ~/xiaoyu-experiments/decide-speak/dry.jsonl
 ```
 
 Expect 92 lines (46 cases × 2 arms) and no `error`. This only checks the flow; the numbers mean nothing.
@@ -45,7 +45,7 @@ Expect 92 lines (46 cases × 2 arms) and no `error`. This only checks the flow; 
 ### 3.3 Live probe
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --only chat-02,task-01,run-03 --repeats 1 --out ~/xiaoyou-experiments/decide-speak/probe.jsonl --note "probe"
+python3 tools/experiments/decide_speak_compare.py run --only chat-02,task-01,run-03 --repeats 1 --out ~/xiaoyu-experiments/decide-speak/probe.jsonl --note "probe"
 ```
 
 Check each line:
@@ -58,7 +58,7 @@ If the API rejects the request (for example `thinking` or the `tools` format), *
 ### 3.4 Full run
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyou-experiments/decide-speak/results.jsonl --note "commit=<commit> model=deepseek-flash persona=runtime/persona.txt"
+python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyu-experiments/decide-speak/results.jsonl --note "commit=<commit> model=deepseek-flash persona=runtime/persona.txt"
 ```
 
 - 460 runs of a few seconds each plus pauses, roughly an hour. Run it in the background and keep the Mac awake.
@@ -68,7 +68,7 @@ python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyo
 ### 3.5 Summary
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py summarize ~/xiaoyou-experiments/decide-speak/results.jsonl
+python3 tools/experiments/decide_speak_compare.py summarize ~/xiaoyu-experiments/decide-speak/results.jsonl
 ```
 
 Prices default to the configured 2 (input) and 8 (output) per million tokens, in the configuration's currency; state this in the report.
@@ -91,7 +91,7 @@ Score each trait in the two tables of plan section 2 as 0 or 1. Small-talk cases
 ### 3.8 Owner blind review
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py review ~/xiaoyou-experiments/decide-speak/results.jsonl --out-dir ~/xiaoyou-experiments/decide-speak/review
+python3 tools/experiments/decide_speak_compare.py review ~/xiaoyu-experiments/decide-speak/results.jsonl --out-dir ~/xiaoyu-experiments/decide-speak/review
 ```
 
 Give `blind-review.md` to the owner. After the owner finishes, map the choices back to S and P with `blind-review-key.json`.

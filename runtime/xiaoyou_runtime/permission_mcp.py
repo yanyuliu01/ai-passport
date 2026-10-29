@@ -1,7 +1,7 @@
-"""Moved to xiaoyou_runtime/helpers/permission_mcp.py; ``python -m xiaoyou_runtime.permission_mcp`` keeps working for installed commands."""
+"""Legacy installed command compatibility."""
 import sys
-
-from .helpers.permission_mcp import main
-
+from pathlib import Path
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from xiaoyu_runtime.helpers.permission_mcp import main
+    raise SystemExit(main())

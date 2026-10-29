@@ -7,10 +7,10 @@ import unittest
 import urllib.error
 import urllib.request
 
-from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime
+from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyu, start_runtime
 
-from xiaoyou_runtime.helpers import helpers
-from xiaoyou_runtime.api.service import RequestError, Service
+from xiaoyu_runtime.helpers import helpers
+from xiaoyu_runtime.api.service import RequestError, Service
 
 
 class RegistryTests(TempDirCase):
@@ -93,7 +93,7 @@ class RegistryTests(TempDirCase):
 class ServiceTests(TempDirCase):
     def setUp(self):
         super().setUp()
-        self.x, store = make_xiaoyou(self.folder, [Scripted("claude")])
+        self.x, store = make_xiaoyu(self.folder, [Scripted("claude")])
         self.service = Service(self.x, store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.x.close)
@@ -124,7 +124,7 @@ class ServiceTests(TempDirCase):
     def test_config_helper_removal_survives_restart_and_can_be_restored(self):
         from unittest.mock import patch
         main, worker = Scripted("main"), Scripted("worker")
-        x, store = make_xiaoyou(self.folder / "base", [main, worker])
+        x, store = make_xiaoyu(self.folder / "base", [main, worker])
         service = Service(x, store)
         self.addCleanup(service.close); self.addCleanup(x.close)
         with patch.object(x.helpers, "_save", side_effect=OSError("disk failure")):
@@ -133,7 +133,7 @@ class ServiceTests(TempDirCase):
         self.assertTrue(x.has("worker")); self.assertEqual(x.helpers.disabled(), [])
         service.helper_remove("worker")
         self.assertFalse(x.has("worker"))
-        again, again_store = make_xiaoyou(self.folder / "base", [Scripted("main"), Scripted("worker")])
+        again, again_store = make_xiaoyu(self.folder / "base", [Scripted("main"), Scripted("worker")])
         self.addCleanup(again.close)
         self.assertFalse(again.has("worker"))
         self.assertNotIn("worker", [row["name"] for row in again.usage.snapshot()["agents"]])
@@ -148,7 +148,7 @@ class ServiceTests(TempDirCase):
 
     def test_late_quota_event_cannot_update_a_reused_helper_names_new_account(self):
         from dataclasses import replace
-        from xiaoyou_runtime.config import AgentSpec
+        from xiaoyu_runtime.config import AgentSpec
         meter = self.x.usage
         old = replace(Scripted("quota").spec, type="codex", config_dir=self.folder / "old-login")
         new = replace(old, config_dir=self.folder / "new-login")
@@ -161,16 +161,16 @@ class ServiceTests(TempDirCase):
 
     def test_codex_unauthorized_quota_refreshes_native_login_once_with_same_deadline(self):
         from unittest.mock import Mock, patch
-        from xiaoyou_runtime.helpers.usage import fetch_codex
-        from xiaoyou_runtime.helpers.agents import AgentError
+        from xiaoyu_runtime.helpers.usage import fetch_codex
+        from xiaoyu_runtime.helpers.agents import AgentError
         server = Mock()
         server.request.side_effect = [1, 2, 3]
         server.expect.side_effect = [AgentError("401 Unauthorized"), {"account": {}},
             {"rateLimits": {"primary": {"usedPercent": 7, "resetsAt": 2000000000},
                             "secondary": {"usedPercent": 2, "resetsAt": 2000500000}}}]
-        with patch("xiaoyou_runtime.helpers.codex_app.AppServer", return_value=server), \
-                patch("xiaoyou_runtime.helpers.codex_app.handshake"), \
-                patch("xiaoyou_runtime.helpers.agents.CodexAgent._env", return_value={}):
+        with patch("xiaoyu_runtime.helpers.codex_app.AppServer", return_value=server), \
+                patch("xiaoyu_runtime.helpers.codex_app.handshake"), \
+                patch("xiaoyu_runtime.helpers.agents.CodexAgent._env", return_value={}):
             windows, _, problem = fetch_codex(Scripted("quota").spec)
         self.assertIsNone(problem); self.assertEqual(windows["5h"]["left"], 93)
         self.assertEqual(windows["7d"]["left"], 98)

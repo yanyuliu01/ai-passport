@@ -2,38 +2,42 @@
   <strong>简体中文</strong> · <a href="README.md">English</a>
 </p>
 
-# 小幽 Runtime
+# 小鱼 Runtime
 
 修改本项目的 Agent 必须先读[根目录指令](../AGENTS.zh_CN.md)和
 [App／Runtime／固件强制可靠性准则](../docs/development/cross-stack-reliability.zh_CN.md)。
 其中规定回归、3 秒首回复、连接恢复和多端一致性验收。下文的能力说明不能
 作为这些要求已经通过验证的证据。
 
-小幽是主人唯一的对话对象，也是一个独立的身份：她不是某个模型的别名。这个 Runtime 是
-小幽背后那个一直开着的小服务，属于她的东西都在这里——人设、她和主人的对话记录、
+小鱼是主人唯一的对话对象，也是一个独立的身份：她不是某个模型的别名。这个 Runtime 是
+小鱼背后那个一直开着的小服务，属于她的东西都在这里——人设、她和主人的对话记录、
 “这句话交给谁”的判断，以及别人做完之后由她怎么转述。Claude Code、Codex、另一台电脑上
-的小幽，还有以后接进来的本地模型，都只是她可以用的**代理**。
+的小鱼，还有以后接进来的本地模型，都只是她可以用的**代理**。
 
-主人提的每个需求是**一件事**，有自己的一张卡：他说的话、小幽的回答、后来的补充都记在
-这张卡上。小幽自己只做快的事——听懂、能马上答的答掉、要花时间的交给帮手在后台做——
+主人提的每个需求是**一件事**，有自己的一张卡：他说的话、小鱼的回答、后来的补充都记在
+这张卡上。小鱼自己只做快的事——听懂、能马上答的答掉、要花时间的交给帮手在后台做——
 所以一件事没做完不妨碍说下一句，几件事可以同时在做，做的过程中可以补充、改要求或
-取消。小幽每说一段话带三样东西：完整回复、给 Passport 小屏幕看的一两句简报、像素宠物
+取消。小鱼每说一段话带三样东西：完整回复、给 Passport 小屏幕看的一两句简报、像素宠物
 此刻的表情；回复里的 Markdown 标记、代码围栏和表情符号会先整理成纯文字，小屏幕和终端
 都显示得干净。消息可以是打出来的文字，也可以是一段录音；录音先由配置里选定的语音识别
 引擎变成文字。
 
 ```text
-手机 App / 任意客户端 ──HTTP──> 小幽 Runtime
+手机 App / 任意客户端 ──HTTP──> 小鱼 Runtime
                                   │  人设 · 对话记录 · 卡 · 路由 · 转述
-                                  ├──> claude   （Claude Code 命令行，能以小幽的身份回话）
+                                  ├──> claude   （Claude Code 命令行，能以小鱼的身份回话）
                                   ├──> codex    （Codex 命令行，只干活）
-                                  ├──> dsh      （DeepSeek Harness 命令行，能以小幽的身份回话）
+                                  ├──> dsh      （DeepSeek Harness 命令行，能以小鱼的身份回话）
                                   ├──> 任意命令 （本地模型等）
-                                  └──> 另一台电脑上的小幽 Runtime
+                                  └──> 另一台电脑上的小鱼 Runtime
 ```
 
 状态：验证阶段，先跑在自己的电脑上。同一份代码之后要搬到虚拟机，里面没有任何假设
 某台机器的地方。见[哪些验证过、哪些没有](#哪些验证过哪些没有)。
+
+## 小鱼身份与人设（0.27.0 源码）
+
+正式包名为 `xiaoyu_runtime`。她称创造她的人为老板，重视自己的感受、意见与好奇，故事从真实互动和探索中逐渐积累；固定做事规则继续独立提供。旧命令、配置兼容及部署边界见[人设与迁移说明](../docs/development/persona-boundaries.zh_CN.md)。本次源码候选不会替换其他工作区或已安装 Runtime 的工作。
 
 ## 统一请求同步（0.24.0）
 
@@ -207,7 +211,7 @@ Speaker 把缓存摘要作为本次调用中的引用背景提供，不写入原
 换轮、负责人变化或任务结束后不能再发布过期通知；私有观察数据不进入客户端／Mesh 投影。
 
 `loop/progress_wakes.py` 通过显式接口独立负责进展准入、领取／重试限额、已保存回复恢复和完成检查点。
-Pulse 提供时钟、既有策略、负责人／模型／投递适配与共享队列；规则模块不导入 Pulse 或 Xiaoyou。
+Pulse 提供时钟、既有策略、负责人／模型／投递适配与共享队列；规则模块不导入 Pulse 或 Xiaoyu。
 沿用现有任务日志、观察编号、提示词、时间策略和客户端格式。
 
 `loop/timer_wakes.py` 独立管理到期提醒与记忆整理生命周期。提醒领取与核对历史仍在原承诺记录中；
@@ -305,14 +309,14 @@ Python、Java 和 TypeScript 共用 `tests/fixtures/presentation-v1.json` 的固
 cd runtime
 cp config.example.json config.json
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # 填进 server.token
-python3 -m xiaoyou_runtime --config config.json --check
-python3 -m xiaoyou_runtime --config config.json --once "你好"    # 只说一句，不启动服务
-python3 -m xiaoyou_runtime --config config.json                 # 启动服务
+python3 -m xiaoyu_runtime --config config.json --check
+python3 -m xiaoyu_runtime --config config.json --once "你好"    # 只说一句，不启动服务
+python3 -m xiaoyu_runtime --config config.json                 # 启动服务
 ```
 
 `config.json`、`state/`、`workdir/` 已被 Git 忽略。不要提交真实的令牌。
 
-想不调用任何模型先把整条链路跑通，启动时加上环境变量 `XIAOYOU_DEFAULT_AGENT=echo`：
+想不调用任何模型先把整条链路跑通，启动时加上环境变量 `XIAOYU_DEFAULT_AGENT=echo`：
 所有的话都交给一个原样复述的代理，不用改配置文件。
 
 ## 在桌面 App 中查看 Runtime 任务
@@ -330,8 +334,8 @@ Runtime 之后继续该任务而内容不同时，会明确报告冲突，不静
 已有任务可从仓库根目录操作：
 
 ```bash
-PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop list
-PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop open --task c149 --agent codex
+PYTHONPATH=runtime python3 -m xiaoyu_runtime --config runtime/config.json desktop list
+PYTHONPATH=runtime python3 -m xiaoyu_runtime --config runtime/config.json desktop open --task c149 --agent codex
 ```
 
 使用配置中的代理名，例如 `cc`，不一定叫 `claude`。任务仍在工作、等待或状态未知时会拒绝
@@ -373,7 +377,7 @@ daemon 也不等于桌面 App 已连接。服务缺失或不兼容会明确失�
 
 ```bash
 cd runtime
-python3 -m xiaoyou_runtime --config config.json --desktop-sync
+python3 -m xiaoyu_runtime --config config.json --desktop-sync
 ```
 
 想不管怎么拉起 Runtime（守护脚本、开机自启、服务管理器）都开着，就写在配置里（0.10.0 起）：
@@ -386,7 +390,7 @@ python3 -m xiaoyou_runtime --config config.json --desktop-sync
 `--desktop-project`；另外两项指定代理的配置目录，目录下应包含 `sessions/` 或 `projects/`：
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json --desktop-sync \
+python3 -m xiaoyu_runtime --config config.json --desktop-sync \
   --desktop-project /absolute/project-a --desktop-project /absolute/project-b \
   --desktop-codex-dir /absolute/codex-config \
   --desktop-claude-dir /absolute/claude-config
@@ -427,12 +431,12 @@ App 的任务列表和详情使用同一个 `card.title`。硬件任务/历史�
 仍使用设备所有卡共用的 4 KiB 文本池。已经支持电脑卡片的固件不需要为内容同步重新刷写。
 
 电脑端会话停下（本轮结束）以后，可以从手机在会话页接着聊（0.8.1 起）。0.10.1 起，在会话页说的话先给
-小幽：她能看到这个会话最近的内容，解释、翻译、总结这类问题自己答，回答另记一张卡。只有主人点名能接这个
-会话的代理（请求里的 `agent`，或者话里说出它的名字），或者小幽判断主人要它接着干活（她对这张卡用
+小鱼：她能看到这个会话最近的内容，解释、翻译、总结这类问题自己答，回答另记一张卡。只有主人点名能接这个
+会话的代理（请求里的 `agent`，或者话里说出它的名字），或者小鱼判断主人要它接着干活（她对这张卡用
 `amend`）时，才接着那个会话做：Runtime 另开一个「接着：……」
 任务，在那个会话的目录里用它的会话编号跑一轮（Claude 会话交给 `claude_code` 类型的代理，Codex 会话
-交给 `codex` 类型的），不加小幽的人设。这个会话不记成 Runtime 自己的，电脑端照常观察，主人也能回到
-电脑上接着聊。电脑上这一轮还在跑（`running`/`waiting` 且不是 `stale`）时不接着做，但可以问小幽。停止仍在电脑端完成。安装并信任下面的可选
+交给 `codex` 类型的），不加小鱼的人设。这个会话不记成 Runtime 自己的，电脑端照常观察，主人也能回到
+电脑上接着聊。电脑上这一轮还在跑（`running`/`waiting` 且不是 `stale`）时不接着做，但可以问小鱼。停止仍在电脑端完成。安装并信任下面的可选
 审批桥后，可以从手机单独回答有效的操作审批；只有状态信号、或者没有决策通道的通知，
 仍需要在电脑端确认。
 “本轮结束”只表示这次响应结束，不代表整个项目
@@ -456,10 +460,10 @@ JSON 输出，不依赖某个 Agent 的原始记录格式。
 在仓库根目录查询保留的历史，不调用模型：
 
 ```bash
-python3 runtime/xiaoyou_runtime/shared_history.py --context
-python3 runtime/xiaoyou_runtime/shared_history.py --task c127
-python3 runtime/xiaoyou_runtime/shared_history.py --format json
-python3 runtime/xiaoyou_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
+python3 runtime/xiaoyu_runtime/shared_history.py --context
+python3 runtime/xiaoyu_runtime/shared_history.py --task c127
+python3 runtime/xiaoyu_runtime/shared_history.py --format json
+python3 runtime/xiaoyu_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
 ```
 
 其他 Runtime／项目使用 `--config /absolute/config.json` 和
@@ -506,7 +510,7 @@ Git 忽略的 `state/`，不进入仓库。
 在 `runtime/` 目录下，接收器的命令是：
 
 ```bash
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
 ```
 
 要让 Hook 从任意项目启动，可以复用这个命令处理器。把两个绝对路径换成实际值；
@@ -515,7 +519,7 @@ python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --ag
 ```json
 {
   "type": "command",
-  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
+  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyu_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
   "timeout": 2
 }
 ```
@@ -544,7 +548,7 @@ Claude Code 的权限通知还覆盖一部分没有 `PermissionRequest` 事件�
       "matcher": "permission_prompt",
       "hooks": [{
         "type": "command",
-        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
+        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyu_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
         "timeout": 2
       }]
     }]
@@ -571,9 +575,9 @@ Claude Code 的权限通知还覆盖一部分没有 `PermissionRequest` 事件�
 用下面的命令为每个代理生成可合并的配置，避免手动算错超时：
 
 ```bash
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state \
   --agent codex --approval-timeout 300 --print-config
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state \
   --agent claude --approval-timeout 300 --print-config
 ```
 
@@ -596,14 +600,14 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 
 ## 先决定再说话（0.19.0，需主动开启）
 
-`xiaoyou.decide_first` 默认是 `false`。使用流式 DeepSeek 作为小幽的声音时，
+`xiaoyu.decide_first` 默认是 `false`。使用流式 DeepSeek 作为小鱼的声音时，
 开启后先用非流式请求选择至多一个承诺，检查并实际落实，再生成可见回复。
 说话阶段只能查看任务详情或翻旧记录。记忆、约定和主动唤醒也采用同样的分离；
 只输出 JSON 的代理及结果转述沿用原有路径。
 
 决定阶段时限是 1.3 秒。超时就带着“本轮尚未落实承诺”的真实事实开始说话；
 迟到的决定直接丢弃，不执行工具。拒绝原因作为事实传给说话阶段。说话失败时，
-不会重做已经落实的操作。两阶段共用小幽单次调用的总时限。工具结果作为协议
+不会重做已经落实的操作。两阶段共用小鱼单次调用的总时限。工具结果作为协议
 消息保留，不新增隐藏提醒提示。诊断只包含轮次编号、决定状态和耗时、服务端
 首段正文、总耗时及“像承诺却未承诺”的计数，不包含消息原文；服务端首段正文
 耗时不等于客户端实际显示的 TTFT。
@@ -641,9 +645,9 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
   `presentation` 上带 `interrupted: true`（`status_label` 为“已打断”）。只有说话的代理确实因此提前
   停下才标记；回复说完后才到的消息不算。旧客户端忽略这个字段，照常显示文字。
 
-## 小幽会记事（0.17.0）
+## 小鱼会记事（0.17.0）
 
-小幽有了记忆：`state/memory/owner.md`，一行一条，带记下的日期，每一轮都放进她的提示（转述帮手结果时
+小鱼有了记忆：`state/memory/owner.md`，一行一条，带记下的日期，每一轮都放进她的提示（转述帮手结果时
 也看得到）。她用 `remember` 记、`forget` 按编号删；主人也可以直接打开这个文件改。只记偏好、规矩、要她
 以后一直照做的话，不记流水账；最多 60 条，满了丢最旧的。
 
@@ -653,7 +657,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 
 ## 说话交给她自己判断（0.16.0）
 
-这一版取代 0.14.0 的“短消息、按长度拆”规则。Runtime 只告诉小幽现在在哪说话（手机聊天，主人随时
+这一版取代 0.14.0 的“短消息、按长度拆”规则。Runtime 只告诉小鱼现在在哪说话（手机聊天，主人随时
 可能插话，能显示加粗和列表），说几条、多长、什么语气由她定；只留三条底线：没调工具不说“已经去做了”，
 不编进度和结果，说过的不换个说法再说。
 
@@ -664,9 +668,9 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
   把最近 8 轮当前情带进去；会话里连工具调用和结果一起记下。一轮里一个工具都没调、却说了“我这就去”
   “交给某某”这类话时，Runtime 悄悄提醒她一次：现在就调，或者改口。（已于 2026-10-23 删除：现在只调用一次模型、只给出一段回复，这种情况只记数。）
 
-## 小幽用工具做事（0.15.0）
+## 小鱼用工具做事（0.15.0）
 
-说话的代理能用工具调用时（现在是 dsh 直连 DeepSeek 的那条路，`talks_with_tools()`），小幽不再
+说话的代理能用工具调用时（现在是 dsh 直连 DeepSeek 的那条路，`talks_with_tools()`），小鱼不再
 写 JSON：她直接写的文字就是说给你的话，空一行是下一条消息；要做事调工具。工具定义在
 `voice_tools.py`，由 Runtime 自己执行，跟哪家模型无关：
 
@@ -681,9 +685,9 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 交给她，免得她照着学。这条路出错（接口出错、超时）时退回写 JSON 的老路；不能用工具的代理
 （比如让 Claude Code 当说话的）照旧写 JSON。
 
-## 小幽怎么说话（0.14.0）
+## 小鱼怎么说话（0.14.0）
 
-小幽像聊天那样回话：一次 1 到 4 条短消息，每条一两句，条与条之间空一行；第一条就是结论。
+小鱼像聊天那样回话：一次 1 到 4 条短消息，每条一两句，条与条之间空一行；第一条就是结论。
 不用标题、编号、加粗、代码块，不贴文件路径、行号和命令，你要了再给。这些写在 Runtime 给
 说话代理的提示里（`CHAT_STYLE`），换哪家模型都一样；模型还是写了一长段时，Runtime 自己在
 句号处拆开（`segments`：每条约 60 字，一轮最多 6 条，列表留在同一条里），再交给手机。
@@ -693,7 +697,7 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
   给你看；实在认不出时用写了一半的 reply，最后才用原文。
 - **没有能说话的代理时**：不再把帮手原文整段贴进聊天，只给第一句和“完整结果在「…」里”，原文
   留在任务里。
-- **帮手做得久时跟进**：做了 90 秒以后，小幽在聊天里说一句它到哪了，之后至少隔 4 分钟，一件事
+- **帮手做得久时跟进**：做了 90 秒以后，小鱼在聊天里说一句它到哪了，之后至少隔 4 分钟，一件事
   最多 3 句。这句话用帮手报的最近一步拼出来，不再问一次模型；进展里是文件名、命令时只说做了多久。
 
 ## 配置
@@ -706,23 +710,23 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | `server.port` | `8765` | 监听端口。 |
 | `server.name` | 这台机器的主机名 | 手机 App 里怎么称呼这台 Runtime，最多 40 个字符。 |
 | `server.token` | 无 | 共享令牌，至少 16 个字符；示例里的占位值会被拒绝。 |
-| `state_dir` | `state` | 存会话表、卡和小幽的对话记录的目录。 |
-| `persona_file` | `persona.txt` | 小幽的人设。只交给以小幽的身份回话的代理。 |
+| `state_dir` | `state` | 存会话表、卡和小鱼的对话记录的目录。 |
+| `persona_file` | `persona.txt` | 小鱼的人设。只交给以小鱼的身份回话的代理。 |
 | `brief_max_chars` | `120` | 小屏幕简报的字数上限（20 到 400）。 |
 | `turn_timeout_seconds` | `0` | 一件后台的事从头到尾最长做多久，`0` 是不限（0.5.4 起的默认；之前是 `3600`）。代理没有自己设 `timeout_seconds` 时用它（`0`，或 10 到 86400）。卡没卡住看的是多久没动静，见[长任务](#长任务看有没有动静不看总时长)。 |
 | `idle_timeout_seconds` | `600` | 后台的事连续这么久一行事件都没有，就去问主人还等不等（`0` 是不管，或 30 到 86400）。 |
 | `idle_timeout_command_seconds` | `1800` | 同上，但用在有操作还没跑完的时候（编译、跑测试时事件流本来就是安静的）。不能比上一项小。 |
 | `idle_answer_seconds` | `1800` | 问了“还等不等”之后这么久没人答，就停掉（`0` 是一直等，或 30 到 86400）。 |
 | `agents.<名字>` | 无 | 一个代理，见[代理](#代理)。至少要有一个启用的。 |
-| `xiaoyou.default_agent` | 第一个代理 | 没人点名、路由器也没有意见时，话交给谁。 |
-| `xiaoyou.voice_agent` | 默认代理；它只干活时取第一个能说话的 | 只干活的代理做完之后，由谁用小幽的口吻转述。 |
-| `xiaoyou.max_parallel` | `0` | 同时在做的事最多几件（0 到 64）；`0` 是不限。超过的排队。 |
-| `xiaoyou.voice_timeout_seconds` | `60` | 小幽自己接一句话最长多久（5 到 600）。这一步不给工具，只是听懂和分派。 |
-| `xiaoyou.decide_first` | `false` | 流式 DeepSeek 的先决定再说话通道，默认关闭，实测验收后再推广。 |
-| `xiaoyou.max_handoffs` | `2` | 0.4 的设置，现在不起作用；留着只为旧配置能读。 |
-| `xiaoyou.router.type` | `mention` | `mention` 或 `command`，见[这句话交给谁](#这句话交给谁)。 |
-| `xiaoyou.router.command` | `[]` | `command`：用来判断的命令。 |
-| `xiaoyou.router.timeout_seconds` | `10` | `command`：超过这么久就不等了，交给默认代理（1 到 120）。 |
+| `xiaoyu.default_agent` | 第一个代理 | 没人点名、路由器也没有意见时，话交给谁。 |
+| `xiaoyu.voice_agent` | 默认代理；它只干活时取第一个能说话的 | 只干活的代理做完之后，由谁用小鱼的口吻转述。 |
+| `xiaoyu.max_parallel` | `0` | 同时在做的事最多几件（0 到 64）；`0` 是不限。超过的排队。 |
+| `xiaoyu.voice_timeout_seconds` | `60` | 小鱼自己接一句话最长多久（5 到 600）。这一步不给工具，只是听懂和分派。 |
+| `xiaoyu.decide_first` | `false` | 流式 DeepSeek 的先决定再说话通道，默认关闭，实测验收后再推广。 |
+| `xiaoyu.max_handoffs` | `2` | 0.4 的设置，现在不起作用；留着只为旧配置能读。 |
+| `xiaoyu.router.type` | `mention` | `mention` 或 `command`，见[这句话交给谁](#这句话交给谁)。 |
+| `xiaoyu.router.command` | `[]` | `command`：用来判断的命令。 |
+| `xiaoyu.router.timeout_seconds` | `10` | `command`：超过这么久就不等了，交给默认代理（1 到 120）。 |
 | `stt.engine` | `none` | 语音识别：`none`、`sense_voice` 或 `command`。见[语音](#语音)。 |
 | `stt.model_dir` | 无 | `sense_voice`：放 `model.int8.onnx`（或 `model.onnx`）和 `tokens.txt` 的目录。 |
 | `stt.language` | `auto` | `sense_voice`：`auto`、`zh`、`en`、`ja`、`ko` 或 `yue`。 |
@@ -736,21 +740,21 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | `firmware.build_command` | `[]` | 这台电脑自己构建固件的命令，在 `source_dir` 里运行。空着表示不会自己构建。 |
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | 构建出的固件文件，相对于 `source_dir`。 |
 | `workspace.type` | `none` | `none` 或 `notion`。见[共享工作区](#共享工作区)。 |
-| `workspace.token` | 无 | Notion 集成的令牌；也可以用环境变量 `XIAOYOU_NOTION_TOKEN`。 |
+| `workspace.token` | 无 | Notion 集成的令牌；也可以用环境变量 `XIAOYU_NOTION_TOKEN`。 |
 | `workspace.token_file` | 无 | 令牌放在这个文件里（相对路径以配置文件所在的目录为准），启动时读一次；和 `workspace.token` 只能留一个。令牌不想写进 `config.json` 时用它。 |
 | `workspace.bus_database` | 无 | “总线”数据库的编号（链接里那 32 位）。`notion` 时必填。 |
 | `workspace.log_database` | 无 | “日志”数据库的编号。不填就只写总线。 |
-| `workspace.author` | `xiaoyou` | 小幽在共享工作区里署的名字。 |
+| `workspace.author` | `xiaoyu` | 小鱼在共享工作区里署的名字。 |
 | `usage.enabled` | `true` | 要不要主动去问订阅额度（0.6.0 起）。`false` 时不为这件事另起进程，帮手干活时自己报上来的照记。见[用量](#用量订阅额度还剩多少)。 |
 | `usage.refresh_seconds` | `300` | 有客户端在看的时候，隔多久去问一次（60 到 86400）。 |
 
-环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYOU_CONFIG`、
-`XIAOYOU_NAME`、`XIAOYOU_HOST`、`XIAOYOU_PORT`、`XIAOYOU_TOKEN`、`XIAOYOU_STATE_DIR`、
-`XIAOYOU_DEFAULT_AGENT`、`XIAOYOU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
-`XIAOYOU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）、`XIAOYOU_DSH_CONFIG_DIR`
-（作用于所有 `dsh` 类型的代理）、`XIAOYOU_NOTION_TOKEN`。
+环境变量优先于配置文件，这样放进容器或虚拟机时不用改文件：`XIAOYU_CONFIG`、
+`XIAOYU_NAME`、`XIAOYU_HOST`、`XIAOYU_PORT`、`XIAOYU_TOKEN`、`XIAOYU_STATE_DIR`、
+`XIAOYU_DEFAULT_AGENT`、`XIAOYU_CODEX_CONFIG_DIR`（作用于所有 `codex` 类型的代理）、
+`XIAOYU_CLAUDE_CONFIG_DIR`（作用于所有 `claude_code` 类型的代理）、`XIAOYU_DSH_CONFIG_DIR`
+（作用于所有 `dsh` 类型的代理）、`XIAOYU_NOTION_TOKEN`。
 
-设了 `XIAOYOU_DEBUG`（任意值）时，小幽每接一句话，标准错误里多一行：她把这句话归到了
+设了 `XIAOYU_DEBUG`（任意值）时，小鱼每接一句话，标准错误里多一行：她把这句话归到了
 哪张卡、要 Runtime 做什么。
 
 0.3 及更早的配置（`backend`、`claude_code`、`tools`）仍然能读：按只有一个名叫 `claude`
@@ -766,9 +770,9 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | --- | --- | --- |
 | `type` | 无 | `claude_code`、`codex`、`dsh`、`command`、`remote` 或 `echo`。 |
 | `enabled` | `true` | `false` 时当它不存在。 |
-| `description` | 空 | 一句话说明它擅长什么。小幽决定要不要把活交给它、路由器做判断，看的都是这句话。 |
+| `description` | 空 | 一句话说明它擅长什么。小鱼决定要不要把活交给它、路由器做判断，看的都是这句话。 |
 | `aliases` | `[]` | 点名时除了名字之外还认的叫法，比如语音识别常写成的中文名。 |
-| `speaks` | 随类型 | 能不能直接以小幽的身份回话。`claude_code`、`dsh`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
+| `speaks` | 随类型 | 能不能直接以小鱼的身份回话。`claude_code`、`dsh`、`remote`、`echo` 默认能；`codex`、`command` 默认只干活。 |
 | `timeout_seconds` | `turn_timeout_seconds` | 这个代理做一件事从头到尾最多跑多久，`0` 是不限。看不到事件流的跑法（`command`、`codex` 的 `exec` 模式）写了 `0` 时按 3600 秒算。 |
 | `idle_timeout_seconds`、`idle_timeout_command_seconds` | 顶层的同名项 | 这个代理多久没动静算可能卡住。只对看得到事件流的跑法有用：`claude_code`、`dsh`，和 `codex` 的 `app_server` 模式。 |
 
@@ -781,13 +785,13 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 | `dsh` | 运行 DeepSeek Harness 命令行（`dsh`），见下面的 [DeepSeek Harness](#deepseek-harnessdsh)。 | `command`（默认 `["dsh"]`）、`workdir`、`config_dir`、`sandbox`（默认 `workspace-write`）、`stream`（默认 `true`）、`model`、`extra_args`、`env`、`env_files`、`models`、`effort`、`efforts` |
 | `pi` | 每一轮运行一次 pi 编程助手（`pi -p`），会话编号由 Runtime 记着，下一轮接着聊。用 API 的模型，Key 放在 `env` / `env_files` 里，变量名用服务商自己的（比如 `OPENAI_API_KEY`）；订阅登录在 pi 里用 `/login`。pi 没有沙箱和审批：用 `extra_args` 里的 `--tools` 限定它能用的工具。 | `command`（默认 `["pi"]`）、`workdir`、`model`（`服务商/编号`）、`extra_args`、`env`、`env_files`、`skills`、`models`、`effort`、`efforts`（pi 的 `--thinking` 档位） |
 | `command` | 任意命令。交给它的话从标准输入送进去，标准输出就是结果；参数里写了 `{prompt}` 时改为替换进参数。没有会话，每次从头开始。 | `command`、`workdir` |
-| `remote` | 另一台电脑上的小幽 Runtime。那边有自己的人设、代理和会话，回来的已经是小幽的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
+| `remote` | 另一台电脑上的小鱼 Runtime。那边有自己的人设、代理和会话，回来的已经是小鱼的话。 | `url`、`token`（那台 Runtime 的 `server.token`） |
 | `echo` | 原样复述，不调用任何模型。 | 无 |
 
 `permission_mode` 是交给 Claude Code 做事时的权限模式，默认 `manual`：凡是它在终端里会问
 “可以吗”的操作，都来问主人，见[授权](#授权)。`allowed_tools` 是预先放行、不用问的规则，
 要写窄。`add_dirs` 是除了启动目录之外它还能碰的目录，默认是整个主目录。想回到“没放行的
-一律拒绝、谁也不问”，把 `permission_mode` 设成 `dontAsk`。小幽自己接话的那一次调用不受
+一律拒绝、谁也不问”，把 `permission_mode` 设成 `dontAsk`。小鱼自己接话的那一次调用不受
 这几项影响：它永远没有工具。Codex 的 `sandbox` 同理，默认只读。
 
 ### 换成别家的模型（例如 DeepSeek V4）
@@ -799,13 +803,13 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 ```json
 "deepseek": {
   "type": "claude_code",
-  "config_dir": "~/.claude-xiaoyou-deepseek",
+  "config_dir": "~/.claude-xiaoyu-deepseek",
   "model": "deepseek-v4-pro",
   "env": {
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
   },
   "env_files": {
-    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
+    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyu/deepseek.key"
   }
 }
 ```
@@ -815,15 +819,15 @@ App 提示到电脑端确认，不提供远程“可以/不行”按钮。
 也能读（要 `chmod 600`），`--check` 都会指出来。下面这样放密钥，密钥不会进 shell 历史：
 
 ```bash
-mkdir -p ~/.config/xiaoyou && chmod 700 ~/.config/xiaoyou
-read -rs "key?DeepSeek 密钥：" && printf '%s\n' "$key" > ~/.config/xiaoyou/deepseek.key; unset key
-chmod 600 ~/.config/xiaoyou/deepseek.key
+mkdir -p ~/.config/xiaoyu && chmod 700 ~/.config/xiaoyu
+read -rs "key?DeepSeek 密钥：" && printf '%s\n' "$key" > ~/.config/xiaoyu/deepseek.key; unset key
+chmod 600 ~/.config/xiaoyu/deepseek.key
 ```
 
 （这是 zsh 的写法；bash 里写 `read -rsp "DeepSeek 密钥：" key`。）
 
-把 `"enabled"` 改成 `true`，放好密钥，再把 `xiaoyou.default_agent`（和 `voice_agent`，
-如果写了）指向它，小幽自己就由这个模型来回话；原来的 `claude` 留着当帮手，改回去只要
+把 `"enabled"` 改成 `true`，放好密钥，再把 `xiaoyu.default_agent`（和 `voice_agent`，
+如果写了）指向它，小鱼自己就由这个模型来回话；原来的 `claude` 留着当帮手，改回去只要
 把这两项指回 `claude`。给它一个单独的 `config_dir`，这样它的会话不和订阅登录的那一套
 混在一起；这个目录不用登录。密钥也可以直接写进 `env`，只是那样它就留在 `config.json` 里。
 
@@ -837,14 +841,14 @@ chmod 600 ~/.config/xiaoyou/deepseek.key
 
 - 后台的事走 `dsh --profile acp`（Agent Client Protocol，标准输入输出上的 JSON-RPC）：
   有进展行、看动静、可以打断。
-- 小幽自己接话那一次默认流式（`stream`，默认 `true`）：dsh 只在一步结束时整段交出回复，
+- 小鱼自己接话那一次默认流式（`stream`，默认 `true`）：dsh 只在一步结束时整段交出回复，
   所以这一次直接调 DeepSeek 的 Messages 接口（和 dsh 用的是同一个：`DEEPSEEK_BASE_URL`
   或 `https://api.deepseek.com/anthropic`，密钥是 `env` / `env_files` 里的
   `DEEPSEEK_API_KEY`），打开 `stream`。已经生成的部分出现在 `GET /v1/messages/<编号>`
   的 `partial` 里，手机边生成边显示。这几轮自己记一份简短的历史，放在
-  `<config_dir>/xiaoyou-stream-sessions/`（编号以 `api-` 开头）。流式没成、或者设了
+  `<config_dir>/xiaoyu-stream-sessions/`（编号以 `api-` 开头）。流式没成、或者设了
   `stream: false` 时，退回 `dsh --profile headless --json`：一问一答，关掉工具和思考，求快。
-- 可选 `chat_model` 只用于小幽接话、路由和结果转述；后台工具任务继续使用 `model`，
+- 可选 `chat_model` 只用于小鱼接话、路由和结果转述；后台工具任务继续使用 `model`，
   按次明确指定的模型优先。未设置时沿用原有模型。例如可将 `model` 设为 `deepseek-v4-pro`，
   `chat_model` 设为 `deepseek-flash`；不会删掉人设、会话历史、派活或审批逻辑。
 - 流式保活、空行和无效事件也受同一总时限约束。失败后的 headless 回退只使用剩余时间，
@@ -861,15 +865,15 @@ chmod 600 ~/.config/xiaoyou/deepseek.key
 
 ### 项目简报
 
-`xiaoyou_runtime/project_brief.py` 是一个可以当 `command` 帮手用的小脚本，回答“这个项目
+`xiaoyu_runtime/project_brief.py` 是一个可以当 `command` 帮手用的小脚本，回答“这个项目
 最近在干什么”：读这台电脑上的 `git log` / `git status`，以及 Claude Code
 （`~/.claude/projects/<仓库>/`）和 Codex（`~/.codex/sessions/`，按工作目录过滤）留在本机的
-最近会话，打印一段摘要，小幽再转述。只用标准库，可以脱离 Runtime 单独跑：
+最近会话，打印一段摘要，小鱼再转述。只用标准库，可以脱离 Runtime 单独跑：
 
 ```json
 "brief": {
   "type": "command",
-  "command": ["python3", "/Users/你/ai-passport/runtime/xiaoyou_runtime/project_brief.py", "~/ai-passport"],
+  "command": ["python3", "/Users/你/ai-passport/runtime/xiaoyu_runtime/project_brief.py", "~/ai-passport"],
   "description": "说说这个项目最近的改动和在 Claude Code、Codex 里聊过什么"
 }
 ```
@@ -898,9 +902,9 @@ JSON 对象。
 和 `low`、`medium`、`high`、`xhigh`、`max`、`minimal`；只认紧跟在名字后面的，这个词会从
 交给帮手的话里去掉。那个帮手不能选这一档时，按它平时的。见[档位](#档位模型和努力程度)。
 
-前三条都算“指定了由谁做”：Runtime 不问模型，直接开一张卡，小幽说一句“交给 codex 了”，
-那个代理在后台做。消息记录里有一条 `handoff`，`agent` 是它。替小幽说话的那个代理也一样：
-`@claude ……` 是让 `claude` 带着工具、以小幽的身份在后台做这件事，Runtime 会告诉它被点名的
+前三条都算“指定了由谁做”：Runtime 不问模型，直接开一张卡，小鱼说一句“交给 codex 了”，
+那个代理在后台做。消息记录里有一条 `handoff`，`agent` 是它。替小鱼说话的那个代理也一样：
+`@claude ……` 是让 `claude` 带着工具、以小鱼的身份在后台做这件事，Runtime 会告诉它被点名的
 就是它自己。默认代理只会干活时，第 4 条也这样处理。
 
 路由器是可以换的那一块。`mention` 不额外判断，只靠上面的第 1、2、4 条。`command` 运行
@@ -910,7 +914,7 @@ JSON 对象。
 
 ### 一件事一张卡
 
-没指定由谁做的话，由替小幽说话的代理接。这一次**不给它任何工具**，并且最长
+没指定由谁做的话，由替小鱼说话的代理接。这一次**不给它任何工具**，并且最长
 `voice_timeout_seconds`：它只需要听懂。Runtime 告诉它有哪些帮手（包括它自己这个代理）、
 现在有哪些事（编号、标题、谁在做、做了多久），以及主人说这句话时屏幕上是哪件事。它的
 回复里除了要说的话，还写明这句话归到哪张卡（新的，或已有的编号）和要 Runtime 做什么：
@@ -926,8 +930,8 @@ JSON 对象。
 一次；还是办不了，就照实告诉主人，不让她把没做的事说成做了。
 
 后台的事每件一个线程，互不等待；同一个帮手可以同时做几件，因为帮手的会话是按
-“事 + 帮手”记的（`state/sessions.json` 里的 `对话名/卡的编号`）。能以小幽的身份说话的帮手
-带着人设做事，它的结果就是小幽的话。只会干活的帮手只拿到任务，看不到人设和聊天记录；
+“事 + 帮手”记的（`state/sessions.json` 里的 `对话名/卡的编号`）。能以小鱼的身份说话的帮手
+带着人设做事，它的结果就是小鱼的话。只会干活的帮手只拿到任务，看不到人设和聊天记录；
 它的原始结果交回这个对话的线上，由 `voice_agent` 转述。`voice_agent` 这时不可用的话，原样
 把结果给主人，不让这件事白做。帮手没做成，卡上照实写“没做成”和原因。
 
@@ -1021,12 +1025,12 @@ MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `gran
 
 传给工具的方式：Claude Code 是 `--effort <档>` 和 `--model <模型>`；Codex 的 `exec` 模式是
 `-c model_reasoning_effort="<档>"` 和 `--model`，`app_server` 模式是每一轮 `turn/start` 里的
-`effort` 和 `model`。小幽自己接话的那一次不带平时那一档：它求的是快。
+`effort` 和 `model`。小鱼自己接话的那一次不带平时那一档：它求的是快。
 
 一件事用哪一档，按这个顺序定：
 
 1. 主人点名时紧跟着说的档（见[这句话交给谁](#这句话交给谁)）。
-2. 小幽在回复里选的：`start` 和 `amend` 的 `action` 里可以写 `effort` 和 `model`。提示里
+2. 小鱼在回复里选的：`start` 和 `amend` 的 `action` 里可以写 `effort` 和 `model`。提示里
    告诉她：主人说了就按主人的；没说时，查一下、看一眼用低档，一般的事不写，明显难的才用
    高档并说一声。
 3. 调用方选的：接口里的 `effort`、`model`。
@@ -1041,7 +1045,7 @@ MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `gran
 ### 用量：订阅额度还剩多少
 
 0.6.0 起，Runtime 记着每个订阅账号的两个窗口各还剩多少：5 小时的和一周的。它给三处用：
-小幽派活时看、手机和设备上显示、算一件事花了多少。
+小鱼派活时看、手机和设备上显示、算一件事花了多少。
 
 额度按**账号**记，不按帮手记：几个帮手用同一个配置目录（同一个登录）时，额度是一份。
 只算订阅登录的：没有用 `env` 指到别的服务、也没有在 `env` 里放密钥的 `claude_code`
@@ -1062,7 +1066,7 @@ MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `gran
 每个账号的状态：`ok`；`warn`（有窗口剩不到 20%）；`out`（有窗口用完了）；`unknown`
 （一个数都没有）。过了重置时间的数不再作数。
 
-小幽接话时，帮手清单里每个帮手后面多一段：
+小鱼接话时，帮手清单里每个帮手后面多一段：
 
 ```text
 - codex：看代码、改代码〔gpt-… · 平时中档，可选 低/中/高；5 小时剩 58%（14:20 重置），本周剩 81%（周三 09:00 重置）〕
@@ -1080,7 +1084,7 @@ MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `gran
 不启动服务也能看：
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json usage
+python3 -m xiaoyu_runtime --config config.json usage
 ```
 
 它现在就去问一次，打印每个账号还剩多少、查不到的原因、每个帮手的模型和档位。加
@@ -1088,26 +1092,26 @@ python3 -m xiaoyou_runtime --config config.json usage
 
 ### 共享工作区
 
-小幽和别的 agent（claude.ai 上的 Claude、Codex，以后还有别的）共用一份记录，放在 Notion
+小鱼和别的 agent（claude.ai 上的 Claude、Codex，以后还有别的）共用一份记录，放在 Notion
 里，一式两份：
 
 - **总线**：AI 之间互通，以它为准。一行一条，内容原样（命令、路径、报错不转述）。
 - **日志**：给人看的。一件事结束时写一条摘要，用“关联”对到总线里的行。
 
-小幽这边都是 Runtime 的代码在写，不靠模型记得写：
+小鱼这边都是 Runtime 的代码在写，不靠模型记得写：
 
 | 什么时候 | 写到哪 | 写成什么 |
 | --- | --- | --- |
-| 把活交给一个代理（新开一件事、点名、对一件已经结束的事再做一轮） | 总线 | 类型“任务”，谁写的 `xiaoyou`，给谁和谁接了都是那个代理，状态“已接”，正文是交代给它的原话 |
+| 把活交给一个代理（新开一件事、点名、对一件已经结束的事再做一轮） | 总线 | 类型“任务”，谁写的 `xiaoyu`，给谁和谁接了都是那个代理，状态“已接”，正文是交代给它的原话 |
 | 对正在做的事补充或改要求 | 总线 | 类型“留言”，正文第一行写实际怎么办的（中途追加、停下重做、做完接着做） |
 | 代理交回结果，或者没做成 | 总线 | 类型“结果”，谁写的是那个代理，状态“做完”或“没成”，正文是它的原始结果或没成的原因 |
 | 取消 | 总线、日志 | 总线一条状态是“取消”的留言；日志一条 |
-| 一件事结束 | 日志 | 标题、谁做的、结果、结论（小屏幕上那句简报）、正文是小幽最后说的话；她要你拿主意时，那句话也写进“要你做的” |
+| 一件事结束 | 日志 | 标题、谁做的、结果、结论（小屏幕上那句简报）、正文是小鱼最后说的话；她要你拿主意时，那句话也写进“要你做的” |
 
-“关联”写成 `Runtime 的名字/卡的编号`（例如 `mac/c12`），同一件事的行靠它对上。小幽自己
+“关联”写成 `Runtime 的名字/卡的编号`（例如 `mac/c12`），同一件事的行靠它对上。小鱼自己
 接话的那一次（不给工具的那次）不算交给别人，不写。
 
-写 Notion 走网络，所以排进一条队列由单独的线程写，小幽说话和后台的事都不等它。遇到
+写 Notion 走网络，所以排进一条队列由单独的线程写，小鱼说话和后台的事都不等它。遇到
 限流或服务器出错会重试三次；还是写不进去的（断网、令牌失效、数据库没有共享给集成）追加到
 `state/workspace-unsent.jsonl`，并在标准错误里说一声。令牌只放在请求头里，不会写进任何
 一行。交代给代理的话和它的结果是原样写的：里面如果带了密钥，也会被写进去，所以不要在
@@ -1163,7 +1167,7 @@ Runtime 的来源及客户端元数据标明源电脑。事件共用同一事件
 错误日志，不会改变已经提交的审批结果。
 
 交给 Claude Code 的事以 `--permission-mode manual` 运行，并带上 Runtime 自带的权限询问工具
-（`xiaoyou_runtime/permission_mcp.py`，一个只有一个工具的 MCP 服务）。Claude Code 要问
+（`xiaoyu_runtime/permission_mcp.py`，一个只有一个工具的 MCP 服务）。Claude Code 要问
 “可以吗”的时候改成调用这个工具；工具把操作交给 Runtime，这件事的卡变成 `waiting`，
 `/v1/feed` 的 `approvals` 里多一项，然后一直等。主人回答 `allow`，这一步照做；回答 `deny`，
 这一步不做，Claude Code 被告知“主人说不行”，接着决定怎么办。那件事被取消、改了要求或
@@ -1216,34 +1220,34 @@ app-server 在 Codex 的帮助里标着“实验性”。`--check` 会对每个�
 
 想要一个硬上限的，给 `turn_timeout_seconds` 或某个代理的 `timeout_seconds` 写一个数。
 `command` 类型和 `codex` 的 `exec` 模式没有事件流，看不出动静，仍然只按总时长（不限时按
-3600 秒）。小幽自己接话的那一次不受这些影响，还是 `voice_timeout_seconds`。
+3600 秒）。小鱼自己接话的那一次不受这些影响，还是 `voice_timeout_seconds`。
 
 ### 使用单独的 Claude 登录
 
 Claude Code 从 `~/.claude` 读取登录信息和设置。如果那个目录已经配成别的用途（比如
-通过 `ANTHROPIC_BASE_URL` 走公司网关，或者配了 API 密钥），不要改它，给小幽单独准备
+通过 `ANTHROPIC_BASE_URL` 走公司网关，或者配了 API 密钥），不要改它，给小鱼单独准备
 一个目录：
 
 ```bash
-mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # 任意文件夹，但不能是主目录
-CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # 用订阅账号登录，/status 确认后退出
+mkdir ~/xiaoyu-login && cd ~/xiaoyu-login      # 任意文件夹，但不能是主目录
+CLAUDE_CONFIG_DIR=~/.claude-xiaoyu claude       # 用订阅账号登录，/status 确认后退出
 ```
 
-然后在这个 `claude_code` 类型的代理下设置 `"config_dir": "~/.claude-xiaoyou"`。登录时不要待在主目录：
+然后在这个 `claude_code` 类型的代理下设置 `"config_dir": "~/.claude-xiaoyu"`。登录时不要待在主目录：
 Claude Code 还会把“当前文件夹/.claude/settings.json”当作项目设置加载，而在主目录里，
 这正是你想绕开的那个文件。
 
 Codex 的 `~/.codex` 也一样：那里的 `config.toml` 如果指向一个网关，不管登录的是哪个账号，
-请求都会发到网关去。给小幽的 Codex 一个单独的目录（`CODEX_HOME`）；这个目录 Codex 不会
+请求都会发到网关去。给小鱼的 Codex 一个单独的目录（`CODEX_HOME`）；这个目录 Codex 不会
 自己建：
 
 ```bash
-mkdir -p ~/.codex-xiaoyou
-CODEX_HOME=~/.codex-xiaoyou codex login
-CODEX_HOME=~/.codex-xiaoyou codex login status
+mkdir -p ~/.codex-xiaoyu
+CODEX_HOME=~/.codex-xiaoyu codex login
+CODEX_HOME=~/.codex-xiaoyu codex login status
 ```
 
-然后在这个 `codex` 类型的代理下设置 `"config_dir": "~/.codex-xiaoyou"`。
+然后在这个 `codex` 类型的代理下设置 `"config_dir": "~/.codex-xiaoyu"`。
 
 
 ## HTTP 接口
@@ -1256,7 +1260,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | 请求 | 结果 |
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`，不需要令牌。`backend` 是默认代理的类型。 |
-| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小幽在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`：小鱼在这台 Runtime 上能用的代理。后四项是 0.6.0 加的：实际用的模型（没跑过是配置里写的，都没有是 `null`）、平时的努力程度、派活时可以选的档和模型。 |
 | `GET /v1/helpers/options` | harnesses、界面添加的帮手、MCP 服务与当前授权；接入方式包括 `magpie`、`key`、`login`。 |
 | `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` 添加帮手。`magpie` 从模型服务选择模型，支持跨服务商接入；`key` 直接传变量，`login` 使用原生登录。返回 `201 {helper,problem}`。 |
 | `POST /v1/helpers/<名字>/remove` | 移除界面添加的帮手及其 Key；0.24.1 也支持可恢复地停用配置中的非主对话帮手。 |
@@ -1265,13 +1269,13 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}`（0.6.0 起）。`accounts` 是每个订阅账号：`{"id", "kind", "agents", "state", "windows": [{"kind": "5h" 或 "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`，`left` 是剩下的百分比，不知道是 `null`。`agents` 是每个帮手：`{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`，`running` 是它正在做几轮，`now` 是正在做的那一轮用的模型。不带 `refresh` 时返回手头的数（太久没问过就在后台问一次）；带了就现在去问，要等几秒。见[用量](#用量订阅额度还剩多少)。 |
 | `POST /v1/messages`，请求体 `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` 和这条消息的记录，状态为 `queued`。`effort`、`model`（0.6.0 起）是给这句话选的努力程度和模型，交给帮手时用；带了 `agent` 时必须是那个帮手能选的，否则返回 `400`。带 `agent` 表示点名交给这个代理；没有这个代理时返回 `400`。`card` 是主人说这句话时屏幕上那件事的编号。`pin` 为 `true`（0.5.3 起）表示主人是打开那件事、在它里面说的：这句话一定归到它，要动手就接着它原来的会话做，不另开卡；话里点了帮手的名也一样（那件事正由别的帮手做着时除外）。`client_id` 用来防重复（0.7.0 起按对话算，并且重启后仍然有效）：同一个对话里同一个 `client_id` 再来，内容一样返回原来那条，不重做；内容不一样返回 `409`。这条消息落盘后才返回 `202`，见[消息落盘与重启](#消息落盘与重启)。 |
 | `POST /v1/voice?conversation=<名字>&client_id=<编号>&agent=<代理>&card=<编号>&pin=1&effort=<档>&model=<模型>`，请求体是一个 WAV 文件 | `202` 和消息记录，`kind` 为 `voice`，`text` 为空。录音不合格或没有配置引擎时返回 `400`。 |
-| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小幽一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。回复还在生成时，`partial` 是到目前为止的整段回复（整段替换，不是追加；空串表示收回）；处理完后是空串。0.7.0 起 Runtime 重启后仍然查得到（最近 200 条）。 |
+| `GET /v1/messages/<id>?wait=<秒>&rev=<n>` | 消息记录。带 `wait`（最多 60）时，小鱼一接完这句话就返回。再带上 `rev`（调用方手里那份记录的 `rev`）时，记录只要有任何变化就返回。回复还在生成时，`partial` 是到目前为止的整段回复（整段替换，不是追加；空串表示收回）；处理完后是空串。0.7.0 起 Runtime 重启后仍然查得到（最近 200 条）。 |
 | `GET /v1/messages/<id>/stream?rev=<n>` | 经过鉴权的 `text/event-stream`，用一条持续连接推送消息快照。每段带相同消息 ID 与完整 `partial`/`rev`，结束状态关闭连接，注释维持心跳。消息记录用 `event_stream: true` 声明支持；连接失败后轮询相同 ID，不重新提交任务。旧 Runtime 继续使用长轮询。 |
 | `GET /v1/timers/effects?conversation=<name>&limit=50&cursor=<cursor>` | 有界待核对定时摘要，不含选定参数；列表改变时旧不透明游标失效。能力名 `timer_effect_review`。 |
 | `GET/POST /v1/timers/<id>/effects` | 查看或明确确认原定时操作，沿用消息操作的身份／版本／逐项结论规则，不重放或回滚。见上方定时核对契约。 |
 | `GET /v1/feed?conversation=<名字>&after=<序号>&wait=<秒>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`：当前对话变更的卡和待回答授权，以及跨对话的电脑端观察卡和审批。授权包含 `id`、`card`、`conversation`、`agent`、`tool`、`detail`、`created_at` 和 `kind`（`tool` 或 `stall`）；电脑端审批还标记来源及是否可远程回答。授权变更会更新所属卡。`wait` 最多 60 秒；卡变更时提前返回，带 `usage=<rev>` 时用量变更也提前返回。下次把收到的 `seq` 作为 `after`；返回序号变小说明记录被替换，要从 0 重新同步。0.7.0 起：带 `messages=1` 时还多一项 `messages`，是这个对话里序号比 `after` 大的消息记录（和卡共用一条序号，包括还在排队、正在生成回复的），另一台手机能看到这边刚说的话；不带时和以前完全一样。返回里的 `epoch` 是这份记录的编号，和上次看到的不一样说明换了一份记录，也要从 0 重新同步。 |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}`（0.8.0 起）：这台 Runtime 的固定编号、这份记录的编号、同步协议版本和能力。见[统一消息结构](../docs/development/unified-message-model.zh_CN.md)。 |
-| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>&usage=<rev>&states=unavailable` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`。0.8.1 起带 `usage`（同 `/v1/feed`），带上 `usage=<rev>` 时用量变了会提前返回；能力里有 `sync_usage`。0.8.2 起，说完一轮的电脑会话在这里的 `state` 是 `turn_ended`（`/v1/feed` 和卡上仍是 `done`）。0.9.0 起：`approvals` 改成序号比 `after` 大的授权变化，每项带 `status`（`pending`、`allowed`、`denied`、`withdrawn`）、`seq`，答了的带 `by`（`phone`、`computer`），收回的带 `reason`；回答里还有 `subject_id`（小幽这个主体的编号，和 `runtime_id` 分开）。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。0.9.1 起，带了 `states=unavailable` 的客户端，对很久没更新、还没结束的观察会话或上报会话拿到的 `state` 是 `unavailable`（现在看不到它的状态，不是做完了）；没带的客户端照旧拿到卡上的状态和 `stale: true`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyou_runtime.conformance --url <地址> --token <令牌>`。 |
+| `GET /v1/sync?conversation=<名字>&after=<序号>&epoch=<编号>&wait=<秒>&usage=<rev>&states=unavailable` | 统一同步（0.8.0 起）：`{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`。0.8.1 起带 `usage`（同 `/v1/feed`），带上 `usage=<rev>` 时用量变了会提前返回；能力里有 `sync_usage`。0.8.2 起，说完一轮的电脑会话在这里的 `state` 是 `turn_ended`（`/v1/feed` 和卡上仍是 `done`）。0.9.0 起：`approvals` 改成序号比 `after` 大的授权变化，每项带 `status`（`pending`、`allowed`、`denied`、`withdrawn`）、`seq`，答了的带 `by`（`phone`、`computer`），收回的带 `reason`；回答里还有 `subject_id`（小鱼这个主体的编号，和 `runtime_id` 分开）。`messages` 是序号比 `after` 大的消息（一句话一条，编号沿用卡条目的编号，带 `status`、`partial`、`author`、`source`、`rev`、`seq`），`tasks` 是卡去掉 `entries`、换成 `members`。0.9.1 起，带了 `states=unavailable` 的客户端，对很久没更新、还没结束的观察会话或上报会话拿到的 `state` 是 `unavailable`（现在看不到它的状态，不是做完了）；没带的客户端照旧拿到卡上的状态和 `stale: true`。`epoch` 不对、游标比现在的序号大或者早于日志的 `floor` 时 `reset` 为 `true`，并从 0 给快照。一致性测试：`python3 -m xiaoyu_runtime.conformance --url <地址> --token <令牌>`。 |
 | `GET /v1/cards?conversation=<名字>` | `{"cards": [...]}`：最近 50 张卡；启用电脑端同步时也包含电脑端观察卡。 |
 | `POST /v1/cards/<编号>/artifacts`，请求体 `{"artifacts": [{"path", "name"?}], "entry_index"?}` | 返回包含已登记附件的卡。`entry_index` 为现有消息的下标，从 0 开始；省略时绑定最后一条代理回复。输入格式错误返回 `400`，没有卡返回 `404`；单个文件失败会保留为 `status: "error"` 的附件。 |
 | `GET /v1/artifacts/<id>/content` | 已登记的不可变文件快照，按实际 MIME 和附件文件名流式返回二进制内容。ID 或快照不可用时返回 `404`。 |
@@ -1286,7 +1290,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 | `GET /v1/firmware/<编号>/image` | 这一版的应用镜像（二进制）。 |
 | `GET /v1/app` | 这台电脑上发布的手机 App 更新：`available`、`version_code`、`version_name`、`sha256`、`size`、`published_at`、`note`。 |
 | `GET /v1/app/apk` | 这个更新的安装包。 |
-| `POST /v1/reports`，请求体 `{"origin", "session_id", "state"?, "text"?, "upstream_id"?, "title"?, "role"?}` | 不在这台电脑上的会话（claude.ai 网页版、云端会话、别的电脑）上报进展（0.9.0 起）。每个 `origin` + `session_id` 一张只读卡，和电脑端观察到的会话放在一起；`text` 按 `upstream_id` 去重；`state` 是 `working`、`waiting`、`turn_ended`、`done`、`failed`；十分钟没再报的“在做”显示状态未知。不能从手机接着聊。命令行：`python3 -m xiaoyou_runtime report --origin claude-web --session <编号> --state working --text "…" --upstream-id <编号>`。 |
+| `POST /v1/reports`，请求体 `{"origin", "session_id", "state"?, "text"?, "upstream_id"?, "title"?, "role"?}` | 不在这台电脑上的会话（claude.ai 网页版、云端会话、别的电脑）上报进展（0.9.0 起）。每个 `origin` + `session_id` 一张只读卡，和电脑端观察到的会话放在一起；`text` 按 `upstream_id` 去重；`state` 是 `working`、`waiting`、`turn_ended`、`done`、`failed`；十分钟没再报的“在做”显示状态未知。不能从手机接着聊。命令行：`python3 -m xiaoyu_runtime report --origin claude-web --session <编号> --state working --text "…" --upstream-id <编号>`。 |
 | `GET /v1/app/packs` | 资源包清单（0.8.3 起）：`{"packs": [{"name", "published_at", "files": [{"path", "sha256", "size", "download_url"}]}]}`。手机比对已装好的文件，只下载校验值变了的。 |
 | `GET /v1/app/file?sha256=<校验值>` | 资源包里的一个文件（0.8.3 起），ETag 是校验值，支持单段 Range 续传；不在现在发布的包里时 409。 |
 | `POST /v1/firmware?note=<备注>&push=1`，请求体是固件文件 | `201` 和这一版的记录；`push=1` 同时把它设为要推的。 |
@@ -1297,7 +1301,7 @@ JSON；下列语音、固件和附件二进制接口除外。
 包含跨对话可见的电脑端观察卡。它们带有 `source: "desktop"`、`monitoring_only: true`、
 `project`、`session_id`、`desktop_status`、`observed_at` 和 `stale`，以及
 `content_scope: "recent"` 和 `content_truncated`。有大小上限的 `entries` 保存实际提出的
-需求（`role: "you"`）和来源代理的可见输出（`role: "xiaoyou"`，App 上标注 Codex 或
+需求（`role: "you"`）和来源代理的可见输出（`role: "xiaoyu"`，App 上标注 Codex 或
 Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `waiting` 本身只是状态信号。
 可选审批桥可以提供独立的审批，是否可远程回答由 `remote_actionable` 决定；停下的会话可以用
 `POST /v1/messages` 带 `card`（这张观察卡）和 `pin: true` 接着聊（见上文），取消仍在电脑端完成。
@@ -1322,7 +1326,7 @@ Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `wa
 `expired: true` 的一份最小记录，不会当成新的一句再做一遍。`messages.json` 坏了不会拒绝启动，
 坏文件留在旁边的 `messages.json.broken`。
 
-消息记录说的是“这句话小幽接住了没有”，不是“这件事做完了没有”：小幽答完或者把活派出去，
+消息记录说的是“这句话小鱼接住了没有”，不是“这件事做完了没有”：小鱼答完或者把活派出去，
 `status` 就是 `done`，后面的进展和结果在卡上，用 `/v1/feed` 等。只有别的 Runtime 转过来的
 话（`remote` 代理）会等到那件事结束。所以只认消息记录的旧客户端（手机 App 0.5.0）配这一版
 能发能收，但只看得到“交给 codex 了”这一句，看不到后台的结果。
@@ -1337,21 +1341,21 @@ Claude）。`entries` 为空表示尚未采集到可见内容。电脑端的 `wa
 - `asked`：调用方点名的代理，没点名是 `null`。
 - `card`：这句话归到了哪张卡。处理完之前是调用方带来的那个编号。
 - `agent`：接这句话的代理；交给了帮手时是那个帮手。
-- `stage`、`helper`：0.4 留下的字段，小幽接话的那几秒里可能有值，处理完都是 `null`。
+- `stage`、`helper`：0.4 留下的字段，小鱼接话的那几秒里可能有值，处理完都是 `null`。
 - `rev`：一个计数，记录每变一次就加一。
 - `events`：走过的步骤，每项是 `{"at", "kind", "agent", "text"}`。`kind` 为 `route`
   （交给了谁，`text` 是原因：`asked`、`mention`、`router`、`default`）或 `handoff`（交给了
-  帮手，`text` 是小幽那一句话）。
+  帮手，`text` 是小鱼那一句话）。
 
 一张卡包含 `id`（`c1`、`c2`……）、`conversation`、`title`（统一任务名称：最多 200 字符，
 从需求生成时最多 24 字符）、`title_source`（`upstream`、`task`、`request` 或 `fallback`）、
 `title_truncated`、`state`、`agent`
-（谁在做或做的；小幽自己答的是 `null`）、`entries`（`[{"role": "you" 或 "xiaoyou", "text",
+（谁在做或做的；小鱼自己答的是 `null`）、`entries`（`[{"role": "you" 或 "xiaoyu", "text",
 "at", "attachments"?}]`，最近 40 条）、`brief`、`mood`、`progress`（最近 5 行进展，每一轮重新开始）、
 `started_at`、`edits`（补充或改过几次）、`approval`（正在等的那个授权的编号，没有是
 `null`）、`queued`（设了并行
 上限、正在排队）、`created_at`、`updated_at`、`finished_at`（交给过帮手的事是什么时候
-结束的；还在做、或者是小幽自己答的，是 `null`）、`seq`。
+结束的；还在做、或者是小鱼自己答的，是 `null`）、`seq`。
 卡片顶层的 `attachments` 汇总这件事已登记的产物，见
 [任务图片和可下载文件](#任务图片和可下载文件)。
 
@@ -1380,14 +1384,14 @@ App：它连着设备、又连得上这台 Runtime 时，发现两边不一样�
 自己报的也是它）。每一版有一个按入库先后排的序号，说“第 7 版”就行。
 
 ```bash
-python3 -m xiaoyou_runtime firmware list              # 有哪些版本；● 设备现在跑的，→ 等着推的
-python3 -m xiaoyou_runtime firmware status            # 设备上是哪一版、在等什么、最近的经过
-python3 -m xiaoyou_runtime firmware fetch --push      # 取 GitHub 上最新构建的一版，入库并推给设备
-python3 -m xiaoyou_runtime firmware add 文件.bin       # 入库一个固件文件（应用镜像或合并镜像）
-python3 -m xiaoyou_runtime firmware restore 5         # 把设备换回第 5 版
-python3 -m xiaoyou_runtime firmware restore previous  # 换回设备另一个槽位里的上一版（几秒钟，不用重传）
-python3 -m xiaoyou_runtime firmware cancel            # 不推了
-python3 -m xiaoyou_runtime firmware remove 3          # 从仓库里删掉第 3 版
+python3 -m xiaoyu_runtime firmware list              # 有哪些版本；● 设备现在跑的，→ 等着推的
+python3 -m xiaoyu_runtime firmware status            # 设备上是哪一版、在等什么、最近的经过
+python3 -m xiaoyu_runtime firmware fetch --push      # 取 GitHub 上最新构建的一版，入库并推给设备
+python3 -m xiaoyu_runtime firmware add 文件.bin       # 入库一个固件文件（应用镜像或合并镜像）
+python3 -m xiaoyu_runtime firmware restore 5         # 把设备换回第 5 版
+python3 -m xiaoyu_runtime firmware restore previous  # 换回设备另一个槽位里的上一版（几秒钟，不用重传）
+python3 -m xiaoyu_runtime firmware cancel            # 不推了
+python3 -m xiaoyu_runtime firmware remove 3          # 从仓库里删掉第 3 版
 ```
 
 “版本”可以写序号（`7` 或 `#7`）、编号的开头几位、`latest`、`current`（设备现在跑的）
@@ -1427,7 +1431,7 @@ python3 -m xiaoyou_runtime firmware remove 3          # 从仓库里删掉第 3 
 改界面代码、跑检查、在本地提交，然后在本机编译并推给设备（这台电脑用
 `tools/install_idf.sh` 装了 ESP-IDF、配置了 `firmware.build_command` 时；这样不需要
 GitHub），否则推送到 GitHub、让 Runtime 去等那边的构建。对设备
-说“@裁缝 把顶上那条改细一点”，或者只说想改什么、让小幽自己决定交给它。“换回上一版”
+说“@裁缝 把顶上那条改细一点”，或者只说想改什么、让小鱼自己决定交给它。“换回上一版”
 也归它。
 
 要先具备的条件：这台电脑上的仓库能 `git push`；`tailor` 的 `allowed_tools` 里有
@@ -1448,8 +1452,8 @@ git clone -b feature/pocket-hub-app https://github.com/yanyuliu01/ai-passport.gi
 cd ai-passport\runtime
 copy config.example.json config.json
 python -c "import secrets; print(secrets.token_urlsafe(32))"   # 填进 server.token
-python -m xiaoyou_runtime --config config.json --once "你好"
-$env:XIAOYOU_HOST = "0.0.0.0"; python -m xiaoyou_runtime --config config.json
+python -m xiaoyu_runtime --config config.json --once "你好"
+$env:XIAOYU_HOST = "0.0.0.0"; python -m xiaoyu_runtime --config config.json
 ```
 
 命令是 `python`，不是 `python3`。服务第一次在网络上监听时，Windows Defender 防火墙会问
@@ -1469,7 +1473,7 @@ UTF-8（记事本里选“UTF-8”，不要选“带有 BOM 的 UTF-8”）。
 3. 这个对话的下一句话到来时，模型会在主人的话前面看到这几轮，只看到一次，并被告知它们
    发生在别处。
 
-带得过去的是“说了什么”：主人的话和小幽的完整回复，转告模型时每轮分别截到 500 和 1000 个
+带得过去的是“说了什么”：主人的话和小鱼的完整回复，转告模型时每轮分别截到 500 和 1000 个
 字。带不过去的是那边会话知道的其他一切：读过的文件、工具的输出，以及比手机还记得的那几轮
 更早的内容。
 
@@ -1485,27 +1489,27 @@ Android 13 或更新版本的通知提醒需要通知权限。配对另一台电
 文件 ID 和缓存内容保留来源 Runtime 归属，对话历史接口只传文字。
 
 另一种接法是不换台：手机只连一台 Runtime，把另一台电脑登记成它的一个 `remote` 代理。
-这样“那台电脑上的事”由小幽转交过去，或者由主人点名，对话记录只在主的那一台上。已经
+这样“那台电脑上的事”由小鱼转交过去，或者由主人点名，对话记录只在主的那一台上。已经
 被别的 Runtime 转过手的话不会再往外转，所以两台互相登记也不会来回踢。
 
-### 小幽网络：每台 Runtime 都有全部记录（0.10.0 起）
+### 小鱼网络：每台 Runtime 都有全部记录（0.10.0 起）
 
-上面两种接法都靠手机。小幽网络让 Runtime 之间直接同步：在哪里拉起的 Runtime、手机正好
+上面两种接法都靠手机。小鱼网络让 Runtime 之间直接同步：在哪里拉起的 Runtime、手机正好
 连上的是哪一台，看到的都是同一段对话、同样的任务、电脑会话和授权。同一个主人的每台
 Runtime 写同一个口令，再写上网络里至少一台的地址：
 
 ```json
 "mesh": {
-  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "secret_file": "~/.config/xiaoyu/mesh-secret",
   "peers": ["https://home.tail1234.ts.net"],
   "advertise": ["https://laptop.tail1234.ts.net"]
 }
 ```
 
-- `secret`（或 `secret_file`、环境变量 `XIAOYOU_MESH_SECRET`）：至少 16 个字符，每台一样。
-  没有就不加入。小幽的 `subject_id` 由它算出，所以每台报的主体都相同。
-- `peers`（或 `XIAOYOU_MESH_PEERS`，逗号分隔）：先去找谁。连得上一台就够了，其余的互相转告。
-- `advertise`（或 `XIAOYOU_MESH_ADVERTISE`）：别人从哪里连这一台。不写就按 `server.host` 推；
+- `secret`（或 `secret_file`、环境变量 `XIAOYU_MESH_SECRET`）：至少 16 个字符，每台一样。
+  没有就不加入。小鱼的 `subject_id` 由它算出，所以每台报的主体都相同。
+- `peers`（或 `XIAOYU_MESH_PEERS`，逗号分隔）：先去找谁。连得上一台就够了，其余的互相转告。
+- `advertise`（或 `XIAOYU_MESH_ADVERTISE`）：别人从哪里连这一台。不写就按 `server.host` 推；
   只监听 `127.0.0.1` 的不对外说地址，照样能加入：它主动连出去，推自己的记录、拉别人的
   （云上的沙盒、别人的网络里都能用）。
 - `home`（`true` / `false`，默认 `false`）：主对话归这台负责。网络里只给一台写 `true`。
@@ -1526,13 +1530,13 @@ Runtime 写同一个口令，再写上网络里至少一台的地址：
 每台看到的样子：别的 Runtime 的事是这里的一张本地卡（`cN`，带 `mesh_origin`、`mesh_id`、
 `origin_name`），它的消息编号前面加上产地编号的前 12 位，它的授权和本机的一样显示。记录
 只由生成它的那台改，所以没有两边同时改的冲突；连不到产地的成员也能经别的成员拿到。每台
-的小幽接话前都会被告知别的电脑上说过什么。
+的小鱼接话前都会被告知别的电脑上说过什么。
 
 在任意一台都能做的：在别的 Runtime 的事里说话、取消它、回答它的授权，会变成指令交给那台
-去做（同一句话两边编号相同，只显示一次）。小幽也能把事交给别的 Runtime 上的帮手，名字是
+去做（同一句话两边编号相同，只显示一次）。小鱼也能把事交给别的 Runtime 上的帮手，名字是
 `帮手@那台的名字`，比如 `@codex@Mac 看看日志`；那台替这件事开的卡记着 `delegated_from`，进展
 和结果回到这台的卡上。五分钟联系不上的成员算离线：它没做完的事显示看不到（`unavailable`），
-它的帮手不再给小幽选，交给它的话会说明原因被拒，不会悄悄丢掉。十分钟内没送到的指令作废。
+它的帮手不再给小鱼选，交给它的话会说明原因被拒，不会悄悄丢掉。十分钟内没送到的指令作废。
 
 不共享的：订阅额度（`/v1/usage`）、固件和 App 发布、附件文件（别的 Runtime 的事的附件会
 列出来，但内容留在那台）。
@@ -1542,7 +1546,7 @@ Runtime 写同一个口令，再写上网络里至少一台的地址：
 
 ```json
 "mesh": {
-  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "secret_file": "~/.config/xiaoyu/mesh-secret",
   "share": {
     "env": ["DEEPSEEK_API_KEY"],
     "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
@@ -1550,9 +1554,9 @@ Runtime 写同一个口令，再写上网络里至少一台的地址：
 }
 ```
 
-- `share.env`：只共享这里点名的，默认一个都不共享。值放在 `~/.config/xiaoyou/shared/<名字>`
+- `share.env`：只共享这里点名的，默认一个都不共享。值放在 `~/.config/xiaoyu/shared/<名字>`
   （只有本人可读；第一次从 Runtime 的环境里取），代理通过 `env_files` 读，比如
-  `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`。没点名的 Runtime
+  `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyu/shared/DEEPSEEK_API_KEY"}`。没点名的 Runtime
   不会写它。
 - `share.folders`：一个名字对应这台电脑上的一个目录；同一个名字在每台电脑上可以是不同的路径
   （Claude Code 的记忆目录随用户名和系统不同）。只传文字文件，单个不超过 512 KB，每个目录最多 300 个。
@@ -1586,7 +1590,7 @@ tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 && mv sh
 用自己的录音或模型自带的样例检查一下：
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
+python3 -m xiaoyu_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
 ```
 
 下载约 160 MB。`stt-models/` 已被 Git 忽略。
@@ -1601,11 +1605,11 @@ python3 -m xiaoyou_runtime --config config.json --stt stt-models/sense-voice/tes
 ## 和手机 App 配对
 
 ```bash
-XIAOYOU_HOST=0.0.0.0 python3 -m xiaoyou_runtime --config config.json   # 在局域网上监听
-python3 -m xiaoyou_runtime --config config.json --pair                 # 打印 http://<地址>:<端口>#<令牌>
+XIAOYU_HOST=0.0.0.0 python3 -m xiaoyu_runtime --config config.json   # 在局域网上监听
+python3 -m xiaoyu_runtime --config config.json --pair                 # 打印 http://<地址>:<端口>#<令牌>
 ```
 
-把打印出来的那一行粘贴到小幽中枢 App 里（见
+把打印出来的那一行粘贴到小鱼中枢 App 里（见
 [`companion/README.zh_CN.md`](../companion/README.zh_CN.md)）。这一行里带着令牌，要像
 密码一样对待。手机要和这台机器在同一个网络里，而且传输是不加密的 HTTP，只在你信任的
 网络里这样用。`--pair` 给出的本机地址是猜的；机器有多块网卡时，确认一下那是手机连得到
@@ -1632,12 +1636,12 @@ feed 会 gzip 压缩并按 48 KB 分批发，慢线路上也能一点点收完�
 SHA-256 后交给安卓安装，安装要主人在系统界面上点确认：
 
 ```bash
-python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "改了什么"
-python3 -m xiaoyou_runtime app status
+python3 -m xiaoyu_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "改了什么"
+python3 -m xiaoyu_runtime app status
 ```
 
 增量更新（0.8.3 起）：很少变的大文件（语音模型）不进安装包，用
-`python3 -m xiaoyou_runtime app pack <名字> <目录>` 发布成资源包，按文件 SHA-256 存放和提供，手机只下载变了的。
+`python3 -m xiaoyu_runtime app pack <名字> <目录>` 发布成资源包，按文件 SHA-256 存放和提供，手机只下载变了的。
 `app publish` 和 `app pack` 默认先上传 GitHub Releases，上传成功后才在本机发布。
 所有提供的 APK 都有公开下载地址；`--github ABI,...` 可限定架构，`--local-only` 明确跳过
 上传。APK 使用 `app-<version>-<code>` 标签和带内容哈希的文件名；资源文件共用 `app-packs`
@@ -1681,32 +1685,32 @@ App 和 Runtime 的包体上限为 512 MiB；旧版 App 仍有 128 MiB 限制，
 
 ## 自动迭代和模型网关
 
-Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对话里的抱怨、失败的事和回复耗时，用规则检测器整理成问题簿，每轮选一个问题，让模型写一份经过校验的小迭代方案。调模型都经过 `model_gateway.py`：优先用本机端点（Ollama、llama.cpp、LM Studio、vLLM），联网端点只在每天预算内使用。每一步都是插件。改代码、门禁、自动发布还没做。见[自动迭代设计](../docs/development/auto-iteration.zh_CN.md)；命令：`python3 -m xiaoyou_runtime iterate --help` 和 `python3 -m xiaoyou_runtime models --help`。
+Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对话里的抱怨、失败的事和回复耗时，用规则检测器整理成问题簿，每轮选一个问题，让模型写一份经过校验的小迭代方案。调模型都经过 `model_gateway.py`：优先用本机端点（Ollama、llama.cpp、LM Studio、vLLM），联网端点只在每天预算内使用。每一步都是插件。改代码、门禁、自动发布还没做。见[自动迭代设计](../docs/development/auto-iteration.zh_CN.md)；命令：`python3 -m xiaoyu_runtime iterate --help` 和 `python3 -m xiaoyu_runtime models --help`。
 
 ## 一句话是怎么走的
 
 1. 消息按对话排队：同一个对话里一句一句处理，不同的对话互不等待。
 2. 按[这句话交给谁](#这句话交给谁)的顺序看有没有指定由谁做。指定了：开卡，交到后台，
    这句话就算接完了。
-3. 没指定：替小幽说话的代理接这句话。对 Claude Code 是
+3. 没指定：替小鱼说话的代理接这句话。对 Claude Code 是
    `claude -p --output-format json --append-system-prompt <人设 + 帮手清单 + 现在的事>
    --json-schema <reply、brief、mood、card、action> --tools "" --permission-mode dontAsk
    [--model ...] [--effort <主人或调用方点的档>] [--resume <会话>]`。主人的话从标准输入送进去，不会出现在命令行参数里。
    Runtime 照她回复里的 `action` 办，见[一件事一张卡](#一件事一张卡)。
 4. 后台的事：对 Claude Code 是 `claude -p --output-format stream-json --verbose
    [--append-system-prompt <人设> --json-schema <reply、brief、mood>] --permission-mode <模式>
-   --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <state 里的临时文件>
+   --permission-prompt-tool mcp__xiaoyu__approve --mcp-config <state 里的临时文件>
    --add-dir <目录> [--allowedTools ...] [--model ...] [--effort <档>] [--resume <这件事的会话>]`。启动目录
    仍然是 `workdir`。Runtime 逐行读它的事件：一开始就记下会话编号，每一步操作记一行进展。
    取消或改要求时，它和它起的所有进程一起结束（Claude Code 跑命令时会另开会话，所以是按
    父子关系找出整棵树来结束的）。Runtime 自己被 `kill` 时也会先这样收尾。
-5. 会话编号存到 `state/sessions.json`：小幽接话用的按“对话 + 代理”，后台的事按
+5. 会话编号存到 `state/sessions.json`：小鱼接话用的按“对话 + 代理”，后台的事按
    “对话/卡 + 代理”。
-6. 每句话和每个后台结果都记进小幽自己的对话记录 `state/transcript.json`，并记下替她说话
+6. 每句话和每个后台结果都记进小鱼自己的对话记录 `state/transcript.json`，并记下替她说话
    的代理听到了没有。没听到的（后台的结果、指定给别人的话、手机从别处带来的），下次它
    接话时先告诉它，只说一次。
 
-对话记录属于小幽，不属于任何一个代理：换一个代理接话，小幽仍然记得刚才说过什么。
+对话记录属于小鱼，不属于任何一个代理：换一个代理接话，小鱼仍然记得刚才说过什么。
 各个代理自己的会话里只有它参与过的部分。
 
 ## 跑在别的机器或虚拟机上
@@ -1730,7 +1734,7 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 `runtime/tests/test_runtime.py`（`./tools/validate.sh --static` 会运行）验证了：配置
 检查和旧写法的兼容；交给假的 `claude`、`codex` 可执行文件的完整命令行和标准输入、结果与
 错误的解析、会话续接；点名和路由的先后顺序、用一条命令做路由器；卡的存取、序号、落盘
-和重启后把旧格式中没做完的标成失败；小幽直接回答、交给帮手后立刻能接下一句、几件事同时做、
+和重启后把旧格式中没做完的标成失败；小鱼直接回答、交给帮手后立刻能接下一句、几件事同时做、
 补充、改要求（包括真的停掉一个进程再重跑）、取消（包括另开了会话的孙进程）、并行上限、
 授权的登记、等待和回答、权限询问工具本身和那个只听本机的入口、交给假的 Claude Code 时
 从询问到主人回答再到文件写或不写的整条路、Codex 的 app-server 模式（对着替身：一轮、
@@ -1744,7 +1748,7 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 假的 `claude`、`codex` 时命令行里的 `--effort`、`model_reasoning_effort` 和 app-server 的
 `effort`；点名之后的档位词；它们报出来的模型、额度和 token 怎么收；三种来源各自的换算；
 按账号记、过期清掉、落盘和重启；对着假的 Claude Code 和假的 app-server 真的问一次（包括
-不是订阅、版本太旧、没有登录这几种问不到的情况）；一轮开始和结束之间的差值；小幽的提示
+不是订阅、版本太旧、没有登录这几种问不到的情况）；一轮开始和结束之间的差值；小鱼的提示
 里有没有那几行；她选的档、调用方选的档、沿用上一次的档怎么到帮手手里和卡上；改要求时
 换档会重做；feed 里的用量和用量变了提前返回。
 
@@ -1758,7 +1762,7 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 
 **没有验证的**：订阅登录下 `get_usage` 和事件流里实际的数（形状是照 Claude Code 2.1.294
 自带的定义写的，没有见过真的回答）；Codex 订阅登录下的额度；它们和各自官方界面里的数
-对不对得上；`d5`、`d7` 在真实任务上有没有参考价值；替小幽说话的模型会不会照着提示选档、
+对不对得上；`d5`、`d7` 在真实任务上有没有参考价值；替小鱼说话的模型会不会照着提示选档、
 看着额度派活（这只能在真的对话里看）；在同一个会话里换模型或换档，Claude Code 和 Codex
 会不会不认。
 
@@ -1767,22 +1771,22 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 接口：
 
 - 第一句“跑一下 sleep 20，然后数一数 /etc 下面有多少个 .conf 文件”：7.6 秒时这句话接完，
-  小幽说交给 Claude Code 了，卡是 `working`。
+  小鱼说交给 Claude Code 了，卡是 `working`。
 - 紧接着第二句“一打鸡蛋是几个”：13.7 秒时答完（“12 个”，还提到那件事还在后台跑），
   在自己的一张卡上。这时第一件事还在做。
 - 37 秒时 feed 给出第一张卡变成 `done`，内容是数出来的结果。
-- 小幽接一句话约 6 到 7 秒，大部分是 Claude Code 自己启动和回答的时间。
+- 小鱼接一句话约 6 到 7 秒，大部分是 Claude Code 自己启动和回答的时间。
 
 同一天，同样的环境，默认的 `manual` 模式（只预先放行了读文件的几个工具），通过 HTTP 接口：
 
 - 让它往一个文件里写一行字：先后来了两个授权（一条 `Bash` 命令、一次 `Write`），卡变成
-  `waiting`，feed 里有内容原文。两个都答 `deny`：文件没有被写，小幽照实说没写成。同一个
+  `waiting`，feed 里有内容原文。两个都答 `deny`：文件没有被写，小鱼照实说没写成。同一个
   授权再答一次得到 `409`。
 - 再说一次并都答 `allow`：文件写出来了，内容正确；`state/` 里没有留下临时文件。
 - 单独试过让一个授权等 100 秒再回答，Claude Code 一直等着，之后照常继续。
-- 改要求：先让它 `sleep 45` 再读一个文件，9 秒后说“不用 sleep 了”。小幽选了那张卡和
+- 改要求：先让它 `sleep 45` 再读一个文件，9 秒后说“不用 sleep 了”。小鱼选了那张卡和
   `redo`；Claude Code 被停掉，用同一个会话接着做，约 10 秒后给出结果，没有等那 45 秒。
-- 取消：让它 `sleep 60`，然后说“算了不用跑了”。小幽选了那张卡和 `cancel`；Claude Code
+- 取消：让它 `sleep 60`，然后说“算了不用跑了”。小鱼选了那张卡和 `cancel`；Claude Code
   和它起的 `sleep` 都结束了。`kill` 掉 Runtime 时正在做的事也一样被结束。
 - 途中发现并改掉的两件事：模型常把卡的编号 `c3` 写成 `3`（现在认）；Claude Code 跑命令
   时会另开会话，只结束进程组留得下 `sleep`（现在按父子关系结束整棵树）。
@@ -1794,7 +1798,7 @@ Runtime 可以收集手机 App 的使用信号（`POST /v1/app/events`）、对�
 做完的，下面的时间不适用于现在：
 
 - 直接回答：一轮约 5 秒，第二轮能接上第一轮的内容。
-- 小幽自己决定转交：一条“找个审查代码的看一下”的请求，Claude Code 按结构给出了
+- 小鱼自己决定转交：一条“找个审查代码的看一下”的请求，Claude Code 按结构给出了
   转交，Runtime 运行了帮手，再由它总结；它发现替身帮手答非所问，并如实告诉了主人。
   通过 HTTP 接口轮询时能看到 `agent` 和 `stage` 的变化。这一轮约 18 到 21 秒。
 - 点名只干活的代理（`@名字`）：帮手先做，结果由 Claude Code 转述，约 6 秒。
@@ -1846,7 +1850,7 @@ GitHub 上的真实发布里取回了 `firmware-build-2`，核对了发布里的
   一个按协议定义写的替身测过——云端没有登录的 Codex。`exec` 模式的命令行选项来自帮助
   输出，同样没有真正跑成功过一轮。
 - `remote` 代理对着另一台真实电脑、经过真实网络的情况。
-- 本地模型：`command` 类型能以小幽的身份回话这条路只在测试里用脚本走过。
+- 本地模型：`command` 类型能以小鱼的身份回话这条路只在测试里用脚本走过。
 - 虚拟机，以及连续运行多天的情况。
 - 0.5 这一版在 macOS 上、以及和手机 App、设备一起使用的情况。手机 App 0.5.0 和现在的
   固件还不认识卡：能发能收，但后台的结果看不到。配套的 App 和固件还没做。
@@ -1915,7 +1919,7 @@ Android 0.30.0 / 版本码 55、Runtime 0.22.0、桌面端 0.1.4 增加共享会
 手机可预览迁移旧的本机置顶、归档；已有共享修改的记录保持原值。
 旧版按对话同步和旁聊改名接口继续兼容。整理资料损坏时保留原文件，停止覆盖写入。
 
-`python3 -m xiaoyou_runtime conversations list --query <文字>` 以及
+`python3 -m xiaoyu_runtime conversations list --query <文字>` 以及
 `show`、`history`、`rename`、`pin`、`unpin`、`archive`、`restore`、
 `project`、`metadata`、`open` 共用同一套带鉴权的接口；用列表返回的确切 `--id` 选记录。
 两个桌面代理都可以使用 `shared_history.py --directory` 或

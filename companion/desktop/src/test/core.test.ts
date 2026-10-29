@@ -24,7 +24,7 @@ function page(extra = {}): SyncPage {
     reset: false, more: false, messages: [], tasks: [], approvals: [], removed: [], ...extra };
 }
 function fixture(t: { after(callback: () => void): void }) {
-  const dir = mkdtempSync(join(tmpdir(), 'xiaoyou-desktop-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'xiaoyu-desktop-test-'));
   const path = join(dir, 'client.sqlite');
   const db = new ClientDatabase(path);
   t.after(() => { try { db.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
@@ -293,7 +293,7 @@ test('conversation catalogs merge without idle notification feedback and persist
   let notifications = 0;
   const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => notifications++);
   client.endpoints.set(runtime, endpoint);
-  client.mergeConversations(space, [{ id: 'default', title: '和小幽聊天', createdAt: 0 }]);
+  client.mergeConversations(space, [{ id: 'default', title: '和小鱼聊天', createdAt: 0 }]);
   assert.equal(notifications, 0);
   client.createConversation(space, '另一个话题');
   const created = client.conversations(space).find(item => item.title === '另一个话题')!;
@@ -353,7 +353,7 @@ test('a real Runtime turn with equal timestamps displays its owner before the re
 
 test('bundle launch uses only fixed packaged paths and isolates embedded Python from the system', () => {
   const mac = bundledRuntimeLaunch('/bundle', 'darwin', '/profile', {});
-  assert.equal(mac.command, join('/bundle', 'xiaoyou-runtime/xiaoyou-runtime'));
+  assert.equal(mac.command, join('/bundle', 'xiaoyu-runtime/xiaoyu-runtime'));
   assert.deepEqual(mac.args, []);
   const windows = bundledRuntimeLaunch('/bundle', 'win32', '/profile', { layout: 'python-embedded' });
   assert.equal(windows.command, join('/bundle', 'python/python.exe'));

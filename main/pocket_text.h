@@ -6,7 +6,7 @@
 // 约定：这里的字面量只用普通 UTF-8 字符和 \n，不用其他转义。
 #pragma once
 
-// ---- 第一屏：形象。DS、一个标题、下面两三行 ----
+// ---- 第一屏：形象。Xiaoyu、一个标题、下面两三行 ----
 #define PT_HOME_BLE_OFF    "蓝牙关着呢"
 #define PT_HOME_WAITING    "睡着啦"
 #define PT_HOME_LINKING    "连上啦"
@@ -25,7 +25,7 @@
 #define PT_HOME_HANDED     "交给帮手了"
 
 // ---- DS此刻在干什么：第一屏的标题，也是第二屏顶上那一条 ----
-#define PT_XIAOYOU         "DS"
+#define PT_XIAOYU         "小鱼"
 #define PT_HEAD_SENT       "在听写"
 #define PT_HEAD_THINKING   "在想"
 // 帮手在做：名字在旁边的名牌里

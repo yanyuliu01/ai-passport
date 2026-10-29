@@ -17,7 +17,7 @@ import java.util.concurrent.Executors;
 /**
  * Incremental app updates: large files that rarely change (the speech models) are not in the
  * APK but in resource packs the Runtime publishes per file by SHA-256
- * (`python3 -m xiaoyou_runtime app pack`). The phone keeps each pack under files/packs/&lt;name&gt;/
+ * (`python3 -m xiaoyu_runtime app pack`). The phone keeps each pack under files/packs/&lt;name&gt;/
  * with an index of what it installed, and downloads only files whose checksum changed, from
  * the computer or, when the pack lists one, from a public HTTPS mirror. Every file is verified
  * before it replaces anything, and downloads resume.

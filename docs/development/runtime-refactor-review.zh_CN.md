@@ -4,7 +4,7 @@
 
 日期：2026-10-23。用户已确认按本次评审修正设计，并要求整理给 Claude Code 接续。
 
-评审对象是提交 `99cf439` 中[重构设计](runtime-refactor-design.zh_CN.md)第 8 节对 Raft 和 DS-Bot-App 的借鉴。本文件是有界的评审交接，不是第二份架构规范。CC 应先把下面的修正合入主设计，再按修正后的契约实现；合并后在本文件记录落实位置。原仓库规则和[跨端可靠性要求](cross-stack-reliability.zh_CN.md)继续适用。
+评审对象是提交 `99cf439` 中[重构设计](runtime-refactor-design.zh_CN.md)第 8 节对 Raft 和 Xiaoyu-Bot-App 的借鉴。本文件是有界的评审交接，不是第二份架构规范。CC 应先把下面的修正合入主设计，再按修正后的契约实现；合并后在本文件记录落实位置。原仓库规则和[跨端可靠性要求](cross-stack-reliability.zh_CN.md)继续适用。
 
 写作时 CC 正在修改 R3 的 `world.py`、`cards.py`、测试和主设计。本次没有审查或判定这些新代码通过验收，也不要求丢弃已有实现。不要因本评审重做 R2，不要重启现用 Runtime。用户会自行把本文件交给 CC；本文件不代表已发送消息。
 
@@ -73,7 +73,7 @@ R3 原有崩溃边界仍须覆盖：持久接收前、接收后执行前、外�
 
 如果权限权威尚未选定，就把它列为 R4 的未决设计条件，不能用“一次改一个”替代具体的一致性方案。
 
-## 6. DS-Bot-App 借鉴的适用范围
+## 6. Xiaoyu-Bot-App 借鉴的适用范围
 
 | 条目 | 修正后的要求 |
 | --- | --- |
@@ -100,9 +100,9 @@ R3 原有崩溃边界仍须覆盖：持久接收前、接收后执行前、外�
 ## 8. 原始参考与落实记录
 
 - [etcd-io/raft README](https://github.com/etcd-io/raft/blob/main/README.md)：确定性状态机、I/O 边界、Ready 持久化/应用约束和租约前提。
-- [DS-Bot-App 项目说明](https://github.com/QingJ01/DS-Bot-App/blob/main/README.zh.md)：主机与手机结构、分段和任务绑定。
-- [DS-Bot-App 连接说明](https://github.com/QingJ01/DS-Bot-App/blob/main/docs/mobile-install.zh.md)：局域网、HTTPS 隧道和 Tailscale 的不同连接范围。
-- [DS-Bot-App 功能说明](https://github.com/QingJ01/DS-Bot-App/blob/main/docs/mobile-features.zh.md)：操作回执、浏览器快照和后台通知限制。
+- [Xiaoyu-Bot-App 项目说明](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/README.zh.md)：主机与手机结构、分段和任务绑定。
+- [Xiaoyu-Bot-App 连接说明](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/docs/mobile-install.zh.md)：局域网、HTTPS 隧道和 Tailscale 的不同连接范围。
+- [Xiaoyu-Bot-App 功能说明](https://github.com/QingJ01/Xiaoyu-Bot-App/blob/main/docs/mobile-features.zh.md)：操作回执、浏览器快照和后台通知限制。
 
 以上是设计参考，不是对这些项目全部实现的审计结论。本文件建议是针对本仓库的工程判断。
 
@@ -114,7 +114,7 @@ R3 原有崩溃边界仍须覆盖：持久接收前、接收后执行前、外�
 | 第 3 节（三种代次、补增量优先、有界保留） | 1.2“三种代次和位置”；2.2 缺口与快照、有界保留窗口；8.1 第 3、4 行（删掉“epoch 相当于 term”） |
 | 第 4 节（确定性核心不重调模型） | 3.1“确定性核心”；8.1 第 1、2 行；8.3 第 2 条 |
 | 第 5 节（追上与成员变更） | 8.3 第 3、4 条（权限权威列为 R4 未决条件） |
-| 第 6 节（DS-Bot-App 适用范围） | 8.2 表格；8.3 第 5、6 条 |
+| 第 6 节（Xiaoyu-Bot-App 适用范围） | 8.2 表格；8.3 第 5、6 条 |
 | 第 7 节（顺序与故障用例） | 8.3 末尾“必须覆盖的故障用例”；R3 按第 7 节交接中的 R3.1～R3.4 继续 |
 
 验证：仓库文档检查通过。实现与故障用例的验收随 R3、R4、R6 各步报告。

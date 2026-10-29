@@ -6,7 +6,7 @@ from unittest import mock
 
 import test_runtime  # Shared direct-script package-path bootstrap.
 
-from xiaoyou_runtime.loop import recall
+from xiaoyu_runtime.loop import recall
 
 
 class RecallTests(unittest.TestCase):

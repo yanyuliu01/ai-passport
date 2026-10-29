@@ -15,7 +15,7 @@ import javax.crypto.spec.GCMParameterSpec;
 
 /** Atomic sealed confirmation envelope. Legacy body-only records are preserved, never reassigned. */
 final class ReviewStorage implements ReviewRecovery.Store {
-    private static final String ALIAS = "xiaoyou-effect-review-v1";
+    private static final String ALIAS = "xiaoyu-effect-review-v1";
     private final SharedPreferences storage, legacy;
     ReviewStorage(Context context) {
         storage = context.getSharedPreferences("effect-review-v1", Context.MODE_PRIVATE);

@@ -7,16 +7,16 @@ import unittest
 import urllib.request
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.agents import STOP, Control, Outcome
-from xiaoyou_runtime.helpers.tasks import Task
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.agents import STOP, Control, Outcome
+from xiaoyu_runtime.helpers.tasks import Task
 
 
 class CallbackFenceTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.worker = Scripted("worker", speaks=False)
-        self.x, self.store = make_xiaoyou(self.folder, [Scripted("voice"), self.worker])
+        self.x, self.store = make_xiaoyu(self.folder, [Scripted("voice"), self.worker])
         self.addCleanup(self.x.close)
         card = self.x._writer.task_open("default", "original task", "working", "worker")
         self.card = card["id"]
@@ -120,9 +120,9 @@ class CallbackFenceTests(TempDirCase):
         env = self.x._gate.open(self.card, "default", "worker", current=current,
                                 asked=self.old_control.approvals.append)
         self.addCleanup(self.x._gate.shut, env)
-        url = env["XIAOYOU_GATE_URL"].rsplit("/", 1)[0] + path
+        url = env["XIAOYU_GATE_URL"].rsplit("/", 1)[0] + path
         request = urllib.request.Request(url, json.dumps(body).encode(), method="POST", headers={
-            "X-Xiaoyou-Key": env["XIAOYOU_GATE_KEY"], "Content-Type": "application/json"})
+            "X-Xiaoyu-Key": env["XIAOYU_GATE_KEY"], "Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.loads(response.read())
 

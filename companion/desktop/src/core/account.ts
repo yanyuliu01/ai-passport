@@ -44,7 +44,7 @@ export class AccountConnection {
   private timer?: ReturnType<typeof setInterval>;
   private identity?: DeviceIdentity;
   private pairing: ClientView['pairing'] = { joined: 0, relayState: '未登录', requests: [] };
-  private message = '登录小幽账号，连接自己的其他电脑';
+  private message = '登录小鱼账号，连接自己的其他电脑';
   private busy = false;
   private pulsing = false;
   private generation = 0;

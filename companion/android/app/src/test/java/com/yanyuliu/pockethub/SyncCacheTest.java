@@ -95,7 +95,7 @@ public class SyncCacheTest {
 
     private static String reply(int rev, String status, String text, String partial) {
         return "{\"id\":\"m1:reply\",\"rev\":" + rev + ",\"seq\":" + rev + ",\"conversation\":\"default\",\"task\":\"c1\","
-                + "\"scope\":\"main\",\"author\":{\"kind\":\"xiaoyou\",\"name\":\"xiaoyou\"},\"kind\":\"reply\",\"text\":\""
+                + "\"scope\":\"main\",\"author\":{\"kind\":\"xiaoyu\",\"name\":\"xiaoyu\"},\"kind\":\"reply\",\"text\":\""
                 + text + "\",\"status\":\"" + status + "\",\"partial\":\"" + partial + "\",\"created_at\":101}";
     }
 
@@ -142,7 +142,7 @@ public class SyncCacheTest {
         assertTrue(card.turnEnded);
         assertEquals("done", card.state);
         assertFalse(card.outstanding());
-        assertEquals("本轮结束", DsState.label(card, true));
+        assertEquals("本轮结束", XiaoyuState.label(card, true));
     }
 
     @Test public void unavailableIsShownAsUnknownNotFinished() {
@@ -218,9 +218,9 @@ public class SyncCacheTest {
     @Test public void savedRecordsAndCursorRestoreTogetherAfterARestart() {
         SyncCache cache = new SyncCache("*");
         String reply = "{\"id\":\"m2\",\"rev\":3,\"task\":\"c1\",\"conversation\":\"default\",\"status\":\"final\","
-                + "\"text\":\"done\",\"author\":{\"kind\":\"xiaoyou\"},\"created_at\":12}";
+                + "\"text\":\"done\",\"author\":{\"kind\":\"xiaoyu\"},\"created_at\":12}";
         String streaming = "{\"id\":\"m3\",\"rev\":1,\"conversation\":\"default\",\"status\":\"streaming\","
-                + "\"text\":\"half\",\"author\":{\"kind\":\"xiaoyou\"},\"created_at\":13}";
+                + "\"text\":\"half\",\"author\":{\"kind\":\"xiaoyu\"},\"created_at\":13}";
         cache.apply(page("{\"epoch\":\"e1\",\"seq\":\"opaque:7\",\"messages\":[" + reply + "," + streaming + "],\"tasks\":["
                 + TASK.replace("\"members\":[", "\"members\":[\"m2\",") + "]}"));
         SyncCache restored = SyncCache.restore(cache.save(), "*");

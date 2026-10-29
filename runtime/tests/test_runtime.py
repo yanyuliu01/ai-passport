@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Xiaoyou runtime. Standard library only; no model is called.
+"""Tests for the Xiaoyu runtime. Standard library only; no model is called.
 
 The claude_code and codex agents are exercised against fake executables that
 record their arguments and standard input, so these tests prove how the runtime
@@ -29,26 +29,26 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.helpers import agents as agents_module  # noqa: E402
-from xiaoyou_runtime.helpers import factory  # noqa: E402
-from xiaoyou_runtime.world import approvals as approvals_module  # noqa: E402
-from xiaoyou_runtime.helpers import permission_mcp  # noqa: E402
-from xiaoyou_runtime.world import cards as cards_module  # noqa: E402
-from xiaoyou_runtime.helpers import codex_app as codex_app_module  # noqa: E402
-from xiaoyou_runtime import config as config_module  # noqa: E402
-from xiaoyou_runtime.loop import router as router_module  # noqa: E402
-from xiaoyou_runtime.events import stt as stt_module  # noqa: E402
-from xiaoyou_runtime.helpers import tasks as tasks_module  # noqa: E402
-from xiaoyou_runtime.loop import workspace as workspace_module  # noqa: E402
-from xiaoyou_runtime.helpers.usage import create_usage
-from xiaoyou_runtime.world import usage as usage_module  # noqa: E402
-from xiaoyou_runtime.loop import xiaoyou as xiaoyou_module  # noqa: E402
-from xiaoyou_runtime.__main__ import main  # noqa: E402
-from xiaoyou_runtime.helpers.agents import AgentError, Job, Outcome  # noqa: E402
-from xiaoyou_runtime.api.server import make_server  # noqa: E402
-from xiaoyou_runtime.api.service import RequestError, Service  # noqa: E402
-from xiaoyou_runtime.world.store import Store  # noqa: E402
-from xiaoyou_runtime.loop.xiaoyou import Xiaoyou  # noqa: E402
+from xiaoyu_runtime.helpers import agents as agents_module  # noqa: E402
+from xiaoyu_runtime.helpers import factory  # noqa: E402
+from xiaoyu_runtime.world import approvals as approvals_module  # noqa: E402
+from xiaoyu_runtime.helpers import permission_mcp  # noqa: E402
+from xiaoyu_runtime.world import cards as cards_module  # noqa: E402
+from xiaoyu_runtime.helpers import codex_app as codex_app_module  # noqa: E402
+from xiaoyu_runtime import config as config_module  # noqa: E402
+from xiaoyu_runtime.loop import router as router_module  # noqa: E402
+from xiaoyu_runtime.events import stt as stt_module  # noqa: E402
+from xiaoyu_runtime.helpers import tasks as tasks_module  # noqa: E402
+from xiaoyu_runtime.loop import workspace as workspace_module  # noqa: E402
+from xiaoyu_runtime.helpers.usage import create_usage
+from xiaoyu_runtime.world import usage as usage_module  # noqa: E402
+from xiaoyu_runtime.loop import xiaoyu as xiaoyu_module  # noqa: E402
+from xiaoyu_runtime.__main__ import main  # noqa: E402
+from xiaoyu_runtime.helpers.agents import AgentError, Job, Outcome  # noqa: E402
+from xiaoyu_runtime.api.server import make_server  # noqa: E402
+from xiaoyu_runtime.api.service import RequestError, Service  # noqa: E402
+from xiaoyu_runtime.world.store import Store  # noqa: E402
+from xiaoyu_runtime.loop.xiaoyu import Xiaoyu  # noqa: E402
 
 TOKEN = "unit-test-token-0123456789"
 OTHER_TOKEN = "other-runtime-token-0123456789"
@@ -113,7 +113,7 @@ if "stream-json" in args:
         # Do what Claude Code does: start the permission tool and ask it before writing.
         target = os.environ["FAKE_CLAUDE_TARGET"]
         with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as handle:
-            server = json.load(handle)["mcpServers"]["xiaoyou"]
+            server = json.load(handle)["mcpServers"]["xiaoyu"]
         tool = subprocess.Popen([server["command"]] + server["args"], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, env=dict(os.environ, **server["env"]))
         def rpc(message):
@@ -442,13 +442,13 @@ class GateTalker(ToolTalker):
         return super().run(job)
 
 
-def make_xiaoyou(folder, agents, router=None, workspace=None, usage=None, **settings):
-    """Xiaoyou over stand-in agents; the first one is the default and the voice."""
+def make_xiaoyu(folder, agents, router=None, workspace=None, usage=None, **settings):
+    """Xiaoyu over stand-in agents; the first one is the default and the voice."""
     loaded = config_module.load(write_config(folder), {})
     loaded = dataclasses.replace(
         loaded, default_agent=agents[0].name, voice_agent=agents[0].name, **settings)
     store = Store(loaded.state_dir)
-    return Xiaoyou(loaded, agents, store, router, workspace, usage), store
+    return Xiaoyu(loaded, agents, store, router, workspace, usage), store
 
 
 class ConfigTests(TempDirCase):
@@ -471,22 +471,22 @@ class ConfigTests(TempDirCase):
         self.assertEqual((spec.timeout_seconds, spec.idle_seconds, spec.idle_command_seconds),
                          (0, 600, 1800))
         self.assertEqual(loaded.idle_answer_seconds, 1800)
-        tuned = self.load(xiaoyou={"max_parallel": 3, "voice_timeout_seconds": 20})
+        tuned = self.load(xiaoyu={"max_parallel": 3, "voice_timeout_seconds": 20})
         self.assertEqual((tuned.max_parallel, tuned.voice_timeout_seconds), (3, 20))
 
     def test_runtime_name(self):
         self.assertTrue(config_module.load(write_config(self.folder), {}).name)
         named = write_config(self.folder, server={"token": TOKEN, "name": " 书房的电脑 "})
         self.assertEqual(config_module.load(named, {}).name, "书房的电脑")
-        self.assertEqual(config_module.load(named, {"XIAOYOU_NAME": "vm"}).name, "vm")
+        self.assertEqual(config_module.load(named, {"XIAOYU_NAME": "vm"}).name, "vm")
         with self.assertRaisesRegex(config_module.ConfigError, "server.name"):
             config_module.load(write_config(self.folder, server={"token": TOKEN, "name": "x" * 41}), {})
 
     def test_environment_overrides_file(self):
         state_override = self.folder / "env-state"
         loaded = self.load(env={
-            "XIAOYOU_HOST": "0.0.0.0", "XIAOYOU_PORT": "9000",
-            "XIAOYOU_TOKEN": "env-token-env-token-env", "XIAOYOU_STATE_DIR": str(state_override),
+            "XIAOYU_HOST": "0.0.0.0", "XIAOYU_PORT": "9000",
+            "XIAOYU_TOKEN": "env-token-env-token-env", "XIAOYU_STATE_DIR": str(state_override),
         })
         self.assertEqual((loaded.host, loaded.port), ("0.0.0.0", 9000))
         self.assertEqual(loaded.token, "env-token-env-token-env")
@@ -507,7 +507,7 @@ class ConfigTests(TempDirCase):
                                lambda target: found.append(target) or "100.101.102.103"):
             path = write_config(self.folder, server={"token": TOKEN, "host": "Tailscale"})
             self.assertEqual(config_module.load(path, {}).host, "100.101.102.103")
-            self.assertEqual(self.load(env={"XIAOYOU_HOST": "tailscale"}).host, "100.101.102.103")
+            self.assertEqual(self.load(env={"XIAOYU_HOST": "tailscale"}).host, "100.101.102.103")
         self.assertEqual(found, ["100.100.100.100"] * 2)
         # Tailscale is off: the route leads somewhere else, or nowhere. Say so, do not
         # quietly listen on another address.
@@ -523,14 +523,14 @@ class ConfigTests(TempDirCase):
 
     def test_the_whole_chain_can_be_switched_to_echo_from_the_environment(self):
         agents = {"claude": {"type": "claude_code"}, "codex": {"type": "codex"}}
-        for env in ({"XIAOYOU_BACKEND": "echo"}, {"XIAOYOU_DEFAULT_AGENT": "echo"}):
+        for env in ({"XIAOYU_BACKEND": "echo"}, {"XIAOYU_DEFAULT_AGENT": "echo"}):
             loaded = self.load(env=env, agents=agents)
             self.assertEqual(loaded.default_agent, "echo")
             self.assertEqual([spec.name for spec in loaded.agents], ["claude", "codex", "echo"])
-        self.assertEqual(self.load(env={"XIAOYOU_DEFAULT_AGENT": "codex"}, agents=agents).default_agent,
+        self.assertEqual(self.load(env={"XIAOYU_DEFAULT_AGENT": "codex"}, agents=agents).default_agent,
                          "codex")
         with self.assertRaisesRegex(config_module.ConfigError, "默认代理"):
-            self.load(env={"XIAOYOU_DEFAULT_AGENT": "nobody"}, agents=agents)
+            self.load(env={"XIAOYU_DEFAULT_AGENT": "nobody"}, agents=agents)
 
     def test_how_long_silence_may_last_can_be_set_for_all_and_per_agent(self):
         loaded = self.load(
@@ -602,7 +602,7 @@ class ConfigTests(TempDirCase):
             with self.assertRaises(config_module.ConfigError, msg=str(overrides)):
                 self.load(**overrides)
         with self.assertRaises(config_module.ConfigError):
-            self.load(env={"XIAOYOU_PORT": "abc"})
+            self.load(env={"XIAOYU_PORT": "abc"})
         with self.assertRaises(config_module.ConfigError):
             config_module.load(self.folder / "nope.json", {})
 
@@ -699,14 +699,14 @@ class ConfigTests(TempDirCase):
         # A tool that was switched on has to be moved by hand: it is now an agent of its own.
         with self.assertRaisesRegex(config_module.ConfigError, "agents"):
             self.load(backend="claude_code", tools=[{"name": "Codex", "allowed_tools": ["Bash(codex exec *)"]}])
-        from_env = self.load(env={"XIAOYOU_CLAUDE_CONFIG_DIR": str(self.folder / "other")},
+        from_env = self.load(env={"XIAOYU_CLAUDE_CONFIG_DIR": str(self.folder / "other")},
                              backend="claude_code")
         self.assertEqual(from_env.agents[0].config_dir, self.folder / "other")
 
     def test_example_config_is_valid_once_the_token_is_set(self):
         with self.assertRaises(config_module.ConfigError):
             config_module.load(RUNTIME / "config.example.json", {})
-        loaded = config_module.load(RUNTIME / "config.example.json", {"XIAOYOU_TOKEN": TOKEN})
+        loaded = config_module.load(RUNTIME / "config.example.json", {"XIAOYU_TOKEN": TOKEN})
         # The Codex example ships disabled.
         self.assertEqual([(spec.name, spec.type) for spec in loaded.agents], [("claude", "claude_code")])
         self.assertEqual((loaded.default_agent, loaded.voice_agent), ("claude", "claude"))
@@ -721,31 +721,31 @@ class ShapeTests(unittest.TestCase):
         clipped = agents_module.clip("字" * 50, 20)
         self.assertEqual(len(clipped), 20)
         self.assertTrue(clipped.endswith("…"))
-        turn = xiaoyou_module.shape("  hello  ", "", "angry", 20, "claude")
+        turn = xiaoyu_module.shape("  hello  ", "", "angry", 20, "claude")
         self.assertEqual((turn.reply, turn.brief, turn.mood, turn.agent, turn.card, turn.started),
                          ("hello", "hello", "idle", "claude", "", False))
 
     def test_clean_display_drops_backticks_and_emoji(self):
-        self.assertEqual(xiaoyou_module.clean_display("```python\nprint(1)\n```"), "print(1)")
-        self.assertEqual(xiaoyou_module.clean_display("运行 `foo` 命令"), "运行 foo 命令")
-        self.assertEqual(xiaoyou_module.clean_display("✅ 完成了 ⚠️ 注意"), "完成了 注意")
-        self.assertEqual(xiaoyou_module.clean_display("你好 😀 世界"), "你好 世界")
-        self.assertEqual(xiaoyou_module.clean_display("温度 25°C"), "温度 25C")
+        self.assertEqual(xiaoyu_module.clean_display("```python\nprint(1)\n```"), "print(1)")
+        self.assertEqual(xiaoyu_module.clean_display("运行 `foo` 命令"), "运行 foo 命令")
+        self.assertEqual(xiaoyu_module.clean_display("✅ 完成了 ⚠️ 注意"), "完成了 注意")
+        self.assertEqual(xiaoyu_module.clean_display("你好 😀 世界"), "你好 世界")
+        self.assertEqual(xiaoyu_module.clean_display("温度 25°C"), "温度 25C")
 
     def test_clean_display_turns_markdown_into_plain_text(self):
         self.assertEqual(
-            xiaoyou_module.clean_display("# 标题\n**重点** 和 [链接](http://x)"),
+            xiaoyu_module.clean_display("# 标题\n**重点** 和 [链接](http://x)"),
             "标题\n重点 和 链接")
-        self.assertEqual(xiaoyou_module.clean_display("- 一\n- 二"), "· 一\n· 二")
-        self.assertEqual(xiaoyou_module.clean_display("> 引用一句话"), "引用一句话")
-        self.assertEqual(xiaoyou_module.clean_display("~~划掉~~ 保留"), "划掉 保留")
+        self.assertEqual(xiaoyu_module.clean_display("- 一\n- 二"), "· 一\n· 二")
+        self.assertEqual(xiaoyu_module.clean_display("> 引用一句话"), "引用一句话")
+        self.assertEqual(xiaoyu_module.clean_display("~~划掉~~ 保留"), "划掉 保留")
 
     def test_clean_display_keeps_chinese_punctuation_and_newlines(self):
         text = "第一行：你好，世界！\n\n第二行——（测试）……"
-        self.assertEqual(xiaoyou_module.clean_display(text), text)
+        self.assertEqual(xiaoyu_module.clean_display(text), text)
 
     def test_shape_cleans_reply_and_brief(self):
-        turn = xiaoyou_module.shape("**好了** `ok` ✅", "**好** `ok` ✅", "happy", 40, "claude")
+        turn = xiaoyu_module.shape("**好了** `ok` ✅", "**好** `ok` ✅", "happy", 40, "claude")
         self.assertEqual((turn.reply, turn.brief), ("**好了** ok", "好 ok"))
 
     def test_a_structured_reply_written_as_text_is_recognised(self):
@@ -759,7 +759,7 @@ class ShapeTests(unittest.TestCase):
     def test_owner_memory_keeps_notes_in_a_plain_file(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.world.memory import OwnerMemory, prompt_section
+        from xiaoyu_runtime.world.memory import OwnerMemory, prompt_section
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         memory = OwnerMemory(folder / "memory" / "owner.md")
@@ -772,7 +772,7 @@ class ShapeTests(unittest.TestCase):
         self.assertIn("- [2026-10-20] 少说点", (folder / "memory" / "owner.md").read_text(encoding="utf-8"))
         section = prompt_section(memory.notes())
         self.assertEqual(section[-1], "2. [2026-10-21] 别点帮手的名")
-        prompt = xiaoyou_module.lane_prompt("P", 40, [], [], None, 0, tools=True, memory=memory.notes())
+        prompt = xiaoyu_module.lane_prompt("P", 40, [], [], None, 0, tools=True, memory=memory.notes())
         self.assertIn("你记得的关于主人的事", prompt)
         self.assertNotIn("判断理由", prompt)
         self.assertEqual(memory.forget(9), "没有第 9 条")
@@ -782,7 +782,7 @@ class ShapeTests(unittest.TestCase):
     def test_memory_keeps_provenance_corrections_and_a_log(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.world.memory import OwnerMemory
+        from xiaoyu_runtime.world.memory import OwnerMemory
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         memory = OwnerMemory(folder / "owner.md")
@@ -800,8 +800,8 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(len(memory.notes()), 1)
 
     def test_recall_finds_old_words_with_or_without_full_text_search(self):
-        from xiaoyou_runtime.loop import recall
-        records = [("聊天", "", 100.0, "主人：短信网关那个方案怎么样\n小幽：备用安卓手机最合适"),
+        from xiaoyu_runtime.loop import recall
+        records = [("聊天", "", 100.0, "主人：短信网关那个方案怎么样\n小鱼：备用安卓手机最合适"),
                    ("聊天", "", 200.0, "主人：今天有点累"),
                    ("记忆", "2026-10-20", 150.0, "- 10:00 记：回复短一点")]
         hits = recall.search("短信网关", records)
@@ -814,8 +814,8 @@ class ShapeTests(unittest.TestCase):
     def test_promises_are_tracked_due_and_resolved(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.world.promises import Promises
-        from xiaoyou_runtime.loop.voice_tools import Toolbox
+        from xiaoyu_runtime.world.promises import Promises
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         promises = Promises(folder / "promises.json")
@@ -835,8 +835,8 @@ class ShapeTests(unittest.TestCase):
     def test_daily_promises_move_to_the_next_day_and_questions_are_not_promises(self):
         import shutil
         import tempfile
-        from xiaoyou_runtime.world.promises import Promises
-        from xiaoyou_runtime.loop.voice_tools import Toolbox
+        from xiaoyu_runtime.world.promises import Promises
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, True)
         promises = Promises(folder / "promises.json")
@@ -854,8 +854,8 @@ class ShapeTests(unittest.TestCase):
         self.assertTrue(tools.promised("我这就去查。"))
 
     def test_helpers_get_the_owner_notes(self):
-        self.assertEqual(xiaoyou_module.owner_notes("做事", []), "做事")
-        self.assertIn("- 回复短一点", xiaoyou_module.owner_notes("做事", ["回复短一点"]))
+        self.assertEqual(xiaoyu_module.owner_notes("做事", []), "做事")
+        self.assertIn("- 回复短一点", xiaoyu_module.owner_notes("做事", ["回复短一点"]))
 
     def test_a_reply_wrapped_in_prose_is_still_recognised(self):
         # 真实出过的样子：JSON 前面多说一句，reply 里带转义的换行。
@@ -868,12 +868,12 @@ class ShapeTests(unittest.TestCase):
     def test_raw_json_never_reaches_the_owner(self):
         Outcome = agents_module.Outcome
         half = 'xx {"reply": "第一句。\\n第二句', 
-        self.assertEqual(xiaoyou_module.reply_text(Outcome(half[0], None, None)), "第一句。\n第二句")
-        self.assertEqual(xiaoyou_module.reply_text(Outcome("就一句话", None, None)), "就一句话")
-        self.assertEqual(xiaoyou_module.reply_text(Outcome("x", None, {"reply": " 好 "})), "好")
+        self.assertEqual(xiaoyu_module.reply_text(Outcome(half[0], None, None)), "第一句。\n第二句")
+        self.assertEqual(xiaoyu_module.reply_text(Outcome("就一句话", None, None)), "就一句话")
+        self.assertEqual(xiaoyu_module.reply_text(Outcome("x", None, {"reply": " 好 "})), "好")
 
     def test_replies_keep_light_formatting_and_her_own_message_breaks(self):
-        chat_text = xiaoyou_module.chat_text
+        chat_text = xiaoyu_module.chat_text
         # 不按长度切：一段话再长也是一条。
         long = "这是一句比较长的话，用来凑够长度。" * 8
         self.assertEqual(chat_text(long), long)
@@ -883,24 +883,24 @@ class ShapeTests(unittest.TestCase):
         # 加粗和列表留给手机画；标题变成一行加粗；表情和代码围栏照旧去掉。
         self.assertEqual(chat_text("## 结论\n* **快** 一点\n```\nx\n```✅"), "**结论**\n- **快** 一点\n\nx")
         # 小屏用的 brief 是纯文字。
-        turn = xiaoyou_module.shape("**好了**\n---\n- 一", None, "happy", 40, "x")
+        turn = xiaoyu_module.shape("**好了**\n---\n- 一", None, "happy", 40, "x")
         self.assertEqual(turn.brief, "好了 · 一")
 
     def test_the_short_version_points_to_the_full_result(self):
         long = "我在 Mac 上，进不了 Windows 的命令行，所以查不了那边的文件，也没法在那边打包。\n\n" * 4
-        text = xiaoyou_module.digest(long, "加密口令")
+        text = xiaoyu_module.digest(long, "加密口令")
         self.assertTrue(text.endswith("完整结果在「加密口令」里。"))
         self.assertLess(len(text), 200)
-        self.assertEqual(xiaoyou_module.digest("只显示正文", "x"), "只显示正文")
+        self.assertEqual(xiaoyu_module.digest("只显示正文", "x"), "只显示正文")
 
     def test_what_she_may_ask_the_runtime_to_do_depends_on_the_helpers(self):
-        plain = xiaoyou_module.reply_schema()
+        plain = xiaoyu_module.reply_schema()
         self.assertEqual(plain["required"], ["reply", "brief", "mood"])
         self.assertNotIn("action", plain["properties"])
-        alone = xiaoyou_module.lane_schema([])["properties"]["action"]["properties"]
+        alone = xiaoyu_module.lane_schema([])["properties"]["action"]["properties"]
         self.assertEqual(alone["type"]["enum"], ["none", "cancel"])
         self.assertNotIn("agent", alone)
-        helped = xiaoyou_module.lane_schema([Scripted("codex", speaks=False), Scripted("pc")])
+        helped = xiaoyu_module.lane_schema([Scripted("codex", speaks=False), Scripted("pc")])
         action = helped["properties"]["action"]["properties"]
         self.assertEqual(action["type"]["enum"], ["none", "start", "amend", "cancel"])
         self.assertEqual(action["agent"]["enum"], ["codex", "pc"])
@@ -913,12 +913,12 @@ class ShapeTests(unittest.TestCase):
             {"id": "c2", "title": "闲聊", "state": "done", "agent": None, "started_at": None},
             {"id": "c3", "title": "改文档", "state": "waiting", "agent": "claude", "started_at": 1},
         ]
-        prompt = xiaoyou_module.lane_prompt("P", 60, [Scripted("codex")], cards, "c3", 290)
+        prompt = xiaoyu_module.lane_prompt("P", 60, [Scripted("codex")], cards, "c3", 290)
         self.assertIn("- c1「查天气」：codex 在做，已经 3 分钟", prompt)
         self.assertIn("- c2「闲聊」：做完了", prompt)
         self.assertIn("- c3「改文档」：claude 在做，等主人点头", prompt)
         self.assertIn("正看着 c3", prompt)
-        nothing = xiaoyou_module.lane_prompt("P", 60, [], [], None, 0)
+        nothing = xiaoyu_module.lane_prompt("P", 60, [], [], None, 0)
         self.assertIn("还没有。", nothing)
         self.assertNotIn("- start", nothing)
         self.assertNotIn("正看着", nothing)
@@ -928,15 +928,15 @@ class ShapeTests(unittest.TestCase):
             with self.subTest(tools=tools):
                 options = dict(persona="PERSONA", brief_max_chars=60,
                                helpers=[Scripted("codex")], focus="c1", tools=tools)
-                first = xiaoyou_module.lane_prompt(
+                first = xiaoyu_module.lane_prompt(
                     **options, now=0, cards=[], memory=["MEMORY_BEFORE"])
-                second = xiaoyou_module.lane_prompt(
+                second = xiaoyu_module.lane_prompt(
                     **options, now=3600, memory=["MEMORY_AFTER"], cards=[
                         {"id": "c1", "title": "TASK_AFTER", "state": "done",
                          "agent": None, "started_at": None}])
                 prefix, context = first.split("## 本轮上下文", 1)
                 self.assertEqual(prefix, second.split("## 本轮上下文", 1)[0])
-                self.assertIn(xiaoyou_module.CHAT_STYLE, prefix)
+                self.assertIn(xiaoyu_module.CHAT_STYLE, prefix)
                 self.assertIn("MEMORY_BEFORE", context)
                 self.assertNotIn("MEMORY_BEFORE", second)
                 self.assertIn("MEMORY_AFTER", second)
@@ -961,12 +961,12 @@ class ClaudeCodeAgentTests(TempDirCase):
             "allowed_tools": ["Read", "Grep"], "extra_args": ["--max-turns", "9"],
         }}), {})
         self.agent = factory.create(self.config.agents[0])
-        self.schema = xiaoyou_module.reply_schema()
+        self.schema = xiaoyu_module.reply_schema()
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text("utf-8").splitlines()]
 
-    def test_speaking_as_xiaoyou_passes_the_persona_and_the_reply_shape(self):
+    def test_speaking_as_xiaoyu_passes_the_persona_and_the_reply_shape(self):
         outcome = self.agent.run(Job("你好 -- $(x)", system="SYSTEM-TEXT", schema=self.schema))
         self.assertEqual((outcome.text, outcome.session_id), ("full 你好 -- $(x)", "s-new"))
         self.assertEqual(outcome.fields, {"reply": "full 你好 -- $(x)", "brief": "short", "mood": "happy"})
@@ -1040,7 +1040,7 @@ class ClaudeCodeAgentTests(TempDirCase):
             self.assertEqual((asked["card"], asked["agent"], asked["tool"], asked["detail"]),
                              ("c1", "claude", "claude · Write", "%s\nhello" % target))
             args = self.calls()[-1]["args"]
-            self.assertEqual(args[args.index("--permission-prompt-tool") + 1], "mcp__xiaoyou__approve")
+            self.assertEqual(args[args.index("--permission-prompt-tool") + 1], "mcp__xiaoyu__approve")
             config = Path(args[args.index("--mcp-config") + 1])
             # The file with the key is readable by the owner only, and lives in the state folder.
             self.assertEqual(config.parent, self.folder / "state")
@@ -1283,7 +1283,7 @@ class ClaudeCodeAgentTests(TempDirCase):
         self.assertEqual(seen[-1]["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-fake-rotated")
 
         # The DeepSeek binding accepts a key that only lives in a file named in env_files.
-        from xiaoyou_runtime.helpers import claude_gateway
+        from xiaoyu_runtime.helpers import claude_gateway
         deepseek = config_module.load(write_config(self.folder, agents={"deepseek": {
             "type": "claude_code", "command": [sys.executable], "model": "deepseek-v4-pro",
             "env": {"ANTHROPIC_BASE_URL": claude_gateway.DEEPSEEK_BASE_URL},
@@ -1476,7 +1476,7 @@ class CodexAgentTests(TempDirCase):
         loaded = config_module.load(write_config(folder, agents=agents), {})
         self.assertEqual(loaded.agents[0].config_dir, (folder / "codex-login").resolve())
         from_env = config_module.load(write_config(folder, agents=agents),
-                                      {"XIAOYOU_CODEX_CONFIG_DIR": str(home)})
+                                      {"XIAOYU_CODEX_CONFIG_DIR": str(home)})
         self.assertEqual(from_env.agents[0].config_dir, home)
 
     def test_continuing_uses_exec_resume_with_the_thread(self):
@@ -1546,7 +1546,7 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual((start["args"], start["home"]), (["app-server", "-c", "x=1"], None))
         self.assertEqual(Path(start["cwd"]).resolve(), self.config.agents[0].workdir)
         hello = self.sent("initialize")[0]["params"]["clientInfo"]
-        self.assertEqual((hello["name"], hello["title"]), ("xiaoyou-runtime", "Xiaoyou"))
+        self.assertEqual((hello["name"], hello["title"]), ("xiaoyu-runtime", "Xiaoyu"))
         self.assertEqual(len(self.sent("initialized")), 1)
         # Read-only and asking: it may read anywhere, and anything else comes to the owner.
         self.assertEqual(self.sent("thread/start")[0]["params"], {
@@ -1606,7 +1606,7 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual(seen, [])
 
     def test_continuing_resumes_the_thread_and_a_speaking_codex_gets_the_shape(self):
-        schema = xiaoyou_module.reply_schema()
+        schema = xiaoyu_module.reply_schema()
         outcome = self.agent.run(Job("more", session_id="thread-7", system="PERSONA",
                                      schema=schema, control=self.control()))
         self.assertEqual(outcome.session_id, "thread-7")
@@ -1725,11 +1725,11 @@ class CodexAppServerTests(TempDirCase):
             self.config.agents[0], command=[sys.executable, str(fake)]))
         self.assertEqual(agent.run(Job("q")).text, "written q")
 
-    def test_through_xiaoyou_the_owner_answers_on_the_card(self):
+    def test_through_xiaoyu_the_owner_answers_on_the_card(self):
         os.environ["FAKE_CODEX_MODE"] = "ask"
         claude = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(self.folder / "x", [claude, self.agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(self.folder / "x", [claude, self.agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         message = service.get(service.submit("@codex 清理一下")["id"], wait=5)
         self.assertTrue(until(lambda: service.feed("default")["approvals"], 10))
@@ -1737,11 +1737,11 @@ class CodexAppServerTests(TempDirCase):
         self.assertEqual((asked["card"], asked["agent"], asked["tool"]),
                          (message["card"], "codex", "codex · 命令"))
         self.assertTrue(asked["detail"].startswith("rm -rf build\n"))
-        card = xiaoyou.cards.get(message["card"])
+        card = xiaoyu.cards.get(message["card"])
         self.assertEqual((card["state"], card["approval"], card["progress"]),
                          ("waiting", asked["id"], ["rm -rf build"]))
         service.approve(asked["id"], "allow")
-        card = xiaoyou.settle(message["card"], 10)
+        card = xiaoyu.settle(message["card"], 10)
         self.assertEqual((card["state"], card["approval"]), ("done", None))
         # Codex only does the work; the result is voiced by the agent that speaks for her.
         self.assertIn('["accept"]', claude.jobs[-1].text)
@@ -1752,9 +1752,9 @@ class CodexAppServerTests(TempDirCase):
         self.assertTrue(until(lambda: len(self.sent("turn/start")) == 2))
         # The runtime can pass a sentence on only once it has the turn's number back.
         self.assertTrue(until(lambda: getattr(getattr(
-            xiaoyou._tasks._active.get(again["card"]), "control", None), "_steer", None)))
-        self.assertEqual(xiaoyou._tasks.amend(again["card"], "redo", "Windows 也要"), "steer")
-        card = xiaoyou.settle(again["card"], 10)
+            xiaoyu._tasks._active.get(again["card"]), "control", None), "_steer", None)))
+        self.assertEqual(xiaoyu._tasks.amend(again["card"], "redo", "Windows 也要"), "steer")
+        card = xiaoyu.settle(again["card"], 10)
         self.assertIn("+ Windows 也要", claude.jobs[-1].text)
 
 
@@ -1978,7 +1978,7 @@ class CardsTests(TempDirCase):
         cards.update(first["id"], say="好了", brief="ok", state="done")
         done = cards.get(first["id"])
         self.assertGreater(done["finished_at"], 0)
-        # 小幽自己答的话不是任务，没有完成时间。
+        # 小鱼自己答的话不是任务，没有完成时间。
         chat = cards.open("default", "闲聊")
         cards.update(chat["id"], say="在的")
         self.assertIsNone(cards.get(chat["id"])["finished_at"])
@@ -2285,11 +2285,11 @@ class ApprovalTests(TempDirCase):
         gate = approvals_module.Gate(approvals)
         self.addCleanup(gate.close)
         env = gate.open("c1", "default", "claude")
-        self.assertTrue(env["XIAOYOU_GATE_URL"].startswith("http://127.0.0.1:"))
+        self.assertTrue(env["XIAOYU_GATE_URL"].startswith("http://127.0.0.1:"))
 
         def post(key, body):
-            request = urllib.request.Request(env["XIAOYOU_GATE_URL"], data=body, method="POST")
-            request.add_header("X-Xiaoyou-Key", key)
+            request = urllib.request.Request(env["XIAOYU_GATE_URL"], data=body, method="POST")
+            request.add_header("X-Xiaoyu-Key", key)
             try:
                 with urllib.request.urlopen(request, timeout=10) as response:
                     return response.status, json.loads(response.read())
@@ -2299,11 +2299,11 @@ class ApprovalTests(TempDirCase):
         ask = json.dumps({"tool_name": "Bash", "input": {"command": "ls"}}).encode()
         self.assertEqual(post("wrong", ask)[0], 403)
         self.assertEqual(post(TOKEN, ask)[0], 403)
-        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], b"{nope")[0], 400)
-        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], b'{"input": {}}')[0], 400)
+        self.assertEqual(post(env["XIAOYU_GATE_KEY"], b"{nope")[0], 400)
+        self.assertEqual(post(env["XIAOYU_GATE_KEY"], b'{"input": {}}')[0], 400)
         self.assertEqual(approvals.pending(), [])
         answer = {}
-        thread = threading.Thread(target=lambda: answer.update(reply=post(env["XIAOYOU_GATE_KEY"], ask)))
+        thread = threading.Thread(target=lambda: answer.update(reply=post(env["XIAOYU_GATE_KEY"], ask)))
         thread.start()
         self.assertTrue(until(approvals.pending))
         approvals.answer(approvals.pending()[0]["id"], "allow")
@@ -2311,7 +2311,7 @@ class ApprovalTests(TempDirCase):
         self.assertEqual((answer["reply"][0], answer["reply"][1]["decision"]), (200, "allow"))
         # Once the round is over the key is worth nothing.
         gate.shut(env)
-        self.assertEqual(post(env["XIAOYOU_GATE_KEY"], ask)[0], 403)
+        self.assertEqual(post(env["XIAOYU_GATE_KEY"], ask)[0], 403)
 
     def test_the_permission_tool_speaks_just_enough_mcp(self):
         handle = permission_mcp.handle
@@ -2320,7 +2320,7 @@ class ApprovalTests(TempDirCase):
         hello = handle({"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
                        None, None)
         self.assertEqual((hello["result"]["protocolVersion"], hello["result"]["serverInfo"]["name"]),
-                         ("2025-06-18", "xiaoyou"))
+                         ("2025-06-18", "xiaoyu"))
         tools = handle({"id": 2, "method": "tools/list"}, None, None)["result"]["tools"]
         self.assertEqual([tool["name"] for tool in tools], ["approve"])
         self.assertIn("error", handle({"id": 3, "method": "resources/list"}, None, None))
@@ -2350,7 +2350,7 @@ class ApprovalTests(TempDirCase):
 
         def opener(decision):
             def open_(request, timeout):
-                seen.append((request.get_header("X-xiaoyou-key"), json.loads(request.data)))
+                seen.append((request.get_header("X-xiaoyu-key"), json.loads(request.data)))
                 return Reply(json.dumps({"decision": decision, "message": "主人说不行"}).encode())
             return open_
 
@@ -2367,9 +2367,9 @@ class ApprovalTests(TempDirCase):
                  {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
         text = "".join(json.dumps(line) + "\n" for line in lines) + "not json\n"
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith("XIAOYOU_GATE")}
+                       if not key.startswith("XIAOYU_GATE")}
         done = subprocess.run(
-            [sys.executable, "-m", "xiaoyou_runtime.helpers.permission_mcp"], input=text.encode(),
+            [sys.executable, "-m", "xiaoyu_runtime.helpers.permission_mcp"], input=text.encode(),
             stdout=subprocess.PIPE, cwd=str(RUNTIME), env=environment, timeout=20)
         replies = [json.loads(line) for line in done.stdout.decode().splitlines()]
         self.assertEqual((done.returncode, [reply["id"] for reply in replies]), (0, [1, 2]))
@@ -2522,9 +2522,9 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
             dataclasses.replace(loaded.agents[0], idle_seconds=idle,
                                 idle_command_seconds=idle_command)])
         self.store = Store(loaded.state_dir)
-        self.xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents],
+        self.xiaoyu = Xiaoyu(loaded, [factory.create(spec) for spec in loaded.agents],
                                self.store)
-        self.service = Service(self.xiaoyou, self.store)
+        self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)
 
     def asked(self, seconds=10):
@@ -2538,23 +2538,23 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
         self.assertEqual((asked["kind"], asked["tool"], asked["card"]),
                          ("stall", "claude · 没动静", card_id))
         self.assertRegex(asked["detail"], r"claude 已经 1 秒没有动静了，接着等吗？\n最后一步：Bash ls -la /tmp\n")
-        self.assertEqual(self.xiaoyou.cards.get(card_id)["state"], "waiting")
+        self.assertEqual(self.xiaoyu.cards.get(card_id)["state"], "waiting")
         # Yes: it goes on, and is asked about again only after twice as long.
         self.assertIs(self.service.approve(asked["id"], "allow"), True)
-        self.assertTrue(until(lambda: self.xiaoyou.cards.get(card_id)["state"] == "working"))
+        self.assertTrue(until(lambda: self.xiaoyu.cards.get(card_id)["state"] == "working"))
         again = self.asked()
         self.assertNotEqual(again["id"], asked["id"])
         self.assertIn("已经 2 秒没有动静", again["detail"])
         # No: stopped, and the card says why and how to go on.
         self.assertIs(self.service.approve(again["id"], "deny"), True)
-        card = self.xiaoyou.settle(card_id, 10)
+        card = self.xiaoyu.settle(card_id, 10)
         self.assertEqual((card["state"], card["approval"]), ("failed", None))
         self.assertRegex(card["entries"][-1]["text"], "claude 没做成：Claude Code 有 2 秒没动静，主人说停掉。.*接着做")
         self.assertEqual(self.service.feed("default")["approvals"], [])
         # Nothing is lost: the next round continues the session it had.
         os.environ["FAKE_CLAUDE_MODE"] = "ok"
         self.service.get(self.service.submit("@claude 接着做", card=card_id, pin=True)["id"], wait=5)
-        self.assertEqual(self.xiaoyou.settle(card_id, 10)["state"], "done")
+        self.assertEqual(self.xiaoyu.settle(card_id, 10)["state"], "done")
         calls = [json.loads(line) for line in (self.folder / "calls.jsonl").read_text("utf-8").splitlines()]
         self.assertEqual(calls[-1]["args"][calls[-1]["args"].index("--resume") + 1], "s-stream")
 
@@ -2562,7 +2562,7 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
         self.build(answer=1)
         card_id = self.service.get(self.service.submit("慢慢做", agent="claude")["id"], wait=5)["card"]
         asked = self.asked()
-        card = self.xiaoyou.settle(card_id, 10)
+        card = self.xiaoyu.settle(card_id, 10)
         self.assertEqual(card["state"], "failed")
         self.assertIn("问了主人没人答，已经停掉", card["entries"][-1]["text"])
         self.assertEqual(self.service.feed("default")["approvals"], [])
@@ -2572,7 +2572,7 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
         os.environ["FAKE_CLAUDE_MODE"] = "hang-in-command"
         self.build(idle=1, idle_command=3)
         card_id = self.service.get(self.service.submit("编译", agent="claude")["id"], wait=5)["card"]
-        self.assertTrue(until(lambda: self.xiaoyou.cards.get(card_id)["progress"], 10))
+        self.assertTrue(until(lambda: self.xiaoyu.cards.get(card_id)["progress"], 10))
         threading.Event().wait(2)
         self.assertEqual(self.service.feed("default")["approvals"], [])
         self.assertIn("已经 3 秒没有动静", self.asked()["detail"])
@@ -2591,7 +2591,7 @@ class StallQuestionTests(QuickWatchdog, TempDirCase):
         self.assertEqual([item["id"] for item in self.service.feed("default")["approvals"]],
                          [asked["id"]])
         self.service.approve(asked["id"], "allow")
-        self.assertEqual(self.xiaoyou.settle(card_id, 10)["state"], "done")
+        self.assertEqual(self.xiaoyu.settle(card_id, 10)["state"], "done")
 
 
 class WorkWithApprovalTests(TempDirCase):
@@ -2609,8 +2609,8 @@ class WorkWithApprovalTests(TempDirCase):
         loaded = config_module.load(write_config(self.folder, agents={"claude": {
             "type": "claude_code", "command": [sys.executable, str(fake)]}}), {})
         self.store = Store(loaded.state_dir)
-        self.xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], self.store)
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu = Xiaoyu(loaded, [factory.create(spec) for spec in loaded.agents], self.store)
+        self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)
 
     def begin(self):
@@ -2622,14 +2622,14 @@ class WorkWithApprovalTests(TempDirCase):
         card_id, asked = self.begin()
         self.assertEqual((asked["card"], asked["tool"], asked["detail"]),
                          (card_id, "claude · Write", "%s\nhello" % self.target))
-        card = self.xiaoyou.cards.get(card_id)
+        card = self.xiaoyu.cards.get(card_id)
         self.assertEqual((card["state"], card["approval"]), ("waiting", asked["id"]))
         # Each step is on the card as it happened.
         self.assertEqual(card["progress"], ["Bash ls -la /tmp", "Write %s" % self.target])
         self.assertFalse(self.target.exists())
         self.assertIs(self.service.approve(asked["id"], "allow"), True)
         self.assertIs(self.service.approve(asked["id"], "allow"), False)
-        card = self.xiaoyou.settle(card_id, 10)
+        card = self.xiaoyu.settle(card_id, 10)
         self.assertEqual((card["state"], card["approval"]), ("done", None))
         self.assertEqual(self.target.read_text("utf-8"), "hello\n")
         self.assertIn("[allow:]", card["entries"][-1]["text"])
@@ -2641,7 +2641,7 @@ class WorkWithApprovalTests(TempDirCase):
     def test_the_owner_says_no(self):
         card_id, asked = self.begin()
         self.assertIs(self.service.approve(asked["id"], "deny"), True)
-        card = self.xiaoyou.settle(card_id, 10)
+        card = self.xiaoyu.settle(card_id, 10)
         self.assertEqual(card["state"], "done")
         self.assertIn("[deny:主人说不行]", card["entries"][-1]["text"])
         self.assertFalse(self.target.exists())
@@ -2653,20 +2653,20 @@ class WorkWithApprovalTests(TempDirCase):
         card_id, asked = self.begin()
         self.assertEqual(self.service.cancel(card_id)["state"], "cancelled")
         self.assertTrue(until(lambda: not self.service.feed("default")["approvals"]))
-        card = self.xiaoyou.cards.get(card_id)
+        card = self.xiaoyu.cards.get(card_id)
         self.assertEqual((card["state"], card["approval"]), ("cancelled", None))
         self.assertFalse(self.target.exists())
         # Too late to answer; the card stays cancelled.
         self.assertIs(self.service.approve(asked["id"], "allow"), False)
-        self.assertEqual(self.xiaoyou.cards.get(card_id)["state"], "cancelled")
+        self.assertEqual(self.xiaoyu.cards.get(card_id)["state"], "cancelled")
 
     def test_a_round_that_is_started_over_does_not_leave_its_question_behind(self):
         os.environ["FAKE_CLAUDE_MODE"] = "hang"
         self.service.get(self.service.submit("慢慢做", agent="claude")["id"], wait=5)
-        self.assertTrue(until(lambda: self.xiaoyou.cards.get("c1")["progress"], 10))
+        self.assertTrue(until(lambda: self.xiaoyu.cards.get("c1")["progress"], 10))
         os.environ["FAKE_CLAUDE_MODE"] = "ok"
-        self.assertEqual(self.xiaoyou._tasks.amend("c1", "redo", "换个做法"), "redo")
-        card = self.xiaoyou.settle("c1", 10)
+        self.assertEqual(self.xiaoyu._tasks.amend("c1", "redo", "换个做法"), "redo")
+        card = self.xiaoyu.settle("c1", 10)
         self.assertEqual(card["state"], "done")
         calls = [json.loads(line) for line in (self.folder / "calls.jsonl").read_text("utf-8").splitlines()]
         # The first round had already said which session it was, so the second continues it.
@@ -2674,15 +2674,15 @@ class WorkWithApprovalTests(TempDirCase):
         self.assertEqual(calls[1]["stdin"], "（主人改了要求：换个做法。按新的要求继续，已经做过的不用重复。）")
 
 
-class XiaoyouTests(TempDirCase):
-    """Xiaoyou is her own identity: she answers, hands work out and reports back."""
+class XiaoyuTests(TempDirCase):
+    """Xiaoyu is her own identity: she answers, hands work out and reports back."""
 
     def setUp(self):
         super().setUp()
         self.claude = Scripted("claude")
         self.codex = Scripted("codex", speaks=False, aliases=["科迪"])
-        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.claude, self.codex])
-        self.addCleanup(self.xiaoyou.close)
+        self.xiaoyu, self.store = make_xiaoyu(self.folder, [self.claude, self.codex])
+        self.addCleanup(self.xiaoyu.close)
         self.addCleanup(self.codex.gate.set)
         self.addCleanup(self.claude.gate.set)
         self.events = []
@@ -2690,28 +2690,28 @@ class XiaoyouTests(TempDirCase):
 
     def say(self, text, conversation="default", **extra):
         self.count += 1
-        return self.xiaoyou.hear(
+        return self.xiaoyu.hear(
             text, conversation, "turn-%d" % self.count,
             report=lambda kind, agent, detail: self.events.append((kind, agent, detail)), **extra)
 
     def settled(self, card_id):
-        card = self.xiaoyou.settle(card_id, 5)
+        card = self.xiaoyu.settle(card_id, 5)
         self.assertNotIn(card["state"], cards_module.ACTIVE)
         return card
 
     def words(self, card_id):
-        return [(entry["role"], entry["text"]) for entry in self.xiaoyou.cards.get(card_id)["entries"]]
+        return [(entry["role"], entry["text"]) for entry in self.xiaoyu.cards.get(card_id)["entries"]]
 
     def test_the_gate_wakes_her_on_progress_and_she_decides_whether_to_speak(self):
-        from xiaoyou_runtime.loop import proactive
+        from xiaoyu_runtime.loop import proactive
         voice = GateTalker()
-        xiaoyou, _ = make_xiaoyou(self.folder / "gate", [voice, self.codex])
-        self.addCleanup(xiaoyou.close)
+        xiaoyu, _ = make_xiaoyu(self.folder / "gate", [voice, self.codex])
+        self.addCleanup(xiaoyu.close)
         self.codex.gate.clear()
         self.addCleanup(self.codex.gate.set)
-        turn = xiaoyou.hear("@codex 看看 parse() slow", "default", "t-1", report=lambda *a: None)
-        card = xiaoyou.cards.get(turn.card)
-        pulse = xiaoyou._pulse
+        turn = xiaoyu.hear("@codex 看看 parse() slow", "default", "t-1", report=lambda *a: None)
+        card = xiaoyu.cards.get(turn.card)
+        pulse = xiaoyu._pulse
         with mock.patch.object(proactive, "WATCH_AFTER", 0), mock.patch.object(proactive, "WATCH_EVERY", 0):
             pulse.progress(card["id"], card["run_id"], "codex", "读完解析器了")
             voice.answers = ["解析器那块看完了，慢在正则。"]
@@ -2720,7 +2720,7 @@ class XiaoyouTests(TempDirCase):
             pulse.progress(card["id"], card["run_id"], "codex", "在试改法")
             voice.answers = ["（不说）"]
             pulse.tick()  # 她觉得不值得说：什么都不发
-        notes = [entry["text"] for entry in xiaoyou.cards.get(card["id"])["entries"] if entry.get("kind") == "note"]
+        notes = [entry["text"] for entry in xiaoyu.cards.get(card["id"])["entries"] if entry.get("kind") == "note"]
         self.assertEqual(notes, ["解析器那块看完了，慢在正则。"])
         self.assertEqual(len(voice.gate_jobs), 2)
         self.assertIn("Runtime 叫醒你的", voice.gate_jobs[0].system)
@@ -2728,56 +2728,56 @@ class XiaoyouTests(TempDirCase):
 
     def test_a_due_promise_wakes_her_once(self):
         voice = GateTalker()
-        xiaoyou, _ = make_xiaoyou(self.folder / "due", [voice, self.codex])
-        self.addCleanup(xiaoyou.close)
-        xiaoyou.promises.track("提醒主人喝水", due=time.time() - 5)
+        xiaoyu, _ = make_xiaoyu(self.folder / "due", [voice, self.codex])
+        self.addCleanup(xiaoyu.close)
+        xiaoyu.promises.track("提醒主人喝水", due=time.time() - 5)
         voice.answers = ["该喝水啦。"]
-        xiaoyou._pulse.tick()
-        xiaoyou._pulse.tick()
-        said = [entry["text"] for card in xiaoyou.cards.recent("default") for entry in card["entries"]]
+        xiaoyu._pulse.tick()
+        xiaoyu._pulse.tick()
+        said = [entry["text"] for card in xiaoyu.cards.recent("default") for entry in card["entries"]]
         self.assertEqual(said, ["该喝水啦。"])
         self.assertIn("到点了", voice.gate_jobs[0].text)
 
     def test_upkeep_only_looks_at_new_quiet_turns(self):
-        from xiaoyou_runtime.loop import proactive
+        from xiaoyu_runtime.loop import proactive
         voice = GateTalker()
-        xiaoyou, store = make_xiaoyou(self.folder / "upkeep", [voice, self.codex])
-        self.addCleanup(xiaoyou.close)
+        xiaoyu, store = make_xiaoyu(self.folder / "upkeep", [voice, self.codex])
+        self.addCleanup(xiaoyu.close)
         old = time.time() - 3600
-        card = xiaoyou._writer.task_open("default", "upkeep")
-        xiaoyou._writer.exchange(card["id"], "你好", "在呢", turn_id="u-1")
+        card = xiaoyu._writer.task_open("default", "upkeep")
+        xiaoyu._writer.exchange(card["id"], "你好", "在呢", turn_id="u-1")
         later = time.time() + 3600  # 一小时后：对话已经安静了
-        xiaoyou._pulse.tick(now=later)  # 第一次：只记下从哪开始
+        xiaoyu._pulse.tick(now=later)  # 第一次：只记下从哪开始
         self.assertEqual(voice.gate_jobs, [])
-        xiaoyou._writer.exchange(card["id"], "以后回复短一点", "好", turn_id="u-2")
-        xiaoyou._writer.exchange(card["id"], "晚上别找我", "好", turn_id="u-3")
-        xiaoyou._pulse.tick(now=time.time())  # 刚说完：还不安静，不整理
+        xiaoyu._writer.exchange(card["id"], "以后回复短一点", "好", turn_id="u-2")
+        xiaoyu._writer.exchange(card["id"], "晚上别找我", "好", turn_id="u-3")
+        xiaoyu._pulse.tick(now=time.time())  # 刚说完：还不安静，不整理
         self.assertEqual(voice.gate_jobs, [])
         voice.tool_calls = [("remember", {"note": "回复短一点", "kind": "偏好", "quote": "以后回复短一点"})]
         voice.answers = ["（好了）"]
-        xiaoyou._pulse.tick(now=later)
-        xiaoyou._pulse.tick(now=later)  # 没有新的轮次：不再整理
+        xiaoyu._pulse.tick(now=later)
+        xiaoyu._pulse.tick(now=later)  # 没有新的轮次：不再整理
         self.assertEqual(len(voice.gate_jobs), 1)
         self.assertNotIn("你好", voice.gate_jobs[0].text)
         self.assertIn("以后回复短一点", voice.gate_jobs[0].text)
-        self.assertTrue(xiaoyou.memory.notes()[-1].startswith("[%s][偏好] 回复短一点" % time.strftime("%Y-%m-%d")))
+        self.assertTrue(xiaoyu.memory.notes()[-1].startswith("[%s][偏好] 回复短一点" % time.strftime("%Y-%m-%d")))
         del old
 
     def test_with_tools_she_talks_in_words_and_acts_through_tools(self):
         voice = ToolTalker()
-        xiaoyou, _ = make_xiaoyou(self.folder / "tools", [voice, self.codex])
-        self.addCleanup(xiaoyou.close)
+        xiaoyu, _ = make_xiaoyu(self.folder / "tools", [voice, self.codex])
+        self.addCleanup(xiaoyu.close)
         voice.calls = [("start_task", {"agent": "nobody", "title": "查", "task": "查日志"}),
                        ("start_task", {"agent": "codex", "title": "查日志", "task": "查一下日志"})]
-        turn = xiaoyou.hear("帮我查日志", "default", "t-1", report=lambda *a: None)
+        turn = xiaoyu.hear("帮我查日志", "default", "t-1", report=lambda *a: None)
         # 第一次写错了帮手：当场告诉她，她在同一轮里改对。
         self.assertTrue(voice.results[0][1])
         self.assertIn("没有叫 nobody 的帮手", voice.results[0][0])
         self.assertFalse(voice.results[1][1])
         self.assertEqual((turn.agent, turn.started, turn.reply), ("codex", True, "好的。\n\n我来安排。"))
-        self.assertIn("start_task", xiaoyou_module.lane_prompt("P", 40, [self.codex], [], None, 0, tools=True))
+        self.assertIn("start_task", xiaoyu_module.lane_prompt("P", 40, [self.codex], [], None, 0, tools=True))
         self.assertNotIn("只输出一个 JSON 对象", voice.tool_jobs[0].system)
-        card = xiaoyou.settle(turn.card, 5)
+        card = xiaoyu.settle(turn.card, 5)
         self.assertEqual(card["title"], "查日志")
         # 转述帮手的结果也是直接写话，不要 JSON。
         relay = voice.jobs[-1]
@@ -2786,9 +2786,9 @@ class XiaoyouTests(TempDirCase):
 
     def test_without_tools_she_answers_and_nothing_is_started(self):
         voice = ToolTalker()
-        xiaoyou, _ = make_xiaoyou(self.folder / "plain", [voice, self.codex])
-        self.addCleanup(xiaoyou.close)
-        turn = xiaoyou.hear("你好", "default", "t-1", report=lambda *a: None)
+        xiaoyu, _ = make_xiaoyu(self.folder / "plain", [voice, self.codex])
+        self.addCleanup(xiaoyu.close)
+        turn = xiaoyu.hear("你好", "default", "t-1", report=lambda *a: None)
         self.assertEqual((turn.started, turn.reply), (False, "好的。\n\n我来安排。"))
         self.assertEqual(self.codex.jobs, [])
 
@@ -2810,7 +2810,7 @@ class XiaoyouTests(TempDirCase):
                          ["claude", "codex"])
         self.assertEqual(self.codex.jobs, [])
         self.assertEqual(self.events, [("route", "claude", "default")])
-        card = self.xiaoyou.cards.get("c1")
+        card = self.xiaoyu.cards.get("c1")
         self.assertEqual((card["state"], card["agent"], card["title"], card["brief"], card["mood"]),
                          ("done", None, "几点了", "b:几点了", "happy"))
         self.assertEqual(self.words("c1"), [("you", "几点了"), ("xiaoyou", "re:几点了")])
@@ -2827,7 +2827,7 @@ class XiaoyouTests(TempDirCase):
         self.assertEqual(turn.card, "c1")
         self.assertIn("正看着 c1", self.claude.jobs[-1].system)
         self.assertEqual(self.words("c1")[2:], [("you", "哪个时区"), ("xiaoyou", "北京时间")])
-        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+        self.assertEqual(len(self.xiaoyu.cards.recent("default")), 1)
         # A card of another conversation, or one that does not exist, is not "the one on screen".
         self.say("别处", "work", card="c1")
         self.assertNotIn("正看着", self.claude.jobs[-1].system)
@@ -2844,7 +2844,7 @@ class XiaoyouTests(TempDirCase):
         turn = self.say("帮我看看 retry 的问题")
         self.assertEqual((turn.reply, turn.mood, turn.agent, turn.card, turn.started),
                          ("我让 codex 看看", "busy", "codex", "c1", True))
-        card = self.xiaoyou.cards.get("c1")
+        card = self.xiaoyu.cards.get("c1")
         self.assertEqual((card["state"], card["agent"], card["title"]),
                          ("working", "codex", "retry 的问题"))
         self.assertIsNotNone(card["started_at"])
@@ -2855,7 +2855,7 @@ class XiaoyouTests(TempDirCase):
         self.assertEqual(self.say("好了吗").reply, "还在看呢")
         self.assertIn("- c1「retry 的问题」：codex 在做，已经 0 秒", self.claude.jobs[1].system)
         # A word about a thing that is still going does not replace its brief.
-        self.assertEqual(self.xiaoyou.cards.get("c1")["brief"], "我让 codex 看看")
+        self.assertEqual(self.xiaoyu.cards.get("c1")["brief"], "我让 codex 看看")
         self.codex.gate.set()
         card = self.settled("c1")
         self.assertEqual((card["state"], card["brief"], card["mood"]), ("done", "第 42 行", "happy"))
@@ -2894,12 +2894,12 @@ class XiaoyouTests(TempDirCase):
                          ("查一下明天的天气", False, None, None))
         self.assertIn("PERSONA-MARKER", work.system)
         self.assertIn("后台", work.system)
-        self.assertEqual(work.schema, xiaoyou_module.reply_schema())
+        self.assertEqual(work.schema, xiaoyu_module.reply_schema())
         self.assertEqual((self.store.session("default", "claude"),
                           self.store.session("default/c1", "claude")), ("s1", "s1"))
         # Nobody voiced it on her own line, so her line is told the next time it speaks.
         self.say("谢谢")
-        self.assertIn("主人：（后台的事「明天的天气」有结果了）\n小幽：明天晴", self.claude.jobs[2].text)
+        self.assertIn("主人：（后台的事「明天的天气」有结果了）\n小鱼：明天晴", self.claude.jobs[2].text)
         self.say("再见")
         self.assertEqual(self.claude.jobs[3].text, "再见")
 
@@ -2926,7 +2926,7 @@ class XiaoyouTests(TempDirCase):
         self.assertEqual(len(self.claude.jobs), 1)
         self.assertEqual(self.events[-2:], [("route", "codex", "mention"),
                                             ("handoff", "codex", "交给 codex 了")])
-        card = self.xiaoyou.cards.get("c2")
+        card = self.xiaoyu.cards.get("c2")
         self.assertEqual((card["title"], card["state"]), ("看看 parse() slow", "working"))
         self.assertEqual(self.words("c2"), [("you", "@codex 看看 parse() slow"),
                                             ("xiaoyou", "交给 codex 了")])
@@ -2939,10 +2939,10 @@ class XiaoyouTests(TempDirCase):
         self.assertIsNone(work.system)
         # She still does the talking: the result is voiced on her line.
         # 回复按聊天的样子拆成几条短消息（每行一条，条间空一行）。
-        self.assertEqual(self.words("c2")[-1], ("xiaoyou", xiaoyou_module.chat_text("re:" + self.claude.jobs[-1].text)))
+        self.assertEqual(self.words("c2")[-1], ("xiaoyou", xiaoyu_module.chat_text("re:" + self.claude.jobs[-1].text)))
         self.assertIn("帮手 codex 做完了", self.claude.jobs[-1].text)
         # She was not there when it was handed over, so she is told that too.
-        self.assertIn("主人：@codex 看看 parse() slow\n小幽：交给 codex 了", self.claude.jobs[-1].text)
+        self.assertIn("主人：@codex 看看 parse() slow\n小鱼：交给 codex 了", self.claude.jobs[-1].text)
 
     def test_naming_the_agent_that_speaks_for_her_makes_it_a_thing_too(self):
         turn = self.say("让 Claude 查一下明天的天气")
@@ -2953,7 +2953,7 @@ class XiaoyouTests(TempDirCase):
         self.assertIn("主人点名要 claude 来做这件事", job.text)
         self.assertTrue(job.text.endswith("让 Claude 查一下明天的天气"))
         self.assertIn("PERSONA-MARKER", job.system)
-        self.assertEqual((job.plain, job.schema), (False, xiaoyou_module.reply_schema()))
+        self.assertEqual((job.plain, job.schema), (False, xiaoyu_module.reply_schema()))
         self.assertEqual(self.codex.jobs, [])
         self.assertEqual(self.events, [("route", "claude", "mention"),
                                        ("handoff", "claude", "交给 claude 了")])
@@ -2970,7 +2970,7 @@ class XiaoyouTests(TempDirCase):
         self.claude.script = [amend("c1", "再加一个测试", "after", reply="好，做完接着加")]
         turn = self.say("顺便加个测试", card="c1")
         self.assertEqual((turn.card, turn.agent, turn.started, turn.mood), ("c1", "codex", True, "busy"))
-        card = self.xiaoyou.cards.get("c1")
+        card = self.xiaoyu.cards.get("c1")
         self.assertEqual((card["state"], card["edits"]), ("working", 1))
         self.codex.gate.set()
         self.settled("c1")
@@ -2988,7 +2988,7 @@ class XiaoyouTests(TempDirCase):
         # No card named: the one on screen is meant.
         self.claude.script = [amend("", "改成用 Python", "redo")]
         self.say("改成 Python", card="c1")
-        self.assertEqual(self.xiaoyou.cards.get("c1")["edits"], 1)
+        self.assertEqual(self.xiaoyu.cards.get("c1")["edits"], 1)
         self.codex.gate.set()
         self.settled("c1")
         self.assertEqual([(job.text, job.session_id) for job in self.codex.jobs], [
@@ -3018,7 +3018,7 @@ class XiaoyouTests(TempDirCase):
         card = self.settled("c1")
         self.assertEqual((self.codex.jobs[-1].text, self.codex.jobs[-1].session_id), ("three", "s2"))
         self.assertEqual(card["edits"], 1)
-        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+        self.assertEqual(len(self.xiaoyu.cards.recent("default")), 1)
         self.assertGreaterEqual(len(self.claude.jobs), asked)
         # The same sentence only "on screen" (the device) still opens a thing of its own.
         self.assertEqual(self.say("@codex four", card="c1").card, "c2")
@@ -3033,7 +3033,7 @@ class XiaoyouTests(TempDirCase):
         turn = self.say("App 交互重新出一版方案", card="c1", pin=True)
         self.assertIn("才用 start 并把 card 写 new", self.claude.jobs[-1].system)
         self.assertEqual((turn.card, turn.agent, turn.started), ("c2", "codex", True))
-        first, second = self.xiaoyou.cards.get("c1"), self.xiaoyou.cards.get("c2")
+        first, second = self.xiaoyu.cards.get("c1"), self.xiaoyu.cards.get("c2")
         self.assertEqual((first["title"], first["edits"]), ("查日常任务", 0))
         self.assertEqual(second["title"], "重出 App 交互方案")
         self.assertNotIn(("you", "App 交互重新出一版方案"), self.words("c1"))
@@ -3062,7 +3062,7 @@ class XiaoyouTests(TempDirCase):
         self.codex.gate.set()
         self.settled("c1")
         self.assertIn("主人补充了一句：four", self.codex.jobs[-1].text)
-        self.assertEqual(len(self.xiaoyou.cards.recent("default")), 1)
+        self.assertEqual(len(self.xiaoyu.cards.recent("default")), 1)
 
     def test_a_thing_can_be_cancelled(self):
         self.codex.gate.clear()
@@ -3072,15 +3072,15 @@ class XiaoyouTests(TempDirCase):
                                "action": {"type": "cancel"}}]
         turn = self.say("算了不用了")
         self.assertEqual((turn.card, turn.started), ("c1", False))
-        self.assertEqual(self.xiaoyou.cards.get("c1")["state"], "cancelled")
+        self.assertEqual(self.xiaoyu.cards.get("c1")["state"], "cancelled")
         self.codex.gate.set()
         self.assertTrue(until(lambda: len(self.codex.jobs) == 1))
         # The result that arrives afterwards is dropped: nothing is voiced, the card stays cancelled.
         self.assertFalse(any("做完了" in job.text for job in self.claude.jobs))
-        self.assertEqual((self.xiaoyou.cards.get("c1")["state"], self.words("c1")[-1]),
+        self.assertEqual((self.xiaoyu.cards.get("c1")["state"], self.words("c1")[-1]),
                          ("cancelled", ("xiaoyou", "好，不做了")))
-        self.assertFalse(self.xiaoyou.cancel("c1"))
-        self.assertFalse(self.xiaoyou.cancel("c9"))
+        self.assertFalse(self.xiaoyu.cancel("c1"))
+        self.assertFalse(self.xiaoyu.cancel("c9"))
 
     def test_what_cannot_be_done_is_put_to_her_once_then_told_as_it_is(self):
         self.say("几点了")
@@ -3134,20 +3134,20 @@ class XiaoyouTests(TempDirCase):
         # 没人转述：短的原样给；长的只给第一句和“完整的在哪”（见 digest 的测试）。
         self.assertEqual(self.words("c1")[-1], ("xiaoyou", "raw:list files"))
         # No agent that speaks at all: the default agent just gets every sentence.
-        alone, _ = make_xiaoyou(self.folder / "b", [self.codex])
+        alone, _ = make_xiaoyu(self.folder / "b", [self.codex])
         self.addCleanup(alone.close)
         turn = alone.hear("数一数", "default", "t1")
         self.assertEqual((turn.agent, turn.started), ("codex", True))
         self.assertEqual(alone.settle(turn.card, 5)["entries"][-1]["text"], "raw:数一数")
 
     def test_what_she_missed_is_told_once_and_survives_a_failed_turn(self):
-        self.xiaoyou.share("default", [{"id": "o1", "text": "别处问的", "reply": "别处答的", "at": 1}])
+        self.xiaoyu.share("default", [{"id": "o1", "text": "别处问的", "reply": "别处答的", "at": 1}])
         self.claude.fail_on = "试一次"
         with self.assertRaises(AgentError):
             self.say("试一次")
         self.claude.fail_on = None
         self.say("再试")
-        self.assertIn("主人：别处问的\n小幽：别处答的", self.claude.jobs[-1].text)
+        self.assertIn("主人：别处问的\n小鱼：别处答的", self.claude.jobs[-1].text)
         self.assertTrue(self.claude.jobs[-1].text.endswith("再试"))
         self.say("然后呢")
         self.assertEqual(self.claude.jobs[-1].text, "然后呢")
@@ -3159,41 +3159,41 @@ class XiaoyouTests(TempDirCase):
         self.settled(self.say("@codex 别的对话", "work").card)
         self.assertEqual((self.store.session("default", "claude"),
                           self.store.session("default/c1", "codex")), ("s1", "s1"))
-        self.assertTrue(self.xiaoyou.reset("default"))
-        self.assertFalse(self.xiaoyou.reset("default"))
+        self.assertTrue(self.xiaoyu.reset("default"))
+        self.assertFalse(self.xiaoyu.reset("default"))
         self.assertEqual((self.store.session("default", "claude"),
                           self.store.session("default/c1", "codex")), (None, None))
         self.assertEqual(self.store.session("work/c2", "codex"), "s1")
 
     def test_words_passed_on_by_another_runtime_are_not_passed_on_again(self):
         other = Scripted("pc", kind="remote")
-        xiaoyou, _ = make_xiaoyou(self.folder / "d", [self.claude, other])
-        self.addCleanup(xiaoyou.close)
-        xiaoyou.hear("hi", "default", "t1")
+        xiaoyu, _ = make_xiaoyu(self.folder / "d", [self.claude, other])
+        self.addCleanup(xiaoyu.close)
+        xiaoyu.hear("hi", "default", "t1")
         self.assertIn("pc：pc helper", self.claude.jobs[-1].system)
-        xiaoyou.hear("hi", "default", "t2", hop=1)
+        xiaoyu.hear("hi", "default", "t2", hop=1)
         self.assertEqual(self.claude.jobs[-1].hop, 1)
         self.assertNotIn("pc helper", self.claude.jobs[-1].system)
         # Even when it is named.
-        self.assertEqual(xiaoyou.hear("@pc hi", "default", "t3", hop=1).agent, "claude")
-        self.assertEqual(xiaoyou.hear("hi", "default", "t4", asked="pc", hop=1).agent, "claude")
+        self.assertEqual(xiaoyu.hear("@pc hi", "default", "t3", hop=1).agent, "claude")
+        self.assertEqual(xiaoyu.hear("hi", "default", "t4", asked="pc", hop=1).agent, "claude")
         self.assertEqual(other.jobs, [])
-        only_remote, _ = make_xiaoyou(self.folder / "e", [other])
+        only_remote, _ = make_xiaoyu(self.folder / "e", [other])
         self.addCleanup(only_remote.close)
         with self.assertRaises(AgentError):
             only_remote.hear("hi", "default", "t", hop=1)
 
     def test_a_limit_on_how_many_things_run_at_once(self):
-        xiaoyou, _ = make_xiaoyou(self.folder / "f", [self.claude, self.codex], max_parallel=1)
-        self.addCleanup(xiaoyou.close)
+        xiaoyu, _ = make_xiaoyu(self.folder / "f", [self.claude, self.codex], max_parallel=1)
+        self.addCleanup(xiaoyu.close)
         self.codex.gate.clear()
-        xiaoyou.hear("@codex one slow", "default", "t1")
-        xiaoyou.hear("@codex two slow", "default", "t2")
+        xiaoyu.hear("@codex one slow", "default", "t1")
+        xiaoyu.hear("@codex two slow", "default", "t2")
         self.assertTrue(until(lambda: self.codex.started == ["one slow"]))
-        self.assertEqual([card["queued"] for card in xiaoyou.cards.recent("default")], [False, True])
+        self.assertEqual([card["queued"] for card in xiaoyu.cards.recent("default")], [False, True])
         self.codex.gate.set()
-        self.assertEqual(xiaoyou.settle("c2", 5)["state"], "done")
-        self.assertEqual([card["queued"] for card in xiaoyou.cards.recent("default")], [False, False])
+        self.assertEqual(xiaoyu.settle("c2", 5)["state"], "done")
+        self.assertEqual([card["queued"] for card in xiaoyu.cards.recent("default")], [False, False])
 
     def test_a_restart_marks_what_was_still_going(self):
         self.codex.gate.clear()
@@ -3201,10 +3201,10 @@ class XiaoyouTests(TempDirCase):
         self.assertTrue(until(lambda: self.codex.started))
         # Stop the old worker before opening another writer on its state.
         # Runtime shutdown does not confirm a durable task cancellation.
-        self.xiaoyou._tasks.cancel("c1")
+        self.xiaoyu._tasks.cancel("c1")
         self.codex.gate.set()
-        self.xiaoyou.close()
-        again, _ = make_xiaoyou(self.folder, [Scripted("claude"), Scripted("codex", speaks=False)])
+        self.xiaoyu.close()
+        again, _ = make_xiaoyu(self.folder, [Scripted("claude"), Scripted("codex", speaks=False)])
         self.addCleanup(again.close)
         card = again.cards.get("c1")
         self.assertEqual((card["state"], card["brief"]),
@@ -3213,7 +3213,7 @@ class XiaoyouTests(TempDirCase):
 
 
 class Recorder(workspace_module.Workspace):
-    """Remembers every write Xiaoyou asks the shared workspace for."""
+    """Remembers every write Xiaoyu asks the shared workspace for."""
 
     def __init__(self):
         self.rows = []
@@ -3299,7 +3299,7 @@ class WorkspaceTests(TempDirCase):
                 config_module.load(write_config(self.folder, workspace=bad), {})
         loaded = config_module.load(
             write_config(self.folder, workspace=dict(type="notion", bus_database=BUS)),
-            {"XIAOYOU_NOTION_TOKEN": "from-env-" + "x" * 20})
+            {"XIAOYU_NOTION_TOKEN": "from-env-" + "x" * 20})
         self.assertEqual(loaded.workspace_token, "from-env-" + "x" * 20)
 
     def test_the_token_can_live_in_a_file_outside_the_config(self):
@@ -3317,7 +3317,7 @@ class WorkspaceTests(TempDirCase):
         self.assertEqual(loaded.workspace_token, "from-file-" + "x" * 20)
         # 环境变量仍然最优先；两处都写了令牌是配置写错了。
         loaded = config_module.load(write_config(self.folder, workspace=settings),
-                                    {"XIAOYOU_NOTION_TOKEN": "from-env-" + "x" * 20})
+                                    {"XIAOYU_NOTION_TOKEN": "from-env-" + "x" * 20})
         self.assertEqual(loaded.workspace_token, "from-env-" + "x" * 20)
         with self.assertRaises(config_module.ConfigError):
             config_module.load(write_config(
@@ -3327,10 +3327,10 @@ class WorkspaceTests(TempDirCase):
         recorder = Recorder()
         lead, worker = Scripted("claude"), Scripted("codex", speaks=False)
         lead.script = [start("codex", "look at main.c", "看代码"), {"reply": "看完了", "brief": "看完了", "mood": "happy"}]
-        xiaoyou, _ = make_xiaoyou(self.folder, [lead, worker], workspace=recorder)
-        self.addCleanup(xiaoyou.close)
-        turn = xiaoyou.hear("帮我看看代码", "default", "t1")
-        xiaoyou.settle(turn.card, 5)
+        xiaoyu, _ = make_xiaoyu(self.folder, [lead, worker], workspace=recorder)
+        self.addCleanup(xiaoyu.close)
+        turn = xiaoyu.hear("帮我看看代码", "default", "t1")
+        xiaoyu.settle(turn.card, 5)
         self.assertTrue(until(lambda: any(row[0] == "closed" for row in recorder.rows)))
         self.assertEqual(recorder.rows, [
             ("task", turn.card, "codex", "look at main.c"),
@@ -3338,7 +3338,7 @@ class WorkspaceTests(TempDirCase):
             ("closed", turn.card, "done", "看完了"),
         ])
         # Named directly: no model in between, still written.
-        turn = xiaoyou.hear("@codex 再看一次", "default", "t2")
+        turn = xiaoyu.hear("@codex 再看一次", "default", "t2")
         self.assertTrue(until(lambda: sum(row[0] == "task" for row in recorder.rows) == 2))
         self.assertEqual(recorder.rows[3][:3], ("task", turn.card, "codex"))
         self.assertIn("再看一次", recorder.rows[3][3])
@@ -3351,14 +3351,14 @@ class WorkspaceTests(TempDirCase):
         worker.fail_on = "do it"
         lead.script = [start("codex", "do it slow"), amend("c1", "also this", "after"),
                        start("codex", "second slow"), {"reply": "不做了", "card": "c2", "action": {"type": "cancel"}}]
-        xiaoyou, _ = make_xiaoyou(self.folder, [lead, worker], workspace=recorder)
-        self.addCleanup(xiaoyou.close)
-        xiaoyou.hear("做一下", "default", "t1")
-        xiaoyou.hear("还有这个", "default", "t2", card="c1")
-        xiaoyou.hear("第二件", "default", "t3")
-        xiaoyou.hear("第二件不要了", "default", "t4", card="c2")
+        xiaoyu, _ = make_xiaoyu(self.folder, [lead, worker], workspace=recorder)
+        self.addCleanup(xiaoyu.close)
+        xiaoyu.hear("做一下", "default", "t1")
+        xiaoyu.hear("还有这个", "default", "t2", card="c1")
+        xiaoyu.hear("第二件", "default", "t3")
+        xiaoyu.hear("第二件不要了", "default", "t4", card="c2")
         release.set()
-        xiaoyou.settle("c1", 5)
+        xiaoyu.settle("c1", 5)
         self.assertTrue(until(lambda: ("closed", "c1", "failed", "codex 没做成：boom") in recorder.rows))
         self.assertIn(("note", "c1", "codex", "also this", "after"), recorder.rows)
         self.assertIn(("result", "c1", "codex", "boom", False), recorder.rows)
@@ -3377,11 +3377,11 @@ class WorkspaceTests(TempDirCase):
         task, result, log = fake.pages
         self.assertEqual(task["parent"], {"database_id": BUS})
         self.assertEqual([plain(task, name) for name in ("标题", "类型", "谁写的", "给谁", "状态", "谁接了", "关联")],
-                         ["看代码", "任务", "xiaoyou", "codex", "已接", "codex", loaded.name + "/c7"])
+                         ["看代码", "任务", "xiaoyu", "codex", "已接", "codex", loaded.name + "/c7"])
         self.assertEqual(body_of(task), "ls -la ~/x\n" + "y" * 4000)
         self.assertTrue(all(block["type"] == "code" for block in task["children"]))
         self.assertEqual([plain(result, name) for name in ("类型", "谁写的", "给谁", "状态")],
-                         ["结果", "codex", "xiaoyou", "没成"])
+                         ["结果", "codex", "xiaoyu", "没成"])
         self.assertEqual(log["parent"], {"database_id": LOG.replace("-", "")})
         self.assertEqual([plain(log, name) for name in ("谁做的", "结果", "结论", "要你做的", "关联")],
                          ["codex", "没成", "没看成", "没看成", loaded.name + "/c7"])
@@ -3410,8 +3410,8 @@ class ServiceTests(TempDirCase):
         super().setUp()
         self.agent = Scripted("claude")
         self.codex = Scripted("codex", speaks=False)
-        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.agent, self.codex])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(self.folder, [self.agent, self.codex])
+        self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.agent.gate.set)
         self.addCleanup(self.codex.gate.set)
@@ -3424,8 +3424,8 @@ class ServiceTests(TempDirCase):
     def test_the_caller_may_choose_effort_and_model_within_what_the_helper_offers(self):
         tiered = Scripted("tiered", speaks=False, kind="codex", effort="medium",
                           efforts=["low", "medium"], model="gpt-a", models=["gpt-b"])
-        xiaoyou, store = make_xiaoyou(self.folder / "t", [Scripted("claude"), tiered])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(self.folder / "t", [Scripted("claude"), tiered])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         for wrong in ({"effort": "huge"}, {"agent": "tiered", "effort": "high"},
                       {"agent": "tiered", "model": "gpt-z"}, {"agent": "claude", "effort": "low"},
@@ -3435,7 +3435,7 @@ class ServiceTests(TempDirCase):
         done = service.get(service.submit("do it", agent="tiered", effort="low", model="gpt-b")["id"],
                            wait=5)
         self.assertEqual((done["effort"], done["model"]), ("low", "gpt-b"))
-        xiaoyou.settle(done["card"], 5)
+        xiaoyu.settle(done["card"], 5)
         self.assertEqual((tiered.jobs[0].effort, tiered.jobs[0].model), ("low", "gpt-b"))
         self.assertEqual([(entry["name"], entry["model"], entry["effort"], entry["efforts"], entry["models"])
                           for entry in service.agents()],
@@ -3443,10 +3443,10 @@ class ServiceTests(TempDirCase):
                           ("tiered", "gpt-a", "medium", ["low", "medium"], ["gpt-b"])])
 
     def test_the_feed_carries_usage_and_returns_when_it_changes(self):
-        import xiaoyou_runtime.api.service as service_module
+        import xiaoyu_runtime.api.service as service_module
         tiered = Scripted("tiered", speaks=False, kind="codex")
-        xiaoyou, store = make_xiaoyou(self.folder / "t", [Scripted("claude"), tiered])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(self.folder / "t", [Scripted("claude"), tiered])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         old = service_module.FEED_USAGE_SECONDS
         service_module.FEED_USAGE_SECONDS = 0.02
@@ -3458,7 +3458,7 @@ class ServiceTests(TempDirCase):
         waiter = threading.Thread(target=lambda: result.update(
             service.feed("default", feed["seq"], 5, feed["usage"]["rev"])))
         waiter.start()
-        xiaoyou.usage.observe("tiered", "codex", codex_limits(95))
+        xiaoyu.usage.observe("tiered", "codex", codex_limits(95))
         waiter.join(3)
         self.assertFalse(waiter.is_alive())
         self.assertEqual((result["cards"], result["usage"]["accounts"][0]["state"]), ([], "warn"))
@@ -3528,7 +3528,7 @@ class ServiceTests(TempDirCase):
         # A second sentence does not wait for the first thing: it is answered while that goes on.
         quick = self.finish(self.service.submit("好了吗", card="c1"))
         self.assertEqual((quick["reply"], quick["card"]), ("在查", "c1"))
-        self.assertEqual(self.xiaoyou.cards.get("c1")["state"], "working")
+        self.assertEqual(self.xiaoyu.cards.get("c1")["state"], "working")
         feed = self.service.feed("default", feed["seq"])
         self.assertEqual(len(feed["cards"]), 1)
         # Nothing new: the caller waits, and hears as soon as the helper is done.
@@ -3540,7 +3540,7 @@ class ServiceTests(TempDirCase):
         self.codex.gate.set()
         thread.join(5)
         self.assertGreater(waiter["seq"], feed["seq"])
-        card = self.xiaoyou.settle("c1", 5)
+        card = self.xiaoyu.settle("c1", 5)
         self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "好了"))
         # The report was voiced on her line, after the sentences that were already there.
         self.assertIn("帮手 codex 做完了", self.agent.jobs[-1].text)
@@ -3581,7 +3581,7 @@ class ServiceTests(TempDirCase):
         self.assertEqual(len([entry for entry in again["entries"] if entry["kind"] == "summary"]), 1)
 
     def test_the_cancel_endpoint_names_the_end_that_asked(self):
-        from xiaoyou_runtime.api.server import _cancel_actor
+        from xiaoyu_runtime.api.server import _cancel_actor
         self.assertEqual(_cancel_actor({"actor": "desktop"}, "Dalvik/2.1.0"), "desktop")
         self.assertEqual(_cancel_actor({}, "Dalvik/2.1.0 (Linux; U; Android 14)"), "app")
         self.assertEqual(_cancel_actor(None, "node"), "desktop")
@@ -3590,8 +3590,8 @@ class ServiceTests(TempDirCase):
     def test_her_own_cancel_is_recorded_but_not_announced_twice(self):
         self.codex.gate.clear()
         message = self.finish(self.service.submit("another slow", agent="codex"))
-        self.assertTrue(self.xiaoyou.cancel(message["card"], actor="xiaoyou", reason="主人说不要了", announce=False))
-        card = self.xiaoyou.cards.get(message["card"])
+        self.assertTrue(self.xiaoyu.cancel(message["card"], actor="xiaoyou", reason="主人说不要了", announce=False))
+        card = self.xiaoyu.cards.get(message["card"])
         self.assertEqual((card["cancelled_by"], card["cancel_reason"]), ("xiaoyou", "主人说不要了"))
         self.assertFalse([entry for entry in card["entries"] if entry["kind"] == "summary"])
 
@@ -3604,7 +3604,7 @@ class ServiceTests(TempDirCase):
                          ("running", "交给 codex 了", "c1"))
         self.codex.gate.set()
         done = self.finish(message)
-        self.assertEqual((done["status"], done["reply"]), ("done", xiaoyou_module.chat_text("re:" + self.agent.jobs[-1].text)))
+        self.assertEqual((done["status"], done["reply"]), ("done", xiaoyu_module.chat_text("re:" + self.agent.jobs[-1].text)))
         self.codex.fail_on = "bad"
         failed = self.finish(self.service.submit("bad", agent="codex", hop=1))
         self.assertEqual((failed["status"], failed["error"]), ("failed", "codex 没做成：boom"))
@@ -3615,7 +3615,7 @@ class ServiceTests(TempDirCase):
         failed = self.finish(self.service.submit("bad"))
         self.assertEqual((failed["status"], failed["error"], failed["mood"]), ("failed", "boom", "oops"))
         # The sentence and what went wrong are on a card, so the conversation shows them.
-        card = self.xiaoyou.cards.get(failed["card"])
+        card = self.xiaoyu.cards.get(failed["card"])
         self.assertEqual((card["state"], [entry["text"] for entry in card["entries"]]),
                          ("failed", ["bad", "boom"]))
         crashed = self.finish(self.service.submit("explode"))
@@ -3938,17 +3938,17 @@ class TierTests(TempDirCase):
         self.codex = Scripted("codex", speaks=False, kind="codex", effort="medium",
                               efforts=self.LEVELS, model="gpt-a", models=["gpt-b"])
         self.codex.reports = {"model": "gpt-real", "tokens": {"in": 10, "out": 5, "cached": 0}}
-        self.xiaoyou, self.store = make_xiaoyou(self.folder, [self.claude, self.codex])
-        self.addCleanup(self.xiaoyou.close)
+        self.xiaoyu, self.store = make_xiaoyu(self.folder, [self.claude, self.codex])
+        self.addCleanup(self.xiaoyu.close)
         self.addCleanup(self.codex.gate.set)
         self.count = 0
 
     def say(self, text, **extra):
         self.count += 1
-        return self.xiaoyou.hear(text, "default", "turn-%d" % self.count, **extra)
+        return self.xiaoyu.hear(text, "default", "turn-%d" % self.count, **extra)
 
     def settled(self, card_id):
-        card = self.xiaoyou.settle(card_id, 5)
+        card = self.xiaoyu.settle(card_id, 5)
         self.assertNotIn(card["state"], cards_module.ACTIVE)
         return card
 
@@ -3960,7 +3960,7 @@ class TierTests(TempDirCase):
         return plan
 
     def test_she_is_told_each_helpers_model_effort_and_quota(self):
-        self.xiaoyou.usage.observe("codex", "codex", codex_limits(37))
+        self.xiaoyu.usage.observe("codex", "codex", codex_limits(37))
         self.say("你好")
         job = self.claude.jobs[0]
         self.assertIn("- codex：codex helper〔gpt-a · 平时中档，可选 低/中/高 · 可换模型 gpt-b；"
@@ -3973,7 +3973,7 @@ class TierTests(TempDirCase):
         # She herself has nothing to choose and no quota: nothing is written after her name.
         self.assertIn("- claude：claude helper\n", job.system)
         # With no helper that has levels or quota, none of this is in her way.
-        plain, _ = make_xiaoyou(self.folder / "plain", [Scripted("claude"), Scripted("echo2")])
+        plain, _ = make_xiaoyu(self.folder / "plain", [Scripted("claude"), Scripted("echo2")])
         self.addCleanup(plain.close)
         plain.hear("你好", "default", "t1")
         job = plain._agents["claude"].jobs[0]
@@ -3993,7 +3993,7 @@ class TierTests(TempDirCase):
         self.assertEqual((job.effort, job.model), ("medium", None))
         self.assertEqual((card["effort"], card["model"], card["model_asked"]),
                          ("medium", "gpt-real", None))
-        self.assertEqual(self.xiaoyou.usage.snapshot()["agents"][1]["model"], "gpt-real")
+        self.assertEqual(self.xiaoyu.usage.snapshot()["agents"][1]["model"], "gpt-real")
         # What the helper does not offer counts as not picked; its own model by name is its usual one.
         self.claude.script = [self.pick("max", "gpt-z"), {"reply": "ok", "brief": "", "mood": "idle"},
                               self.pick(model="gpt-a")]
@@ -4007,7 +4007,7 @@ class TierTests(TempDirCase):
         self.settled(turn.card)
         job = self.codex.jobs[0]
         self.assertEqual((job.effort, job.text), ("high", "看看这个报错"))
-        self.assertEqual(self.xiaoyou.cards.get(turn.card)["effort"], "high")
+        self.assertEqual(self.xiaoyu.cards.get(turn.card)["effort"], "high")
         # The caller's choice is used when the sentence itself names none, also when she decides.
         self.settled(self.say("@codex 看看", effort="low", model="gpt-b").card)
         self.settled(self.say("@codex 高档 看看", effort="low").card)
@@ -4040,14 +4040,14 @@ class TierTests(TempDirCase):
         change["action"]["effort"] = "high"
         self.claude.script = [change, {"reply": "好了", "brief": "", "mood": "idle"}]
         self.say("认真点", card=running.card)
-        self.assertEqual(self.xiaoyou.cards.get(running.card)["effort"], "high")
+        self.assertEqual(self.xiaoyu.cards.get(running.card)["effort"], "high")
         self.codex.gate.set()
         self.settled(running.card)
         self.assertEqual(self.codex.jobs[-1].effort, "high")
         self.assertIn("主人改了要求：认真点", self.codex.jobs[-1].text)
 
     def test_the_card_says_what_the_thing_cost(self):
-        meter = self.xiaoyou.usage
+        meter = self.xiaoyu.usage
         meter.observe("codex", "codex", codex_limits(37))
         self.codex.reports["limits"] = ("codex", codex_limits(40, 13))
         self.codex.gate.clear()
@@ -4068,7 +4068,7 @@ class TierTests(TempDirCase):
         card = self.settled(self.say("再数一遍", card=card["id"]).card)
         self.assertEqual(card["cost"], {"in": 20, "out": 10, "cached": 0, "d5": 7, "d7": 1})
         # It is kept with the card across a restart.
-        self.xiaoyou.close()
+        self.xiaoyu.close()
         again = cards_module.Cards(self.folder / "state" / "cards.json").get(card["id"])
         self.assertEqual((again["cost"]["d5"], again["effort"], again["model"]), (7, "medium", "gpt-real"))
 
@@ -4079,8 +4079,8 @@ class SharedHistoryTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.agent = Scripted("claude")
-        xiaoyou, self.store = make_xiaoyou(self.folder, [self.agent])
-        self.service = Service(xiaoyou, self.store)
+        xiaoyu, self.store = make_xiaoyu(self.folder, [self.agent])
+        self.service = Service(xiaoyu, self.store)
         self.addCleanup(self.service.close)
 
     def done(self, text):
@@ -4122,8 +4122,8 @@ class SharedHistoryTests(TempDirCase):
     def test_survives_a_restart_and_reset_drops_what_was_not_said(self):
         self.service.share("default", [self.turn(1)])
         self.service.close()
-        xiaoyou, _ = make_xiaoyou(self.folder, [self.agent])
-        service = Service(xiaoyou, Store(self.folder / "state"))
+        xiaoyu, _ = make_xiaoyu(self.folder, [self.agent])
+        service = Service(xiaoyu, Store(self.folder / "state"))
         self.addCleanup(service.close)
         self.assertEqual(service.share("default", [self.turn(1)]), 0)
         service.reset("default")
@@ -4164,12 +4164,12 @@ class SharedHistoryTests(TempDirCase):
 
 def start_runtime(case, folder, env=None, **overrides):
     """A whole runtime on a free port, built the way the command line builds it."""
-    environment = {"XIAOYOU_PORT": str(free_port())}
+    environment = {"XIAOYU_PORT": str(free_port())}
     environment.update(env or {})
     loaded = config_module.load(write_config(folder, **overrides), environment)
     store = Store(loaded.state_dir, legacy_agent=loaded.default_agent)
-    xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], store)
-    service = Service(xiaoyou, store, stt_module.create(loaded))
+    xiaoyu = Xiaoyu(loaded, [factory.create(spec) for spec in loaded.agents], store)
+    service = Service(xiaoyu, store, stt_module.create(loaded))
     server = make_server(loaded, service)
     server.RequestHandlerClass.log_message = lambda *args: None
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -4388,15 +4388,15 @@ class RemoteAgentTests(TempDirCase):
         with self.assertRaisesRegex(AgentError, "400"):
             self.remote().run(Job("hi", conversation="bad name"))
 
-    def test_xiaoyou_can_hand_work_to_the_other_computer(self):
+    def test_xiaoyu_can_hand_work_to_the_other_computer(self):
         lead = Scripted("claude")
         lead.script = [start("pc", "列出桌面上的文件", "桌面上有什么", reply="我让那台电脑看看")]
-        xiaoyou, _ = make_xiaoyou(self.folder / "here", [lead, self.remote()])
-        self.addCleanup(xiaoyou.close)
-        turn = xiaoyou.hear("那台电脑上有什么", "default", "t1")
+        xiaoyu, _ = make_xiaoyu(self.folder / "here", [lead, self.remote()])
+        self.addCleanup(xiaoyu.close)
+        turn = xiaoyu.hear("那台电脑上有什么", "default", "t1")
         self.assertEqual((turn.agent, turn.started), ("pc", True))
-        # The other side is Xiaoyou too, so what it says is already in her words.
-        card = xiaoyou.settle(turn.card, 10)
+        # The other side is Xiaoyu too, so what it says is already in her words.
+        card = xiaoyu.settle(turn.card, 10)
         self.assertEqual((card["state"], card["entries"][-1]["text"]), ("done", "（回声）列出桌面上的文件"))
         self.assertEqual(len(lead.jobs), 1)
 
@@ -4442,7 +4442,7 @@ class RemoteAgentTests(TempDirCase):
 
         def side(name, own_port, other_port):
             return start_runtime(
-                self, self.folder / name, env={"XIAOYOU_PORT": str(own_port)},
+                self, self.folder / name, env={"XIAOYU_PORT": str(own_port)},
                 server={"token": OTHER_TOKEN},
                 agents={"peer": {"type": "remote", "url": "http://127.0.0.1:%d" % other_port,
                                  "token": OTHER_TOKEN, "timeout_seconds": 20}})[0]
@@ -4463,7 +4463,7 @@ if mode == "crash":
     sys.exit(3)
 if mode == "silence":
     sys.exit(0)
-sys.stdout.buffer.write(("  你好小幽 %.1f\n" % seconds).encode("utf-8"))
+sys.stdout.buffer.write(("  你好小鱼 %.1f\n" % seconds).encode("utf-8"))
 '''
 
 
@@ -4490,7 +4490,7 @@ class VoiceTests(TempDirCase):
         loaded = config_module.load(write_config(self.folder, stt=stt or self.stt_config), {})
         loaded = dataclasses.replace(loaded, default_agent="claude", voice_agent="claude")
         store = Store(loaded.state_dir)
-        service = Service(Xiaoyou(loaded, [self.agent], store), store, stt_module.create(loaded))
+        service = Service(Xiaoyu(loaded, [self.agent], store), store, stt_module.create(loaded))
         self.addCleanup(service.close)
         return service, loaded
 
@@ -4520,9 +4520,9 @@ class VoiceTests(TempDirCase):
         message = service.submit_voice(make_wav(1.5), client_id="v1")
         self.assertEqual((message["kind"], message["text"]), ("voice", ""))
         done = service.get(message["id"], wait=10)
-        self.assertEqual((done["status"], done["text"]), ("done", "你好小幽 1.5"))
-        self.assertEqual(done["reply"], "re:你好小幽 1.5")
-        self.assertEqual([(job.text, job.session_id) for job in self.agent.jobs], [("你好小幽 1.5", None)])
+        self.assertEqual((done["status"], done["text"]), ("done", "你好小鱼 1.5"))
+        self.assertEqual(done["reply"], "re:你好小鱼 1.5")
+        self.assertEqual([(job.text, job.session_id) for job in self.agent.jobs], [("你好小鱼 1.5", None)])
         # The recording is gone once it has been transcribed.
         self.assertEqual(self.leftovers(loaded), [])
         # A retry with the same client_id does not transcribe or answer again.
@@ -4561,7 +4561,7 @@ class VoiceTests(TempDirCase):
         loaded = config_module.load(write_config(self.folder), {})
         store = Store(loaded.state_dir)
         loaded = dataclasses.replace(loaded, default_agent="claude", voice_agent="claude")
-        service = Service(Xiaoyou(loaded, [self.agent], store), store, stt_module.create(loaded))
+        service = Service(Xiaoyu(loaded, [self.agent], store), store, stt_module.create(loaded))
         self.addCleanup(service.close)
         with self.assertRaisesRegex(RequestError, "语音识别"):
             service.submit_voice(make_wav())
@@ -4600,7 +4600,7 @@ class VoiceTests(TempDirCase):
         with urllib.request.urlopen(request, timeout=15) as response:
             done = json.loads(response.read())
         self.assertEqual((done["status"], done["text"], done["reply"], done["card"]),
-                         ("done", "你好小幽 2.0", "（回声）你好小幽 2.0", "c1"))
+                         ("done", "你好小鱼 2.0", "（回声）你好小鱼 2.0", "c1"))
         # Said inside a thing (the device's task screen): the recording is pinned to it.
         status, message = post("/v1/voice?client_id=p2&card=c7&pin=1", make_wav(2))
         self.assertEqual((status, message["card"], message["pin"]), (202, "c7", True))
@@ -4671,7 +4671,7 @@ class CommandLineTests(TempDirCase):
 
 class SourceTests(unittest.TestCase):
     def test_sources_parse_as_python_3_9(self):
-        for path in sorted((RUNTIME / "xiaoyou_runtime").glob("*.py")):
+        for path in sorted((RUNTIME / "xiaoyu_runtime").glob("*.py")):
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 9))
 
     def test_no_real_config_or_state_is_tracked(self):

@@ -13,7 +13,7 @@ function styled(run: DisplayRun, key: React.Key): React.ReactNode {
   if (run.quote) node = <span className="run-quote">{node}</span>;
   if (run.href && SAFE_LINK.test(run.href)) {
     const href = run.href;
-    node = <a href={href} title={href} onClick={event => { event.preventDefault(); void window.xiaoyou.openLink(href); }}>{node}</a>;
+    node = <a href={href} title={href} onClick={event => { event.preventDefault(); void window.xiaoyu.openLink(href); }}>{node}</a>;
   }
   return <React.Fragment key={key}>{node}</React.Fragment>;
 }

@@ -159,8 +159,8 @@ export class PeerNetwork implements RuntimeTransport {
   }
   async invite(reuse = false): Promise<string> {
     const endpoint = this.getLocal();
-    if (!this.crypto || !this.relay || !endpoint) throw new Error('请先连接本机小幽并配置通信入口');
-    if (this.space && this.space !== endpoint.spaceId) throw new Error('本机小幽与已加入空间不同，请使用原空间设备发出邀请');
+    if (!this.crypto || !this.relay || !endpoint) throw new Error('请先连接本机小鱼并配置通信入口');
+    if (this.space && this.space !== endpoint.spaceId) throw new Error('本机小鱼与已加入空间不同，请使用原空间设备发出邀请');
     this.space = endpoint.spaceId; this.db.set('paired-space', this.space);
     const saved = reuse ? this.secrets.load<Invitation>('active-invitation') : undefined;
     const invitation: Invitation = saved && saved.expires > Date.now() && saved.space === this.space
@@ -168,13 +168,13 @@ export class PeerNetwork implements RuntimeTransport {
       : { v: 1, space: this.space, device: this.crypto.identity, relay: invitationRelay(this.relay),
         token: randomBytes(32).toString('base64url'), expires: Date.now() + 120_000 };
     this.secrets.save('active-invitation', invitation);
-    this.invitation = 'xiaoyou://join#' + Buffer.from(JSON.stringify(invitation)).toString('base64url');
+    this.invitation = 'xiaoyu://join#' + Buffer.from(JSON.stringify(invitation)).toString('base64url');
     this.emit(); return this.invitation;
   }
   async join(text: string, computer = false): Promise<void> {
     if (!this.crypto || text.length > 16_384) throw new Error('邀请无效');
     const url = new URL(text.trim());
-    if (url.protocol !== 'xiaoyou:' || url.hostname !== 'join' || !url.hash) throw new Error('请使用小幽邀请链接');
+    if (!['xiaoyu:', 'xiaoyou:'].includes(url.protocol) || url.hostname !== 'join' || !url.hash) throw new Error('请使用小鱼邀请链接');
     const invitation = JSON.parse(Buffer.from(url.hash.slice(1), 'base64url').toString('utf8')) as Invitation;
     validateDevice(invitation.device); validateRelay(invitation.relay);
     if (invitation.v !== 1 || !/^[a-f0-9]{32}$/.test(invitation.space) || invitation.expires < Date.now()
@@ -230,7 +230,7 @@ export class PeerNetwork implements RuntimeTransport {
     for (const peer of this.trusted.values()) {
       await this.send(peer, this.space, 'hello', { ...(endpoint ? publicRuntime(endpoint) : { subject_id: this.space }),
         conversations: this.db.get<Conversation[]>('conversations:' + this.space,
-          [{ id: 'default', title: '和小幽聊天', createdAt: 0 }]) }, false);
+          [{ id: 'default', title: '和小鱼聊天', createdAt: 0 }]) }, false);
       const remote = this.remoteRuntimes.get(peer.id);
       if (endpoint?.meshToken && remote?.capabilities.includes('mesh')) void this.exchange(peer.id, endpoint, remote);
     }

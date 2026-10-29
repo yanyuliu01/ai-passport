@@ -16,8 +16,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from xiaoyou_runtime.world import world  # noqa: E402
-from xiaoyou_runtime.world.cards import MAX_CARDS, RESTART_NOTE, Cards  # noqa: E402
+from xiaoyu_runtime.world import world  # noqa: E402
+from xiaoyu_runtime.world.cards import MAX_CARDS, RESTART_NOTE, Cards  # noqa: E402
 
 SEEDS = range(12)
 STATES = ("working", "waiting", "done", "failed", "cancelled")

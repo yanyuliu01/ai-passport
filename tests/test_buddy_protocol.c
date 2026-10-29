@@ -991,7 +991,7 @@ static void test_usage_lists_what_is_left_and_who_runs_on_what(void)
            event.tasks[2].effort == BUDDY_EFFORT_MINIMAL && event.tasks[3].effort == BUDDY_EFFORT_MAX);
 }
 
-static void test_helpers_lists_who_xiaoyou_can_ask(void)
+static void test_helpers_lists_who_xiaoyu_can_ask(void)
 {
     buddy_event_t event;
 
@@ -1079,7 +1079,7 @@ int main(void)
     test_unpair_maps_confirmation_event();
     test_hub_hello_reports_voice_support();
     test_chat_reports_the_conversation();
-    test_helpers_lists_who_xiaoyou_can_ask();
+    test_helpers_lists_who_xiaoyu_can_ask();
     test_card_carries_one_thing();
     test_tasks_lists_the_things_in_progress();
     test_past_lists_the_things_that_ended_in_parts();

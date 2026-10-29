@@ -4,11 +4,11 @@ import json
 import unittest
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.events.intake import Intake
-from xiaoyou_runtime.world.store import Store
-from xiaoyou_runtime.loop.context import bind as bind_context
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.events.intake import Intake
+from xiaoyu_runtime.world.store import Store
+from xiaoyu_runtime.loop.context import bind as bind_context
 
 
 class ContextTests(TempDirCase):
@@ -105,20 +105,20 @@ class ContextTests(TempDirCase):
 
     def test_reset_persistence_failure_does_not_claim_history_was_forgotten(self):
         self.exchange()
-        with mock.patch("xiaoyou_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
+        with mock.patch("xiaoyu_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.context.clear("side")
         self.assertEqual(["a"], [turn["id"] for turn in self.context.turns("side")])
 
     def test_receipt_failure_keeps_saved_answer_available(self):
         self.exchange()
-        with mock.patch("xiaoyou_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
+        with mock.patch("xiaoyu_runtime.loop.context.durable_write", side_effect=OSError("disk full")):
             self.context.delivered("side", "a", ["speaker"])
         self.assertEqual("saved answer", self.context.turns("side")[0]["reply"])
 
     def test_background_context_excludes_the_current_handoff(self):
         helper = Scripted("codex", speaks=False)
-        x, _ = make_xiaoyou(self.folder / "runtime", [helper])
+        x, _ = make_xiaoyu(self.folder / "runtime", [helper])
         self.addCleanup(x.close)
         card = x.hear("@codex inspect this", "default", "new").card
         x.settle(card, 5)
@@ -140,7 +140,7 @@ class ContextTests(TempDirCase):
             bind_context(Store(self.state), self.cards)
 
     def test_decision_and_speaker_frames_read_current_task_and_conversation_commitments(self):
-        from xiaoyou_runtime.world.promises import Promises
+        from xiaoyu_runtime.world.promises import Promises
         promises = Promises(self.state / "promises.json")
         context = bind_context(self.store, self.cards, promises=promises)
         promises.track("side commitment", conversation="side")
@@ -163,7 +163,7 @@ class ContextTests(TempDirCase):
 
     def test_speaking_does_not_mark_history_omitted_from_the_prompt_as_seen(self):
         voice = Scripted("speaker")
-        x, _ = make_xiaoyou(self.folder / "bounded", [voice])
+        x, _ = make_xiaoyu(self.folder / "bounded", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "retained history")
         for index in range(20):
@@ -175,7 +175,7 @@ class ContextTests(TempDirCase):
 
     def test_a_partial_history_excerpt_is_not_a_full_turn_delivery_receipt(self):
         voice = Scripted("speaker")
-        x, _ = make_xiaoyou(self.folder / "excerpt", [voice])
+        x, _ = make_xiaoyu(self.folder / "excerpt", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "long retained answer")
         x._writer.exchange(card["id"], "older question", "a" * 2000 + "unquoted tail", turn_id="long")
@@ -303,7 +303,7 @@ class ContextTests(TempDirCase):
     def test_no_retrieval_scan_when_every_retained_turn_is_already_quoted(self):
         self.exchange()
         original = self.context.window("side", "reader")
-        with mock.patch("xiaoyou_runtime.loop.recall.search") as search:
+        with mock.patch("xiaoyu_runtime.loop.recall.search") as search:
             queried = self.context.window("side", "reader", query="question")
         search.assert_not_called()
         self.assertEqual(original, queried)
@@ -311,7 +311,7 @@ class ContextTests(TempDirCase):
     def test_delivered_recent_turns_are_not_requoted_into_short_chat_or_helper_summaries(self):
         self.exchange(text="saved question", reply="saved answer")
         self.context.mark("side", "reader", self.context.history("side"))
-        with mock.patch("xiaoyou_runtime.loop.recall.search") as search:
+        with mock.patch("xiaoyu_runtime.loop.recall.search") as search:
             window = self.context.window("side", "reader", query="saved question 的处理结果")
         search.assert_not_called()
         self.assertEqual("", window["body"])
@@ -340,9 +340,9 @@ class ContextTests(TempDirCase):
                 self.context.window("side", "reader", **fields)
 
     def test_retained_history_before_the_recent_window_is_recallable_and_resettable(self):
-        from xiaoyou_runtime.world.store import MAX_TURNS
+        from xiaoyu_runtime.world.store import MAX_TURNS
         voice = Scripted("speaker")
-        x, store = make_xiaoyou(self.folder / "archive", [voice])
+        x, store = make_xiaoyu(self.folder / "archive", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "retained archive")
         for index in range(MAX_TURNS + 5):
@@ -359,7 +359,7 @@ class ContextTests(TempDirCase):
 
     def test_recall_reset_does_not_reintroduce_hidden_messages_via_task_entries(self):
         voice = Scripted("speaker")
-        x, _ = make_xiaoyou(self.folder / "recall-reset", [voice])
+        x, _ = make_xiaoyu(self.folder / "recall-reset", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "retained task facts")
         x._writer.exchange(card["id"], "private-reset-anchor", "saved reply", turn_id="old")
@@ -373,7 +373,7 @@ class ContextTests(TempDirCase):
 
     def test_recall_keeps_global_memory_and_scoped_task_evidence_without_writes(self):
         voice = Scripted("speaker")
-        x, store = make_xiaoyou(self.folder / "recall-sources", [voice])
+        x, store = make_xiaoyu(self.folder / "recall-sources", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "source-anchor task")
         x._writer.exchange(card["id"], "source-anchor question", "source-anchor reply", turn_id="old")
@@ -390,9 +390,9 @@ class ContextTests(TempDirCase):
         self.assertEqual([], voice.jobs)
 
     def test_provider_failure_and_decision_only_do_not_mark_the_window_seen(self):
-        from xiaoyou_runtime.helpers.agents import AgentError
+        from xiaoyu_runtime.helpers.agents import AgentError
         voice = Scripted("speaker")
-        x, _ = make_xiaoyou(self.folder / "receipt-boundary", [voice])
+        x, _ = make_xiaoyu(self.folder / "receipt-boundary", [voice])
         self.addCleanup(x.close)
         card = x._writer.task_open("default", "history")
         x._writer.exchange(card["id"], "old question", "old answer", turn_id="old")

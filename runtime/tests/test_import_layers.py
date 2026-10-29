@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 RUNTIME = Path(__file__).resolve().parents[1]
-PACKAGE = RUNTIME / "xiaoyou_runtime"
+PACKAGE = RUNTIME / "xiaoyu_runtime"
 
 
 def modules():
@@ -41,7 +41,7 @@ def graph():
                 while target and target not in found:
                     target = target.rpartition(".")[0]
                 # A package's __init__ is not a dependency on its submodules.
-                if target and target != name and target != "xiaoyou_runtime" \
+                if target and target != name and target != "xiaoyu_runtime" \
                         and not name.startswith(target + "."):
                     edges[name].add(target)
     return edges
@@ -84,7 +84,7 @@ class ImportLayerTests(unittest.TestCase):
         violations = sorted(
             (source, target)
             for source, targets in edges.items()
-            if source.startswith(("xiaoyou_runtime.events.", "xiaoyou_runtime.world."))
+            if source.startswith(("xiaoyu_runtime.events.", "xiaoyu_runtime.world."))
             for target in targets
             if target.split(".")[1] in {"helpers", "loop", "api", "delivery"}
         )

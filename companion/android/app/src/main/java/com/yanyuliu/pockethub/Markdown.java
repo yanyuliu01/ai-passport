@@ -12,7 +12,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 小幽回复里的轻量格式：Runtime 只留下加粗 **…**、列表（“- ” 开头）、编号列表，以及她单独写一行
+ * 小鱼回复里的轻量格式：Runtime 只留下加粗 **…**、列表（“- ” 开头）、编号列表，以及她单独写一行
  * --- 表示另起一条消息。手机聊天里按这几样画出来（render）；设备小屏、首页那一句话、复制出去的
  * 文字用纯文字（plain）。
  */

@@ -18,7 +18,7 @@ final class AppPresentation {
     static String role(String name) {
         String value = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
         if (value.isEmpty() || value.equals("ds") || value.equals("dsh")
-                || value.equals("deepseek") || value.equals("deep") || value.equals("xiaoyou")) return "ds";
+                || value.equals("deepseek") || value.equals("deep") || value.equals("xiaoyou") || value.equals("xiaoyu")) return "ds";
         if (value.equals("cc") || value.equals("claude")) return "claude";
         if (value.equals("codex")) return "codex";
         return value;
@@ -26,7 +26,7 @@ final class AppPresentation {
 
     static String name(String role) {
         switch (role(role)) {
-            case "ds": return "DS";
+            case "ds": return "小鱼";
             case "codex": return "Codex";
             case "claude": return "Claude";
             case "assistant": return "助手";
@@ -36,7 +36,7 @@ final class AppPresentation {
 
     static String author(Card card, Card.Entry entry) {
         if (entry.role.equals("you")) return "you";
-        // Runtime task entries are DS's relay replies. Desktop entries are the observed agent.
+        // Runtime task entries are Xiaoyu's relay replies. Desktop entries are the observed agent.
         return card.monitoringOnly ? owner(card) : "ds";
     }
 
@@ -55,7 +55,7 @@ final class AppPresentation {
 
     static String stateLabel(Card card, boolean connected) {
         if (card.presentation != null && connected) return card.presentation.label();
-        switch (DsState.state(card, connected)) {
+        switch (XiaoyuState.state(card, connected)) {
             case "working": case "talking": return "执行中";
             case "waiting": return "待确认";
             case "queued": return "排队";
@@ -68,12 +68,12 @@ final class AppPresentation {
         }
     }
 
-    /** Work DS handed to a helper; desktop sessions are observed, not dispatched. */
+    /** Work Xiaoyu handed to a helper; desktop sessions are observed, not dispatched. */
     static boolean dispatched(Card card) {
         return !card.monitoringOnly && !card.agent.isEmpty();
     }
 
-    /** The chat holds only DS's own conversation and its hand-off receipts. */
+    /** The chat holds only Xiaoyu's own conversation and its hand-off receipts. */
     static List<Card> chatCards(List<Card> cards) {
         List<Card> result = new ArrayList<>();
         for (Card card : cards) if (!card.monitoringOnly) result.add(card);
@@ -128,7 +128,7 @@ final class AppPresentation {
         if (card.presentation != null && connected)
             return card.presentation.value("group").equals("history") ? "" : card.presentation.label();
         if (connected && card.resultReady && card.active()) return "总结中";
-        switch (DsState.state(card, connected)) {
+        switch (XiaoyuState.state(card, connected)) {
             case "working": case "talking": return "进行中";
             case "queued": return "排队";
             case "waiting": return card.monitoringOnly ? "等电脑确认" : "等你确认";
@@ -147,24 +147,24 @@ final class AppPresentation {
         /** The task it is doing now (waiting for approval counts); null when idle. */
         Card current(boolean connected) {
             for (Card card : dispatched) {
-                String state = DsState.state(card, connected);
+                String state = XiaoyuState.state(card, connected);
                 if (state.equals("working") || state.equals("talking") || state.equals("waiting")) return card;
             }
             return null;
         }
 
         boolean desktopRunning(boolean connected) {
-            for (Card card : desktop) if (DsState.state(card, connected).equals("working")) return true;
+            for (Card card : desktop) if (XiaoyuState.state(card, connected).equals("working")) return true;
             return false;
         }
 
         /**
          * One answer for every view of this helper (home chip, sidebar, helper page):
-         * waiting, working (work DS handed over), desktop (a session on the computer is running) or idle.
+         * waiting, working (work Xiaoyu handed over), desktop (a session on the computer is running) or idle.
          */
         String mode(boolean connected) {
             Card now = current(connected);
-            if (now != null) return DsState.state(now, connected).equals("waiting") ? "waiting" : "working";
+            if (now != null) return XiaoyuState.state(now, connected).equals("waiting") ? "waiting" : "working";
             return desktopRunning(connected) ? "desktop" : "idle";
         }
 
@@ -226,7 +226,7 @@ final class AppPresentation {
             COMPOSER_STOP = "stop", COMPOSER_STOPPING = "stopping";
 
     /**
-     * hasText：框里有字；replying：小幽还在回上一句；stoppable：有一件能停的事在做（小幽交办出去的、
+     * hasText：框里有字；replying：小鱼还在回上一句；stoppable：有一件能停的事在做（小鱼交办出去的、
      * 不是电脑上同步来的）；stopping：已经叫它停了，还没停下。
      * 有字就能发：补充要求不被正在做的事挡住，她回话途中也能插话（Runtime 0.18 起会打断那一句）。
      */
@@ -239,7 +239,7 @@ final class AppPresentation {
         return COMPOSER_IDLE;
     }
 
-    /** 小幽的一条回复拆成的气泡：她单独写一行 --- 的地方另起一条（几条由她定）；段落留在同一个气泡里。 */
+    /** 小鱼的一条回复拆成的气泡：她单独写一行 --- 的地方另起一条（几条由她定）；段落留在同一个气泡里。 */
     static List<String> bubbles(String text) {
         return Markdown.messages(text);
     }

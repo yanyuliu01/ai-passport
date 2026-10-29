@@ -1,4 +1,4 @@
-// DS pixel head portraits compiled from the retained avatar-whale-v1 artwork.
+// Xiaoyu pixel head portraits compiled from the retained avatar-whale-v1 artwork.
 #pragma once
 
 #include <stdbool.h>

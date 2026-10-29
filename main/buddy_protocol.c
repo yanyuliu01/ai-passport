@@ -470,7 +470,7 @@ static uint8_t buddy_parse_effort(const cJSON *object)
 /* {"cmd":"chat","phase":"thinking|helper|done|failed|idle","said":"...",
  *  "reply":"...","agent":"...","stage":"...","mood":"idle|busy|ask|happy|oops",
  *  "card":"c12","doing":2,"eff":"high"}
- * A hub host reports where the conversation with Xiaoyou stands: this is what
+ * A hub host reports where the conversation with Xiaoyu stands: this is what
  * the first screen shows. Everything except phase is optional. card is the
  * card the turn went onto, doing how many things are in progress in the
  * background. Text that does not fit is cut on a character boundary; only the
@@ -550,7 +550,7 @@ static bool buddy_parse_chat(const cJSON *object, buddy_event_t *event)
 
 /* {"cmd":"card","id":"c12","at":"14:02","state":"working|waiting|done|failed|
  *  cancelled|talking|unknown|idle","agent":"codex","edits":1,"said":"...","reply":"..."}
- * One thing: the first sentence the owner said and the latest thing Xiaoyou
+ * One thing: the first sentence the owner said and the latest thing Xiaoyu
  * said about it. A card that is already known is updated where it stands.
  * {"cmd":"card","clear":true} forgets every card. */
 static bool buddy_parse_card(const cJSON *object, buddy_event_t *event)
@@ -867,7 +867,7 @@ static bool buddy_parse_usage(const cJSON *object, buddy_event_t *event)
 }
 
 /* {"cmd":"helpers","list":[{"name":"claude","about":"..."}, ...]}
- * The agents Xiaoyou can hand work to. Entries beyond BUDDY_HELPER_COUNT and
+ * The agents Xiaoyu can hand work to. Entries beyond BUDDY_HELPER_COUNT and
  * entries without a name are left out; an empty list clears what was known. */
 static bool buddy_parse_helpers(const cJSON *object, buddy_event_t *event)
 {

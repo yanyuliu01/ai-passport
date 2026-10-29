@@ -31,7 +31,7 @@ The owner supplied a two-week Instinct chat export as the target style. It conta
 | Offers an alternative when refusing | Does not disclose internals, but immediately says what it can do |
 | Lists only for list content | Capability and mail lists use lists; conversation does not |
 
-Timing in the export (66 replies): the median time from the owner's message to the first reply is about **8 seconds**, and 90% arrive within 17 seconds. Bubbles in one reply are about 2 seconds apart; more than half of the replies are a single bubble, and most others have two or three. The conversational feel comes from content, not speed. Xiaoyou's 3-second first-reply contract is much stricter than this reference; this experiment still judges against the 3-second contract.
+Timing in the export (66 replies): the median time from the owner's message to the first reply is about **8 seconds**, and 90% arrive within 17 seconds. Bubbles in one reply are about 2 seconds apart; more than half of the replies are a single bubble, and most others have two or three. The conversational feel comes from content, not speed. Xiaoyu's 3-second first-reply contract is much stricter than this reference; this experiment still judges against the 3-second contract.
 
 The owner also shared a QQ screenshot of Aurabot's "Feiyu", which is the small-talk style the owner likes best. The two references cover different turns: Instinct shows how to talk while getting things done, Feiyu shows how to talk in casual chat. Traits in the screenshot:
 
@@ -44,7 +44,7 @@ The owner also shared a QQ screenshot of Aurabot's "Feiyu", which is the small-t
 | Takes a joke and gives in | "Fine, fine, I'll go watch it now" |
 | Not every turn ends with a question | She stops when she is done |
 
-Feiyu is built with the rigid rules discussed earlier plus a Bilibili browsing module, so having something concrete to talk about partly comes from her real browsing history, not only from the prompt. Also, "I'll go watch it now" is a promise for Xiaoyou: under decide-then-speak she either creates the task or must not say it.
+Feiyu is built with the rigid rules discussed earlier plus a Bilibili browsing module, so having something concrete to talk about partly comes from her real browsing history, not only from the prompt. Also, "I'll go watch it now" is a promise for Xiaoyu: under decide-then-speak she either creates the task or must not say it.
 
 ## 3. Arms
 
@@ -101,7 +101,7 @@ Case fields:
   "category": "Very short reply to her last offer",
   "history": [
     {"role": "owner", "text": "I have to hand in the expense form tomorrow"},
-    {"role": "xiaoyou", "text": "Want me to remind you at 9 tomorrow morning?"}
+    {"role": "xiaoyu", "text": "Want me to remind you at 9 tomorrow morning?"}
   ],
   "owner": ["OK"],
   "expected": {"decision": "track", "args_hint": "remind about the expense form, due 2026-10-28 09:00"},
@@ -111,7 +111,7 @@ Case fields:
 }
 ```
 
-The case file itself is written in Chinese, the language the owner uses with Xiaoyou; the example above is translated.
+The case file itself is written in Chinese, the language the owner uses with Xiaoyu; the example above is translated.
 
 - `owner` is a list; messages sent in a row go together as one batch.
 - `expected.also_ok` lists other acceptable decisions, for example switching straight to another helper when the named one does not exist.
@@ -166,7 +166,7 @@ P is recommended only if all of these hold:
 3. **No quality loss**: in the owner's blind judgment, P wins or ties at least 50% of cases.
 If any condition fails, keep S and record why in the report.
 
-Extra cost is still measured and reported, but it is not a condition and has no limit. The owner decided that model-call spending will later become part of the drive design: a resource Xiaoyou weighs herself and spends according to her goals and expected benefit (see the drive section of the [dialogue naturalness design](dialogue-naturalness-design.md)).
+Extra cost is still measured and reported, but it is not a condition and has no limit. The owner decided that model-call spending will later become part of the drive design: a resource Xiaoyu weighs herself and spends according to her goals and expected benefit (see the drive section of the [dialogue naturalness design](dialogue-naturalness-design.md)).
 
 ## 8. Steps
 

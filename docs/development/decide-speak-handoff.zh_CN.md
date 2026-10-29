@@ -21,7 +21,7 @@
 ## 2. 不能做的事
 
 - 不改 Runtime 的代码、配置和人格文件，不重启或替换线上 Runtime，不部署。
-- 结果和评审文件只放在仓库外（脚本会拒绝写进仓库）。建议放在 `~/xiaoyou-experiments/decide-speak/`。
+- 结果和评审文件只放在仓库外（脚本会拒绝写进仓库）。建议放在 `~/xiaoyu-experiments/decide-speak/`。
 - 不打印、不记录、不提交密钥。
 - 不剔除慢样本和失败样本，不为了数字好看重跑某几次。
 - 主人盲评完成之前，不打开 `blind-review-key.json`，也不告诉主人哪个是 S、哪个是 P。
@@ -32,7 +32,7 @@
 ### 3.1 准备
 
 1. 确认 Python 是 3.9 或更新：`python3 --version`。脚本只用标准库。
-2. 确认密钥文件存在：`~/.config/xiaoyou/deepseek.key`。脚本会先读环境变量 `DEEPSEEK_API_KEY`，没有再读这个文件。
+2. 确认密钥文件存在：`~/.config/xiaoyu/deepseek.key`。脚本会先读环境变量 `DEEPSEEK_API_KEY`，没有再读这个文件。
 3. 确认模型配置。线上配置 `runtime/config.json` 中，`agents.deepseek.chat_model` 是 `deepseek-flash`。
    R7 的 `helpers/agents.py` 里，只说话的调用（包括决定）用的是 `chat_model`，所以两步默认都用 `deepseek-flash`。
    如果你核对后发现不是这样，就用 `--decide-model`、`--speak-model` 改过来，并在报告里写明。
@@ -41,7 +41,7 @@
 ### 3.2 不联网试跑
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --dry-run --repeats 1 --pause 0 --decide-wait 3 --out ~/xiaoyou-experiments/decide-speak/dry.jsonl
+python3 tools/experiments/decide_speak_compare.py run --dry-run --repeats 1 --pause 0 --decide-wait 3 --out ~/xiaoyu-experiments/decide-speak/dry.jsonl
 ```
 
 应该写出 92 行（46 个用例 × 2 组），没有 `error`。这一步只检查流程，数字没有意义。
@@ -49,7 +49,7 @@ python3 tools/experiments/decide_speak_compare.py run --dry-run --repeats 1 --pa
 ### 3.3 真实接口探测
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --only chat-02,task-01,run-03 --repeats 1 --out ~/xiaoyou-experiments/decide-speak/probe.jsonl --note "probe"
+python3 tools/experiments/decide_speak_compare.py run --only chat-02,task-01,run-03 --repeats 1 --out ~/xiaoyu-experiments/decide-speak/probe.jsonl --note "probe"
 ```
 
 逐行检查：
@@ -62,7 +62,7 @@ python3 tools/experiments/decide_speak_compare.py run --only chat-02,task-01,run
 ### 3.4 完整运行
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyou-experiments/decide-speak/results.jsonl --note "commit=<提交号> model=deepseek-flash persona=runtime/persona.txt"
+python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyu-experiments/decide-speak/results.jsonl --note "commit=<提交号> model=deepseek-flash persona=runtime/persona.txt"
 ```
 
 - 共 460 次运行，每次大约几秒，加上间隔，预计一小时左右。建议在后台跑，并保持电脑不休眠。
@@ -72,7 +72,7 @@ python3 tools/experiments/decide_speak_compare.py run --repeats 5 --out ~/xiaoyo
 ### 3.5 汇总
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py summarize ~/xiaoyou-experiments/decide-speak/results.jsonl
+python3 tools/experiments/decide_speak_compare.py summarize ~/xiaoyu-experiments/decide-speak/results.jsonl
 ```
 
 单价默认是配置里的每百万 token 输入 2、输出 8，单位沿用配置，报告里注明。
@@ -97,7 +97,7 @@ python3 tools/experiments/decide_speak_compare.py summarize ~/xiaoyou-experiment
 ### 3.8 给主人盲评
 
 ```bash
-python3 tools/experiments/decide_speak_compare.py review ~/xiaoyou-experiments/decide-speak/results.jsonl --out-dir ~/xiaoyou-experiments/decide-speak/review
+python3 tools/experiments/decide_speak_compare.py review ~/xiaoyu-experiments/decide-speak/results.jsonl --out-dir ~/xiaoyu-experiments/decide-speak/review
 ```
 
 把 `blind-review.md` 交给主人。主人评完以后，再用 `blind-review-key.json` 还原成 S／P 的胜负。

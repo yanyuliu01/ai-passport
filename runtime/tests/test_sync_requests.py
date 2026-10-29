@@ -3,8 +3,8 @@ import json
 import threading
 import unittest
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until, start_runtime
-from xiaoyou_runtime.api.service import Service, RequestError
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until, start_runtime
+from xiaoyu_runtime.api.service import Service, RequestError
 
 
 class SyncRequestTests(TempDirCase):
@@ -12,7 +12,7 @@ class SyncRequestTests(TempDirCase):
         super().setUp()
         self.agent = Scripted("claude")
         self.agent.gate.clear()
-        self.x, self.store = make_xiaoyou(self.folder, [self.agent])
+        self.x, self.store = make_xiaoyu(self.folder, [self.agent])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.x.close)
         self.addCleanup(self.service.close)

@@ -14,14 +14,14 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.helpers.factory import create
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.config import load
-from xiaoyou_runtime.events.desktop_hook import record
-from xiaoyou_runtime.events.desktop_sync import DesktopSync, MAX_LINE_BYTES, STALE_SECONDS
-from xiaoyou_runtime.api.service import RequestError, Service
-from xiaoyou_runtime.world.store import Store
-from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
+from xiaoyu_runtime.helpers.factory import create
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.config import load
+from xiaoyu_runtime.events.desktop_hook import record
+from xiaoyu_runtime.events.desktop_sync import DesktopSync, MAX_LINE_BYTES, STALE_SECONDS
+from xiaoyu_runtime.api.service import RequestError, Service
+from xiaoyu_runtime.world.store import Store
+from xiaoyu_runtime.loop.xiaoyu import Xiaoyu
 
 
 class DesktopTests(unittest.TestCase):
@@ -363,7 +363,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual([card["session_id"] for card in self.observed()], ["yes"])
 
     def test_recap_context_is_not_imported_as_a_human_message(self):
-        from xiaoyou_runtime.loop.project_brief import recap_text
+        from xiaoyu_runtime.loop.project_brief import recap_text
         recap = recap_text({"when": self.now, "turns": [{"role": "user", "text": "private recap"}]}, now=self.now)
         path = self.codex()
         self.append(path, [self.message("user", recap), self.message("user", "real request")])
@@ -423,15 +423,15 @@ class DesktopTests(unittest.TestCase):
             "agents": {"echo": {"type": "echo"}}, "xiaoyou": {"default_agent": "echo"}}))
         config = load(config_path)
         store = Store(config.state_dir)
-        xiaoyou = Xiaoyou(config, [create(spec) for spec in config.agents], store)
-        service = Service(xiaoyou, store)
+        xiaoyu = Xiaoyu(config, [create(spec) for spec in config.agents], store)
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
-        sync = DesktopSync(xiaoyou.cards, config.state_dir, home=self.root, clock=lambda: self.now)
+        sync = DesktopSync(xiaoyu.cards, config.state_dir, home=self.root, clock=lambda: self.now)
         path = self.codex()
         self.append(path, [self.cevent("task_started")])
         sync.poll()
         card = service.cards("phone")[0]
-        # Talking about a running desktop session goes to Xiaoyou; it never joins that session.
+        # Talking about a running desktop session goes to Xiaoyu; it never joins that session.
         message = service.get(service.submit("continue", "phone", card=card["id"], pin=True)["id"],
                               wait=5)
         self.assertEqual("done", message["status"])
@@ -439,7 +439,7 @@ class DesktopTests(unittest.TestCase):
         with self.assertRaises(RequestError):
             service.cancel(card["id"])
         self.assertEqual(service.feed("phone")["cards"][0]["state"], "working")
-        # Xiaoyou's own conversation session only; the desktop session is not taken over.
+        # Xiaoyu's own conversation session only; the desktop session is not taken over.
         self.assertNotIn(card["session_id"], store.session_ids())
 
     def test_displaced_active_session_cannot_keep_running_badge(self):

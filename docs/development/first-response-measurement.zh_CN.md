@@ -8,7 +8,7 @@
 
 | 来源 | 给出什么 | 作用 |
 | --- | --- | --- |
-| 手机 logcat，标签 `XiaoyouTiming`（App 0.32.4 起） | `send`（发出）、`final`（完整回复到达手机）、`bubble`（第一个气泡画出），用手机自己的开机时钟，按随机客户端编号区分 | **测量本身** |
+| 手机 logcat，标签 `XiaoyuTiming`（App 0.32.4 起） | `send`（发出）、`final`（完整回复到达手机）、`bubble`（第一个气泡画出），用手机自己的开机时钟，按随机客户端编号区分 | **测量本身** |
 | Runtime 消息记录（`runtime/state/messages.json` 和日志） | 客户端编号 → Runtime 轮次编号、输入类型、这一轮是否失败 | 把两边对上；把错误气泡记为未达标 |
 | Runtime 日志（`runtime/state/runtime-stderr.log`）中的 `Decide/speak` 行 | 一轮的决定耗时、模型首段正文耗时和说话总耗时 | 说明时间花在哪里 |
 
@@ -18,7 +18,7 @@
 
 ## 测量之前
 
-1. `xiaoyou.decide_first` 只改变流式 DeepSeek 语音代理的路径。在 Runtime 配置里设 `"xiaoyou": {"decide_first": true}`，然后重启 Runtime。先保留一份状态目录副本；回退时改回 `false` 再重启。
+1. `xiaoyu.decide_first` 只改变流式 DeepSeek 语音代理的路径。在 Runtime 配置里设 `"xiaoyu": {"decide_first": true}`，然后重启 Runtime。先保留一份状态目录副本；回退时改回 `false` 再重启。
 2. 记下版本组合（不含密钥）：App 版本、Runtime 提交号（在 Runtime 那台电脑上执行 `git rev-parse --short HEAD`）和版本号、语音代理和模型、连接方式（同一局域网、Tailscale、Funnel），以及这段对话归哪台电脑负责。
 3. 用 USB 调试连上手机，确认 `adb devices` 能列出它。
 
@@ -31,7 +31,7 @@ adb logcat -c
 ```
 
 ```bash
-adb logcat -s XiaoyouTiming > phone-cold-start.txt
+adb logcat -s XiaoyuTiming > phone-cold-start.txt
 ```
 
 然后在 Runtime 那台电脑上（或者用它的状态目录和日志副本）运行：

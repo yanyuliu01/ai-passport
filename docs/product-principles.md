@@ -2,33 +2,33 @@
   <a href="product-principles.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Xiaoyou product principles (draft)
+# Xiaoyu product principles (draft)
 
 > Status: v0.1 draft, written by AI on 2026-10-19 from the current code, documents and the owner's past feedback. **Not in effect until the owner edits and approves it.** Each principle lists its basis: the owner's own words or a rule already in the repository.
 
 ## What this document is for
 
-- It states what Xiaoyou is, what it does not do and how it behaves, so people and AI changing the product share one yardstick.
+- It states what Xiaoyu is, what it does not do and how it behaves, so people and AI changing the product share one yardstick.
 - [Auto-iteration](development/auto-iteration.md) version plans must check against it item by item: a plan names the principles it relies on (by number, for example "per P8") and any it conflicts with. Plans with serious conflicts are sent back.
 - The principles change with versions. Changes are recorded in the revision log at the end.
 
 ## In one sentence
 
-Xiaoyou is the owner's pocket AI companion: the owner talks only to her, she arranges AI helpers on the owner's own computers, and she brings progress and decisions that need the owner to the phone and the pocket device.
+Xiaoyu is the owner's pocket AI companion: the owner talks only to her, she arranges AI helpers on the owner's own computers, and she brings progress and decisions that need the owner to the phone and the pocket device.
 
 ## What it does not do
 
 - **No model or tool picker.** The owner does not choose helpers, models or effort tiers in the UI; saying it is enough.
 - **No interruption-driven product.** No pop-ups, no promotional notifications, no need to keep refreshing for progress.
 - **No owner data to third parties.** No cloud account system; conversations and usage data are not uploaded to anyone else's service.
-- **The device is not a standalone smart terminal.** It is Xiaoyou's face and ears; work happens on computers.
+- **The device is not a standalone smart terminal.** It is Xiaoyu's face and ears; work happens on computers.
 - **Not designed for the local network.** A solution that only works at home is not a solution.
 
 ## Principles
 
 ### 1. Roles and conversation
 
-**P1 One voice.** The owner talks only to Xiaoyou (whose character is DS); Claude Code, Codex, DeepSeek and future local models are her tools and never appear as separate roles in the conversation.
+**P1 One voice.** The owner talks only to Xiaoyu (whose character is Xiaoyu); Claude Code, Codex, DeepSeek and future local models are her tools and never appear as separate roles in the conversation.
 Basis: the persona file; the app guide's "no helper or effort picker".
 Check: does a new screen let the owner pick a helper, model or tier? Does the conversation contain lines like "I'll transfer you to X"?
 
@@ -36,9 +36,9 @@ Check: does a new screen let the owner pick a helper, model or tier? Does the co
 Basis: "why did you give it to cc, can't you hand it over", "I said use ds v4 Pro", "don't let it use Astra again unless I say so".
 Check: can the owner's constraints be produced and checked before delegating? Is a delegation that violates them stopped?
 
-**P3 Do simple things yourself.** Xiaoyou has the fullest context; follow-ups, summaries, organizing and simple files are not delegated. Only heavy work such as multi-file code changes, builds and tests, or long debugging goes to helpers.
+**P3 Do simple things yourself.** Xiaoyu has the fullest context; follow-ups, summaries, organizing and simple files are not delegated. Only heavy work such as multi-file code changes, builds and tests, or long debugging goes to helpers.
 Basis: "just look yourself, don't send this kind of task to others", "you don't need it to sync, you can look yourself".
-Check: of the work delegated, how much could Xiaoyou have finished in a few steps?
+Check: of the work delegated, how much could Xiaoyu have finished in a few steps?
 
 **P4 Conclusion first, complete and honest.** Lead with the conclusion, then the necessary detail; reports are structured and never truncated; say plainly what was not done; "done" needs evidence (file exists, tests pass, and device verification stated separately).
 Basis: the persona file; "think it through, be complete, give me a structured report"; the repository rule against calling a build a hardware validation.
@@ -82,7 +82,7 @@ Check: does each device screen have one focus? Does anything switch screens auto
 Basis: the repository's Chinese font rules; "messages on the home page show English".
 Check: does any new text leak English? Do device photos show missing glyphs?
 
-**P13 Colour answers only "who is working".** Xiaoyou is sea blue and each helper has a fixed colour; green, red and yellow mean only yes, no and attention.
+**P13 Colour answers only "who is working".** Xiaoyu is sea blue and each helper has a fixed colour; green, red and yellow mean only yes, no and attention.
 Basis: the device guide.
 Check: does a new screen use green, red or yellow as decoration?
 
@@ -128,7 +128,7 @@ Check: does a report call "it compiles" "it works"?
 
 - P8 "no pop-ups": should a new release or a failed task be an exception that sends a system notification?
 - P14 budget: what are the daily and monthly caps for network models?
-- P3 boundary: does Xiaoyou judge what is "simple", or should there be a list?
+- P3 boundary: does Xiaoyu judge what is "simple", or should there be a list?
 
 ## Revision log
 

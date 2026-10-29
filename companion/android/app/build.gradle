@@ -10,12 +10,12 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 86
-        versionName "0.38.3"
+        versionCode 87
+        versionName "0.39.0"
     }
 
     // The speech models are no longer packaged: they are published as the "speech" resource
-    // pack (python3 -m xiaoyou_runtime app pack speech app/build/phone-speech/assets/asr) and
+    // pack (python3 -m xiaoyu_runtime app pack speech app/build/phone-speech/assets/asr) and
     // downloaded once by the phone, so app updates stay small. preparePhoneSpeech still fetches
     // and verifies them, and the AAR.
     // Compress native libraries so installed 0.12.x updaters can fetch this APK (<128 MB).

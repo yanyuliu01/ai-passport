@@ -12,7 +12,7 @@ import org.bouncycastle.crypto.generators.SCrypt;
 final class AccountIdentity {
     static void verify(String password,String account,String space,Map<String,Object> vault) throws Exception {
         if(!account.matches("[a-f0-9]{32}") || !space.matches("[a-f0-9]{32}") || vault==null || Json.number(vault,"v")!=1)
-            throw new Exception("请先在电脑登录并配置小幽，再在手机登录同一账号");
+            throw new Exception("请先在电脑登录并配置小鱼，再在手机登录同一账号");
         byte[] key=SCrypt.generate(password.getBytes(StandardCharsets.UTF_8),("xiaoyou-account-recovery-v1:"+account).getBytes(StandardCharsets.UTF_8),32768,8,1,32);
         byte[] secret=null;
         try {

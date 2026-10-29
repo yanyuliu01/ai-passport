@@ -72,7 +72,7 @@ require rewriting or translating the original upstream documents.
 
 ## Responsibilities
 
-- Product documents cover what Xiaoyou does and how its parts work: the device, the phone app, the runtime, and their design decisions.
+- Product documents cover what Xiaoyu does and how its parts work: the device, the phone app, the runtime, and their design decisions.
 - Hardware documents cover the board, BSP behavior, engineering constraints, and acceptance methods.
 - Contribution and engineering documents cover code style, testing, commits, CI, and AI workflows grounded in this repository's real tools.
 

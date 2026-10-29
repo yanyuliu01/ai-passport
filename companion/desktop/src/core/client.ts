@@ -32,7 +32,7 @@ export class DesktopClient {
   private retryFailures = new Map<string, number>();
   private submittingReviews = new Set<string>();
   private stopped = false;
-  runtime = { state: 'disconnected', message: '正在查找本机小幽' };
+  runtime = { state: 'disconnected', message: '正在查找本机小鱼' };
   pairing: ClientView['pairing'] = { invitation: undefined, joined: 0, relayState: '未设置跨网入口',
     requests: [] as { id: string; name: string; fingerprint: string }[] };
   constructor(readonly db: ClientDatabase, private transport: RuntimeTransport,
@@ -256,9 +256,9 @@ export class DesktopClient {
   nativeSession(space: string, id: string, runtime: string): string {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);
     if (endpoint.url.startsWith('peer://')) throw new Error('请在原电脑打开这个会话');
-    if (!endpoint.capabilities.includes('desktop_handoff')) throw new Error('当前服务尚未提供原生会话控制交接，请先通过小幽补充要求');
+    if (!endpoint.capabilities.includes('desktop_handoff')) throw new Error('当前服务尚未提供原生会话控制交接，请先通过小鱼补充要求');
     const task = this.db.records<Json>(space, 'task').find(item => item.id === id && item._runtimeId === runtime)!;
-    if (!['done', 'failed', 'cancelled', 'turn_ended'].includes(String(task.state))) throw new Error('执行尚未结束，请先通过小幽补充要求');
+    if (!['done', 'failed', 'cancelled', 'turn_ended'].includes(String(task.state))) throw new Error('执行尚未结束，请先通过小鱼补充要求');
     const agent = this.db.get<Json[]>('agents:' + runtime, []).find(item => item.name === (task.worker_agent || task.agent));
     const session = String(task.worker_session || '');
     if (agent?.type !== 'codex' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(session)) throw new Error('此会话暂不支持从这里打开');
@@ -400,7 +400,7 @@ export class DesktopClient {
       : [...this.endpoints.values()].find(item => item.spaceId === space && !item.url.startsWith('peer://'))
         || [...this.endpoints.values()].find(item => item.spaceId === space && this.link(item)?.connected)
         || [...this.endpoints.values()].find(item => item.spaceId === space);
-    if (!endpoint) throw new Error('请先连接小幽空间');
+    if (!endpoint) throw new Error('请先连接小鱼空间');
     if (mainReply && card && !endpoint.capabilities.includes('task_audit')) throw new Error('当前服务尚不支持在来源聊天补充要求，请升级服务后再试');
     this.db.transaction(() => {
       this.db.enqueue(space, endpoint.runtimeId, text, card, conversation, mainReply);
@@ -516,7 +516,7 @@ export class DesktopClient {
     if (this.stopped) throw new Error('客户端已停止，请重新连接后核对');
     const endpoint = this.endpoints.get(runtime);
     if (!endpoint || endpoint.spaceId !== space) throw new Error('找不到处理这项操作的电脑');
-    if (!endpoint.capabilities.includes(capability)) throw new Error('这台电脑的小幽还不支持核对，请先更新');
+    if (!endpoint.capabilities.includes(capability)) throw new Error('这台电脑的小鱼还不支持核对，请先更新');
     return endpoint;
   }
   /** A connection generation, including its credential, owns each asynchronous review read/write. */
@@ -633,7 +633,7 @@ export class DesktopClient {
   /** Read-only recheck of an execution whose result is unknown; confirmed only with completion evidence. */
   async reconcileTask(space: string, id: string, runtime: string, run: string): Promise<'confirmed' | 'unconfirmed'> {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);
-    if (!endpoint.capabilities.includes('execution_reconciliation')) throw new Error('这台电脑的小幽还不支持核对，请先更新');
+    if (!endpoint.capabilities.includes('execution_reconciliation')) throw new Error('这台电脑的小鱼还不支持核对，请先更新');
     const result = await this.transport.request(endpoint, 'POST', '/v1/cards/' + encodeURIComponent(id) + '/reconcile', { run_id: run });
     return result.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
   }
@@ -668,7 +668,7 @@ export class DesktopClient {
       const records = this.db.records<Message>(endpoint.spaceId, 'message');
       const groups = new Map<string, Message[]>();
       for (const row of records) { const group = groups.get(row.conversation) || []; group.push(row); groups.set(row.conversation, group); }
-      spaces.set(endpoint.spaceId, { id: endpoint.spaceId, name: this.db.get('name:' + endpoint.spaceId, '小幽空间'),
+      spaces.set(endpoint.spaceId, { id: endpoint.spaceId, name: this.db.get('name:' + endpoint.spaceId, '小鱼空间'),
         runtimeName: endpoint.name, connected: Boolean(current?.connected || link?.connected),
         catchingUp: Boolean(current?.catchingUp || link?.catchingUp),
         error: current?.connected ? '' : link?.error || '',
@@ -705,7 +705,7 @@ export class DesktopClient {
     this.retryTimers.clear();
     for (const controller of this.loops.values()) controller.abort();
     this.loops.clear(); this.endpoints.clear();
-    this.runtime = { state: 'disconnected', message: '请登录小幽账号，已有记录保留' };
+    this.runtime = { state: 'disconnected', message: '请登录小鱼账号，已有记录保留' };
   }
   stop(): void {
     this.stopped = true;

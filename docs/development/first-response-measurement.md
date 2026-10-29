@@ -14,7 +14,7 @@ timeout may be left out.
 
 | Source | What it gives | Role |
 | --- | --- | --- |
-| Phone logcat, tag `XiaoyouTiming` (App 0.32.4 and later) | `send`, `final` (the complete reply reached the phone) and `bubble` (the first bubble was drawn), on the phone's uptime clock, keyed by the random client id | **The measurement** |
+| Phone logcat, tag `XiaoyuTiming` (App 0.32.4 and later) | `send`, `final` (the complete reply reached the phone) and `bubble` (the first bubble was drawn), on the phone's uptime clock, keyed by the random client id | **The measurement** |
 | Runtime message records (`runtime/state/messages.json` + journal) | Client id → Runtime turn id, input kind, and whether the turn failed | Joins the two sides; marks error bubbles as misses |
 | Runtime log (`runtime/state/runtime-stderr.log`) `Decide/speak` lines | Decision time, provider first body time and total speaking time for one turn | Explains where the time went |
 
@@ -28,8 +28,8 @@ device (firmware) voice path is not logged. Record both as NOT RUN.
 
 ## Before the run
 
-1. `xiaoyou.decide_first` only changes the path for a streaming DeepSeek voice
-   agent. Set `"xiaoyou": {"decide_first": true}` in the Runtime config and
+1. `xiaoyu.decide_first` only changes the path for a streaming DeepSeek voice
+   agent. Set `"xiaoyu": {"decide_first": true}` in the Runtime config and
    restart the Runtime. Keep a copy of the state folder first; to roll back, set
    it to `false` and restart.
 2. Write down the version tuple without secrets: App version, Runtime revision
@@ -48,7 +48,7 @@ adb logcat -c
 ```
 
 ```bash
-adb logcat -s XiaoyouTiming > phone-cold-start.txt
+adb logcat -s XiaoyuTiming > phone-cold-start.txt
 ```
 
 Then, on the Runtime computer (or with a copy of its state folder and log):

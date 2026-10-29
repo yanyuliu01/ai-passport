@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.events.desktop_titles import DesktopTitles, MAX_METADATA_BYTES, MAX_SESSION_IDS, _Budget
+from xiaoyu_runtime.events.desktop_titles import DesktopTitles, MAX_METADATA_BYTES, MAX_SESSION_IDS, _Budget
 
 
 class DesktopTitleTests(unittest.TestCase):
@@ -103,7 +103,7 @@ class DesktopTitleTests(unittest.TestCase):
             opened.append(connection)
             return connection
 
-        with mock.patch("xiaoyou_runtime.events.desktop_titles.sqlite3.connect", side_effect=observe):
+        with mock.patch("xiaoyu_runtime.events.desktop_titles.sqlite3.connect", side_effect=observe):
             self.refresh("s-1")
         self.assertEqual(len(opened), 1)
         with self.assertRaises(sqlite3.ProgrammingError):
@@ -283,8 +283,8 @@ class DesktopTitleTests(unittest.TestCase):
         self.write(self.claude / "projects/z-unrelated-project/sessions-index.json", {
             "entries": [{"sessionId": "other", "summary": "unrelated sidebar"}]})
         self.refresh(claude=("s-1",))
-        with mock.patch("xiaoyou_runtime.events.desktop_titles._json_file", side_effect=AssertionError("unexpected metadata read")), \
-             mock.patch("xiaoyou_runtime.events.desktop_titles._records", side_effect=AssertionError("unexpected transcript read")):
+        with mock.patch("xiaoyu_runtime.events.desktop_titles._json_file", side_effect=AssertionError("unexpected metadata read")), \
+             mock.patch("xiaoyu_runtime.events.desktop_titles._records", side_effect=AssertionError("unexpected transcript read")):
             self.refresh(claude=("s-1",))
         self.assertEqual(self.titles.get("claude", "s-1"), "explicit name")
 
@@ -308,7 +308,7 @@ class DesktopTitleTests(unittest.TestCase):
         self.append(self.codex / "session_index.jsonl", {"id": "s-codex", "thread_name": "Codex name"})
         budget = _Budget()
         budget.bytes, budget.files = 4000, 2
-        with mock.patch("xiaoyou_runtime.events.desktop_titles._Budget", return_value=budget):
+        with mock.patch("xiaoyu_runtime.events.desktop_titles._Budget", return_value=budget):
             self.refresh("s-codex", claude=("s-1",))
         self.assertGreaterEqual(budget.bytes, 0)
         self.assertEqual(budget.files, 0)

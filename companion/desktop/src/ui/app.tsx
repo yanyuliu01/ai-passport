@@ -10,7 +10,7 @@ import { DisplayText } from './display-text';
 import { Onboarding } from './onboarding';
 import './style.css';
 
-declare global { interface Window { xiaoyou: DesktopAPI } }
+declare global { interface Window { xiaoyu: DesktopAPI } }
 const empty: ClientView = { version: '0.1.17', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
 type Page = 'chat' | 'work' | 'settings' | 'native';
@@ -51,20 +51,20 @@ function App() {
     : page === 'work' ? '在做的事' : page === 'native' ? '原会话记录' : '设置';
   const messageVersion = messages.filter(message => ['final', 'done', 'failed', 'cancelled'].includes(message.status)).map(message => message.id + ':' + message.rev).join('|');
   useEffect(() => {
-    void window.xiaoyou.snapshot().then(value => { setView(value); if (!value.setup?.confirmed) setSetupOpen(true); setLoaded(true); }).catch(() => setProblem('暂时无法连接后台服务'));
-    return window.xiaoyou.subscribe(setView);
+    void window.xiaoyu.snapshot().then(value => { setView(value); if (!value.setup?.confirmed) setSetupOpen(true); setLoaded(true); }).catch(() => setProblem('暂时无法连接后台服务'));
+    return window.xiaoyu.subscribe(setView);
   }, []);
   useEffect(() => { setHistoryLimit(100); setText(''); setUsage(undefined); }, [space?.id, space?.selectedConversation]);
   useEffect(() => { setSelectedTask(undefined); setDetail(undefined); setTarget(undefined); setPage('chat'); }, [space?.id]);
   useEffect(() => setReconcileNote(''), [selectedTask?.id, selectedTask?.runtime]);
   useEffect(() => {
     if (page === 'chat') bottom.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
-    if (space && page === 'chat' && document.hasFocus() && document.visibilityState === 'visible') void window.xiaoyou.markRead({ space: space.id, conversation: space.selectedConversation }).catch(() => {});
+    if (space && page === 'chat' && document.hasFocus() && document.visibilityState === 'visible') void window.xiaoyu.markRead({ space: space.id, conversation: space.selectedConversation }).catch(() => {});
   }, [messageVersion, page, space?.id, space?.selectedConversation]);
   useEffect(() => {
     let current = true; detailGeneration.current++; setDetail(undefined); setDetailError(''); setAllSteps(false);
     if (!space || !selectedTask || !['work', 'native'].includes(page)) return;
-    void window.xiaoyou.taskDetail({ space: space.id, ...selectedTask }).then(value => { if (current) setDetail(value); }).catch(() => { if (current) setDetailError('进展暂时读不到，稍后会自动重试。'); });
+    void window.xiaoyu.taskDetail({ space: space.id, ...selectedTask }).then(value => { if (current) setDetail(value); }).catch(() => { if (current) setDetailError('进展暂时读不到，稍后会自动重试。'); });
     return () => { current = false; };
   }, [space?.id, selectedTask?.id, selectedTask?.runtime, selected?.rev, selected?.seq, page]);
   useEffect(() => {
@@ -86,30 +86,30 @@ function App() {
   function go(next: Page) { setPage(next); setSidebarOpen(false); setAttachmentsOpen(false); }
   async function chooseConversation(id: string) {
     if (!space) return;
-    await run(() => window.xiaoyou.selectConversation({ space: space.id, conversation: id })); setTarget(undefined); go('chat');
+    await run(() => window.xiaoyu.selectConversation({ space: space.id, conversation: id })); setTarget(undefined); go('chat');
   }
   async function supplement(task: Json) {
     if (!space) return;
     const conversationId = String(task.conversation || 'default');
     const legacy = !space.connections?.find(item => item.runtime === task._runtimeId)?.capabilities.includes('task_audit');
-    if (space.selectedConversation !== conversationId) await window.xiaoyou.selectConversation({ space: space.id, conversation: conversationId });
+    if (space.selectedConversation !== conversationId) await window.xiaoyu.selectConversation({ space: space.id, conversation: conversationId });
     setTimeout(() => { setTarget({ id: String(task.id), runtime: String(task._runtimeId), legacy }); setPage('chat'); input.current?.focus(); }, 0);
   }
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (!space || !text.trim() || sending) return;
     const value = text, source = selection.current; setSending(true); setProblem('');
     try {
-      await window.xiaoyou.send({ space: space.id, text: value, ...(target ? { card: target.id, runtime: target.runtime, mainReply: !target.legacy } : {}) });
+      await window.xiaoyu.send({ space: space.id, text: value, ...(target ? { card: target.id, runtime: target.runtime, mainReply: !target.legacy } : {}) });
       if (selection.current === source) setText(current => current === value ? '' : current);
     } catch (error) { setProblem(clean(error)); } finally { setSending(false); }
   }
   async function branch(message: Message) {
     if (!space) return;
-    await run(() => window.xiaoyou.createConversation({ space: space.id, title: '', message: message.id, runtime: String(message._runtimeId) })); setTarget(undefined); go('chat');
+    await run(() => window.xiaoyu.createConversation({ space: space.id, title: '', message: message.id, runtime: String(message._runtimeId) })); setTarget(undefined); go('chat');
   }
   function loadTimers() {
     if (!space || !space.connections?.some(item => item.capabilities.includes('timer_effect_review'))) { setTimerRows([]); return; }
-    void window.xiaoyou.timerReviews({ space: space.id }).then(setTimerRows).catch(() => setTimerRows([]));
+    void window.xiaoyu.timerReviews({ space: space.id }).then(setTimerRows).catch(() => setTimerRows([]));
   }
   useEffect(() => { if (page === 'work') loadTimers(); }, [page, space?.id]);
   function reviewable(message: Message): boolean {
@@ -124,26 +124,26 @@ function App() {
   if (!view.account?.signedIn || !view.setup?.confirmed || setupOpen) return <Onboarding view={view} onDone={() => { setSetupOpen(false); setPage('chat'); }} />;
   return <div className={'shell ' + (sidebarOpen ? 'sidebar-is-open' : '')}>
     {sidebarOpen && <button className="sidebar-shade" aria-label="关闭侧边栏" onClick={() => setSidebarOpen(false)} />}
-    <aside className="sidebar" aria-label="小幽导航">
-      <div className="identity"><Avatar size={42} /><div><strong>小幽</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</small></div></div>
+    <aside className="sidebar" aria-label="小鱼导航">
+      <div className="identity"><Avatar size={42} /><div><strong>小鱼</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</small></div></div>
       <button className={'nav ' + (page === 'chat' && conversation?.id === 'default' && !target?.legacy ? 'selected' : '')} onClick={() => void chooseConversation('default')}><Icon name="chat" /><span>主对话</span>{space?.conversations.find(item => item.id === 'default')?.unread && page !== 'chat' && <i className="unread-dot" />}</button>
       <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length}</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
-      <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyou.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
+      <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyu.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
       <div className="side-conversations">{space?.conversations.filter(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{shortTime(item.updatedAt)}</small>}</button>)}
         {!space?.conversations.some(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')) && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
       <div className="side-heading helpers-heading"><span>帮手</span></div>
       <div className="side-helpers">{helpers.map(item => <div className="side-helper" key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => { const task = tasks.find(task => helperMatchesTask(item, task) && activeTask(task)); task ? openTask(task) : setUsage(item.id); }}><span>{item.label}</span><small>{tasks.some(task => helperMatchesTask(item, task) && activeTask(task)) ? tasks.some(task => helperMatchesTask(item, task) && task.state === 'waiting') ? '等你确认' : '在做' : item.connected ? '空闲' : '连不上'}</small></button></div>)}
         {!helpers.length && <p className="side-empty">尚无帮手数据</p>}</div>
-      <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>设置</span></button><small>小幽桌面版 {view.version}</small></div>
+      <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>设置</span></button><small>小鱼桌面版 {view.version}</small></div>
     </aside>
     <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')}><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</button>}</header>
       {problem && <div role="alert" className="alert"><span>{problem}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
       {page === 'chat' && <>
-        <section className="companion-header"><Avatar size={64} /><div className="companion-intro"><div><strong>小幽</strong><span>换个地方，接着聊。</span></div><div className="helper-pills">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}{!helpers.length && <small>帮手信息暂未上报</small>}</div></div></section>
+        <section className="companion-header"><Avatar size={64} /><div className="companion-intro"><div><strong>小鱼</strong><span>换个地方，接着聊。</span></div><div className="helper-pills">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}{!helpers.length && <small>帮手信息暂未上报</small>}</div></div></section>
         <section className="timeline" aria-label="聊天记录" aria-live="polite">
           {conversation?.context && <div className="conversation-context"><Icon name="quote" /><div><strong>来自{conversation.context.conversation === 'default' ? '主对话' : '另一段聊天'}</strong><p>{String(conversation.context.text || '')}</p></div></div>}
           {target?.legacy && <p className="legacy-note">当前服务使用任务会话续聊，这里的消息只属于这项工作。</p>}
-          {messages.length === 0 && pending.length === 0 && <div className="chat-empty"><p>{conversation?.id && conversation.id !== 'default' ? '从这里开始这段旁聊。' : '想说什么，都可以从这里开始。'}</p>{conversation?.id !== 'default' && <small>发出第一句话后，标题会随会话记录更新。</small>}{!space && <button className="primary" onClick={() => setSetupOpen(true)}>连接小幽</button>}</div>}
+          {messages.length === 0 && pending.length === 0 && <div className="chat-empty"><p>{conversation?.id && conversation.id !== 'default' ? '从这里开始这段旁聊。' : '想说什么，都可以从这里开始。'}</p>{conversation?.id !== 'default' && <small>发出第一句话后，标题会随会话记录更新。</small>}{!space && <button className="primary" onClick={() => setSetupOpen(true)}>连接小鱼</button>}</div>}
           {messages.length > historyLimit && <button className="history-more" onClick={() => setHistoryLimit(value => value + 100)}>查看更早的消息</button>}
           {messages.slice(-historyLimit).map(message => {
             const task = tasks.find(task => task.id === message.task && task._runtimeId === message._runtimeId);
@@ -152,12 +152,12 @@ function App() {
               onReview={reviewable(message) ? () => setReview({ runtime: String(message._runtimeId), record: 'messages/' + requestOf(message.id) }) : undefined} canBranch={Boolean(space?.connections?.find(item => item.runtime === message._runtimeId)?.capabilities.includes('side_chats'))} />;
           })}
           {pending.map(item => <article className="message-row mine" key={item.clientId}><div className="message-bubble"><p>{item.payload.text}</p><small>{item.state === 'accepted' ? '已接收，等待回复' : item.state === 'blocked' ? item.error : item.error || '已存本机，等待发送'}</small></div></article>)}
-          {waiting && <div className="thinking" role="status"><span className="working-dot" />{waitingProblem ? '回复状态待确认：' + waitingProblem : space?.connected ? '正在等待小幽回复…' : '连接恢复中，回复状态待确认…'}</div>}
-          {space?.approvals.filter(approval => String(approval.conversation || 'default') === space.selectedConversation).map(approval => <Decision key={String(approval._canonical || approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyou.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
+          {waiting && <div className="thinking" role="status"><span className="working-dot" />{waitingProblem ? '回复状态待确认：' + waitingProblem : space?.connected ? '正在等待小鱼回复…' : '连接恢复中，回复状态待确认…'}</div>}
+          {space?.approvals.filter(approval => String(approval.conversation || 'default') === space.selectedConversation).map(approval => <Decision key={String(approval._canonical || approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyu.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
           <div ref={bottom} />
         </section>
         <div className="compose-area">{linkedTask && <div className="task-target"><Icon name="quote" /><span>补充：{String(linkedTask.title)}</span><button className="icon-button" aria-label="取消任务关联" onClick={() => setTarget(undefined)}><Icon name="close" /></button></div>}
-          <form className="composer" onSubmit={submit}><textarea ref={input} aria-label="消息" value={text} disabled={!space} placeholder={target ? '补充这件事的要求…' : '跟小幽说…'} rows={1} maxLength={32000} onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(event); } }} />
+          <form className="composer" onSubmit={submit}><textarea ref={input} aria-label="消息" value={text} disabled={!space} placeholder={target ? '补充这件事的要求…' : '跟小鱼说…'} rows={1} maxLength={32000} onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(event); } }} />
             <button className="icon-button" type="button" aria-label="语音输入" title="语音输入暂不可用" onClick={() => setProblem('当前桌面版本暂未接入语音输入，请先使用文字。')}><Icon name="mic" /></button>
             <div className="attachment-wrap"><button className="icon-button" type="button" aria-label="添加照片或文件" aria-expanded={attachmentsOpen} onClick={() => setAttachmentsOpen(value => !value)}><Icon name="plus" /></button>{attachmentsOpen && <div className="attachment-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送照片，可在手机 App 发送。'); }}><Icon name="image" />照片</button><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送文件。'); }}><Icon name="file" />文件</button></div>}</div>
             <button className="send" type="submit" aria-label="发送" disabled={!space || !text.trim() || sending}><Icon name="up" /></button>
@@ -168,31 +168,31 @@ function App() {
           <Icon name="clock" /><span>{row.kind === 'promise' ? '提醒' : '记忆整理'}结果不明</span><small>{row.reviewable ? reviewLabel(row.status) : String(row.reason || '暂时不能核对')}</small></button>)}
         {timerRows.some(row => row.more) && <p className="quiet-empty">还有更多，处理完这些后会接着列出</p>}</>}
         {awaiting.length > 0 && <h2>等你确认</h2>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
-        {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小幽会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+        {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小鱼会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
         {completed.length > 0 && <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已结束 {completed.length}</button>}{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
         <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一件事')}</h2></div>
           <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{stopping === taskKey(selected) && activeTask(selected) ? '正在停止…' : selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{taskProgress(selected) || '暂无新的进展'}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
-          {space?.approvals.filter(approval => approval._runtimeId === selected._runtimeId && (approval.card === selected.id || approval.task === selected.id || (selected.approval as Json | undefined)?.id === approval.id)).map(approval => <Decision key={String(approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyou.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
+          {space?.approvals.filter(approval => approval._runtimeId === selected._runtimeId && (approval.card === selected.id || approval.task === selected.id || (selected.approval as Json | undefined)?.id === approval.id)).map(approval => <Decision key={String(approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyu.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
           <div className="task-detail-actions"><button className="primary" disabled={working || Boolean(selected._staleEpoch) || Boolean(selected.monitoring_only)} onClick={() => void run(() => supplement(selected))}>补充要求</button>
-            {canOpenNative(selected, space) && <button disabled={working} onClick={() => space && void run(() => window.xiaoyou.openNative({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}>在 Codex 打开 <Icon name="external" /></button>}</div>
+            {canOpenNative(selected, space) && <button disabled={working} onClick={() => space && void run(() => window.xiaoyu.openNative({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}>在 Codex 打开 <Icon name="external" /></button>}</div>
           <div className="progress-heading"><h3>最近进展</h3><button className="quiet-button" onClick={() => setAllSteps(value => !value)}>{allSteps ? '收起' : '全部' + (progressCount(detail) ? ' ' + progressCount(detail) : '')}</button></div>
           {detailError && <p className="quiet-empty">{detailError}</p>}{Boolean(detail?.cached) && <p className="quiet-empty">连不上，显示上次的记录</p>}
           <Progress detail={detail} all={allSteps} />
-          {allSteps && detail?.more === true && <button className="quiet-button" onClick={() => space && selectedTask && void readAction(async () => { const generation = detailGeneration.current; const previous = await window.xiaoyou.taskDetail({ space: space.id, ...selectedTask, before: Number(detail.before) }); if (generation !== detailGeneration.current) return; setDetail(value => ({ ...previous, events: [...(previous.events as Json[] || []), ...(value?.events as Json[] || [])] })); })}>加载更早进展</button>}
+          {allSteps && detail?.more === true && <button className="quiet-button" onClick={() => space && selectedTask && void readAction(async () => { const generation = detailGeneration.current; const previous = await window.xiaoyu.taskDetail({ space: space.id, ...selectedTask, before: Number(detail.before) }); if (generation !== detailGeneration.current) return; setDetail(value => ({ ...previous, events: [...(previous.events as Json[] || []), ...(value?.events as Json[] || [])] })); })}>加载更早进展</button>}
           <div className="task-meta"><span>{space?.connections?.find(item => item.runtime === selected._runtimeId)?.name || '来源设备'}</span><button className="quiet-button" onClick={() => void readAction(async () => { await chooseConversation(String(selected.conversation || 'default')); setHighlight(String(selected.origin_message || '')); })}>来源聊天 <Icon name="next" /></button><button className="quiet-button" onClick={() => go('native')}>原会话 <Icon name="next" /></button></div>
           <details className="execution-info"><summary><Icon name="info" />执行信息</summary><dl><dt>执行者</dt><dd>{String(selected.worker_agent || selected.agent || '未记录')}</dd><dt>目录</dt><dd>{String(selected.worker_cwd || selected.project || '未记录')}</dd><dt>会话</dt><dd>{String(selected.worker_session || selected.session_id || '未记录')}</dd></dl></details>
-          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(async () => { await window.xiaoyou.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }); setStopping(taskKey(selected)); })}><Icon name="stop" />停止</button>}
+          {activeTask(selected) && <button className="quiet-button stop-task" disabled={working || Boolean(selected._staleEpoch)} onClick={() => space && void run(async () => { await window.xiaoyu.cancel({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }); setStopping(taskKey(selected)); })}><Icon name="stop" />停止</button>}
           {unverifiedTask(selected) && !selected.monitoring_only && Boolean(selected.run_id) && space?.connections?.find(item => item.runtime === selected._runtimeId)?.capabilities.includes('execution_reconciliation')
-            && <div className="reconcile"><button disabled={working} onClick={() => space && void run(async () => { setReconcileNote(''); const status = await window.xiaoyou.reconcile({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId), run: String(selected.run_id) }); setReconcileNote(status === 'confirmed' ? '核对好了，结果已回到原对话' : '没找到足够的完成证据，保持待确认'); })}>核对结果</button>{reconcileNote && <small role="status">{reconcileNote}</small>}</div>}
+            && <div className="reconcile"><button disabled={working} onClick={() => space && void run(async () => { setReconcileNote(''); const status = await window.xiaoyu.reconcile({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId), run: String(selected.run_id) }); setReconcileNote(status === 'confirmed' ? '核对好了，结果已回到原对话' : '没找到足够的完成证据，保持待确认'); })}>核对结果</button>{reconcileNote && <small role="status">{reconcileNote}</small>}</div>}
         </> : <div className="work-unselected">选一件事，查看进展。</div>}</div></section>}
-      {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小幽转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
-        {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小幽')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
+      {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小鱼转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
+        {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小鱼')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
         {(!detail || !(detail.entries as Json[] | undefined)?.length) && <p className="quiet-empty">尚无可读取的原会话片段。</p>}{selected && !selected.monitoring_only && <button className="primary" onClick={() => void run(() => supplement(selected))}>补充要求</button>}</section>}
-      {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyou.select(id))} onDirectory={() => setDirectoryOpen(true)} />}
+      {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyu.select(id))} onDirectory={() => setDirectoryOpen(true)} />}
     </main>
     {directoryOpen && space && <Directory key={space.id} space={space} onClose={()=>setDirectoryOpen(false)}/>}
     {review && space && <EffectReview key={review.runtime + '/' + review.record} space={space.id} target={review} onClose={() => { setReview(undefined); loadTimers(); }} />}
-    {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyou.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
+    {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyu.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
   </div>;
 }
 function Bubble({ message, task, onTask, onBranch, onReview, canBranch, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onBranch(): void; onReview?: () => void; canBranch: boolean; highlight: boolean }) {
@@ -211,7 +211,7 @@ function EffectReview({ space, target, onClose }: { space: string; target: { run
   const load = async (message = '') => {
     setView(undefined); setChosen({}); setProblem(message);
     try {
-      const value = await window.xiaoyou.effectReview({ space, ...target });
+      const value = await window.xiaoyu.effectReview({ space, ...target });
       setView(value); setChosen((value.saved_outcomes || (value.review as Json | undefined)?.outcomes || {}) as Record<string, ReviewOutcome>);
     } catch (error) { setProblem([message, clean(error)].filter(Boolean).join('。')); }
   };
@@ -222,7 +222,7 @@ function EffectReview({ space, target, onClose }: { space: string; target: { run
   async function submit() {
     setBusy(true); setProblem('');
     try {
-      const result = await window.xiaoyou.submitEffectReview({ space, ...target, revision: String(view?.revision || ''), outcomes: chosen as Record<string, ReviewOutcome> });
+      const result = await window.xiaoyu.submitEffectReview({ space, ...target, revision: String(view?.revision || ''), outcomes: chosen as Record<string, ReviewOutcome> });
       if (result.status === 'reviewed') { onClose(); return; }
       setView({ ...result, saved: true });
     } catch (error) {
@@ -276,17 +276,17 @@ function Usage({ helper, tasks, disabled, onClose, onRefresh, onTask }: { helper
 }
 function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory }: { view: ClientView; space?: SpaceView; disabled: boolean; onSetup(): void; onRun(action: () => Promise<unknown>): Promise<void>; onSelect(id: string): void; onDirectory(): void }) {
   return <section className="settings-page">
-    <div className="settings-group">小幽</div><AccountPanel view={view.account} onConfigure={onSetup} />
+    <div className="settings-group">小鱼</div><AccountPanel view={view.account} onConfigure={onSetup} />
     <article className="settings-card vertical"><h3>已登录的电脑</h3>
-      <p>在新电脑登录同一个小幽账号，就会通过服务器自动连接。帮手、模型密钥和执行权限保留在各自电脑上。</p>
+      <p>在新电脑登录同一个小鱼账号，就会通过服务器自动连接。帮手、模型密钥和执行权限保留在各自电脑上。</p>
       {space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '离线，等待恢复'}</small></div>)}
       <p role="status">{view.pairing.relayState}</p>
     </article>
     <div className="settings-group">帮手</div>
     <HelperSettings space={space} helpers={space?.helpers || []} disabled={disabled} onRun={onRun} />
     <div className="settings-group">偏好</div>
-    <article className="settings-card"><div><h3>小幽在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
-    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyou.loginStart(false))}>关闭</button></article>
+    <article className="settings-card"><div><h3>小鱼在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
+    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(false))}>关闭</button></article>
     <details className="advanced"><summary>会话目录</summary>
       <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
       {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}
@@ -298,5 +298,5 @@ function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(
   && space.helpers?.some(item => item.runtime === task._runtimeId && item.name === (task.worker_agent || task.agent) && item.type === 'codex')); }
 function clean(error: unknown): string { return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '操作未完成，请重试'; }
 /** Same wording as the phone (WorkRecords.relayLabel). */
-function relayLabel(state: string): string { return ({ supplement_received: '已收到补充要求', received: '已收到补充要求', relay_queued: '补充要求等本轮结束后转交', queued: '补充要求等本轮结束后转交', relayed: '补充要求已转交原会话', executing: '正在执行补充要求', interrupted: '小幽重启过，补充要求还留着，等你确认后再转交' } as Record<string, string>)[state] || '补充要求状态：' + state; }
+function relayLabel(state: string): string { return ({ supplement_received: '已收到补充要求', received: '已收到补充要求', relay_queued: '补充要求等本轮结束后转交', queued: '补充要求等本轮结束后转交', relayed: '补充要求已转交原会话', executing: '正在执行补充要求', interrupted: '小鱼重启过，补充要求还留着，等你确认后再转交' } as Record<string, string>)[state] || '补充要求状态：' + state; }
 createRoot(document.getElementById('root')!).render(<App />);

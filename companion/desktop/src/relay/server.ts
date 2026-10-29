@@ -73,11 +73,11 @@ export function createRelay(token: string, tls?: ServerOptions, accounts?: Relay
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const token = process.env.XIAOYOU_RELAY_TOKEN || '';
-  const host = process.env.XIAOYOU_RELAY_HOST || '127.0.0.1';
+  const token = process.env.XIAOYU_RELAY_TOKEN || '';
+  const host = process.env.XIAOYU_RELAY_HOST || '127.0.0.1';
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('Bind loopback behind a TLS reverse proxy');
   const server = createRelay(token);
-  server.listen(Number(process.env.XIAOYOU_RELAY_PORT || 8795), host, () => process.stdout.write('Xiaoyou relay ready\n'));
+  server.listen(Number(process.env.XIAOYU_RELAY_PORT || 8795), host, () => process.stdout.write('Xiaoyu relay ready\n'));
   const stop = () => server.close();
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
 }

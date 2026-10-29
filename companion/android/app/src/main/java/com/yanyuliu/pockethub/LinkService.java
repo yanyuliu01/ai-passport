@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.TimeZone;
 
 /**
- * 前台服务：保持和小幽的蓝牙连接，把中枢的状态翻译成设备协议发过去，
+ * 前台服务：保持和小鱼的蓝牙连接，把中枢的状态翻译成设备协议发过去，
  * 把设备上的回答交回中枢。应用界面关掉后它继续运行。
  */
 public class LinkService extends Service implements BleLink.Listener, HubStore.Listener {
@@ -306,7 +306,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         firmware.onClosed();
     }
 
-    /** 问一次小幽有哪些帮手，告诉设备。清单没变就不重发。 */
+    /** 问一次小鱼有哪些帮手，告诉设备。清单没变就不重发。 */
     private void refreshHelpers() {
         RuntimeClient.fetchAgents(this, agents -> main.post(() -> {
             if (link == null || !link.isReady() || !deviceChat) {

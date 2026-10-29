@@ -94,7 +94,7 @@ static void show(const char *name, const buddy_ui_snapshot_t *snapshot)
 
     pocket_ui_render(snapshot);
     save(name);
-    /* 同一份快照反复渲染不应该带来额外的刷屏。小幽自己会动（每 450 ms 一帧），
+    /* 同一份快照反复渲染不应该带来额外的刷屏。小鱼自己会动（每 450 ms 一帧），
      * 所以先量一段“不渲染”时的刷屏次数作基线，再量同样时长“每 50 ms 渲染一次”。 */
     {
         unsigned baseline;
@@ -164,7 +164,7 @@ static buddy_ui_snapshot_t live_snapshot(void)
     return snap;
 }
 
-/* Connected to the phone hub: Xiaoyou is on the other end. */
+/* Connected to the phone hub: Xiaoyu is on the other end. */
 static buddy_ui_snapshot_t hub_snapshot(void)
 {
     buddy_ui_snapshot_t snap = live_snapshot();
@@ -339,7 +339,7 @@ int main(int argc, char **argv)
     snap.heartbeat_stale = true;
     show("05_home_linking", &snap);
 
-    /* ---- the conversation with Xiaoyou (phone hub) ---- */
+    /* ---- the conversation with Xiaoyu (phone hub) ---- */
     snap = hub_snapshot();
     show("06_home_quiet", &snap);
     /* Notifications from other apps do not interrupt; the page only mentions them. */
@@ -366,7 +366,7 @@ int main(int argc, char **argv)
     snap.voice_phase = BUDDY_VOICE_SENDING;
     show("09_voice_sending", &snap);
 
-    /* ---- first screen: Xiaoyou and what she is doing ---- */
+    /* ---- first screen: Xiaoyu and what she is doing ---- */
     snap = hub_snapshot();
     snap.doing = 2;
     show("10_home_quiet_doing", &snap);
@@ -562,9 +562,9 @@ int main(int argc, char **argv)
     show("50_tasks_ended_cancelled_no_card", &snap);
     /* OK on a picked thing: that thing's own page, opened at its newest end. */
     put_card("c4", "14:31", BUDDY_CARD_DONE, "claude", 2, "把周报改成三段",
-             "小幽：交给 claude 了\n\n你：每段不要超过一百字\n\n小幽：好，告诉 claude 了\n\n"
+             "小鱼：交给 claude 了\n\n你：每段不要超过一百字\n\n小鱼：好，告诉 claude 了\n\n"
              "你：标题也改一下，叫十月第一周\n\n"
-             "小幽：改好了：进展、风险、下周计划各一段，一共 280 字，标题是十月第一周。",
+             "小鱼：改好了：进展、风险、下周计划各一段，一共 280 字，标题是十月第一周。",
              false);
     snap.page = BUDDY_PAGE_TALK;
     snap.card_thread = true;
@@ -642,7 +642,7 @@ int main(int argc, char **argv)
     snap.card_serial = 30;
     show("63_history_page_waiting_for_card", &snap);
     put_card("c56", "09:12", BUDDY_CARD_CANCELLED, "codex", 0, "看看登录为什么慢",
-             "小幽：交给 codex 了\n\n你：先不看了\n\n小幽：好，停掉了。", false);
+             "小鱼：交给 codex 了\n\n你：先不看了\n\n小鱼：好，停掉了。", false);
     snap.card_index = buddy_cards_find(&s_cards, "c56");
     snap.card_serial = 31;
     show("64_history_page_card", &snap);

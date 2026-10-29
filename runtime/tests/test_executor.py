@@ -6,11 +6,11 @@ import unittest
 from unittest import mock
 from types import SimpleNamespace
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.tasks import fingerprint
-from xiaoyou_runtime.errors import AgentError
-from xiaoyou_runtime.loop.effects import Effects, EffectFenceError, EffectUncertain
-from xiaoyou_runtime.loop.xiaoyou import Turn
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.tasks import fingerprint
+from xiaoyu_runtime.errors import AgentError
+from xiaoyu_runtime.loop.effects import Effects, EffectFenceError, EffectUncertain
+from xiaoyu_runtime.loop.xiaoyu import Turn
 
 
 class ExecutorTests(TempDirCase):
@@ -18,7 +18,7 @@ class ExecutorTests(TempDirCase):
         super().setUp()
         self.voice = Scripted("voice", speaks=True)
         self.helper = Scripted("worker", speaks=False)
-        self.x, _ = make_xiaoyou(self.folder, [self.voice, self.helper])
+        self.x, _ = make_xiaoyu(self.folder, [self.voice, self.helper])
         self.addCleanup(self.x.close)
         self.card = self.x.record.task_open("side", "original", "working", "worker")
         self.message = {"id": "r1", "conversation": "side"}

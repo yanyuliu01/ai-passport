@@ -7,23 +7,23 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou  # noqa: E402
-import xiaoyou_runtime.api.service as service_module  # noqa: E402
-from xiaoyou_runtime.api.service import Service  # noqa: E402
+from test_runtime import Scripted, TempDirCase, make_xiaoyu  # noqa: E402
+import xiaoyu_runtime.api.service as service_module  # noqa: E402
+from xiaoyu_runtime.api.service import Service  # noqa: E402
 
 
 class SyncWindowTests(TempDirCase):
     def setUp(self):
         super().setUp()
         agent = Scripted("claude")
-        self.xiaoyou, store = make_xiaoyou(self.folder, [agent])
-        self.service = Service(self.xiaoyou, store)
+        self.xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        self.service = Service(self.xiaoyu, store)
         self.addCleanup(self.service.close)
-        self.cards = self.xiaoyou.cards
+        self.cards = self.xiaoyu.cards
         self.cards.open("default", "先有一件事", "done")  # 游标从大于 0 开始才是增量
 
     def chat(self, count, conversation="default", words="说了一句"):
-        """开几件事，每件说几句：日志里攒下 count 句小幽说的话。"""
+        """开几件事，每件说几句：日志里攒下 count 句小鱼说的话。"""
         card = None
         for index in range(count):
             if index % 20 == 0:

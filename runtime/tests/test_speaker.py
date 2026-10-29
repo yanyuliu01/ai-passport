@@ -4,17 +4,17 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.helpers.base import Outcome
-from xiaoyou_runtime.errors import AgentError
-from xiaoyou_runtime.loop.effects import EffectFenceError
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.helpers.base import Outcome
+from xiaoyu_runtime.errors import AgentError
+from xiaoyu_runtime.loop.effects import EffectFenceError
 
 
 class SpeakerTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.voice = Scripted("voice", speaks=True)
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.addCleanup(self.x.close)
         card = self.x.record.task_open("side", "saved context")
         self.x.record.exchange(card["id"], "saved question", "saved answer", turn_id="old")
@@ -108,7 +108,7 @@ class SpeakerTests(TempDirCase):
     def test_streamer_retains_throttle_retraction_and_complete_text_replacement(self):
         shown = []
         stream = self.x._streamer("voice", lambda kind, agent, text: shown.append((kind, agent, text)))
-        with mock.patch("xiaoyou_runtime.loop.xiaoyou.time.monotonic", side_effect=[0, .01, .2]):
+        with mock.patch("xiaoyu_runtime.loop.xiaoyu.time.monotonic", side_effect=[0, .01, .2]):
             stream('{"reply":"first"}')
             stream("")
             stream('{"reply":"too soon"}')

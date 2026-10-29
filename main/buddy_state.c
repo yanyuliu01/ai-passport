@@ -140,7 +140,7 @@ static int buddy_card_index(const buddy_state_t *state)
 }
 
 /* Whether the conversation screen shows the turn in progress instead of a card:
- * it has no card yet (a recording being transcribed, Xiaoyou still thinking), it
+ * it has no card yet (a recording being transcribed, Xiaoyu still thinking), it
  * never gets one (the recording was not understood), or the host does not send
  * cards at all (the Claude desktop app, an older phone app). */
 static bool buddy_card_live(const buddy_state_t *state)
@@ -710,7 +710,7 @@ static void buddy_apply_permission_result(buddy_state_t *state,
 /* The thing a recording started now is about: inside an opened thing, that
  * thing (*pin: it is said inside it and stays on it); on the third screen's
  * list the thing that is selected, and on the conversation screen the card that
- * is showing (hints only: Xiaoyou still decides, so a new request on the list
+ * is showing (hints only: Xiaoyu still decides, so a new request on the list
  * becomes a thing of its own instead of piling onto the selected one). */
 static void buddy_voice_card(const buddy_state_t *state, char *id, size_t size, bool *pin)
 {

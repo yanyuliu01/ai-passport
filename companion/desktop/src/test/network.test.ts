@@ -24,7 +24,7 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   const server = createRelay(token);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
-  const folder = mkdtempSync(join(tmpdir(), 'xiaoyou-network-test-'));
+  const folder = mkdtempSync(join(tmpdir(), 'xiaoyu-network-test-'));
   const dbA = new ClientDatabase(join(folder, 'a.sqlite')), dbB = new ClientDatabase(join(folder, 'b.sqlite'));
   const remoteA: Endpoint[] = [], remoteB: Endpoint[] = [];
   const changesA: Parameters<PeerEvents['changed']>[0][] = [], changesB: Parameters<PeerEvents['changed']>[0][] = [];

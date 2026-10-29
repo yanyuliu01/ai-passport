@@ -2,7 +2,7 @@
 
 # 代码清理执行方案（第一阶段）
 
-状态：执行方案，2026-10-23，待主人确认后开始。依据是[小幽完整方案](xiaoyou-agent-model.zh_CN.md)和[交互简化问题清单](app-runtime-simplification.zh_CN.md)。
+状态：执行方案，2026-10-23，待主人确认后开始。依据是[小鱼完整方案](xiaoyu-agent-model.zh_CN.md)和[交互简化问题清单](app-runtime-simplification.zh_CN.md)。
 
 ## 范围
 
@@ -37,11 +37,11 @@
 
 | 删除 | 位置 |
 | --- | --- |
-| 追问提示词 `PROMISE_NUDGE` | `runtime/xiaoyou_runtime/loop/voice_tools.py` |
-| 工具循环里的 `nudged` 分支和对它的特殊处理 | `runtime/xiaoyou_runtime/helpers/dsh_stream.py` 约 280～325 行 |
+| 追问提示词 `PROMISE_NUDGE` | `runtime/xiaoyu_runtime/loop/voice_tools.py` |
+| 工具循环里的 `nudged` 分支和对它的特殊处理 | `runtime/xiaoyu_runtime/helpers/dsh_stream.py` 约 280～325 行 |
 | 测试里对追问的断言 | `runtime/tests/test_decision.py` |
 
-保留：`promised()` 正则只作计数（`xiaoyou.py` 已经这样用）；`promises.mark_nudged` 是到点提醒，与追问无关，不动。
+保留：`promised()` 正则只作计数（`xiaoyu.py` 已经这样用）；`promises.mark_nudged` 是到点提醒，与追问无关，不动。
 
 验证：Runtime 全部测试；新增一条测试——一句会被正则判成承诺、但没有调工具的回复，只调用一次模型，只产生一段回复。
 

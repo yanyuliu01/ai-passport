@@ -19,10 +19,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 和小幽 Runtime 说话：把一句话发过去，等它处理完，把回复交给中枢。
+ * 和小鱼 Runtime 说话：把一句话发过去，等它处理完，把回复交给中枢。
  *
  * Runtime 的地址和令牌用一条“连接串”设置：http://主机:端口#令牌，
- * 由电脑上的 `python3 -m xiaoyou_runtime --pair` 打印出来。
+ * 由电脑上的 `python3 -m xiaoyu_runtime --pair` 打印出来。
  * 消息一条一条顺序处理，和 Runtime 那边的做法一致。
  */
 final class RuntimeClient {
@@ -62,7 +62,7 @@ final class RuntimeClient {
         if (pending != null) pending.disconnect();
         RelayManager.cancelSyncReads();
     }
-    /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小幽回话，不能排在它后面。 */
+    /** 界面上查固件、选版本用的线程：聊天那一条可能正等着小鱼回话，不能排在它后面。 */
     private static final ExecutorService FIRMWARE_WORKER = Executors.newSingleThreadExecutor();
     private static final ExecutorService AGENTS_WORKER = Executors.newSingleThreadExecutor();
 
@@ -188,13 +188,13 @@ final class RuntimeClient {
         return url;
     }
 
-    /** 这个地址上的小幽是哪一个（小幽网络里每台都一样，见 Runtime 的 mesh.py）；没加入网络是空串。 */
+    /** 这个地址上的小鱼是哪一个（小鱼网络里每台都一样，见 Runtime 的 mesh.py）；没加入网络是空串。 */
     static String subjectId(Context context, String url) {
         return prefs(context).getString("sid:" + url, "");
     }
 
     /**
-     * 哪些地址算“同一个”：同一个小幽网络里的几台（它们的记录都一样），否则同一台 Runtime 的
+     * 哪些地址算“同一个”：同一个小鱼网络里的几台（它们的记录都一样），否则同一台 Runtime 的
      * 几个地址，再否则就是这个地址自己。授权只按组盯一份，免得同一个授权弹两次。
      */
     static String groupKey(Context context, Target target) {
@@ -209,7 +209,7 @@ final class RuntimeClient {
 
     /**
      * 连不上当前这个时换着试的：先是同一台 Runtime 的其他地址（局域网、Funnel），再是同一个
-     * 小幽网络里的别的电脑（它们有一样的对话和任务，只是卡的编号各算各的，换过去时从头取一次）。
+     * 小鱼网络里的别的电脑（它们有一样的对话和任务，只是卡的编号各算各的，换过去时从头取一次）。
      */
     static synchronized List<Target> siblings(Context context, Target target) {
         List<Target> same = new ArrayList<>(), others = new ArrayList<>();
@@ -223,7 +223,7 @@ final class RuntimeClient {
         return same;
     }
 
-    /** 问一次这个地址上的 Runtime 是谁（记下 runtime_id、小幽网络的主体）；问不到就算了。 */
+    /** 问一次这个地址上的 Runtime 是谁（记下 runtime_id、小鱼网络的主体）；问不到就算了。 */
     static void learn(Context context, Target target) throws IOException {
         identify(context, target, false);
     }
@@ -251,9 +251,9 @@ final class RuntimeClient {
             if (direct && abilities.contains("host_proof")) {
                 Map<String, Object> host = Json.object(info.get("host"));
                 if (!HostProof.matches(target.token, Json.string(host, "id"), nonce, Json.string(host, "proof"))) {
-                    // 答不出证明：不是持有这部手机凭据的小幽。不再往下发请求，等主人重新配对。
+                    // 答不出证明：不是持有这部手机凭据的小鱼。不再往下发请求，等主人重新配对。
                     if (display) HubStore.get().pairingProblem(true);
-                    throw new IOException("需要重新配对：这个地址上的电脑没能证明自己是你配对的小幽");
+                    throw new IOException("需要重新配对：这个地址上的电脑没能证明自己是你配对的小鱼");
                 }
             }
             Target selected = selected(context);
@@ -268,7 +268,7 @@ final class RuntimeClient {
                 HubStore.get().pairingProblem(false);
                 HubStore.get().capabilities(abilities);
             }
-            // 加入了小幽网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
+            // 加入了小鱼网络（mesh）的才按主体并：没加入的每台各有自己的主体编号，不能并。
             String subject = (abilities.contains("mesh") || target.url.startsWith("relay://")) ? Json.string(info, "subject_id") : "";
             synchronized (RuntimeClient.class) {
                 if ((!id.isEmpty() && !id.equals(runtimeId(context, target.url))) || !subject.equals(subjectId(context, target.url)))
@@ -285,7 +285,7 @@ final class RuntimeClient {
     }
 
     /**
-     * 还在用旧的共享令牌：换成这部手机自己的凭据。同一个小幽（同一主体）只要一份凭据，各条线路共用：
+     * 还在用旧的共享令牌：换成这部手机自己的凭据。同一个小鱼（同一主体）只要一份凭据，各条线路共用：
      * 已有就拿来在这条线路上核对；没有才向这台电脑要（POST /v1/devices），要到但还不能用的先记着，
      * 下次接着核对，不重复要新的。只有这份凭据在这条线路上通过认证、答对 host_proof、而且还是
      * 同一主体，才替换这条线路的令牌；别的电脑还没同步到凭据时，这条线路继续用原来的认证。
@@ -375,7 +375,7 @@ final class RuntimeClient {
         final Context app = context.getApplicationContext();
         ApprovalNotifications.start(app);
         ApprovalMonitor.start(app);
-        watcher = new Thread(() -> watchLoop(app), "xiaoyou-feed");
+        watcher = new Thread(() -> watchLoop(app), "xiaoyu-feed");
         watcher.setDaemon(true);
         watcher.start();
     }
@@ -699,7 +699,7 @@ final class RuntimeClient {
     }
 
     /**
-     * 问现在用的那台 Runtime：小幽有哪些帮手。默认接话的那个代理就是小幽自己用来说话的，
+     * 问现在用的那台 Runtime：小鱼有哪些帮手。默认接话的那个代理就是小鱼自己用来说话的，
      * 也列在里面——在设备上它和别的帮手一样，是她能找的人。问不到时不回调。
      */
     static void fetchAgents(Context context, AgentsCallback callback) {
@@ -722,7 +722,7 @@ final class RuntimeClient {
                 callback.onAgents(agents);
             } catch (IOException | RuntimeException error) {
                 // 旧版 Runtime 没有这个接口，或者暂时连不上：设备上的帮手页就先空着。
-                HubStore.get().log("没问到小幽有哪些帮手：" + error.getMessage());
+                HubStore.get().log("没问到小鱼有哪些帮手：" + error.getMessage());
             }
         });
     }
@@ -859,7 +859,7 @@ final class RuntimeClient {
     }
 
     static String savePairing(Context context, String pairing) {
-        return "连接已统一，请登录小幽账号；原配对和历史保留";
+        return "连接已统一，请登录小鱼账号；原配对和历史保留";
     }
 
     // ---- 最近的对话：存在手机上，换 Runtime 时带过去 ----
@@ -890,7 +890,7 @@ final class RuntimeClient {
     static final String VOICE_PLACEHOLDER = "（语音）";
 
     /**
-     * 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。card 为 null 是对小幽说的，
+     * 发一句话。结果通过 HubStore 的聊天状态反映出来，这里不返回。card 为 null 是对小鱼说的，
      * 否则是在那件事里面说的；effort 是让帮手用哪一档做（low、medium、high），agent 是点名的帮手。
      */
     static void send(Context context, String text, String card, String effort, String agent) {
@@ -1051,7 +1051,7 @@ final class RuntimeClient {
      * unconfirmed（证据不足，保持待确认）；轮次变了、在别的电脑执行等返回 409，原话交给界面。
      */
     static void reconcile(Context context, String card, String runId, CatalogCallback callback) {
-        Target target = selected(context); if (target == null) { callback.done(null, "连不上小幽"); return; }
+        Target target = selected(context); if (target == null) { callback.done(null, "连不上小鱼"); return; }
         QUICK.execute(() -> {
             Map<String, Object> result = null; String error = null;
             try {
@@ -1104,7 +1104,7 @@ final class RuntimeClient {
      */
     static void effects(Context context, ReviewRecovery.Source source, String record, EffectReview shown,
                         Map<String, String> outcomes, ReviewViewResult callback) {
-        if (source == null) { callback.done(null, "连不上小幽"); return; }
+        if (source == null) { callback.done(null, "连不上小鱼"); return; }
         Map<String, String> choices = outcomes == null ? null : new java.util.LinkedHashMap<>(outcomes);
         QUICK.execute(() -> {
             ReviewRecovery.View view = null; String error = null;
@@ -1125,7 +1125,7 @@ final class RuntimeClient {
     /** 等主人核对的定时操作（timer_effect_review）：一页摘要；列表变了（409）从第一页重新取。 */
     static void timerReviews(Context context, String cursor, ReviewResult callback) {
         ReviewRecovery.Source source = reviewSource(context);
-        if (source == null) { callback.done(null, 0, "连不上小幽"); return; }
+        if (source == null) { callback.done(null, 0, "连不上小鱼"); return; }
         QUICK.execute(() -> {
             Map<String, Object> view = null; String error = null; int status = 200;
             try {
@@ -1261,7 +1261,7 @@ final class RuntimeClient {
                         if (System.currentTimeMillis() > deadline) {
                             throw new IOException("等了太久还没有结果");
                         }
-                        // 小幽把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
+                        // 小鱼把活交给了谁、帮手做完了没有：有变化就告诉中枢，设备上看得见。
                         store.chatProgress(message.get("helper"), "transcribing".equals(status) ? "正在识别语音…" : message.get("stage"));
                         // 回复还在生成：Runtime 给的是到目前为止的整段，对话里边生成边显示。
                         // 旧版 Runtime 没有这一项，就照旧等整段。
@@ -1497,7 +1497,7 @@ final class RuntimeClient {
             if (progress != null && body != null) progress.sent(body.length, body.length);
             return result;
         }
-        throw new IOException("旧直连已停用，请登录小幽账号；原请求仍绑定原来的电脑");
+        throw new IOException("旧直连已停用，请登录小鱼账号；原请求仍绑定原来的电脑");
     }
 
     private static String readAll(InputStream stream) throws IOException {

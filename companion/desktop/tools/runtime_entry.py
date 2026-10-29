@@ -1,4 +1,4 @@
-from xiaoyou_runtime.__main__ import main
+from xiaoyu_runtime.__main__ import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

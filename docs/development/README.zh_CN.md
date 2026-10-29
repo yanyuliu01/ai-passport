@@ -18,20 +18,20 @@
 ## AI 工作流
 
 - [project-status.zh_CN.md](project-status.zh_CN.md)：当前 Windows/Mac 基线、版本、未提交工作、分支用途及验收缺口。
-- [xiaoyou-system-prompt.zh_CN.md](xiaoyou-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
+- [xiaoyu-system-prompt.zh_CN.md](xiaoyu-system-prompt.zh_CN.md)：基础系统提示词、Grok Bot 整体参考映射、能力适配与验收边界。
 - [cross-stack-reliability.zh_CN.md](cross-stack-reliability.zh_CN.md)：App／Runtime／固件强制准则，包含回归、3 秒首回复、连接恢复和多端一致性。
 - [first-response-measurement.zh_CN.md](first-response-measurement.zh_CN.md)：默认流程切换前，在真实手机上测量并记录 3 秒首响应的方法。
 - [unified-message-model.zh_CN.md](unified-message-model.zh_CN.md)：统一消息结构——唯一的消息日志、编号规则、同步接口，以及新的 Runtime 或 agent 怎么接入。
 - [conversation-presentation.zh_CN.md](conversation-presentation.zh_CN.md)：项目／会话统一展示方案，包含来源与目录绑定、标题修复、事件署名与原生客户端边界。
 - [app-runtime-simplification.zh_CN.md](app-runtime-simplification.zh_CN.md)：App 与 Runtime 交互简化的问题清单，覆盖代码、体验、交互三层，含根因、目标指标与待决定事项。
-- [xiaoyou-agent-model.zh_CN.md](xiaoyou-agent-model.zh_CN.md)：小幽完整方案：简洁原则、五个页面与统一词汇、配一次就不用管的连接、主体模型（事件、世界状态、注意力与承诺、统一决策循环）、8 个接口、模块划分与分阶段实施。
+- [xiaoyu-agent-model.zh_CN.md](xiaoyu-agent-model.zh_CN.md)：小鱼完整方案：简洁原则、五个页面与统一词汇、配一次就不用管的连接、主体模型（事件、世界状态、注意力与承诺、统一决策循环）、8 个接口、模块划分与分阶段实施。
 - [code-cleanup-plan.zh_CN.md](code-cleanup-plan.zh_CN.md)：第一阶段代码清理：先对齐本地与远端，再分批删除暗中追问、App 里没人用的代码和旧版 Runtime 兼容，每批单独验证。
 - [runtime-refactor-design.zh_CN.md](runtime-refactor-design.zh_CN.md)：Runtime 三层重构设计（状态接收、回复消息、agent loop）：目标结构、接口、和现有代码的对应、迁移顺序 R1～R8。
-- [helper-capabilities.zh_CN.md](helper-capabilities.zh_CN.md)：帮手能用哪些 MCP 和 skill，由小幽按电脑统一管（参考 Raft 的托管 MCP）：能力库、连接、授权、注入的代理和分阶段。
-- [runtime-refactor-review.zh_CN.md](runtime-refactor-review.zh_CN.md)：给 CC 的评审交接，修正 Raft/DS-Bot-App 借鉴中的协调、重放与连接前提。
+- [helper-capabilities.zh_CN.md](helper-capabilities.zh_CN.md)：帮手能用哪些 MCP 和 skill，由小鱼按电脑统一管（参考 Raft 的托管 MCP）：能力库、连接、授权、注入的代理和分阶段。
+- [runtime-refactor-review.zh_CN.md](runtime-refactor-review.zh_CN.md)：给 CC 的评审交接，修正 Raft/Xiaoyu-Bot-App 借鉴中的协调、重放与连接前提。
 - [windows-public-node-handoff.zh_CN.md](windows-public-node-handoff.zh_CN.md)：家用公网节点的 Windows Codex 交接、源码快照、网络权限问题、原生构建与异网验收。
-- [xiaoyou-desktop-plan.zh_CN.md](xiaoyou-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
-- [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小幽说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
+- [xiaoyu-desktop-plan.zh_CN.md](xiaoyu-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
+- [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小鱼说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
 - [dialogue-naturalness-design.zh_CN.md](dialogue-naturalness-design.zh_CN.md)：重构后再实施的陪伴／办事上下文提议，含相处偏好、真实任务回复和表达习惯的逻辑框架图。
 - [decide-speak-experiment.zh_CN.md](decide-speak-experiment.zh_CN.md)：实验方案——先定再说的串行与推测并行对比，含 12 类 46 个用例、指标和事先定好的判定标准。
 - [decide-speak-handoff.zh_CN.md](decide-speak-handoff.zh_CN.md)：交给 Codex 跑上述实验的步骤、禁止事项和报告格式。

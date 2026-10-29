@@ -1,7 +1,7 @@
-"""Moved to xiaoyou_runtime/events/desktop_hook.py; ``python -m xiaoyou_runtime.desktop_hook`` keeps working for installed commands."""
+"""Legacy installed command compatibility."""
 import sys
-
-from .events.desktop_hook import main
-
+from pathlib import Path
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from xiaoyu_runtime.events.desktop_hook import main
+    raise SystemExit(main())

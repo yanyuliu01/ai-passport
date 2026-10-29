@@ -199,7 +199,7 @@ final class ChatHistory {
     }
 
     /**
-     * A message another client sent (or Xiaoyou's reply still being written) that is not on a card
+     * A message another client sent (or Xiaoyu's reply still being written) that is not on a card
      * yet. Local sends keep their own bubble; anything already final is left alone.
      */
     boolean pending(SyncCache.Pending item) {
@@ -246,7 +246,7 @@ final class ChatHistory {
 
     /**
      * Finished question/answer pairs of the main conversation, oldest first: what is carried to
-     * another computer so Xiaoyou there can pick up the thread. Ids are the request ids, so a
+     * another computer so Xiaoyu there can pick up the thread. Ids are the request ids, so a
      * computer that already has a turn skips it.
      */
     List<ChatTurn> turns() {

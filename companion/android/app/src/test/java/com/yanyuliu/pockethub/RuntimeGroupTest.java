@@ -3,7 +3,7 @@ package com.yanyuliu.pockethub;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
-/** 同一个小幽网络里的几台电脑算一组（授权只盯一份、连不上时换着用）。 */
+/** 同一个小鱼网络里的几台电脑算一组（授权只盯一份、连不上时换着用）。 */
 public class RuntimeGroupTest {
     @Test public void membersOfOneMeshShareAGroupEvenOnDifferentRuntimes() {
         assertEquals(RuntimeClient.groupKeyOf("s1", "mac", "https://mac.test"),

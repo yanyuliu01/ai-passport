@@ -11,10 +11,10 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from test_runtime import TempDirCase, Scripted, make_xiaoyou, write_config, start_runtime, TOKEN
-from xiaoyou_runtime.helpers import capabilities, helper_models, helpers, mcp_client, agents
-from xiaoyou_runtime import config
-from xiaoyou_runtime.api.service import Service, UnavailableError, RequestError
+from test_runtime import TempDirCase, Scripted, make_xiaoyu, write_config, start_runtime, TOKEN
+from xiaoyu_runtime.helpers import capabilities, helper_models, helpers, mcp_client, agents
+from xiaoyu_runtime import config
+from xiaoyu_runtime.api.service import Service, UnavailableError, RequestError
 
 
 class LocalModels(TempDirCase):
@@ -69,29 +69,29 @@ class LocalModels(TempDirCase):
         codex = registry.add(self.body("codex2"))
         command = agents.CodexAgent(codex).command(agents.Job("hello"), self.folder / "last.txt")
         self.assertLess(command.index("-c"), command.index("exec"))
-        self.assertIn('model_provider="xiaoyou_gateway"', command)
+        self.assertIn('model_provider="xiaoyu_gateway"', command)
         self.assertIn('wire_api="responses"', " ".join(command))
         self.assertNotIn("gateway-only-token", " ".join(command))
         dsh = registry.add(self.body("dsh2", "dsh"))
         self.assertEqual(dsh.env["DEEPSEEK_BASE_URL"], self.url)
         path = agents.DshAgent(dsh)._patch_file(self.folder / "scratch", dsh.model, False)
         data = path.read_text("utf-8")
-        self.assertIn("provider: xiaoyou_gateway", data)
+        self.assertIn("provider: xiaoyu_gateway", data)
         self.assertIn("api: openai-completions", data)
         self.assertNotIn("gateway-only-token", data)
         pi = registry.add(self.body("pi2", "pi"))
-        self.assertEqual(pi.model, "xiaoyou_gateway/vendor/model-x")
+        self.assertEqual(pi.model, "xiaoyu_gateway/vendor/model-x")
         env = agents.PiAgent(pi)._env()
         document = json.loads((Path(env["PI_CODING_AGENT_DIR"]) / "models.json").read_text("utf-8"))
-        self.assertEqual(document["providers"]["xiaoyou_gateway"]["apiKey"], helper_models.KEY_ENV)
-        self.assertEqual(document["providers"]["xiaoyou_gateway"]["models"][0]["id"], "vendor/model-x")
+        self.assertEqual(document["providers"]["xiaoyu_gateway"]["apiKey"], helper_models.KEY_ENV)
+        self.assertEqual(document["providers"]["xiaoyu_gateway"]["models"][0]["id"], "vendor/model-x")
         restored = self.registry().specs()
         self.assertEqual(len(restored), 4)
         saved = (self.folder / "state" / "helpers.json").read_text("utf-8")
         self.assertNotIn("gateway-only-token", saved)
 
     def test_service_add_checks_current_catalog_and_deletion_failure_preserves_agent(self):
-        x, store = make_xiaoyou(self.folder, [Scripted("claude")])
+        x, store = make_xiaoyu(self.folder, [Scripted("claude")])
         service = Service(x, store)
         self.addCleanup(x.close)
         self.addCleanup(service.close)
@@ -127,7 +127,7 @@ class LocalModels(TempDirCase):
     def test_native_api_and_reasoning_levels_come_from_the_live_model(self):
         self.catalog_rows = [{"id": "vendor/model-x", "native_endpoints": ["/v1/messages"],
                               "reasoning_levels": ["none", "low", "high"], "reasoning": True}]
-        x, store = make_xiaoyou(self.folder, [Scripted("claude")])
+        x, store = make_xiaoyu(self.folder, [Scripted("claude")])
         service = Service(x, store)
         self.addCleanup(x.close)
         self.addCleanup(service.close)
@@ -199,7 +199,7 @@ class McpLifecycle(TempDirCase):
                     library.close()
 
     def test_revoke_regrant_and_restart_cannot_reuse_an_old_grant_version(self):
-        x, store = make_xiaoyou(self.folder, [Scripted("claude")], capabilities=self.settings())
+        x, store = make_xiaoyu(self.folder, [Scripted("claude")], capabilities=self.settings())
         service = Service(x, store)
         self.addCleanup(x.close)
         self.addCleanup(service.close)

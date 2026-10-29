@@ -18,7 +18,7 @@ const master='test-relay-master-secret-at-least-32-characters';
 function vault():SecretStore{const m=new Map();return{load:key=>m.get(key),save:(key,value)=>m.set(key,structuredClone(value))};}
 async function until(check:()=>boolean){const deadline=Date.now()+7000;while(!check()){if(Date.now()>deadline)throw Error('test condition timeout');await new Promise(r=>setTimeout(r,10));}}
 async function fixture(t:import('node:test').TestContext){
- const folder=mkdtempSync(join(tmpdir(),'xiaoyou-accounts-'));
+ const folder=mkdtempSync(join(tmpdir(),'xiaoyu-accounts-'));
  const cert=await generate([{name:'commonName',value:'localhost'}],{keySize:2048});
  const pin=createHash('sha256').update(new X509Certificate(cert.cert).raw).digest('hex');
  const store=join(folder,'accounts.json'),accounts=new RelayAccounts(store,master);
@@ -67,7 +67,7 @@ test('directory discovery is account-scoped and cannot replace an existing space
  const second=(await EndpointCrypto.create('second')).identity;
  const b=await f.call('login',{username:'owner',password:'correct test password',device:second});
  const outsider=await f.call('register',{username:'other',password:'other private password',device:second});
- function invite(identity:typeof second,subject='a'.repeat(32)){return 'xiaoyou://join#'+Buffer.from(JSON.stringify({v:1,space:subject,device:identity,relay:{...f.config,room:a.body.id,token:a.body.relayToken},token:'j'.repeat(43),expires:Date.now()+120000})).toString('base64url');}
+ function invite(identity:typeof second,subject='a'.repeat(32)){return 'xiaoyu://join#'+Buffer.from(JSON.stringify({v:1,space:subject,device:identity,relay:{...f.config,room:a.body.id,token:a.body.relayToken},token:'j'.repeat(43),expires:Date.now()+120000})).toString('base64url');}
  const invitation=invite(f.identity);assert.equal((await f.call('presence',{invitation},String(a.body.token))).status,200);
  assert.equal((await f.call('presence',{},String(b.body.token))).body.invitation,invitation);
  assert.equal((await f.call('presence',{},String(outsider.body.token))).body.invitation,undefined);
@@ -81,7 +81,7 @@ test('account login restores identity with old computer offline, then both compu
  const localA:Endpoint={runtimeId:'1'.repeat(32),spaceId:space,name:'old computer',url:'http://127.0.0.1:1',token:'private-a',meshToken:secret,capabilities:['sync']};
  let localB:Endpoint|undefined;
  const a=new AccountConnection(f.folder,aVault,{request:async()=>({source:'A'})},()=>localA,()=>{},e=>eventsA.push(e),()=>{},'old computer',f.config);
- const bFolder=mkdtempSync(join(tmpdir(),'xiaoyou-account-new-'));
+ const bFolder=mkdtempSync(join(tmpdir(),'xiaoyu-account-new-'));
  const b=new AccountConnection(bFolder,bVault,{request:async()=>({source:'B'})},()=>localB,()=>{},e=>eventsB.push(e),()=>{},'new computer',f.config);
  f.cleanup.push(async()=>{await Promise.all([a.stop(),b.stop()]);rmSync(bFolder,{recursive:true,force:true});});
  await a.login('owner','eight123',true);a.stop();await new Promise(r=>setTimeout(r,50));
@@ -111,10 +111,10 @@ test('account-linked real Runtimes exchange configured files and keep independen
   if(name==='old')writeFileSync(join(home,'shared','notes.txt'),'authorized shared file from old Runtime');
   const listener=createServer();await new Promise<void>(r=>listener.listen(0,'127.0.0.1',r));const number=(listener.address() as import('node:net').AddressInfo).port;await new Promise<void>(r=>listener.close(()=>r()));
   const token=randomBytes(32).toString('hex'),config=join(home,'config.json');
-  writeFileSync(config,JSON.stringify({server:{host:'127.0.0.1',port:number,token,name},state_dir:'state',persona_file:'persona.txt',desktop_sync:false,agents:{echo:{type:'echo'}},xiaoyou:{default_agent:'echo',voice_agent:null},mesh:{secret:meshSecret,peers:[],advertise:[],share:{folders:{notes:join(home,'shared')}}},usage:{enabled:false}}));
+  writeFileSync(config,JSON.stringify({server:{host:'127.0.0.1',port:number,token,name},state_dir:'state',persona_file:'persona.txt',desktop_sync:false,agents:{echo:{type:'echo'}},xiaoyu:{default_agent:'echo',voice_agent:null},mesh:{secret:meshSecret,peers:[],advertise:[],share:{folders:{notes:join(home,'shared')}}},usage:{enabled:false}}));
   writeFileSync(join(home,'persona.txt'),'Synthetic account interoperability test.');
-  const env={...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('XIAOYOU_'))),PYTHONPATH:join(root,'runtime'),PYTHONUNBUFFERED:'1'};
-  const child=spawn(process.env.XIAOYOU_TEST_PYTHON||(process.platform==='win32'?'python':'python3'),['-m','xiaoyou_runtime','--config',config],{cwd:home,env,stdio:'ignore'});children.push(child);
+  const env={...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('XIAOYU_'))),PYTHONPATH:join(root,'runtime'),PYTHONUNBUFFERED:'1'};
+  const child=spawn(process.env.XIAOYU_TEST_PYTHON||(process.platform==='win32'?'python':'python3'),['-m','xiaoyu_runtime','--config',config],{cwd:home,env,stdio:'ignore'});children.push(child);
   let result:Endpoint|undefined;const end=Date.now()+8000;
   while(!result&&Date.now()<end){try{result=await identify(transport,'http://127.0.0.1:'+number,token,name);}catch{await new Promise(r=>setTimeout(r,30));}}
   assert.ok(result,'isolated Runtime starts');return{...result,meshToken:meshSecret};

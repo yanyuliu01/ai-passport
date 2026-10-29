@@ -55,7 +55,7 @@ export class RelayHost {
       this.identity = this.secrets.load<Identity>('relay-host-identity-v1');
       if (!this.identity) {
         const now = Date.now();
-        const pems = await generate([{ name: 'commonName', value: 'xiaoyou-node' }], {
+        const pems = await generate([{ name: 'commonName', value: 'xiaoyu-node' }], {
           keyType: 'ec', curve: 'P-256', algorithm: 'sha256',
           notBeforeDate: new Date(now - 5 * 60_000), notAfterDate: new Date(now + 365 * 86400_000) });
         this.identity = { key: pems.private, cert: pems.cert, token: randomBytes(32).toString('base64url'), room: randomBytes(16).toString('hex') };

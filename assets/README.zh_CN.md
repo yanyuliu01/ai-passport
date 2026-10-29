@@ -68,20 +68,20 @@
 
 ### AI 伙伴形象设计素材包
 
-2026-10-12 使用内置图像生成工具生成，包含 DSH（大肥鱼女仆）、Claude 和用户选定的优雅 Codex 角色。[设计图库](../docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)记录推荐版本与姿态顺序。文件放在 `images/ai-companions/`：`app-*` 为 app 插画，`fw-*` 为固件全身角色概念，`avatar-*` 为小像素头像，含接近小幽质感的豆豆眼备选。
+2026-10-12 使用内置图像生成工具生成，包含 DSH（大肥鱼女仆）、Claude 和用户选定的优雅 Codex 角色。[设计图库](../docs/reference/yanyuliu01/ai-companion-design.zh_CN.md)记录推荐版本与姿态顺序。文件放在 `images/ai-companions/`：`app-*` 为 app 插画，`fw-*` 为固件全身角色概念，`avatar-*` 为小像素头像，含接近小鱼质感的豆豆眼备选。
 
 实际 PNG 尺寸、透明通道统计、哈希和推荐/草稿状态见 [manifest.json](images/ai-companions/manifest.json)，生成提示词见 [prompts.json](images/ai-companions/prompts.json)。PNG 是静态高清源图集，不是已编译的 LVGL 资源或连续动画帧。固件接入前需切图、清理边缘和像素网格、转换调色板并实测 RAM/Flash，app 图集也需切图与检查边缘。
 
-用户提供 `reference-codex-elegant.png` 作为角色参考，原作者和再利用许可未知。`reference-xiaoyou-style.png` 从仓库的 `main/pocket_pet.c` 渲染。其他图集为本项目生成，参考社区角色约定与用户偏好，不声称取得第三方权利或官方身份。本条目不赋予新的美术许可；仓库代码许可不能证明底层角色参考的使用权。
+用户提供 `reference-codex-elegant.png` 作为角色参考，原作者和再利用许可未知。`reference-xiaoyu-style.png` 从仓库的 `main/pocket_pet.c` 渲染。其他图集为本项目生成，参考社区角色约定与用户偏好，不声称取得第三方权利或官方身份。本条目不赋予新的美术许可；仓库代码许可不能证明底层角色参考的使用权。
 
-根目录 README 用的横幅图放在 `images/readme/`，由这些图稿拼合而成；小幽的像素帧从 `main/pocket_pet.c` 渲染。状态与权利说明同上。
+根目录 README 用的横幅图放在 `images/readme/`，由这些图稿拼合而成；小鱼的像素帧从 `main/pocket_pet.c` 渲染。状态与权利说明同上。
 
-DS 固件与手机 App 现在使用之前的像素大头图集
+Xiaoyu 固件与手机 App 现在使用之前的像素大头图集
 [`avatar-whale-v1.png`](images/ai-companions/avatar-whale-v1.png)，原 PNG 保持不变。睡眠表情另有修正版
 `avatar-whale-sleep-v5.png`，采用用户提供的下巴和脸颊轮廓，眉毛放松；其他五种
 固件表情沿用原有源像素。
 `tools/compile_pocket_avatar.py` 按逐个检查的边界做最近邻采样，生成
 [`pocket_whale_pixels.h`](images/ai-companions/pocket_whale_pixels.h)：六个 60×60
 索引头像和共享的 64 色调色板，共 21,856 字节 Flash。`main/pocket_pet.c` 直接读取
-这份只读数据，没有解码缓冲。App 将原图保留为 `drawable-nodpi/ds_source.png`，按
+这份只读数据，没有解码缓冲。App 将原图保留为 `drawable-nodpi/xiaoyu_source.png`，按
 已检查的头像边界绘制并禁用位图滤波。派生资源沿用原图的来源与权利说明。

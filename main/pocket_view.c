@@ -63,7 +63,7 @@ pocket_home_t pocket_home_for(const buddy_ui_snapshot_t *snapshot)
         break;
     }
     if (snapshot->host_chat) {
-        // 中枢自己会说对话到哪了；心跳里的数字只是别的 App 的通知，不代表小幽在忙。
+        // 中枢自己会说对话到哪了；心跳里的数字只是别的 App 的通知，不代表小鱼在忙。
         return POCKET_HOME_QUIET;
     }
     // 没有“对话”可言：对面是 Claude 桌面端，或者不报告对话的旧版中枢。按心跳里的数字来。
@@ -429,13 +429,13 @@ static bool pocket_name_is(const char *name, const char *known)
 
 uint32_t pocket_helper_color(const char *name)
 {
-    // 不认识的名字从这几个颜色里按名字选一个；都和小幽的淡紫、以及表示
+    // 不认识的名字从这几个颜色里按名字选一个；都和小鱼的淡紫、以及表示
     // 可以 / 不行 / 留意的绿、红、黄分得开。
     static const uint32_t others[] = {0xF2A7C8u, 0xC9B458u, 0xB9A7FFu, 0xE6E6E6u};
     uint32_t hash = 2166136261u;
 
     if (name == NULL || name[0] == '\0') {
-        return POCKET_COLOR_XIAOYOU;
+        return POCKET_COLOR_XIAOYU;
     }
     if (pocket_name_is(name, "claude") || pocket_name_is(name, "cc")) {
         return 0xE08A63u;

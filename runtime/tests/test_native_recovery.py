@@ -8,11 +8,11 @@ import unittest
 from dataclasses import replace
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou
-from xiaoyou_runtime.events import native_history
-from xiaoyou_runtime.config import AgentSpec
-from xiaoyou_runtime.world.conversation_directory import home_scope
-from xiaoyou_runtime.api.service import ConflictError, RequestError, Service
+from test_runtime import Scripted, TempDirCase, make_xiaoyu
+from xiaoyu_runtime.events import native_history
+from xiaoyu_runtime.config import AgentSpec
+from xiaoyu_runtime.world.conversation_directory import home_scope
+from xiaoyu_runtime.api.service import ConflictError, RequestError, Service
 
 
 def event(kind, **payload):
@@ -34,7 +34,7 @@ class NativeExecutionTests(TempDirCase):
                             native_turn_id="turn-1", range_state="open-turn")
         self.path = self.home / "sessions/2026/rollout-session-1.jsonl"
         self.path.parent.mkdir(parents=True)
-        self.write({"type": "session_meta", "payload": {"id": "session-1", "originator": "xiaoyou-runtime"}})
+        self.write({"type": "session_meta", "payload": {"id": "session-1", "originator": "xiaoyu-runtime"}})
 
     def write(self, *events):
         with self.path.open("a", encoding="utf-8") as stream:
@@ -131,7 +131,7 @@ class NativeExecutionTests(TempDirCase):
         other.write_text(contents)
         self.assertIsNone(self.query())
         other.unlink()
-        self.path.write_text(contents.replace('"originator": "xiaoyou-runtime"', '"parent_thread_id": "parent"'))
+        self.path.write_text(contents.replace('"originator": "xiaoyu-runtime"', '"parent_thread_id": "parent"'))
         self.assertIsNone(self.query())
 
     def test_scan_limit_leaves_long_sources_unknown(self):
@@ -161,7 +161,7 @@ class NativeRecoveryTests(TempDirCase):
 
     def runtime(self):
         agent = self.helper()
-        x, store = make_xiaoyou(self.folder, [agent])
+        x, store = make_xiaoyu(self.folder, [agent])
         self.addCleanup(x.close)
         return x, store, agent
 
@@ -226,7 +226,7 @@ class NativeRecoveryTests(TempDirCase):
         self.complete(path)
         agent = self.helper()
         agent.spec = replace(agent.spec, description="changed helper")
-        x, _ = make_xiaoyou(self.folder, [agent])
+        x, _ = make_xiaoyu(self.folder, [agent])
         self.addCleanup(x.close)
         self.assertEqual(0, x.recover_tasks(ready=True))
         self.assertEqual("unknown", x.cards.get(card)["state"])
@@ -364,7 +364,7 @@ class NativeRecoveryTests(TempDirCase):
         self.assertEqual([], helper.started)
 
     def test_long_result_keeps_the_complete_text_in_a_saved_attachment(self):
-        from xiaoyou_runtime.helpers.agents import MAX_OUTPUT_CHARS
+        from xiaoyu_runtime.helpers.agents import MAX_OUTPUT_CHARS
         text = "x" * (MAX_OUTPUT_CHARS + 100) + "tail"
         card, run_id, path = self.stage(text)
         self.complete(path, text)
@@ -404,7 +404,7 @@ class NativeRecoveryTests(TempDirCase):
     def test_http_query_requires_authentication_and_original_run_identity(self):
         import urllib.error
         import urllib.request
-        from xiaoyou_runtime.api.server import make_server
+        from xiaoyu_runtime.api.server import make_server
         card, run_id, path = self.stage()
         service, x, helper = self.service()
         server = make_server(replace(x._config, host="127.0.0.1", port=0), service)

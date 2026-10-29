@@ -1,18 +1,18 @@
 """A reply the owner cut into is final text with a mark every client can see."""
 import unittest
 
-from test_runtime import TempDirCase, ToolTalker, make_xiaoyou
-from xiaoyou_runtime.delivery import presentation
-from xiaoyou_runtime.helpers.agents import Cut, Outcome, stopped_early
-from xiaoyou_runtime.api.service import Service
+from test_runtime import TempDirCase, ToolTalker, make_xiaoyu
+from xiaoyu_runtime.delivery import presentation
+from xiaoyu_runtime.helpers.agents import Cut, Outcome, stopped_early
+from xiaoyu_runtime.api.service import Service
 
 
 class CutTalker(ToolTalker):
     """Speaks half a sentence; the owner cuts in while it streams."""
 
-    def __init__(self, xiaoyou_ref, effective=True):
+    def __init__(self, xiaoyu_ref, effective=True):
         super().__init__("deepseek")
-        self.ref = xiaoyou_ref
+        self.ref = xiaoyu_ref
         self.effective = effective
         self.cut_next = True
 
@@ -32,7 +32,7 @@ class InterruptedReplyTests(TempDirCase):
     def start(self, effective=True):
         ref = [None]
         self.voice = CutTalker(ref, effective)
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         ref[0] = self.x
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
@@ -78,7 +78,7 @@ class InterruptedReplyTests(TempDirCase):
         done, _ = self.turn("写一段秋天的散文")
         self.service.close()
         self.x.close()
-        x, _ = make_xiaoyou(self.folder, [ToolTalker()])
+        x, _ = make_xiaoyu(self.folder, [ToolTalker()])
         self.addCleanup(x.close)
         self.assertIs(True, x.cards.message(done["id"] + ":reply")["interrupted"])
 

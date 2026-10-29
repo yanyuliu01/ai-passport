@@ -18,12 +18,12 @@ export async function accountFixture(folder,endpoint){
  const values=new Map(),path=join(folder,'bootstrap');mkdirSync(path);
  const bootstrap=new AccountConnection(path,{load:key=>values.get(key),save:(key,value)=>values.set(key,value)},new HTTPRuntimeTransport(),()=>({...endpoint,meshToken:SHELL_MESH_SECRET}),()=>{},()=>{},()=>{},'Bootstrap fixture',server);
  await bootstrap.login('shell_owner','synthetic-shell-passphrase',true);
- return {env:{XIAOYOU_ACCOUNT_TEST_SERVER:JSON.stringify(server)},async close(){await bootstrap.stop();await new Promise(r=>relay.close(r));}};
+ return {env:{XIAOYU_ACCOUNT_TEST_SERVER:JSON.stringify(server)},async close(){await bootstrap.stop();await new Promise(r=>relay.close(r));}};
 }
 export async function loginShell(page){
- await page.getByLabel('小幽账号',{exact:true}).fill('shell_owner');
+ await page.getByLabel('小鱼账号',{exact:true}).fill('shell_owner');
  await page.getByLabel('密码',{exact:true}).fill('synthetic-shell-passphrase');
  await page.getByRole('button',{name:'登录并连接',exact:true}).click();
- await page.getByRole('button',{name:'返回小幽',exact:true}).click();
+ await page.getByRole('button',{name:'返回小鱼',exact:true}).click();
  await page.locator('.composer').waitFor();
 }

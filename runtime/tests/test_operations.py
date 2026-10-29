@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime.events import ledger as ledger_module, operations
-from xiaoyou_runtime.world import world  # noqa: E402
-from xiaoyou_runtime.events.ledger import Ledger, dedupe_key  # noqa: E402
-from xiaoyou_runtime.api.service import RESTART_NOTE, Service  # noqa: E402
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until  # noqa: E402
+from xiaoyu_runtime.events import ledger as ledger_module, operations
+from xiaoyu_runtime.world import world  # noqa: E402
+from xiaoyu_runtime.events.ledger import Ledger, dedupe_key  # noqa: E402
+from xiaoyu_runtime.api.service import RESTART_NOTE, Service  # noqa: E402
 
 SEEDS = range(10)
 STATUSES = ("queued", "running", "done", "failed")
@@ -196,17 +196,17 @@ class LedgerJournalTests(TempDirCase):
 class OperationServiceTests(TempDirCase):
     def start(self):
         agent = Scripted("claude")
-        xiaoyou, store = make_xiaoyou(self.folder, [agent])
-        service = Service(xiaoyou, store)
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.addCleanup(agent.gate.set)
-        return service, agent, xiaoyou, store
+        return service, agent, xiaoyu, store
 
     @staticmethod
-    def crash(service, xiaoyou):
+    def crash(service, xiaoyu):
         service._ledger.save = lambda *args: None
-        xiaoyou.cards._save = lambda: None
-        xiaoyou.cards._journal._append = lambda entry: None
+        xiaoyu.cards._save = lambda: None
+        xiaoyu.cards._journal._append = lambda entry: None
 
     def disk(self, store, message_id):
         for item in ledger_module.current(store.state_dir / "messages.json")["messages"]:

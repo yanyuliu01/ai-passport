@@ -1,9 +1,9 @@
 <p align="right"><a href="README.zh_CN.md">简体中文</a> · <strong>English</strong></p>
 
-# Xiaoyou desktop client
+# Xiaoyu desktop client
 
-Implementation in progress, source version 0.1.17. Follow the
-[development plan](../../docs/development/xiaoyou-desktop-plan.md) and
+Implementation in progress, source version 0.1.26. Follow the
+[development plan](../../docs/development/xiaoyu-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
 
@@ -11,6 +11,10 @@ The owner approved the v8 interaction reference on 2026-10-21. The onboarding
 increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
+
+## Xiaoyu identity and character packaging (0.1.26 source)
+
+The product, IPC and new internal names use Xiaoyu. Existing encrypted profiles retain their storage/keychain identity. New managed Runtime profiles read the complete shared character file; packaging verifies its hash as well as Runtime code. This source candidate has not replaced the installed client or incorporated other worktrees' uncommitted changes.
 
 ## Server account connection (0.1.17 source)
 
@@ -172,7 +176,7 @@ Android 0.29.0 preserve old settings and caches, but cannot connect to this new
 self-signed node; both endpoints need the pin-aware versions for this role.
 Physical phone installation, public-network recovery, Windows native execution
 and meaningful model response <=3s remain unverified. Local WSS/Java protocol and
-native Mac lifecycle evidence is recorded in `build/xiaoyou-node-validation.json`.
+native Mac lifecycle evidence is recorded in `build/xiaoyu-node-validation.json`.
 
 Validation for this checkpoint: Mac arm64 build and DMG integrity PASS; 52 desktop
 and 161 Android unit tests PASS; complete repository gate and six supplementary
@@ -224,7 +228,7 @@ not prove every NAT traversal method impossible. QR pairing cannot create that
 route. A separately purchased server is optional if an existing public-reachable
 host is available. The reviewed deployment template is in [deploy/](deploy/README.md),
 and a generated template archive is under ignored
-`build/xiaoyou-relay-deployment-0.1.3.tar.gz`. External deployment and a phone on
+`build/xiaoyu-relay-deployment-0.1.3.tar.gz`. External deployment and a phone on
 cellular data remain NOT RUN. Do not describe this checkpoint as proven stable
 cross-network phone communication.
 
@@ -235,8 +239,8 @@ transferred synthetic text/voice/image data, recovered from a relay restart with
 lost response, and executed the submitted message exactly once. Those tests use a
 local synthetic relay and do not establish physical phone or public-network
 acceptance. Native packaged Mac QR/settings/onboarding checks pass. Evidence is
-under `build/xiaoyou-android-relay-interop.json`, `build/xiaoyou-remote-shell-qa.json`
-and `build/xiaoyou-remote-onboarding-packaged-qa.json`. Bouncy Castle 1.86 handles
+under `build/xiaoyu-android-relay-interop.json`, `build/xiaoyu-remote-shell-qa.json`
+and `build/xiaoyu-remote-onboarding-packaged-qa.json`. Bouncy Castle 1.86 handles
 HPKE, OkHttp 4.12.0 handles WSS, and ZXing Embedded 4.3.0/core 3.5.4 handles scanning.
 
 Android 0.29.0 (code 54) was published locally through the existing Runtime; the
@@ -279,9 +283,9 @@ startup, encrypted pairing, background/restart, main/side isolation, task-bound
 supplements, single approval convergence, read-only transcript, responsive sidebar
 and credential isolation. CLI/HTTP fixtures were used; no real model was invoked.
 Source Runtime encrypted interoperability also passed. Evidence is under ignored
-`build/xiaoyou-main-validation.json`, `build/xiaoyou-shell-qa.json` and
-`build/xiaoyou-main-onboarding-packaged-qa.json`; the complete-gate log for this run
-is `/tmp/xiaoyou-shell-full-gate.log`. The offline `build/desktop-main-preview/`
+`build/xiaoyu-main-validation.json`, `build/xiaoyu-shell-qa.json` and
+`build/xiaoyu-main-onboarding-packaged-qa.json`; the complete-gate log for this run
+is `/tmp/xiaoyu-shell-full-gate.log`. The offline `build/desktop-main-preview/`
 uses explicitly labelled sample data and does not connect to a service.
 
 Versions/configuration: desktop 0.1.2, Electron 44.9.3, Mac arm64; packaged Runtime
@@ -306,7 +310,7 @@ and OS credentials. New catalog/read metadata is additive and ignored by 0.1.1.
 
 ## First connection and local agents (0.1.1)
 
-First launch now asks whether to enable a local Xiaoyou or pair with an existing
+First launch now asks whether to enable a local Xiaoyu or pair with an existing
 one. There is no silent legacy Runtime attach or restore of unconfirmed saved
 endpoints/relay. An explicit review restores old connections without erasing
 history, pending requests, cursors or dormant endpoint settings. Subsequent
@@ -361,7 +365,7 @@ calls. It never saves typed keys.
 
 The 0.1.1 installer, packed provenance and checksum live under
 `release/onboarding-0.1.1/`; isolated packaged evidence is
-`build/xiaoyou-onboarding-packaged-qa.json` at the repository root.
+`build/xiaoyu-onboarding-packaged-qa.json` at the repository root.
 Installer SHA-256:
 `10a1ea594de43309418f8e6fd0783d9c295096db76105c8dae5945fd1cf5b2ca`.
 
@@ -384,7 +388,7 @@ installs a helper or copies login credentials automatically. Provider readiness
 must be tested; a missing helper/login is a setup limitation, not a working AI.
 
 On request, local detection recognizes known configs under `~/ai-passport`,
-`~/xiaoyou/ai-passport` or `~/Documents/GitHub/ai-passport`. It reads metadata
+`~/xiaoyu/ai-passport` or `~/Documents/GitHub/ai-passport`. It reads metadata
 without connecting; the owner confirms a source before loopback attachment.
 Other locations can be selected under Advanced connection settings. Isolated QA
 profiles skip these legacy locations.
@@ -459,7 +463,7 @@ download the official Electron distribution:
 ```bash
 python3 tools/bundle_windows_embedded.py
 node tools/download_windows_electron.mjs
-XIAOYOU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
+XIAOYU_RUNTIME_BUNDLE="$PWD/runtime-dist-win" npm run package:win-preview
 python3 tools/release_manifest.py
 ```
 
@@ -481,7 +485,7 @@ public WSS endpoint. Start the relay on loopback behind a TLS reverse proxy:
 
 ```bash
 npm run build:main
-XIAOYOU_RELAY_TOKEN='<random-access-token>' npm run relay
+XIAOYU_RELAY_TOKEN='<random-access-token>' npm run relay
 ```
 
 The default listener is `127.0.0.1:8795`; the CLI refuses public plaintext bind.
@@ -517,8 +521,8 @@ are enforced; a missing Runtime waits rather than being re-executed elsewhere.
 Recovery after both computers become unreachable and independent key recovery
 remain outside the normal always-on baseline.
 
-For isolated native QA, set `XIAOYOU_DESKTOP_TEST_DATA` to a new temporary
-directory and `XIAOYOU_DESKTOP_SKIP_DISCOVERY=1` before launch. This works with
+For isolated native QA, set `XIAOYU_DESKTOP_TEST_DATA` to a new temporary
+directory and `XIAOYU_DESKTOP_SKIP_DISCOVERY=1` before launch. This works with
 packaged clients and keeps smoke tests away from ordinary profiles. Do not
 import real configuration or register login startup in that test profile.
 
@@ -609,7 +613,7 @@ Quota rings use the limiting known, unexpired 5-hour/weekly remainder.
 
 The native-window synthetic acceptance script is
 `node tools/test-helper-management-shell.mjs` (Playwright supplied through
-`XIAOYOU_QA_PLAYWRIGHT` when needed). It checks the 82%/28% quota case, source
+`XIAOYU_QA_PLAYWRIGHT` when needed). It checks the 82%/28% quota case, source
 label, adding and removing through the actual renderer/IPC path. It does not
 measure a real model's first response or Windows/phone acceptance.
 

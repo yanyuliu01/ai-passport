@@ -13,7 +13,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'../../..');
 const cache=process.env.GRADLE_USER_HOME||join(homedir(),'.gradle');
 function jar(group,name,version){const base=join(cache,'caches/modules-2/files-2.1',group,name,version);for(const d of readdirSync(base)){const f=readdirSync(join(base,d)).find(f=>f.endsWith('.jar'));if(f)return join(base,d,f);}throw Error('Missing '+name);}
 const cp=[jar('org.bouncycastle','bcprov-jdk18on','1.86'),jar('com.squareup.okhttp3','okhttp','4.12.0'),jar('com.squareup.okio','okio-jvm','3.6.0'),jar('org.jetbrains.kotlin','kotlin-stdlib','1.9.20')].join(':');
-const folder=mkdtempSync(join(tmpdir(),'xiaoyou-phone-account-')),classes=join(folder,'classes');
+const folder=mkdtempSync(join(tmpdir(),'xiaoyu-phone-account-')),classes=join(folder,'classes');
 const run=(command,args)=>new Promise((resolve,reject)=>{const p=spawn(command,args,{stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',d=>output+=d);p.stderr.on('data',d=>output+=d);p.on('error',reject);p.on('close',code=>code?reject(Error(output)):resolve(output));});
 const java=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin/java'):'java',javac=process.env.JAVA_HOME?join(process.env.JAVA_HOME,'bin/javac'):'javac';
 const main=join(root,'companion/android/app/src/main/java/com/yanyuliu/pockethub');

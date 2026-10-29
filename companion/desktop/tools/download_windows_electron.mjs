@@ -10,7 +10,7 @@ const archive = await downloadArtifact({ version: pkg.devDependencies.electron, 
 const output = join(root, '.build-cache/electron-win');
 await rm(output, { recursive: true, force: true }); await mkdir(output, { recursive: true });
 // Use the build host's Python only to extract a checksum-verified official archive.
-const result = spawnSync(process.env.XIAOYOU_BUILD_PYTHON || (process.platform === 'win32' ? 'python' : 'python3'),
+const result = spawnSync(process.env.XIAOYU_BUILD_PYTHON || (process.platform === 'win32' ? 'python' : 'python3'),
   ['-m', 'zipfile', '-e', archive, output], { stdio: 'inherit' });
 if (result.status !== 0) throw new Error('Could not unpack verified Windows Electron');
 console.log(JSON.stringify({ electron: pkg.devDependencies.electron, target: 'win32-x64', downloaded: true, nativeExecutionVerified: false }));

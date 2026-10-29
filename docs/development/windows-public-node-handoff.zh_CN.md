@@ -8,7 +8,7 @@
 
 把配套源码包解压到一个新的本机目录，再把下面这段发给家里 Windows 上的 Codex：
 
-> 请阅读 `docs/development/windows-public-node-handoff.zh_CN.md`，接着做小幽的家庭 Windows 公网节点。Mac 在公司，Windows 在家常开，手机需要在蜂窝网络通过扫码连接，并能保留多台电脑。先确认当前执行环境可以正常联网，再验证家庭公网条件；目前只有本地加密协议测试通过，真实公网入口尚未上线。复用现有客户端和指纹 TLS/HPKE，不依赖 Tailscale，不重新设计前端，不使用 Astra。先检查原工程的 Git 状态、已有 Runtime 和共享历史，再核对源码快照，所有构建在隔离目录进行。保留原配置、历史、密钥和正在运行的任务。遇到 EACCES/10013 要报告权限阻止，不要反复换命令或判断家庭网络不通。按文档顺序推进；需要主人操作时，只请求当前缺少的具体信息或权限，不要重新询问是否购买服务器。
+> 请阅读 `docs/development/windows-public-node-handoff.zh_CN.md`，接着做小鱼的家庭 Windows 公网节点。Mac 在公司，Windows 在家常开，手机需要在蜂窝网络通过扫码连接，并能保留多台电脑。先确认当前执行环境可以正常联网，再验证家庭公网条件；目前只有本地加密协议测试通过，真实公网入口尚未上线。复用现有客户端和指纹 TLS/HPKE，不依赖 Tailscale，不重新设计前端，不使用 Astra。先检查原工程的 Git 状态、已有 Runtime 和共享历史，再核对源码快照，所有构建在隔离目录进行。保留原配置、历史、密钥和正在运行的任务。遇到 EACCES/10013 要报告权限阻止，不要反复换命令或判断家庭网络不通。按文档顺序推进；需要主人操作时，只请求当前缺少的具体信息或权限，不要重新询问是否购买服务器。
 
 本文保留原有授权范围，不授予额外的系统或网络权限。此前已授权使用现有 Windows 任务、客户端实现和隔离构建测试；最近两轮网络任务只授权只读检测，没有修改任何系统或网络设置。
 
@@ -57,21 +57,21 @@ Mac 0.1.5 构建来源：
 
 这批桌面代码和部分 Runtime 变更在 Mac 工作树中尚未提交。不能假设 `git pull` 会拿到这些内容，也不要为传递本次交接而擅自提交或推送。
 
-配套 `xiaoyou-windows-node-handoff-20261022.zip` 是可隔离构建的快照，包含桌面 0.1.5 源码、冻结 Runtime 0.22.0、必要规则/技能和本文。它不是完整 Git/固件工程，也不包含真实配置、聊天状态、系统凭据、设备 QR、私钥、依赖缓存、Mac 二进制或 Windows 安装包。
+配套 `xiaoyu-windows-node-handoff-20261022.zip` 是可隔离构建的快照，包含桌面 0.1.5 源码、冻结 Runtime 0.22.0、必要规则/技能和本文。它不是完整 Git/固件工程，也不包含真实配置、聊天状态、系统凭据、设备 QR、私钥、依赖缓存、Mac 二进制或 Windows 安装包。
 
 1. 用同名 `.sha256` 文件核对 ZIP 的 SHA-256，然后解压到新目录。
 2. 检查包内 `SOURCE-MANIFEST.json`：逐文件摘要、桌面和 Runtime 源码摘要必须一致。
 3. 先读原工程 `AGENTS.md`，执行 `git status --short --branch`，保存已有修改的清单。不要清理原工程或覆盖整个目录。
 4. 原工程有本地配置时运行共享历史读取器；没有配置就跳过。历史只作为证据，不能当成新的授权。
 5. 核对五个 `passport-*` 必需技能是否可用。缺失时遵照原工程规则自主安装；包内 `skills/` 提供项目来源。
-6. 源码包中直接构建需要的根目录是解压后的 `xiaoyou-windows-node-handoff`，不是旧的构建缓存目录。不要把原配置/状态复制进交接包再对外传递。
+6. 源码包中直接构建需要的根目录是解压后的 `xiaoyu-windows-node-handoff`，不是旧的构建缓存目录。不要把原配置/状态复制进交接包再对外传递。
 
 原工程命令：
 
 ```powershell
 git status --short --branch
 if (Test-Path runtime/config.json) {
-    python.exe runtime/xiaoyou_runtime/shared_history.py --config runtime/config.json --context
+    python.exe runtime/xiaoyu_runtime/shared_history.py --config runtime/config.json --context
 }
 ```
 

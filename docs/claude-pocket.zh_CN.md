@@ -4,7 +4,7 @@
 
 # Claude Pocket
 
-Claude Pocket 把 FoloToy AI Passport 变成 DS 随身的那张脸。DS 是海蓝鲸鱼女仆伙伴，
+Claude Pocket 把 FoloToy AI Passport 变成 Xiaoyu 随身的那张脸。Xiaoyu 是海蓝鲸鱼女仆伙伴，
 也是你唯一要对话的对象。设备通过加密的低功耗蓝牙连着手机伴侣：按住按键说话，
 她的回答出现在屏幕上；她把活儿交给别的 agent 时，屏幕上能看到谁在做、做到哪一步；
 agent 要做需要你确认的操作时，设备上弹出来问你。
@@ -36,10 +36,10 @@ Anthropic 把这个蓝牙桥定位为面向创客的功能，不是正式支持�
 | 配对 | LE Secure Connections，设备显示六位配对码 |
 | 换固件 | 新固件经蓝牙从手机伴侣传过来，不用插线；装上后没被认可就自己退回上一版，见[经蓝牙换固件](#经蓝牙换固件) |
 
-颜色只回答一个问题：现在是谁在干活。DS 是海蓝色；每个帮手有自己的颜色，同一个
+颜色只回答一个问题：现在是谁在干活。Xiaoyu 是海蓝色；每个帮手有自己的颜色，同一个
 名字的颜色固定不变。绿、红、黄只表示可以、不行和“看一下这个”，不作他用。
 
-配套 DS 固件使用原有 `avatar-whale-v1.png` 像素大头，编译为 60×60 索引图集，保留
+配套 Xiaoyu 固件使用原有 `avatar-whale-v1.png` 像素大头，编译为 60×60 索引图集，保留
 睡觉、待命、忙碌、询问、开心、出错六种情绪。最近邻绘制保留已有的 120、40、60
 显示像素尺寸。图集占用 21,856 字节 Flash，没有增加位图解码缓冲。睡眠帧使用单独的
 圆脸修正版，眉毛平缓；睡觉、待命、询问、开心每 3.6 秒轻微起伏一轮，首页最大移动
@@ -48,7 +48,7 @@ Anthropic 把这个蓝牙桥定位为面向创客的功能，不是正式支持�
 一拍，两帧（450 ms）之间只重画正在动的那只。App 0.10.0 使用
 同一套原稿，提供更丰富的出勤栏、任务抽屉和文件查看功能，见
 [伴侣说明](../companion/README.zh_CN.md#ds-首版0100)。设备导航和任务选择保留原有按键。
-BLE 名称 `Claude-XXXXXX`、协议字段及 `xiaoyou` role、安卓包名和 Runtime 模块名不变。
+BLE 名称 `Claude-XXXXXX`、协议字段及 `xiaoyu` role、安卓包名和 Runtime 模块名不变。
 
 屏幕不会自己切换：回答来的时候留在你正看的那一屏。顶栏上的“在做 N”是后台还在做
 的事的件数，没有就不显示。
@@ -215,7 +215,7 @@ Runtime（见 [`companion/README.zh_CN.md`](../companion/README.zh_CN.md) 和
 | 对端 → 设备 | `{"cmd":"chat","phase":P,"said":"…","reply":"…","agent":"…","stage":"…","mood":M,"card":"c12","doing":N}` | DS此刻在干什么：**第一屏**显示的就是它。只有 `phase` 是必需的 |
 | 对端 → 设备 | `{"cmd":"card","id":"c12","at":"14:02","state":S,"agent":"…","edits":N,"said":"…","reply":"…"}` | 新增或更新一件事的卡：**第二屏**。`id` 和 `state` 是必需的 |
 | 对端 → 设备 | `{"cmd":"card","clear":true}` | 忘掉所有的卡（对端马上要重新发一遍） |
-| 对端 → 设备 | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | 交给帮手的事：**第三屏**。`T` 是 `working`、`waiting`、`queued`，做完的是 `done`、`failed`、`cancelled`（对端只发给声明了 `threads` 的固件；这时 `p1` 是结论，而这件事的 `card` 里 `reply` 是它最近的来回，“你：”“DS：”各一段，最多 480 字节）。最多保留四件；空列表表示一件都没有。对声明了 `past` 的固件，这里只发在做的，做完的走下一行 |
+| 对端 → 设备 | `{"cmd":"tasks","list":[{"id":"c12","agent":"…","title":"…","state":T,"secs":42,"p1":"…","p2":"…"}]}` | 交给帮手的事：**第三屏**。`T` 是 `working`、`waiting`、`queued`，做完的是 `done`、`failed`、`cancelled`（对端只发给声明了 `threads` 的固件；这时 `p1` 是结论，而这件事的 `card` 里 `reply` 是它最近的来回，“你：”“Xiaoyu：”各一段，最多 480 字节）。最多保留四件；空列表表示一件都没有。对声明了 `past` 的固件，这里只发在做的，做完的走下一行 |
 | 对端 → 设备 | `{"cmd":"past","at":0,"n":12,"list":[{"id":"c41","agent":"…","title":"…","state":"done","day":"今天","eff":"high"}]}` | 做完的事：**第三屏**单子的下半张，最近做完的在前。只发给声明了 `past` 的固件。分几条发：一条最多五件，`at` 是这几件从单子的第几件起，`n` 是单子一共多长（最多五）；从头按顺序发，设备收到最后一条才换成新单子。`state` 是 `done`、`failed`、`cancelled`；`day` 是哪天做完的（最多 11 字节，设备原样显示，同一天的排在一个小标题下面）。没有进展和结论：设备没有多余的内存，一件只留标题。`n` 为 0 清空 |
 | 设备 → 对端 | `{"evt":"want","card":"c41"}` | 主人打开了一件做完的事，它的卡不在设备上（设备只留十二张）：请对端把这张卡发来。对端回那张 `card`，之后也接着带上它 |
 | 对端 → 设备 | `{"cmd":"helpers","list":[{"name":"…","about":"…"}]}` | DS可以把活儿交给哪些 agent；最多保留四个。空列表表示清空 |
@@ -263,8 +263,8 @@ App 0.10.0 将只有通知的请求作为文字摘要发送，不发送其可操
 
 Runtime HTTP 和附件字段见 [HTTP 接口](../runtime/README.zh_CN.md#http-接口)和
 [任务输出说明](../runtime/README.zh_CN.md#任务图片和可下载文件)。HTTP 处理器位于
-`runtime/xiaoyou_runtime/api/server.py`；代理回复的 schema 是
-`runtime/xiaoyou_runtime/loop/xiaoyou.py` 中的 `reply_schema()` 和 `lane_schema()`。
+`runtime/xiaoyu_runtime/api/server.py`；代理回复的 schema 是
+`runtime/xiaoyu_runtime/loop/xiaoyu.py` 中的 `reply_schema()` 和 `lane_schema()`。
 设备继续显示文字和状态；全屏图片、附件下载、安卓文件保存和其他应用打开由手机负责。
 
 ### 设备上留着什么
@@ -383,7 +383,7 @@ Runtime HTTP 和附件字段见 [HTTP 接口](../runtime/README.zh_CN.md#http-�
 快照这几块加起来不能超过 34 KB，超了编译不过。2026-10-10 有一版把任务单子从 4 件
 加到 20 件、一行的上限从 4096 加到 8192 字节，这几块一共多了 31 KB；那一版能启动，
 但蓝牙起不来，手机连不上去认可它，三分钟后被退回。要加大这些结构之前，先看设备报的
-余量：`fw info` 的应答里有 `heap` 和 `low`，电脑上 `python3 -m xiaoyou_runtime
+余量：`fw info` 的应答里有 `heap` 和 `low`，电脑上 `python3 -m xiaoyu_runtime
 firmware status` 会打印出来。新固件第一次启动时如果蓝牙起不来，会立刻退回上一版，
 不等满三分钟。
 
@@ -479,7 +479,7 @@ tests/update_emulator/run.sh   # needs ESP-IDF 5.5 and Espressif's QEMU (qemu-sy
 设备上一旦是带[经蓝牙换固件](#经蓝牙换固件)的版本，之后就不用再插线：新版本由手机
 伴侣传过去，设置和配对都保留。插线只在三种情况下还需要：设备上是更早的单槽位固件、
 改了分区表、或者蓝牙这条路本身被改坏了而且两个槽位里的都不能用。插线刷过之后，在
-Runtime 那台电脑上运行 `python3 -m xiaoyou_runtime firmware fetch` 把同一版入库，
+Runtime 那台电脑上运行 `python3 -m xiaoyu_runtime firmware fetch` 把同一版入库，
 以后才能换回它。
 
 ## 上板验收

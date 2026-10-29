@@ -6,15 +6,15 @@ import threading
 import unittest
 from unittest import mock
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.world import world
-from xiaoyou_runtime.api.service import Service
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until
+from xiaoyu_runtime.world import world
+from xiaoyu_runtime.api.service import Service
 
 
 class DispatchRecoveryTests(TempDirCase):
     def runtime(self, agent=None, **settings):
         agent = agent or Scripted("codex", speaks=False)
-        x, store = make_xiaoyou(self.folder, [agent], **settings)
+        x, store = make_xiaoyu(self.folder, [agent], **settings)
         self.addCleanup(x.close)
         return x, store, agent
 
@@ -235,7 +235,7 @@ class DispatchRecoveryTests(TempDirCase):
         self.assertEqual(helper.started, [])
 
     def test_a_real_parallel_queue_recovers_only_the_worker_not_yet_started(self):
-        from xiaoyou_runtime.helpers.agents import Outcome
+        from xiaoyu_runtime.helpers.agents import Outcome
         class Blocking(Scripted):
             def run(self, job):
                 self.started.append(job.text)
@@ -290,7 +290,7 @@ class DispatchRecoveryTests(TempDirCase):
     def test_failed_checkpoint_does_not_reject_a_durable_pending_amendment(self):
         old, _, agent = self.runtime()
         card, run_id = self.stage(old, agent)
-        with mock.patch("xiaoyou_runtime.world.world.SNAPSHOT_EVERY", 1), mock.patch.object(
+        with mock.patch("xiaoyu_runtime.world.world.SNAPSHOT_EVERY", 1), mock.patch.object(
                 old.cards, "_save", side_effect=OSError("snapshot unavailable")):
             self.assertEqual(old._amend(old.cards.get(card), agent, "redo", "new requirement",
                                        None, None), "redo")
@@ -379,7 +379,7 @@ class DispatchRecoveryTests(TempDirCase):
     def test_thread_start_failure_keeps_durably_accepted_work_queued_for_restart(self):
         old, _, agent = self.runtime()
         card = old._writer.task_open("side-test", "work", "working", agent.name)["id"]
-        with mock.patch("xiaoyou_runtime.helpers.tasks.threading.Thread.start",
+        with mock.patch("xiaoyu_runtime.helpers.tasks.threading.Thread.start",
                         side_effect=RuntimeError("no thread available")):
             old._launch(card, agent, "original", "side-test", 0)
         self.assertTrue(old.cards.get(card)["queued"])
@@ -404,7 +404,7 @@ class DispatchRecoveryTests(TempDirCase):
             self.assertIn("待核对", service._busy_reason("side-test"))
 
     def test_recovery_preserves_the_entire_saved_result_at_the_entry_limit(self):
-        from xiaoyou_runtime.world.cards import MAX_ENTRY_CHARS
+        from xiaoyu_runtime.world.cards import MAX_ENTRY_CHARS
         old, _, agent = self.runtime()
         card, run_id = self.stage(old, agent)
         text = "x" * (MAX_ENTRY_CHARS - 4) + "tail"

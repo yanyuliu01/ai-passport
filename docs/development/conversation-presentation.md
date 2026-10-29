@@ -2,14 +2,14 @@
 
 # Conversation presentation across clients
 
-> **Partly superseded by the [Xiaoyou complete plan](xiaoyou-agent-model.md); the complete plan prevails.**
+> **Partly superseded by the [Xiaoyu complete plan](xiaoyu-agent-model.md); the complete plan prevails.**
 
 Status: consolidated proposal, 2026-10-21. This replaces the earlier incremental
 UI proposals, including task cards in the main chat. It records the owner's
 accepted direction and the remaining native-client integration requirements.
 It does not claim implementation, deployment or installed-client acceptance.
 The [message model](unified-message-model.md), [reliability contract](cross-stack-reliability.md)
-and [desktop plan](xiaoyou-desktop-plan.md) continue to govern storage, transport
+and [desktop plan](xiaoyu-desktop-plan.md) continue to govern storage, transport
 and delivery. This document owns presentation, task association and surface handoff.
 
 All agents use the same metadata policy for project/conversation organization,
@@ -21,7 +21,7 @@ not independently by each agent adapter or UI.
 
 ## 1. Product contract
 
-The owner talks to one Xiaoyou. Normal navigation contains the main chat and
+The owner talks to one Xiaoyu. Normal navigation contains the main chat and
 side chats the owner chose to open. A separate **Work records** view exposes
 execution, source conversations and audit detail across those chats.
 
@@ -44,7 +44,7 @@ while reducing repeated administrative text.
 ### One presentation policy across all surfaces
 
 Owner clarification, 2026-10-22: shared storage alone is insufficient. The
-same conversation must follow one presentation policy on Android, Xiaoyou
+same conversation must follow one presentation policy on Android, Xiaoyu
 Mac/Windows, Codex's native window and Claude Code's native window. Native
 windows are part of acceptance; unsupported integration remains incomplete.
 Different fonts, spacing and platform controls are compatible with this goal;
@@ -83,7 +83,7 @@ flowchart TB
     Sources[App inputs and native Codex / Claude events] --> Adapters[Source normalization]
     Adapters --> Record[Existing Record hub and source bindings]
     Record --> Policy[One versioned presentation policy in Runtime]
-    Policy --> Clients[Android and Xiaoyou Mac / Windows renderers]
+    Policy --> Clients[Android and Xiaoyu Mac / Windows renderers]
     Policy --> Native[Capability-checked native surface integration]
     Native --> Check[Verify the actual Codex and Claude windows]
 ```
@@ -175,12 +175,12 @@ context is scoped. Changing helper or execution computer preserves task identity
 
 | Starting point | Where the owner sees it | Execution and reporting |
 | --- | --- | --- |
-| Ordinary chat in the App/client | Same logical chat on authorized Xiaoyou clients | No worker task merely to synchronize a sentence |
+| Ordinary chat in the App/client | Same logical chat on authorized Xiaoyu clients | No worker task merely to synchronize a sentence |
 | Work requested in main chat | Original request and concise answer; details in Work records | Bind one task before dispatch; result returns to this request |
 | Work requested in a side chat | Original side chat; task also visible in Work records | Remains in that topic; does not replay the transcript in main chat |
 | Owner starts work directly in native CC/Codex/CLI | A source-conversation entry in Work records | Observe visible records; do not fabricate a main-chat request or new execution |
 | Explicitly continue an existing task | Same task, new turn/attempt as needed | Send to its actual source/executor; verify availability and ownership first |
-| Ask Xiaoyou about native work | Reply in the chat where the question was asked | Read attributed context; explanation alone does not resume the native agent |
+| Ask Xiaoyu about native work | Reply in the chat where the question was asked | Read attributed context; explanation alone does not resume the native agent |
 
 Association happens before executor selection. Naming Codex selects a helper,
 not a new task/project/chat. Use explicit task references, selected task context
@@ -212,7 +212,7 @@ Peer replicas -> main/side-chat views, Work records and bounded device views
 
 The Runtime owns its durable shared records through the existing record hub.
 Native tools own their original transcripts; adapters add attributed observed
-records. Those observed records do not make Xiaoyou the owner of native storage.
+records. Those observed records do not make Xiaoyu the owner of native storage.
 Preserve original source identity when copying/exporting a session, so observing
 an imported copy does not create another logical execution.
 
@@ -267,7 +267,7 @@ phone. The following distinctions are mandatory:
 | App ordinary/main/side-chat dialogue | Available as attributed shared context/history on demand; do not create native sidebar sessions for every message |
 | App task already executed by that native agent | Open/resume the original execution session by its recorded ID; do not manufacture a second conversation |
 | Persistent CLI task using the same native agent | Discover/open its original stored session when compatible home, source filters, project and version allow it |
-| CLI command without an agent transcript, or ephemeral/nonpersistent execution | Show recorded task/process evidence in Xiaoyou; there is no original native session to resume |
+| CLI command without an agent transcript, or ephemeral/nonpersistent execution | Show recorded task/process evidence in Xiaoyu; there is no original native session to resume |
 | Task handled by another agent | Explicit context handoff to a linked target session; the original session remains intact |
 | Remote computer's task | Link to its origin; locally opening a context copy must not claim control of its remote process |
 
@@ -277,7 +277,7 @@ agent can retrieve the relevant conversation without executing it. Where the
 owner explicitly asks to continue that dialogue in CC/Codex, reuse a recorded
 conversation-to-native binding or create one target session with an attributed
 context attachment. That session shows the handoff and its later turns. Do not
-promise that arbitrary Xiaoyou history becomes indistinguishable native chat
+promise that arbitrary Xiaoyu history becomes indistinguishable native chat
 bubbles unless a supported import API is verified for that exact format/version.
 The adapter should record new owner turns/results once, and return a concise
 summary to the logical conversation under their real origin.
@@ -288,7 +288,7 @@ record their IDs at creation. Missing sidebar discovery may be a home/directory/
 source filter issue; it is not a reason to create another execution. An original
 session-opening action must not include a new prompt just to make it visible.
 Provide a reliable open-by-ID route. For an owner-facing task delegated by
-Xiaoyou to Codex, native discoverability is also a **required acceptance gate**:
+Xiaoyu to Codex, native discoverability is also a **required acceptance gate**:
 the real task session must be easy to locate under its verified native project
 with a stable objective title, without knowing an ID, opening a terminal, changing
 hidden source filters, or reading internal prompts. Do not require every internal
@@ -398,7 +398,7 @@ pruning and restarts, plus history paging and truthful gap/coverage indicators.
 
 The owner accepted this interaction design on 2026-10-21 after reviewing
 interactive prototypes up to v7. It applies to the Android App and the Mac/Windows
-client and keeps the current App visual language: Xiaoyou portrait, grey-blue
+client and keeps the current App visual language: Xiaoyu portrait, grey-blue
 background, blue owner bubbles, white replies and the large microphone. The
 prototypes are design references, not implementation or acceptance evidence.
 
@@ -449,7 +449,7 @@ carries an amber dot while a decision is waiting or a chat is unread.
 
 Home is the voice face of the main chat:
 
-- the portrait and one speech card with Xiaoyou's latest main-chat reply;
+- the portrait and one speech card with Xiaoyu's latest main-chat reply;
   selecting the card opens the main chat;
 - the helper chip row, matching the current App `HelperChip`: the avatar sits in
   a remaining five-hour quota ring (green above 40%, amber above 15%, red
@@ -473,7 +473,7 @@ composer holds text, microphone, `+` and send. There is no large microphone stag
 
 ### Chat
 
-- Owner bubbles are right-aligned and blue; Xiaoyou replies are left-aligned and
+- Owner bubbles are right-aligned and blue; Xiaoyu replies are left-aligned and
   white. The composer `+` sits on the right before send and offers photo or file.
 - The reply that started work carries one light status line (helper avatar,
   "in progress" or "waiting for you", chevron to the detail). Only the latest
@@ -483,7 +483,7 @@ composer holds text, microphone, `+` and send. There is no large microphone stag
   the chat or in Work records records the same decision once, and the chosen
   option appears as the owner's message in that chat.
 - **Add instructions** from Work records returns to the originating chat with a
-  task reference chip above the composer. Xiaoyou relays the message to the same
+  task reference chip above the composer. Xiaoyu relays the message to the same
   native session; while that session is busy it says truthfully that the
   instruction waits for the current turn to end.
   Receipt, waiting for relay, successful relay and execution start each require
@@ -509,10 +509,10 @@ Each screen has one focus.
   original message), the native session and an ⓘ toggle for operation, working
   directory, branch and session ID.
 - The **native session view** is read-only on every client. It marks relayed
-  owner text as relayed by Xiaoyou and offers Add instructions. A session on
+  owner text as relayed by Xiaoyu and offers Add instructions. A session on
   another computer is marked as openable only on that host.
 - **View native session** reads existing records; **Add instructions** returns to
-  the originating chat for Xiaoyou to relay; **Open in agent** opens the original
+  the originating chat for Xiaoyu to relay; **Open in agent** opens the original
   client's session on its source computer for inspection and direct continuation.
   Native continuation follows control handoff and remains associated with the
   same task. Read-only client records do not restrict native-client continuation.
@@ -552,7 +552,7 @@ Local commands report Codex CLI **0.162.0**, Claude Code CLI **2.1.294**.
 | Cross-computer desktop history | `desktop_history.py` and `mesh_share.py` mirror bounded readable exports: up to 500 entries / 512 KiB per session, newest 32 from seven days; not a native backend or an unlimited archive |
 | Desktop context | `shared_history.py` exists; needs precise dialogue/task selection and attributed handoff semantics instead of broad context becoming new owner input |
 | Activity auditing | `Record.activity()` and Android activity pages exist; 2,000 activity events across the Runtime, 4,000-character detail cap; need source freshness, structured wait/evidence and durable audit retention |
-| Execution association | `Xiaoyou.hear()` routes explicit agents before general association; map objective/follow-up before dispatch and preserve the initiating chat |
+| Execution association | `Xiaoyu.hear()` routes explicit agents before general association; map objective/follow-up before dispatch and preserve the initiating chat |
 | Misleading authorship | `agents.py` prepends recap text to a new Claude job when enabled; `mesh.py::_remember_turn()` synthesizes a missing owner sentence; separate historical context/result events |
 | Native opening | `desktop_handoff.py` provides completed-session macOS handoff and isolated-home snapshots; live shared backend, Windows launcher and writer transfer need separate verification/work |
 | New desktop client | `companion/desktop` now exists and is in progress; its source guide records the current increment; the quiet/native-handoff design here is not claimed implemented |
@@ -598,7 +598,7 @@ every page; one decision answered from either chat or Work records is recorded
 once; usage rings match Runtime usage and label stale data. Inspect native rendered output;
 mock events/launcher exit codes do not establish native acceptance.
 
-Replay identical canonical fixtures through Android, Xiaoyou Mac/Windows and
+Replay identical canonical fixtures through Android, Xiaoyu Mac/Windows and
 both native integrations. Compare visible conversation/title, author, item IDs,
 block boundaries, order, content, placement, status and available actions;
 platform geometry may differ. Cover multiple assistant items in one turn,
@@ -666,7 +666,7 @@ are rejected. A phone can preview migrating old local pin/archive marks; existin
 shared edits are skipped. Old scoped message APIs and side-chat rename remain
 compatible. A damaged metadata file is preserved and editing it is disabled.
 
-`python3 -m xiaoyou_runtime conversations list --query <text>` and its
+`python3 -m xiaoyu_runtime conversations list --query <text>` and its
 `show`, `history`, `rename`, `pin`, `unpin`, `archive`, `restore`, `project`,
 `metadata` and `open` actions use the same authenticated API. Select the exact
 `--id` returned by list. Both desktop agents can use
@@ -722,11 +722,11 @@ separately validated communication increment.
 ## Five-entry increment (2026-10-24)
 
 Android 0.32.0 (version code 60) and desktop 0.1.8 reduce the pages to the five entries in section 1 of the
-[complete plan](xiaoyou-agent-model.md) without changing Runtime APIs. Both clients use the same wording:
+[complete plan](xiaoyu-agent-model.md) without changing Runtime APIs. Both clients use the same wording:
 
 - **Main chat**: the phone home and the text chat are one entry and one conversation in two forms. The app
   opens in voice form; the keyboard or the reply card switches to text; the microphone at the top right of
-  the text form switches back. The Xiaoyou row in the sidebar shows status only and is no longer a second
+  the text form switches back. The Xiaoyu row in the sidebar shows status only and is no longer a second
   entry. The desktop client no longer has a separate home page.
 - **Side chats**: a side chat nobody has written in yet (`title_source` is `pending`) is not listed, except
   the one that is open.
@@ -736,7 +736,7 @@ Android 0.32.0 (version code 60) and desktop 0.1.8 reduce the pages to the five 
   The detail has one primary button, add a requirement, the last three steps with "all N", then one quiet
   line with the computer, source chat and original session; directory and session IDs sit behind ⓘ.
 - **Helpers**: both clients say busy, waiting for you, idle or cannot connect.
-- **Settings**: Xiaoyou (pairing state, add a computer), the device, preferences and a developer page.
+- **Settings**: Xiaoyu (pairing state, add a computer), the device, preferences and a developer page.
   Connection strings, the route list, firmware versions, notification sources, the unified directory,
   local mark sync, tests and logs moved to the developer page. The phone adds a computer only by scanning.
 - **Connection state** has three phrases only: connected, cannot connect (retrying) and needs pairing.

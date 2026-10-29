@@ -1,6 +1,6 @@
-"""小幽网络（mesh.py）：几台 Runtime 互相同步、转交，不经真的网络。
+"""小鱼网络（mesh.py）：几台 Runtime 互相同步、转交，不经真的网络。
 
-每台 Runtime 是同一个进程里的一套 Xiaoyou + Service + Mesh；HTTP 调用由一个假的 opener 直接交给
+每台 Runtime 是同一个进程里的一套 Xiaoyu + Service + Mesh；HTTP 调用由一个假的 opener 直接交给
 对方的 Mesh.exchange（也检查网络口令），所以拉、推、长轮询、转告都走真的代码。
 """
 
@@ -15,17 +15,17 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from test_runtime import TOKEN, Scripted, TempDirCase, free_port, make_xiaoyou, until, write_config
+from test_runtime import TOKEN, Scripted, TempDirCase, free_port, make_xiaoyu, until, write_config
 
-from xiaoyou_runtime.helpers import agents as agents_module
-from xiaoyou_runtime.helpers import factory
-from xiaoyou_runtime import config as config_module
-from xiaoyou_runtime.api import shared_history
-from xiaoyou_runtime.delivery.mesh import Mesh, local_id, subject_for
-from xiaoyou_runtime.api.server import make_server
-from xiaoyou_runtime.api.service import Service
-from xiaoyou_runtime.world.store import Store
-from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
+from xiaoyu_runtime.helpers import agents as agents_module
+from xiaoyu_runtime.helpers import factory
+from xiaoyu_runtime import config as config_module
+from xiaoyu_runtime.api import shared_history
+from xiaoyu_runtime.delivery.mesh import Mesh, local_id, subject_for
+from xiaoyu_runtime.api.server import make_server
+from xiaoyu_runtime.api.service import Service
+from xiaoyu_runtime.world.store import Store
+from xiaoyu_runtime.loop.xiaoyu import Xiaoyu
 
 SECRET = "mesh-secret-for-tests-0123456789"
 
@@ -64,13 +64,13 @@ class Node:
     def __init__(self, case, network, name, peers=(), advertise=True, agents=None, secret=SECRET):
         folder = case.folder / name
         self.agent = agents[0] if agents else Scripted("claude")
-        self.xiaoyou, self.store = make_xiaoyou(folder, agents or [self.agent])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(folder, agents or [self.agent])
+        self.service = Service(self.xiaoyu, self.store)
         self.url = "http://%s.test" % name.lower()
-        config = dataclasses.replace(self.xiaoyou._config, name=name, mesh_secret=secret,
+        config = dataclasses.replace(self.xiaoyu._config, name=name, mesh_secret=secret,
                                      mesh_peers=list(peers),
                                      mesh_advertise=[self.url] if advertise else [])
-        self.mesh = Mesh(config, self.service, self.xiaoyou, opener=network.open)
+        self.mesh = Mesh(config, self.service, self.xiaoyu, opener=network.open)
         if advertise:
             network.nodes[self.url] = self.mesh
         self.mesh.start()
@@ -82,7 +82,7 @@ class Node:
 
     def card_from(self, other, card_id):
         """other 那台的一件事在这台的本地卡。"""
-        for card in self.xiaoyou.cards.recent(None, 1000, include_desktop=True):
+        for card in self.xiaoyu.cards.recent(None, 1000, include_desktop=True):
             if card.get("mesh_origin") == other.service.runtime_id and card.get("mesh_id") == card_id:
                 return card
         return None
@@ -95,14 +95,14 @@ class MeshTests(TempDirCase):
     def test_side_chat_delete_converges_without_restoring_stale_history(self):
         network=Network();a=Node(self,network,'DeleteMac');b=Node(self,network,'DeleteWindows',peers=[a.url])
         chat=a.service.conversation_create({'id':'side-delete-mesh'})
-        card=a.xiaoyou.record.task_open(chat['id'],'private task','done','claude')
-        a.xiaoyou.record.reply(card['id'],'private deletion body',turn_id='delete-mesh-turn')
-        self.assertTrue(until(lambda: b.xiaoyou.cards.conversations.get(chat['id']) is not None))
+        card=a.xiaoyu.record.task_open(chat['id'],'private task','done','claude')
+        a.xiaoyu.record.reply(card['id'],'private deletion body',turn_id='delete-mesh-turn')
+        self.assertTrue(until(lambda: b.xiaoyu.cards.conversations.get(chat['id']) is not None))
         self.assertTrue(until(lambda: b.card_from(a,card['id']) is not None))
         b.service.conversation_delete(chat['id'])
-        self.assertTrue(until(lambda: bool((a.xiaoyou.cards.conversations.get(chat['id']) or {}).get('deleted'))))
-        self.assertEqual([],a.xiaoyou.cards.recent(chat['id'],100))
-        self.assertEqual([],b.xiaoyou.cards.recent(chat['id'],100))
+        self.assertTrue(until(lambda: bool((a.xiaoyu.cards.conversations.get(chat['id']) or {}).get('deleted'))))
+        self.assertEqual([],a.xiaoyu.cards.recent(chat['id'],100))
+        self.assertEqual([],b.xiaoyu.cards.recent(chat['id'],100))
         self.assertEqual(0,a.service.share(chat['id'],[{'id':'old','text':'private deletion body','reply':'old answer'}]))
 
 
@@ -133,7 +133,7 @@ class MeshTests(TempDirCase):
         ids = {message["id"] for message in page["messages"]}
         self.assertIn(local_id(a.service.runtime_id, sent["id"] + ":you"), ids)
         self.assertIn(mirrored["id"], {task["id"] for task in page["tasks"]})
-        # 那台的小幽答过的话，这台的小幽下次接话时会被告知。
+        # 那台的小鱼答过的话，这台的小鱼下次接话时会被告知。
         self.assertIn(sent["id"], [turn["id"] for turn in b.store.transcript.turns("default")])
         # 反过来也一样（B 连得上 A，A 也从 B 那里知道 B 的地址并连回去）。
         back = b.service.submit("在 Windows 上说的", client_id="c2")
@@ -174,16 +174,16 @@ class MeshTests(TempDirCase):
         self.assertEqual("done", finished["status"], finished.get("error"))
         # 那台在自己的那件事里接住了这句话，用的是同一个编号。
         self.assertTrue(until(lambda: any(entry["id"] == relayed["id"] + ":you"
-                                          for entry in a.xiaoyou.cards.get(card)["entries"])))
+                                          for entry in a.xiaoyu.cards.get(card)["entries"])))
         self.assertIsNotNone(a.service.get(relayed["id"]))
         # 这台的聊天里这句话只有一条（占位被那台的记录替换，编号不变）。
-        self.assertTrue(until(lambda: (b.xiaoyou.cards.message(relayed["id"] + ":you") or {}).get("mesh_origin")
+        self.assertTrue(until(lambda: (b.xiaoyu.cards.message(relayed["id"] + ":you") or {}).get("mesh_origin")
                               == a.service.runtime_id))
         page = b.service.sync("default", 0)
         texts = [message["text"] for message in page["messages"] if message["text"] == "接着说一句"]
         self.assertEqual(1, len(texts))
         # 转交出去的占位不会再转给别人。
-        self.assertNotIn(relayed["id"] + ":you", {message["id"] for message in b.xiaoyou.cards.own_since(0)[2]})
+        self.assertNotIn(relayed["id"] + ":you", {message["id"] for message in b.xiaoyu.cards.own_since(0)[2]})
 
     def test_relay_to_an_offline_runtime_fails_with_a_reason(self):
         a = self.node("Mac")
@@ -206,33 +206,33 @@ class MeshTests(TempDirCase):
         worker = Scripted("claude")
         a = self.node("Mac", agents=[worker])
         b = self.node("Windows", peers=[a.url])
-        card = a.xiaoyou.record.task_open("default", "长任务", "working", "claude")
-        approval = a.xiaoyou.approvals.ask(card["id"], "default", "claude", "claude · Bash", "rm -rf build")
+        card = a.xiaoyu.record.task_open("default", "长任务", "working", "claude")
+        approval = a.xiaoyu.approvals.ask(card["id"], "default", "claude", "claude · Bash", "rm -rf build")
         self.assertTrue(until(lambda: b.card_from(a, card["id"]) is not None))
         mirrored = local_id(a.service.runtime_id, approval)
-        self.assertTrue(until(lambda: any(item["id"] == mirrored for item in b.xiaoyou.approvals.pending())))
+        self.assertTrue(until(lambda: any(item["id"] == mirrored for item in b.xiaoyu.approvals.pending())))
         self.assertTrue(b.service.approve(mirrored, "allow"))
-        self.assertTrue(until(lambda: (a.xiaoyou.approvals.get(approval) or {}).get("status") == "allowed"))
-        self.assertTrue(until(lambda: not any(item["id"] == mirrored for item in b.xiaoyou.approvals.pending())))
+        self.assertTrue(until(lambda: (a.xiaoyu.approvals.get(approval) or {}).get("status") == "allowed"))
+        self.assertTrue(until(lambda: not any(item["id"] == mirrored for item in b.xiaoyu.approvals.pending())))
         b.service.cancel(b.card_from(a, card["id"])["id"])
-        self.assertTrue(until(lambda: a.xiaoyou.cards.get(card["id"])["state"] == "cancelled"))
+        self.assertTrue(until(lambda: a.xiaoyu.cards.get(card["id"])["state"] == "cancelled"))
         self.assertTrue(until(lambda: b.card_from(a, card["id"])["state"] == "cancelled"))
         # The origin records which computer (and which end there) stopped it.
-        self.assertEqual(a.xiaoyou.cards.get(card["id"])["cancelled_by"], "mesh:Windows/client")
+        self.assertEqual(a.xiaoyu.cards.get(card["id"])["cancelled_by"], "mesh:Windows/client")
 
-    def test_xiaoyou_hands_work_to_a_helper_on_another_runtime(self):
+    def test_xiaoyu_hands_work_to_a_helper_on_another_runtime(self):
         a = self.node("Mac", agents=[Scripted("claude"), Scripted("codex", speaks=False)])
         b = self.node("Windows", peers=[a.url])
-        self.assertTrue(until(lambda: b.xiaoyou.has("codex@Mac"), 35) or self._refresh(b, "codex@Mac"))
+        self.assertTrue(until(lambda: b.xiaoyu.has("codex@Mac"), 35) or self._refresh(b, "codex@Mac"))
         sent = b.service.submit("看看日志", client_id="d1", agent="codex@Mac")
         self.assertTrue(b.done(sent["id"]))
         card = b.service.get(sent["id"])["card"]
-        self.assertTrue(until(lambda: b.xiaoyou.cards.get(card)["state"] == "done", 15))
-        finished = b.xiaoyou.cards.get(card)
+        self.assertTrue(until(lambda: b.xiaoyu.cards.get(card)["state"] == "done", 15))
+        finished = b.xiaoyu.cards.get(card)
         self.assertEqual({"runtime": a.service.runtime_id, "name": "Mac"}, finished["delegated_to"])
         self.assertIn("看看日志", finished["entries"][-1]["text"])
         # Mac 替这件事开的卡记着替谁做；Windows 不再另外显示它。
-        worker = [item for item in a.xiaoyou.cards.recent(None, 100) if item.get("delegated_from")]
+        worker = [item for item in a.xiaoyu.cards.recent(None, 100) if item.get("delegated_from")]
         self.assertEqual(1, len(worker))
         self.assertEqual(b.service.runtime_id, worker[0]["delegated_from"]["runtime"])
         self.assertIsNone(b.card_from(a, worker[0]["id"]))
@@ -241,8 +241,8 @@ class MeshTests(TempDirCase):
         heir = Scripted("cc", kind="claude_code")
         a = self.node("Mac", agents=[Scripted("claude"), heir])
         b = self.node("Windows", peers=[a.url])
-        desktop = a.xiaoyou.record.observed_open("__desktop__", "改同步方案", "done", "claude")
-        a.xiaoyou.record.observed(desktop["id"], monitoring_only=True, source="desktop", session_id="s-mac",
+        desktop = a.xiaoyu.record.observed_open("__desktop__", "改同步方案", "done", "claude")
+        a.xiaoyu.record.observed(desktop["id"], monitoring_only=True, source="desktop", session_id="s-mac",
                                   desktop_cwd=str(self.folder), desktop_status="idle", entries=[
                                       {"id": "e1", "role": "you", "text": "先出方案", "at": 1.0}])
         self.assertTrue(until(lambda: b.card_from(a, desktop["id"]) is not None))
@@ -250,9 +250,9 @@ class MeshTests(TempDirCase):
         self.assertTrue(b.mesh.amend(mirrored, "照方案改代码", continue_desktop=True))
         # Mac 自己开一件「接着：…」，交给它能接 Claude 会话的帮手，在那个会话里接着做。
         self.assertTrue(until(lambda: any(card["title"].startswith("接着：") and card["agent"] == "cc"
-                                          for card in a.xiaoyou.cards.recent(None, 100)), 10))
+                                          for card in a.xiaoyu.cards.recent(None, 100)), 10))
         self.assertTrue(until(lambda: heir.jobs and heir.jobs[-1].session_id == "s-mac", 10))
-        self.assertFalse(any(card["title"].startswith("接着：") for card in b.xiaoyou.cards.recent(None, 100)
+        self.assertFalse(any(card["title"].startswith("接着：") for card in b.xiaoyu.cards.recent(None, 100)
                              if not card.get("mesh_origin")))
 
     def sharing(self, node, env=(), folders=None):
@@ -308,7 +308,7 @@ class MeshTests(TempDirCase):
         mac.history.mkdir(parents=True)
         (mac.history / "claude-s1.md").write_text("# 改同步方案\n\n### 主人 · 2026\n\n先出方案\n", encoding="utf-8")
         mac.scan()
-        state = Path(b.xiaoyou._config.state_dir)
+        state = Path(b.xiaoyu._config.state_dir)
         self.assertTrue(until(lambda: shared_history.elsewhere(state)))
         listed = shared_history.elsewhere(state)[0]
         self.assertEqual(("Mac", "改同步方案"), (listed["computer"], listed["title"]))
@@ -329,7 +329,7 @@ class MeshTests(TempDirCase):
 
     def _refresh(self, node, name):
         node.mesh.sweep()
-        return until(lambda: node.xiaoyou.has(name))
+        return until(lambda: node.xiaoyu.has(name))
 
     def test_wrong_secret_is_refused(self):
         a = self.node("Mac")
@@ -377,8 +377,8 @@ class MeshConfigTests(TempDirCase):
                          (loaded.mesh_secret, loaded.mesh_peers, loaded.mesh_advertise))
         # 只监听本机：不对外说地址（只往外连）。
         self.assertEqual([], self.load(mesh={"secret": SECRET}).mesh_advertise)
-        loaded = self.load({"XIAOYOU_MESH_SECRET": SECRET, "XIAOYOU_MESH_PEERS": "http://a.test, https://b.test",
-                            "XIAOYOU_MESH_ADVERTISE": "https://me.test"})
+        loaded = self.load({"XIAOYU_MESH_SECRET": SECRET, "XIAOYU_MESH_PEERS": "http://a.test, https://b.test",
+                            "XIAOYU_MESH_ADVERTISE": "https://me.test"})
         self.assertEqual((["http://a.test", "https://b.test"], ["https://me.test"]),
                          (loaded.mesh_peers, loaded.mesh_advertise))
 
@@ -406,12 +406,12 @@ class MeshHttpTests(TempDirCase):
         port = free_port()
         url = "http://127.0.0.1:%d" % port
         loaded = config_module.load(write_config(self.folder / name), {
-            "XIAOYOU_PORT": str(port), "XIAOYOU_NAME": name, "XIAOYOU_MESH_SECRET": SECRET,
-            "XIAOYOU_MESH_PEERS": ",".join(peers), "XIAOYOU_MESH_ADVERTISE": url})
+            "XIAOYU_PORT": str(port), "XIAOYU_NAME": name, "XIAOYU_MESH_SECRET": SECRET,
+            "XIAOYU_MESH_PEERS": ",".join(peers), "XIAOYU_MESH_ADVERTISE": url})
         store = Store(loaded.state_dir, legacy_agent=loaded.default_agent)
-        xiaoyou = Xiaoyou(loaded, [factory.create(spec) for spec in loaded.agents], store)
-        service = Service(xiaoyou, store)
-        mesh = Mesh(loaded, service, xiaoyou)
+        xiaoyu = Xiaoyu(loaded, [factory.create(spec) for spec in loaded.agents], store)
+        service = Service(xiaoyu, store)
+        mesh = Mesh(loaded, service, xiaoyu)
         server = make_server(loaded, service)
         server.RequestHandlerClass.log_message = lambda *args: None
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -420,7 +420,7 @@ class MeshHttpTests(TempDirCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         self.addCleanup(mesh.close)
-        return url, service, xiaoyou
+        return url, service, xiaoyu
 
     def call(self, method, url, body=None, token=TOKEN):
         request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
@@ -436,7 +436,7 @@ class MeshHttpTests(TempDirCase):
 
     def test_two_runtimes_sync_over_http_and_the_exchange_needs_the_mesh_secret(self):
         home, home_service, _ = self.runtime("Home")
-        laptop, _, laptop_xiaoyou = self.runtime("Laptop", peers=[home])
+        laptop, _, laptop_xiaoyu = self.runtime("Laptop", peers=[home])
         self.assertEqual(401, self.call("POST", home + "/v1/mesh/exchange", {}, token=None)[0])
         self.assertEqual(401, self.call("POST", home + "/v1/mesh/exchange", {}, token=TOKEN)[0])
         self.assertEqual(401, self.call("GET", home + "/v1/mesh", token=SECRET)[0])
@@ -444,7 +444,7 @@ class MeshHttpTests(TempDirCase):
         self.assertTrue(until(lambda: home_service.get(sent["id"])["status"] == "done"))
         card = home_service.get(sent["id"])["card"]
         self.assertTrue(until(lambda: any(item.get("mesh_id") == card and len(item["entries"]) == 2
-                                          for item in laptop_xiaoyou.cards.recent(None, 100)), 10))
+                                          for item in laptop_xiaoyu.cards.recent(None, 100)), 10))
         status, mesh = self.call("GET", laptop + "/v1/mesh")
         self.assertEqual(200, status)
         self.assertEqual(["Home"], [peer["name"] for peer in mesh["peers"]])

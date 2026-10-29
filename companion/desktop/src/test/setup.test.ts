@@ -16,7 +16,7 @@ const endpoint: Endpoint = { runtimeId: 'a'.repeat(32), spaceId: 'b'.repeat(32),
 const agents: LocalAgent[] = ['dsh', 'codex', 'claude'].map(id => ({ id: id as LocalAgent['id'], name: id,
   installed: true, auth: id === 'dsh' ? 'unknown' : 'signed-in', configured: true, version: '1.0.0', location: process.execPath }));
 async function fixture(t: { after(callback: () => void | Promise<void>): void }) {
-  const dir = await mkdtemp(join(tmpdir(), 'xiaoyou-setup-')), db = new ClientDatabase(join(dir, 'cache.sqlite'));
+  const dir = await mkdtemp(join(tmpdir(), 'xiaoyu-setup-')), db = new ClientDatabase(join(dir, 'cache.sqlite'));
   const values = new Map<string, unknown>();
   const secrets: SecretStore = { load: <T>(key: string) => values.get(key) as T | undefined, save(key, value) { values.set(key, value); } };
   t.after(async () => { db.close(); await rm(dir, { recursive: true, force: true }); });
@@ -132,12 +132,12 @@ test('explicit configuration attach cannot be redirected by inherited Runtime po
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer configured-token-123456');
     return new Response(JSON.stringify({ runtime_id: endpoint.runtimeId, subject_id: endpoint.spaceId, capabilities: ['sync'] }));
   });
-  const oldPort = process.env.XIAOYOU_PORT, oldToken = process.env.XIAOYOU_TOKEN;
-  process.env.XIAOYOU_PORT = '1'; process.env.XIAOYOU_TOKEN = 'unexpected-token';
+  const oldPort = process.env.XIAOYU_PORT, oldToken = process.env.XIAOYU_TOKEN;
+  process.env.XIAOYU_PORT = '1'; process.env.XIAOYU_TOKEN = 'unexpected-token';
   try { await new RuntimeHost(dir, { command: process.execPath, args: [], cwd: dir }, transport).attach(file); }
   finally {
-    if (oldPort === undefined) delete process.env.XIAOYOU_PORT; else process.env.XIAOYOU_PORT = oldPort;
-    if (oldToken === undefined) delete process.env.XIAOYOU_TOKEN; else process.env.XIAOYOU_TOKEN = oldToken;
+    if (oldPort === undefined) delete process.env.XIAOYU_PORT; else process.env.XIAOYU_PORT = oldPort;
+    if (oldToken === undefined) delete process.env.XIAOYU_TOKEN; else process.env.XIAOYU_TOKEN = oldToken;
   }
 });
 

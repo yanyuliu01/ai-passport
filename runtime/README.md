@@ -2,7 +2,7 @@
   <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Xiaoyou Runtime
+# Xiaoyu Runtime
 
 Agents changing this project must first read the [root instructions](../AGENTS.md)
 and [mandatory App/Runtime/firmware reliability rules](../docs/development/cross-stack-reliability.md).
@@ -10,20 +10,20 @@ They define regression, 3-second first-response, connection recovery, and
 multi-end consistency acceptance. The capability descriptions below do not
 establish that these requirements have passed validation.
 
-Xiaoyou is the single voice the owner talks to, and an identity of her own: she
+Xiaoyu is the single voice the owner talks to, and an identity of her own: she
 is not another name for one model. This runtime is the small, always-on service
 behind her, and what is hers lives here: the persona, the transcript of her
 conversations with the owner, the decision of who gets each message, and how
-somebody else's result is reported back. Claude Code, Codex, Xiaoyou on another
+somebody else's result is reported back. Claude Code, Codex, Xiaoyu on another
 computer, and a local model added later are all **agents** she can use.
 
 Every request the owner makes is **one thing** with a card of its own: what he
-said, what Xiaoyou answered and anything added later are kept on that card.
-Xiaoyou herself only does what is quick: she understands the sentence, answers
+said, what Xiaoyu answered and anything added later are kept on that card.
+Xiaoyu herself only does what is quick: she understands the sentence, answers
 at once when she can, and hands anything that takes time to a helper working in
 the background. So an unfinished thing does not hold up the next sentence,
 several things can be in progress at once, and a thing can be added to, changed
-or cancelled while it runs. Whatever Xiaoyou says comes as a full reply, a
+or cancelled while it runs. Whatever Xiaoyu says comes as a full reply, a
 short brief for the Passport screen, and a mood for the pixel pet; Markdown
 markup, code fences and emoji in a reply are turned into plain text first so
 the small screen and terminals show it cleanly. A message
@@ -31,18 +31,22 @@ can be typed text or a voice recording; a recording is first turned into text
 by a speech recognition engine chosen in the configuration.
 
 ```text
-phone app / any client ──HTTP──> Xiaoyou Runtime
+phone app / any client ──HTTP──> Xiaoyu Runtime
                                    │  persona · transcript · cards · routing · reporting back
-                                   ├──> claude   (Claude Code command line; can answer as Xiaoyou)
+                                   ├──> claude   (Claude Code command line; can answer as Xiaoyu)
                                    ├──> codex    (Codex command line; does work only)
-                                   ├──> dsh      (DeepSeek Harness command line; can answer as Xiaoyou)
+                                   ├──> dsh      (DeepSeek Harness command line; can answer as Xiaoyu)
                                    ├──> any command (a local model, for example)
-                                   └──> Xiaoyou Runtime on another computer
+                                   └──> Xiaoyu Runtime on another computer
 ```
 
 Status: verification stage, intended to run on your own computer. The same
 code is meant to move to a virtual machine later; nothing in it assumes a
 particular host. See [What is and is not verified](#what-is-and-is-not-verified).
+
+## Xiaoyu identity and character (0.27.0 source)
+
+The canonical package is `xiaoyu_runtime`. The character calls her creator the boss, values her own reactions and curiosity, and develops her story from actual interactions and exploration. The fixed execution contract remains independent. See [character and migration boundaries](../docs/development/persona-boundaries.md) for legacy command/configuration compatibility and deployment limits. This source candidate does not replace separately developed or installed Runtime work.
 
 ## Unified request synchronization (0.24.0)
 
@@ -354,7 +358,7 @@ private watch data stays off client/Mesh projections.
 `loop/progress_wakes.py` now owns progress admission, claim/retry limits, saved
 reply recovery and completion checkpoints through explicit ports. Pulse supplies
 the clock, configured policy, owner/model/publication adapters and shared queue;
-the rules do not import Pulse or Xiaoyou. This preserves the existing task journal,
+the rules do not import Pulse or Xiaoyu. This preserves the existing task journal,
 watch identities, prompts, timing policy and client formats.
 
 `loop/timer_wakes.py` owns due-reminder and memory-upkeep lifecycles. Reminder
@@ -493,16 +497,16 @@ without its parent remains an attributed result until the parent arrives.
 cd runtime
 cp config.example.json config.json
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # paste into server.token
-python3 -m xiaoyou_runtime --config config.json --check
-python3 -m xiaoyou_runtime --config config.json --once "hello"   # one turn, no server
-python3 -m xiaoyou_runtime --config config.json                  # start the service
+python3 -m xiaoyu_runtime --config config.json --check
+python3 -m xiaoyu_runtime --config config.json --once "hello"   # one turn, no server
+python3 -m xiaoyu_runtime --config config.json                  # start the service
 ```
 
 `config.json`, `state/`, and `workdir/` are ignored by Git. Never commit a real
 token.
 
 To try the whole path without calling any model, start it with the environment
-variable `XIAOYOU_DEFAULT_AGENT=echo`: every message goes to an agent that
+variable `XIAOYU_DEFAULT_AGENT=echo`: every message goes to an agent that
 repeats it, and the configuration file stays as it is.
 
 ## View Runtime tasks in desktop apps
@@ -526,8 +530,8 @@ artifacts and subagent files are not imported.
 For retained tasks, from the repository root:
 
 ```bash
-PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop list
-PYTHONPATH=runtime python3 -m xiaoyou_runtime --config runtime/config.json desktop open --task c149 --agent codex
+PYTHONPATH=runtime python3 -m xiaoyu_runtime --config runtime/config.json desktop list
+PYTHONPATH=runtime python3 -m xiaoyu_runtime --config runtime/config.json desktop open --task c149 --agent codex
 ```
 
 Use the configured agent name (for example `cc`, not necessarily `claude`).
@@ -583,7 +587,7 @@ App/Bluetooth connection:
 
 ```bash
 cd runtime
-python3 -m xiaoyou_runtime --config config.json --desktop-sync
+python3 -m xiaoyu_runtime --config config.json --desktop-sync
 ```
 
 To keep it on however the runtime is started (a keepalive script, login items,
@@ -599,7 +603,7 @@ specific projects, repeat `--desktop-project`; the other two options select the
 agent's configuration directory, which contains `sessions/` or `projects/`:
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json --desktop-sync \
+python3 -m xiaoyu_runtime --config config.json --desktop-sync \
   --desktop-project /absolute/project-a --desktop-project /absolute/project-b \
   --desktop-codex-dir /absolute/codex-config \
   --desktop-claude-dir /absolute/claude-config
@@ -655,17 +659,17 @@ that already supports desktop cards needs no new flash for content sync.
 
 A desktop conversation whose turn has stopped can be continued from the phone on
 its page (since 0.8.1). Since 0.10.1, what the owner says on that page goes to
-Xiaoyou first: she sees the session's recent content and answers questions about it
+Xiaoyu first: she sees the session's recent content and answers questions about it
 (explain, translate, summarize) herself, filing her answer on a new card. The
 session is continued only when the owner names the agent that can take it over
-(`agent` in the request, or its name in the text), or when Xiaoyou decides the
+(`agent` in the request, or its name in the text), or when Xiaoyu decides the
 owner wants it to keep working (her `amend` on that card). Continuing opens a new
 task, titled after that conversation, and runs one turn in that
 session's directory with its session id (Claude sessions go to a `claude_code`
-agent, Codex sessions to a `codex` agent), without Xiaoyou's persona. The session is
+agent, Codex sessions to a `codex` agent), without Xiaoyu's persona. The session is
 not recorded as the runtime's own, so desktop observation continues and the owner
 can go back to the computer. Continuing is refused while the turn on the computer is still
-running (`running`/`waiting` and not `stale`); asking Xiaoyou about it is not. Stopping stays in the desktop app. A live permission request can be answered separately from the phone
+running (`running`/`waiting` and not `stale`); asking Xiaoyu about it is not. Stopping stays in the desktop app. A live permission request can be answered separately from the phone
 when the optional approval bridge below is installed and trusted; a status signal
 or notification without that decision channel still requires desktop confirmation.
 Ending a response means this turn ended, not that the whole project is complete.
@@ -694,10 +698,10 @@ repeated.
 From the repository root, query the retained history without calling a model:
 
 ```bash
-python3 runtime/xiaoyou_runtime/shared_history.py --context
-python3 runtime/xiaoyou_runtime/shared_history.py --task c127
-python3 runtime/xiaoyou_runtime/shared_history.py --format json
-python3 runtime/xiaoyou_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
+python3 runtime/xiaoyu_runtime/shared_history.py --context
+python3 runtime/xiaoyu_runtime/shared_history.py --task c127
+python3 runtime/xiaoyu_runtime/shared_history.py --format json
+python3 runtime/xiaoyu_runtime/shared_history.py --export runtime/state/history-context/shared-history.md
 ```
 
 Use `--config /absolute/config.json` and `--project /absolute/project` for another
@@ -755,7 +759,7 @@ JSON object from standard input. Status-only events produce no standard output.
 From `runtime/`, the receiver command is:
 
 ```bash
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state --agent codex
 ```
 
 For a hook launched from any project, use this reusable command handler. Replace
@@ -764,7 +768,7 @@ both absolute paths; `runtime-state` must be the Runtime's resolved `state_dir`:
 ```json
 {
   "type": "command",
-  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
+  "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyu_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent codex",
   "timeout": 2
 }
 ```
@@ -794,7 +798,7 @@ by `PermissionRequest`. Its matching hook group can be added as follows:
       "matcher": "permission_prompt",
       "hooks": [{
         "type": "command",
-        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyou_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
+        "command": "PYTHONPATH=\"/absolute/ai-passport/runtime\" python3 -m xiaoyu_runtime.desktop_hook --state-dir \"/absolute/runtime-state\" --agent claude",
         "timeout": 2
       }]
     }]
@@ -827,9 +831,9 @@ Generate mergeable configuration for each agent instead of hand-editing timeout
 values:
 
 ```bash
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state \
   --agent codex --approval-timeout 300 --print-config
-python3 -m xiaoyou_runtime.desktop_hook --state-dir /absolute/runtime-state \
+python3 -m xiaoyu_runtime.desktop_hook --state-dir /absolute/runtime-state \
   --agent claude --approval-timeout 300 --print-config
 ```
 
@@ -858,7 +862,7 @@ without it, the approval is still visible inside the App.
 
 ## Decide before speaking (0.19.0, opt-in)
 
-`xiaoyou.decide_first` defaults to `false`. With a streaming DeepSeek voice,
+`xiaoyu.decide_first` defaults to `false`. With a streaming DeepSeek voice,
 enabling it selects at most one commitment in a non-streamed request, then
 validates and applies it before the visible reply. The speaking request can
 only query task details or recall records. Memory/promise changes follow the
@@ -996,23 +1000,23 @@ Relative paths are resolved against the directory of the configuration file.
 | `server.port` | `8765` | Port to listen on. |
 | `server.name` | the machine's host name | What the phone app calls this runtime, at most 40 characters. |
 | `server.token` | none | Shared secret, at least 16 characters. The placeholder is rejected. |
-| `state_dir` | `state` | Where the session table, the cards and Xiaoyou's transcript are kept. |
-| `persona_file` | `persona.txt` | Xiaoyou's persona. Given only to an agent that answers as Xiaoyou. |
+| `state_dir` | `state` | Where the session table, the cards and Xiaoyu's transcript are kept. |
+| `persona_file` | `persona.txt` | Xiaoyu's persona. Given only to an agent that answers as Xiaoyu. |
 | `brief_max_chars` | `120` | Upper bound for the small-screen brief (20 to 400). |
 | `turn_timeout_seconds` | `0` | How long one thing in the background may take from start to end; `0` means no limit (the default since 0.5.4; it was `3600`). Used by agents that do not set their own `timeout_seconds` (`0`, or 10 to 86400). Whether a thing is stuck is judged by how long it has been silent, see [Long tasks](#long-tasks-watched-for-silence-not-for-total-time). |
 | `idle_timeout_seconds` | `600` | When a thing in the background has produced no event for this long, the owner is asked whether to keep waiting (`0` turns this off, or 30 to 86400). |
 | `idle_timeout_command_seconds` | `1800` | The same, while an operation has started and not finished (the event stream is quiet during a build or a test run anyway). Must not be smaller than the previous one. |
 | `idle_answer_seconds` | `1800` | When nobody answers that question for this long, the thing is stopped (`0` waits forever, or 30 to 86400). |
 | `agents.<name>` | none | An agent; see [Agents](#agents). At least one must be enabled. |
-| `xiaoyou.default_agent` | the first agent | Who gets a message when nobody is named and the router has no opinion. |
-| `xiaoyou.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyou, after an agent that only does work. |
-| `xiaoyou.max_parallel` | `0` | How many things may be in progress at once (0 to 64); `0` means no limit. The rest wait their turn. |
-| `xiaoyou.voice_timeout_seconds` | `60` | How long Xiaoyou herself may take over one sentence (5 to 600). She gets no tools for this step; it is only understanding and dispatching. |
-| `xiaoyou.decide_first` | `false` | Opt-in decision-before-speech path for streaming DeepSeek voices; requires live validation before rollout. |
-| `xiaoyou.max_handoffs` | `2` | A 0.4 setting that no longer has any effect; still read so that old configurations load. |
-| `xiaoyou.router.type` | `mention` | `mention` or `command`; see [Who gets a message](#who-gets-a-message). |
-| `xiaoyou.router.command` | `[]` | `command`: the command that decides. |
-| `xiaoyou.router.timeout_seconds` | `10` | `command`: after this long the default agent is used instead (1 to 120). |
+| `xiaoyu.default_agent` | the first agent | Who gets a message when nobody is named and the router has no opinion. |
+| `xiaoyu.voice_agent` | the default agent, or the first one that speaks if the default only works | Who reports back, as Xiaoyu, after an agent that only does work. |
+| `xiaoyu.max_parallel` | `0` | How many things may be in progress at once (0 to 64); `0` means no limit. The rest wait their turn. |
+| `xiaoyu.voice_timeout_seconds` | `60` | How long Xiaoyu herself may take over one sentence (5 to 600). She gets no tools for this step; it is only understanding and dispatching. |
+| `xiaoyu.decide_first` | `false` | Opt-in decision-before-speech path for streaming DeepSeek voices; requires live validation before rollout. |
+| `xiaoyu.max_handoffs` | `2` | A 0.4 setting that no longer has any effect; still read so that old configurations load. |
+| `xiaoyu.router.type` | `mention` | `mention` or `command`; see [Who gets a message](#who-gets-a-message). |
+| `xiaoyu.router.command` | `[]` | `command`: the command that decides. |
+| `xiaoyu.router.timeout_seconds` | `10` | `command`: after this long the default agent is used instead (1 to 120). |
 | `stt.engine` | `none` | Speech recognition: `none`, `sense_voice`, or `command`. See [Voice](#voice). |
 | `stt.model_dir` | none | `sense_voice`: folder holding `model.int8.onnx` (or `model.onnx`) and `tokens.txt`. |
 | `stt.language` | `auto` | `sense_voice`: `auto`, `zh`, `en`, `ja`, `ko`, or `yue`. |
@@ -1026,23 +1030,23 @@ Relative paths are resolved against the directory of the configuration file.
 | `firmware.build_command` | `[]` | The command that builds the firmware on this computer, run in `source_dir`. Empty means this computer does not build it. |
 | `firmware.build_output` | `build/FoloToy-AI-Passport.bin` | The firmware file a build produces, relative to `source_dir`. |
 | `workspace.type` | `none` | `none` or `notion`. See [Shared workspace](#shared-workspace). |
-| `workspace.token` | none | The Notion integration token; the environment variable `XIAOYOU_NOTION_TOKEN` also works. |
+| `workspace.token` | none | The Notion integration token; the environment variable `XIAOYU_NOTION_TOKEN` also works. |
 | `workspace.token_file` | none | A file that holds the token (a relative path is taken from the folder of the config file), read once at start; set this or `workspace.token`, not both. For keeping the token out of `config.json`. |
 | `workspace.bus_database` | none | The id of the "bus" database (the 32 characters in its link). Required for `notion`. |
 | `workspace.log_database` | none | The id of the "log" database. Leave it out to write the bus only. |
-| `workspace.author` | `xiaoyou` | The name Xiaoyou signs with in the shared workspace. |
+| `workspace.author` | `xiaoyu` | The name Xiaoyu signs with in the shared workspace. |
 | `usage.enabled` | `true` | Whether the runtime asks for subscription quota on its own (since 0.6.0). With `false` no process is started for that; what helpers report while they work is still recorded. See [Usage](#usage-what-is-left-of-each-subscription). |
 | `usage.refresh_seconds` | `300` | How often to ask again while a client is watching (60 to 86400). |
 
 Environment variables override the file, so a container or virtual machine can
-be configured without editing it: `XIAOYOU_CONFIG`, `XIAOYOU_HOST`,
-`XIAOYOU_NAME`, `XIAOYOU_PORT`, `XIAOYOU_TOKEN`, `XIAOYOU_STATE_DIR`,
-`XIAOYOU_DEFAULT_AGENT`, `XIAOYOU_CODEX_CONFIG_DIR` (applied to every `codex`
-agent), `XIAOYOU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent), `XIAOYOU_DSH_CONFIG_DIR`
+be configured without editing it: `XIAOYU_CONFIG`, `XIAOYU_HOST`,
+`XIAOYU_NAME`, `XIAOYU_PORT`, `XIAOYU_TOKEN`, `XIAOYU_STATE_DIR`,
+`XIAOYU_DEFAULT_AGENT`, `XIAOYU_CODEX_CONFIG_DIR` (applied to every `codex`
+agent), `XIAOYU_CLAUDE_CONFIG_DIR` (applied to every `claude_code` agent), `XIAOYU_DSH_CONFIG_DIR`
 (applied to every `dsh` agent),
-and `XIAOYOU_NOTION_TOKEN`.
+and `XIAOYU_NOTION_TOKEN`.
 
-With `XIAOYOU_DEBUG` set (to anything), every sentence Xiaoyou takes adds one
+With `XIAOYU_DEBUG` set (to anything), every sentence Xiaoyu takes adds one
 line to standard error: which card she put it on and what she asked the
 runtime to do.
 
@@ -1060,9 +1064,9 @@ and hyphens, at most 24 characters). Every agent has:
 | --- | --- | --- |
 | `type` | none | `claude_code`, `codex`, `dsh`, `command`, `remote`, or `echo`. |
 | `enabled` | `true` | `false` makes the runtime treat it as absent. |
-| `description` | empty | One sentence on what it is good at. Xiaoyou reads it to decide whether to hand work over, and so does the router. |
+| `description` | empty | One sentence on what it is good at. Xiaoyu reads it to decide whether to hand work over, and so does the router. |
 | `aliases` | `[]` | Other names it answers to when named in a message, for example how speech recognition tends to spell it. |
-| `speaks` | by type | Whether it may answer as Xiaoyou. `claude_code`, `dsh`, `remote` and `echo` do by default; `codex` and `command` only do work. |
+| `speaks` | by type | Whether it may answer as Xiaoyu. `claude_code`, `dsh`, `remote` and `echo` do by default; `codex` and `command` only do work. |
 | `timeout_seconds` | `turn_timeout_seconds` | How long one run of this agent may take from start to end; `0` means no limit. Ways of running that have no event stream (`command`, and `codex` in `exec` mode) use 3600 seconds when this is `0`. |
 | `idle_timeout_seconds`, `idle_timeout_command_seconds` | the top-level settings of the same name | How long this agent may be silent before it counts as possibly stuck. Only for ways of running that have an event stream: `claude_code`, `dsh`, and `codex` in `app_server` mode. |
 
@@ -1075,7 +1079,7 @@ Keys by type:
 | `dsh` | Runs the DeepSeek Harness command line (`dsh`); see [DeepSeek Harness](#deepseek-harness-dsh) below. | `command` (default `["dsh"]`), `workdir`, `config_dir`, `sandbox` (default `workspace-write`), `stream` (default `true`), `model`, `extra_args`, `env`, `env_files`, `models`, `effort`, `efforts` |
 | `pi` | Runs the pi coding agent once per turn (`pi -p`), with a session id Runtime keeps so the next turn continues. Keys for API models go in `env` / `env_files` under the provider's own variable (for example `OPENAI_API_KEY`); a subscription is logged in inside pi with `/login`. pi has no sandbox or approvals: limit its tools with `--tools` in `extra_args`. | `command` (default `["pi"]`), `workdir`, `model` (`provider/id`), `extra_args`, `env`, `env_files`, `skills`, `models`, `effort`, `efforts` (pi's `--thinking` levels) |
 | `command` | Any command. The text goes in on standard input and standard output is the result; an argument containing `{prompt}` receives the text instead. It has no session: every run starts fresh. | `command`, `workdir` |
-| `remote` | Xiaoyou Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyou's words. | `url`, `token` (that runtime's `server.token`) |
+| `remote` | Xiaoyu Runtime on another computer. That side has its own persona, agents and sessions; what comes back is already Xiaoyu's words. | `url`, `token` (that runtime's `server.token`) |
 | `echo` | Repeats what it is given; calls no model. | none |
 
 `permission_mode` is the permission mode Claude Code works under when it is
@@ -1085,7 +1089,7 @@ are rules that are approved in advance and never asked about; keep them
 narrow. `add_dirs` are the directories it may touch besides the one it starts
 in; the default is the whole home directory. To go back to "refuse whatever is
 not allowed, ask nobody", set `permission_mode` to `dontAsk`. None of these
-affect the one call in which Xiaoyou herself takes a sentence: that call never
+affect the one call in which Xiaoyu herself takes a sentence: that call never
 has tools.
 
 ### Using another provider's model (for example DeepSeek V4)
@@ -1099,13 +1103,13 @@ carries a disabled `deepseek` agent:
 ```json
 "deepseek": {
   "type": "claude_code",
-  "config_dir": "~/.claude-xiaoyou-deepseek",
+  "config_dir": "~/.claude-xiaoyu-deepseek",
   "model": "deepseek-v4-pro",
   "env": {
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
   },
   "env_files": {
-    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyou/deepseek.key"
+    "ANTHROPIC_AUTH_TOKEN": "~/.config/xiaoyu/deepseek.key"
   }
 }
 ```
@@ -1117,15 +1121,15 @@ missing or empty file, and a file that other users can read (`chmod 600` it). On
 to write the key without it reaching shell history:
 
 ```bash
-mkdir -p ~/.config/xiaoyou && chmod 700 ~/.config/xiaoyou
-read -rs "key?DeepSeek key: " && printf '%s\n' "$key" > ~/.config/xiaoyou/deepseek.key; unset key
-chmod 600 ~/.config/xiaoyou/deepseek.key
+mkdir -p ~/.config/xiaoyu && chmod 700 ~/.config/xiaoyu
+read -rs "key?DeepSeek key: " && printf '%s\n' "$key" > ~/.config/xiaoyu/deepseek.key; unset key
+chmod 600 ~/.config/xiaoyu/deepseek.key
 ```
 
 (That is zsh; in bash write `read -rsp "DeepSeek key: " key`.)
 
-Set `"enabled"` to `true`, put the key in place, and point `xiaoyou.default_agent` (and
-`voice_agent`, if set) at it: Xiaoyou herself is then answered by that model. The
+Set `"enabled"` to `true`, put the key in place, and point `xiaoyu.default_agent` (and
+`voice_agent`, if set) at it: Xiaoyu herself is then answered by that model. The
 original `claude` stays as a helper, and switching back is pointing those two keys
 at `claude` again. Give it its own `config_dir` so its sessions stay apart from the
 subscription login; that directory needs no login. Writing the key directly into
@@ -1143,14 +1147,14 @@ shell:
 - Background jobs use `dsh --profile acp` (the Agent Client Protocol, JSON-RPC
   over standard input and output): progress lines, silence watching, and
   interruption all work.
-- The one call in which Xiaoyou herself takes a sentence streams by default
+- The one call in which Xiaoyu herself takes a sentence streams by default
   (`stream`, default `true`): dsh only hands over a reply once a step is
   committed, so this call goes straight to DeepSeek's Messages endpoint (the
   same one dsh uses: `DEEPSEEK_BASE_URL` or `https://api.deepseek.com/anthropic`,
   with `DEEPSEEK_API_KEY` from `env` / `env_files`) with `stream: true`. The
   reply so far appears as `partial` on `GET /v1/messages/<id>`, so the phone
   shows it while it is written. These turns keep their own short history in
-  `<config_dir>/xiaoyou-stream-sessions/` (ids start with `api-`). If the stream
+  `<config_dir>/xiaoyu-stream-sessions/` (ids start with `api-`). If the stream
   fails, or with `stream: false`, the call falls back to
   `dsh --profile headless --json`: one question, one answer, with tools and
   thinking switched off for speed.
@@ -1181,17 +1185,17 @@ handshake with an unexpected version or method name says so plainly.
 
 ### Project brief
 
-`xiaoyou_runtime/project_brief.py` is a small script to use as a `command`
+`xiaoyu_runtime/project_brief.py` is a small script to use as a `command`
 helper for "what has been happening in this project": it reads this computer's
 `git log` / `git status` and the recent sessions Claude Code
 (`~/.claude/projects/<repo>/`) and Codex (`~/.codex/sessions/`, filtered by
-working directory) keep locally, prints a summary, and Xiaoyou relays it. It
+working directory) keep locally, prints a summary, and Xiaoyu relays it. It
 uses only the standard library and runs on its own as well:
 
 ```json
 "brief": {
   "type": "command",
-  "command": ["python3", "/Users/you/ai-passport/runtime/xiaoyou_runtime/project_brief.py", "~/ai-passport"],
+  "command": ["python3", "/Users/you/ai-passport/runtime/xiaoyu_runtime/project_brief.py", "~/ai-passport"],
   "description": "What changed in this project lately, and what was discussed in Claude Code and Codex"
 }
 ```
@@ -1215,7 +1219,7 @@ The order is fixed:
 2. The owner named one at the start of the sentence: that one. Two forms are
    recognized: `@codex look at this`, and a Chinese "let / ask / use / hand to"
    word followed by a name or alias (the words are `ASK_WORDS` in
-   [`xiaoyou_runtime/loop/router.py`](xiaoyou_runtime/loop/router.py); the Chinese version
+   [`xiaoyu_runtime/loop/router.py`](xiaoyu_runtime/loop/router.py); the Chinese version
    of this page lists them).
 3. The router has an opinion: its choice.
 4. Otherwise: the default agent.
@@ -1223,18 +1227,18 @@ The order is fixed:
 Right after the name the owner may say which effort this one job runs at
 (since 0.6.0): `@codex high look at this error`. The words are `low`,
 `medium`, `high`, `xhigh`, `max`, `minimal` and their Chinese counterparts
-(`EFFORT_WORDS` in [`xiaoyou_runtime/loop/router.py`](xiaoyou_runtime/loop/router.py);
+(`EFFORT_WORDS` in [`xiaoyu_runtime/loop/router.py`](xiaoyu_runtime/loop/router.py);
 the Chinese version of this page lists them, with the spoken form that puts a
 "use" word in between). Only a word directly after the name counts, and it is
 removed from what is handed to the helper. A level the helper may not use
 falls back to its usual one. See [Tiers](#tiers-model-and-effort).
 
 The first three rules all mean "it was decided who does this": the runtime
-does not ask a model. It opens a card, Xiaoyou says one sentence to the effect
+does not ask a model. It opens a card, Xiaoyu says one sentence to the effect
 of "handed to codex", and that agent works in the background. The message
 record gets a `handoff` event and `agent` is that agent. This includes the
-agent that speaks as Xiaoyou: `@claude …` makes `claude` do the thing in the
-background, with its tools and as Xiaoyou, and it is told that it was the one
+agent that speaks as Xiaoyu: `@claude …` makes `claude` do the thing in the
+background, with its tools and as Xiaoyu, and it is told that it was the one
 named. When the default agent only does work, rule 4 is handled the same way.
 
 The router is the replaceable part. `mention` adds nothing beyond rules 1, 2
@@ -1248,7 +1252,7 @@ decides routing plugs in here.
 ### One thing, one card
 
 A sentence that nobody was named for is taken by the agent that speaks as
-Xiaoyou. For this step it gets **no tools** and at most
+Xiaoyu. For this step it gets **no tools** and at most
 `voice_timeout_seconds`: it only has to understand. The runtime tells it which
 helpers exist (its own agent included), which things there are at the moment
 (number, title, who is on it, for how long), and which thing was on the
@@ -1271,8 +1275,8 @@ something as done that was not.
 Each thing in the background has a thread of its own and none waits for
 another. One helper can be on several things at once, because a helper's
 session is kept per thing and helper (`conversation/card` in
-`state/sessions.json`). A helper that can speak as Xiaoyou works with the
-persona, and its result is what Xiaoyou says. A helper that only does work
+`state/sessions.json`). A helper that can speak as Xiaoyu works with the
+persona, and its result is what Xiaoyu says. A helper that only does work
 receives the task only, without the persona or the chat; its raw result comes
 back to the conversation's own line and `voice_agent` reports it. If
 `voice_agent` is unavailable at that moment, the owner gets the raw result
@@ -1400,14 +1404,14 @@ high effort, or raise the helper's `effort`.
 How it reaches the tool: Claude Code gets `--effort <level>` and
 `--model <model>`; Codex gets `-c model_reasoning_effort="<level>"` and
 `--model` in `exec` mode, and `effort` and `model` in every `turn/start` in
-`app_server` mode. The call in which Xiaoyou herself takes a sentence does not
+`app_server` mode. The call in which Xiaoyu herself takes a sentence does not
 carry the usual effort: it has to be quick.
 
 The effort of a job is decided in this order:
 
 1. The level the owner said right after the name (see
    [Who gets a message](#who-gets-a-message)).
-2. Xiaoyou's choice in her reply: the `action` of `start` and `amend` may carry
+2. Xiaoyu's choice in her reply: the `action` of `start` and `amend` may carry
    `effort` and `model`. Her prompt says: follow the owner when he names a
    level; otherwise use low for a quick look, write nothing for ordinary
    things, and use high only for what is clearly hard, saying so.
@@ -1428,7 +1432,7 @@ known after the first run and kept in `state/usage.json`.
 
 Since 0.6.0 the runtime keeps, for every subscription login, how much is left
 in its two windows: the five-hour one and the weekly one. Three things use it:
-Xiaoyou when she hands out work, the phone and the device for display, and the
+Xiaoyu when she hands out work, the phone and the device for display, and the
 cost recorded on a card.
 
 Quota belongs to a **login**, not to a helper: helpers that share a
@@ -1455,7 +1459,7 @@ The state of a login is `ok`, `warn` (a window has less than 20% left), `out`
 (a window is used up) or `unknown` (no number at all). A number is dropped once
 its window has reset.
 
-When Xiaoyou takes a sentence, each helper in her list carries a note in
+When Xiaoyu takes a sentence, each helper in her list carries a note in
 Chinese after its description: the model, the usual effort and the levels to
 choose from, then what is left of both windows and when each resets (the
 Chinese version of this page shows one).
@@ -1478,7 +1482,7 @@ show 0.
 The numbers can be read without starting the service:
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json usage
+python3 -m xiaoyu_runtime --config config.json usage
 ```
 
 It asks now and prints what is left of each login, why a login could not be
@@ -1486,7 +1490,7 @@ asked, and each helper's model and effort. `--json` prints the raw data.
 
 ### Shared workspace
 
-Xiaoyou and other agents (Claude on claude.ai, Codex, later others) share one
+Xiaoyu and other agents (Claude on claude.ai, Codex, later others) share one
 record, kept in Notion as two databases:
 
 - **Bus**: for agents, and the source of truth. One row per entry, content
@@ -1494,23 +1498,23 @@ record, kept in Notion as two databases:
 - **Log**: for people. One summary when a thing ends, matched to its bus rows
   by the link column.
 
-On Xiaoyou's side the runtime's code writes every row; nothing depends on a
+On Xiaoyu's side the runtime's code writes every row; nothing depends on a
 model remembering to.
 
 | When | Where | What |
 | --- | --- | --- |
-| Work is handed to an agent (a new thing, a named agent, another round on a finished thing) | Bus | Type task, written by `xiaoyou`, addressed to and taken by that agent, status taken, body is the exact text given to it |
+| Work is handed to an agent (a new thing, a named agent, another round on a finished thing) | Bus | Type task, written by `xiaoyu`, addressed to and taken by that agent, status taken, body is the exact text given to it |
 | An addition or a changed requirement for work in progress | Bus | Type note; the first body line says what was actually done (steered midway, stopped and redone, queued for after) |
 | An agent returns a result, or fails | Bus | Type result, written by that agent, status done or failed, body is its raw result or the reason |
 | A cancellation | Bus, log | A bus note with status cancelled; one log row |
-| A thing ends | Log | Title, who did it, outcome, conclusion (the small-screen brief), body is what Xiaoyou finally said; when she needs a decision from you, that sentence is also in the your-action column |
+| A thing ends | Log | Title, who did it, outcome, conclusion (the small-screen brief), body is what Xiaoyu finally said; when she needs a decision from you, that sentence is also in the your-action column |
 
 The link column is `runtime name/card id` (for example `mac/c12`). The one call
-where Xiaoyou herself takes a sentence (the call without tools) is not a
+where Xiaoyu herself takes a sentence (the call without tools) is not a
 handoff and is not written.
 
 Writing to Notion goes over the network, so rows go through a queue and a
-separate thread; neither Xiaoyou's replies nor background work wait for it.
+separate thread; neither Xiaoyu's replies nor background work wait for it.
 Rate limits and server errors are retried three times. Rows that still cannot
 be written (no network, a revoked token, a database not shared with the
 integration) are appended to `state/workspace-unsent.jsonl` and reported on
@@ -1521,7 +1525,7 @@ pasted into a task is written too, so keep secrets out of tasks.
 Setup: create an internal integration in Notion and copy its token; share the
 page that holds the two databases with that integration. The column and
 option names in Notion are Chinese and must match exactly; they are listed in
-[README.zh_CN.md](README.zh_CN.md) and in `xiaoyou_runtime/loop/workspace.py`.
+[README.zh_CN.md](README.zh_CN.md) and in `xiaoyu_runtime/loop/workspace.py`.
 
 Other agents read and write the same record through Notion directly (Notion
 MCP where they support MCP); they do not go through the runtime.
@@ -1590,7 +1594,7 @@ the Runtime error log without changing a committed approval result.
 
 A thing given to Claude Code runs with `--permission-mode manual` and with the
 runtime's own permission tool attached
-(`xiaoyou_runtime/permission_mcp.py`, an MCP server with a single tool). Where
+(`xiaoyu_runtime/permission_mcp.py`, an MCP server with a single tool). Where
 Claude Code would ask "may I?", it calls that tool instead; the tool hands the
 operation to the runtime, the card of the thing becomes `waiting`, an entry
 appears under `approvals` in `/v1/feed`, and it waits. When the owner answers
@@ -1623,7 +1627,7 @@ The default is a read-only sandbox with `approval_policy: "on-request"`: it
 may read anywhere, and every change and every command that has to leave the
 sandbox is asked about. `tool` is the helper's name with a short Chinese label
 for a command, a file change or permissions (the labels are in
-[`xiaoyou_runtime/helpers/codex_app.py`](xiaoyou_runtime/helpers/codex_app.py); the Chinese
+[`xiaoyu_runtime/helpers/codex_app.py`](xiaoyu_runtime/helpers/codex_app.py); the Chinese
 version of this page lists them), and `detail` is the command
 and its directory, each file's path and diff, or the permissions it wants as
 they are, followed by the reason Codex itself gave. Anything else it asks
@@ -1676,37 +1680,37 @@ forty minutes. What the runtime watches is how long it has been silent:
 For a hard limit, give `turn_timeout_seconds` or an agent's `timeout_seconds`
 a number. The `command` type and `codex` in `exec` mode have no event stream,
 so nothing can be seen of them; they are still limited by total time only
-(3600 seconds when set to no limit). The one call in which Xiaoyou herself
+(3600 seconds when set to no limit). The one call in which Xiaoyu herself
 takes a sentence is not affected: that is still `voice_timeout_seconds`.
 
 ### Using a separate Claude login
 
 Claude Code reads its login and settings from `~/.claude`. If that directory is
 set up for something else (for example a company gateway through
-`ANTHROPIC_BASE_URL` or an API key), give Xiaoyou its own directory instead of
+`ANTHROPIC_BASE_URL` or an API key), give Xiaoyu its own directory instead of
 changing it:
 
 ```bash
-mkdir ~/xiaoyou-login && cd ~/xiaoyou-login      # any folder except your home folder
-CLAUDE_CONFIG_DIR=~/.claude-xiaoyou claude       # log in with the subscription, check /status, quit
+mkdir ~/xiaoyu-login && cd ~/xiaoyu-login      # any folder except your home folder
+CLAUDE_CONFIG_DIR=~/.claude-xiaoyu claude       # log in with the subscription, check /status, quit
 ```
 
-Then set `"config_dir": "~/.claude-xiaoyou"` on that `claude_code` agent. Do the login
+Then set `"config_dir": "~/.claude-xiaoyu"` on that `claude_code` agent. Do the login
 from a folder other than your home folder: Claude Code also loads
 `<current folder>/.claude/settings.json` as project settings, and in the home
 folder that is the very file you are trying to avoid.
 
 Codex is the same with `~/.codex`: a `config.toml` there that points at a
 gateway decides where every request goes, whatever account is logged in. Give
-Xiaoyou's Codex its own directory (`CODEX_HOME`); Codex does not create it:
+Xiaoyu's Codex its own directory (`CODEX_HOME`); Codex does not create it:
 
 ```bash
-mkdir -p ~/.codex-xiaoyou
-CODEX_HOME=~/.codex-xiaoyou codex login
-CODEX_HOME=~/.codex-xiaoyou codex login status
+mkdir -p ~/.codex-xiaoyu
+CODEX_HOME=~/.codex-xiaoyu codex login
+CODEX_HOME=~/.codex-xiaoyu codex login status
 ```
 
-Then set `"config_dir": "~/.codex-xiaoyou"` on that `codex` agent.
+Then set `"config_dir": "~/.codex-xiaoyu"` on that `codex` agent.
 
 
 ## HTTP interface
@@ -1719,7 +1723,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | Request | Result |
 | --- | --- |
 | `GET /healthz` | `{"ok": true, "version", "backend", "name"}`; no token needed. `backend` is the default agent's type. |
-| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyou can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
+| `GET /v1/agents` | `{"default", "agents": [{"name", "type", "description", "speaks", "default", "model", "effort", "efforts", "models"}]}`: the agents Xiaoyu can use on this runtime. The last four came with 0.6.0: the model actually used (the configured one before the first run, `null` when neither is known), the usual effort, and the levels and models a job may choose. |
 | `GET /v1/helpers/options` | Harnesses, UI-added helpers, MCP services and current grants; access ways include `magpie`, `key` and `login`. |
 | `POST /v1/helpers` | `{name,harness,access,model?,effort?,provider?,env?,key?,gateway_url?}` adds a helper. `magpie` selects a model through the model service; `key` passes a native environment variable; `login` uses native sign-in. Returns `201 {helper,problem}`. |
 | `POST /v1/helpers/<name>/remove` | Removes a managed helper and its key, or reversibly disables a non-primary config helper (0.24.1). |
@@ -1728,13 +1732,13 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/usage?refresh=1` | `{"rev", "at", "accounts": [...], "agents": [...]}` (since 0.6.0). `accounts` has one entry per subscription login: `{"id", "kind", "agents", "state", "windows": [{"kind": "5h" or "7d", "left", "resets_at"}], "plan", "source", "updated_at", "note"}`; `left` is the percentage that remains, `null` when unknown. `agents` has one entry per helper: `{"name", "type", "model", "effort", "efforts", "models", "account", "running", "now"}`; `running` is how many rounds it is working on and `now` the model of the one in progress. Without `refresh` the numbers at hand are returned (and asked for again in the background when they are old); with it they are asked for now, which takes a few seconds. See [Usage](#usage-what-is-left-of-each-subscription). |
 | `POST /v1/messages` with `{"text", "conversation"?, "client_id"?, "agent"?, "card"?, "pin"?, "effort"?, "model"?}` | `202` and the message record, status `queued`. `effort` and `model` (since 0.6.0) are the effort and model chosen for this sentence, used when it goes to a helper; with `agent` they must be ones that helper offers, otherwise `400`. `agent` sends the message to that agent; `400` if there is no such agent. `card` is the number of the thing on the owner's screen when he said it. `pin: true` (since 0.5.3) means he opened that thing and said it from inside: the sentence is always filed on it, and any work continues that thing's own session instead of opening another card, also when the sentence names a helper (unless another helper is working on that thing right now). `client_id` deduplicates retries (since 0.7.0 per conversation, and it survives a restart): the same `client_id` in the same conversation returns the original message when the content matches and `409` when it differs. The message is written to disk before `202` is returned; see [Messages on disk and restarts](#messages-on-disk-and-restarts). |
 | `POST /v1/voice?conversation=<name>&client_id=<id>&agent=<agent>&card=<number>&pin=1&effort=<level>&model=<model>` with a WAV file as the body | `202` and the message record, `kind` `voice`, empty `text`. `400` if the recording is not acceptable or no engine is configured. |
-| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyou has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. Since 0.7.0 the record survives a runtime restart (the latest 200 are kept). |
+| `GET /v1/messages/<id>?wait=<seconds>&rev=<n>` | The message record. With `wait` (up to 60) the call returns as soon as Xiaoyu has dealt with the sentence. With `rev` as well (the `rev` of the record the caller already has) it returns as soon as anything in the record changes. While the reply is still being written, `partial` holds the whole reply so far (replace, do not append; an empty string takes it back); it is empty once the message is done. Since 0.7.0 the record survives a runtime restart (the latest 200 are kept). |
 | `GET /v1/messages/<id>/stream?rev=<n>` | Authenticated `text/event-stream` snapshots on one connection. Each event has the same message ID and full `partial`/`rev` record; terminal states end the stream and comments provide keepalives. Message records advertise `event_stream: true`. After a stream failure, poll the same ID without resubmitting the job; older runtimes keep using long polling. |
 | `GET /v1/timers/effects?conversation=<name>&limit=50&cursor=<cursor>` | Bounded outstanding timer-review summaries, without selected arguments; list changes invalidate the opaque cursor. Advertised by `timer_effect_review`. |
 | `GET/POST /v1/timers/<id>/effects` | Inspect or explicitly confirm the original timer selections with the same identity/revision/outcome rules as message effects. No replay or rollback. See the timer-review contract above. |
 | `GET /v1/feed?conversation=<name>&after=<seq>&wait=<seconds>&usage=<rev>` | `{"seq", "cards": [...], "approvals": [...], "usage": {...}}`: changed cards and pending approvals for the conversation, plus desktop monitoring cards and desktop approvals across conversations. Approvals have `id`, `card`, `conversation`, `agent`, `tool`, `detail`, `created_at`, and `kind` (`tool` or `stall`); desktop ones also identify their source and whether they are remotely actionable. Changes to an approval touch its card. `wait` is at most 60 seconds; a changed card, or changed usage when `usage=<rev>` is supplied, returns early. Send the returned `seq` as `after` next time; a lower returned sequence means records were replaced and the client must resync from 0. Since 0.7.0, `messages=1` adds `messages`: the message records of this conversation with a sequence above `after` (the same sequence as cards, including queued messages and replies still being written), so another phone sees what was just said; without it the response is unchanged. `epoch` identifies the record set: when it differs from the one last seen, the records were replaced and the client must resync from 0. |
 | `GET /v1/info` | `{"runtime_id", "epoch", "protocol", "capabilities", "name", "version"}` (since 0.8.0): the runtime's fixed id, the record set id, the sync protocol version and capabilities. See the [unified message model](../docs/development/unified-message-model.md). |
-| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>&states=unavailable` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. Since 0.8.2 a desktop session that finished its turn has `state` `turn_ended` here (`/v1/feed` and the card still say `done`). Since 0.9.0 `approvals` are the approval changes with a sequence above `after`, each with `status` (`pending`, `allowed`, `denied`, `withdrawn`) and `seq`, answered ones with `by` (`phone`, `computer`) and withdrawn ones with `reason`; the response also carries `subject_id` (the id of Xiaoyou as one subject, kept apart from `runtime_id`). `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. Since 0.9.1 a client that sends `states=unavailable` gets `state` `unavailable` for an observed or reported session that has not updated for a while and has not ended (its state cannot be seen now; it is not finished); other clients keep getting the card's state with `stale: true`, as before. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyou_runtime.conformance --url <address> --token <token>`. |
+| `GET /v1/sync?conversation=<name>&after=<seq>&epoch=<id>&wait=<seconds>&usage=<rev>&states=unavailable` | Unified sync (since 0.8.0): `{"protocol", "runtime_id", "epoch", "seq", "reset", "more", "messages", "tasks", "approvals", "removed", "usage"}`. Since 0.8.1 it carries `usage` (as `/v1/feed` does) and returns early when `usage=<rev>` is stale; the capabilities include `sync_usage`. Since 0.8.2 a desktop session that finished its turn has `state` `turn_ended` here (`/v1/feed` and the card still say `done`). Since 0.9.0 `approvals` are the approval changes with a sequence above `after`, each with `status` (`pending`, `allowed`, `denied`, `withdrawn`) and `seq`, answered ones with `by` (`phone`, `computer`) and withdrawn ones with `reason`; the response also carries `subject_id` (the id of Xiaoyu as one subject, kept apart from `runtime_id`). `messages` are the messages with a sequence above `after` (one per sentence, ids as in card entries, with `status`, `partial`, `author`, `source`, `rev`, `seq`); `tasks` are cards without `entries` and with `members`. Since 0.9.1 a client that sends `states=unavailable` gets `state` `unavailable` for an observed or reported session that has not updated for a while and has not ended (its state cannot be seen now; it is not finished); other clients keep getting the card's state with `stale: true`, as before. `reset` is `true`, with a snapshot from 0, when the `epoch` differs or the cursor is above the current sequence or older than the log's `floor`. Conformance test: `python3 -m xiaoyu_runtime.conformance --url <address> --token <token>`. |
 | `GET /v1/cards?conversation=<name>` | `{"cards": [...]}`: the latest 50 cards, including desktop monitoring cards when synchronization is enabled. |
 | `POST /v1/cards/<number>/artifacts` with `{"artifacts": [{"path", "name"?}], "entry_index"?}` | The updated card with registered attachments. `entry_index` chooses an existing entry (zero-based); omitted means the latest assistant entry. Malformed input returns `400`, a missing card `404`; individual file failures remain visible as `status: "error"` attachments. |
 | `GET /v1/artifacts/<id>/content` | The registered immutable file snapshot, streamed as binary with its MIME type and attachment filename. `404` if the ID or snapshot is unavailable. |
@@ -1749,7 +1753,7 @@ responses are JSON except the documented voice, firmware, and artifact binaries.
 | `GET /v1/firmware/<id>/image` | That version's application image (binary). |
 | `GET /v1/app` | The phone app update published on this computer: `available`, `version_code`, `version_name`, `sha256`, `size`, `published_at`, `note`. |
 | `GET /v1/app/apk` | That update's APK. |
-| `POST /v1/reports` with `{"origin", "session_id", "state"?, "text"?, "upstream_id"?, "title"?, "role"?}` | A session that is not on this computer (claude.ai on the web, a cloud session, another computer) reports progress (since 0.9.0). Each `origin` + `session_id` is one read-only card next to the observed desktop sessions; `text` is deduplicated by `upstream_id`; `state` is `working`, `waiting`, `turn_ended`, `done` or `failed`; "working" without a report for ten minutes shows as unknown. It cannot be continued from the phone. Command line: `python3 -m xiaoyou_runtime report --origin claude-web --session <id> --state working --text "…" --upstream-id <id>`. |
+| `POST /v1/reports` with `{"origin", "session_id", "state"?, "text"?, "upstream_id"?, "title"?, "role"?}` | A session that is not on this computer (claude.ai on the web, a cloud session, another computer) reports progress (since 0.9.0). Each `origin` + `session_id` is one read-only card next to the observed desktop sessions; `text` is deduplicated by `upstream_id`; `state` is `working`, `waiting`, `turn_ended`, `done` or `failed`; "working" without a report for ten minutes shows as unknown. It cannot be continued from the phone. Command line: `python3 -m xiaoyu_runtime report --origin claude-web --session <id> --state working --text "…" --upstream-id <id>`. |
 | `GET /v1/app/packs` | Resource packs (since 0.8.3): `{"packs": [{"name", "published_at", "files": [{"path", "sha256", "size", "download_url"}]}]}`. The phone compares with what it has and downloads only files whose checksum changed. |
 | `GET /v1/app/file?sha256=<hash>` | One resource pack file (since 0.8.3); the ETag is its checksum and a single Range resumes; 409 when no current pack lists it. |
 | `POST /v1/firmware?note=<note>&push=1` with a firmware file as the body | `201` and the version's record; `push=1` also makes it the version to push. |
@@ -1762,7 +1766,7 @@ requested conversation. They carry `source: "desktop"`, `monitoring_only: true`,
 `project`, `session_id`, `desktop_status`, `observed_at`, and `stale`, plus
 `content_scope: "recent"` and `content_truncated`. Their bounded `entries` hold
 visible human requests (`role: "you"`) and originating assistant output
-(`role: "xiaoyou"`, labeled Codex or Claude in the App). Empty `entries` mean no
+(`role: "xiaoyu"`, labeled Codex or Claude in the App). Empty `entries` mean no
 visible content has been collected. A desktop `waiting` state alone is only a
 status signal. The optional permission bridge can supply a separate approval
 whose `remote_actionable` field determines whether it can be answered remotely;
@@ -1801,7 +1805,7 @@ a retry after the message has been trimmed returns the same id as a minimal
 record with `expired: true` and is not run again. A broken `messages.json` does
 not stop the runtime; the broken file is kept as `messages.json.broken`.
 
-A message record says whether Xiaoyou has dealt with the sentence, not whether
+A message record says whether Xiaoyu has dealt with the sentence, not whether
 the thing is finished: once she has answered or handed the work out, `status`
 is `done`, and the progress and the result are on the card, to be waited for
 with `/v1/feed`. Only a sentence passed on by another runtime (a `remote`
@@ -1823,24 +1827,24 @@ The record also says who the sentence went to:
   is the number the caller sent.
 - `agent`: the agent that took the sentence, or the helper it was handed to.
 - `stage`, `helper`: fields left from 0.4. They may hold a value for the few
-  seconds Xiaoyou is dealing with the sentence and are `null` afterwards.
+  seconds Xiaoyu is dealing with the sentence and are `null` afterwards.
 - `rev`: a counter that goes up every time the record changes.
 - `events`: the steps taken, each `{"at", "kind", "agent", "text"}`. `kind` is
   `route` (who got it; `text` is the reason: `asked`, `mention`, `router`,
-  `default`) or `handoff` (handed to a helper; `text` is what Xiaoyou said).
+  `default`) or `handoff` (handed to a helper; `text` is what Xiaoyu said).
 
 A card has `id` (`c1`, `c2`, …), `conversation`, `title` (the canonical name:
 at most 200 characters, or 24 when derived from a request), `title_source`
 (`upstream`, `task`, `request`, or `fallback`), `title_truncated`, `state`,
-`agent` (who is or was on it; `null` when Xiaoyou
-answered herself), `entries` (`[{"role": "you" or "xiaoyou", "text", "at", "attachments"?}]`,
+`agent` (who is or was on it; `null` when Xiaoyu
+answered herself), `entries` (`[{"role": "you" or "xiaoyu", "text", "at", "attachments"?}]`,
 the latest 40), `brief`, `mood`, `progress` (the latest 5 lines of progress,
 starting over with each round), `started_at`, `edits` (how many times it was
 added to or changed), `approval` (the number of the approval it is waiting
 for, or `null`), `queued`
 (waiting its turn under a limit on parallel things), `created_at`,
 `updated_at`, `finished_at` (when a thing handed to a helper ended; `null`
-while it is in progress and for what Xiaoyou answered herself), and `seq`.
+while it is in progress and for what Xiaoyu answered herself), and `seq`.
 The top-level `attachments` list aggregates the task's registered outputs; see
 [Task images and downloadable files](#task-images-and-downloadable-files).
 
@@ -1877,14 +1881,14 @@ version gets a number in the order it arrived, so "version 7" is enough to name
 one.
 
 ```bash
-python3 -m xiaoyou_runtime firmware list              # the versions; ● on the device, → waiting to be pushed
-python3 -m xiaoyou_runtime firmware status            # what the device runs, what is pending, recent history
-python3 -m xiaoyou_runtime firmware fetch --push      # take the newest build from GitHub, store it, push it
-python3 -m xiaoyou_runtime firmware add FILE.bin      # store a firmware file (application or merged image)
-python3 -m xiaoyou_runtime firmware restore 5         # put the device back on version 5
-python3 -m xiaoyou_runtime firmware restore previous  # back to the version in the device's other slot (seconds, no transfer)
-python3 -m xiaoyou_runtime firmware cancel            # do not push after all
-python3 -m xiaoyou_runtime firmware remove 3          # delete version 3 from the library
+python3 -m xiaoyu_runtime firmware list              # the versions; ● on the device, → waiting to be pushed
+python3 -m xiaoyu_runtime firmware status            # what the device runs, what is pending, recent history
+python3 -m xiaoyu_runtime firmware fetch --push      # take the newest build from GitHub, store it, push it
+python3 -m xiaoyu_runtime firmware add FILE.bin      # store a firmware file (application or merged image)
+python3 -m xiaoyu_runtime firmware restore 5         # put the device back on version 5
+python3 -m xiaoyu_runtime firmware restore previous  # back to the version in the device's other slot (seconds, no transfer)
+python3 -m xiaoyu_runtime firmware cancel            # do not push after all
+python3 -m xiaoyu_runtime firmware remove 3          # delete version 3 from the library
 ```
 
 A version is named by its number (`7` or `#7`), the first digits of its id,
@@ -1936,7 +1940,7 @@ and push the result to the device (when ESP-IDF is installed with
 `tools/install_idf.sh` and `firmware.build_command` is set; GitHub is not needed
 then), or else push to GitHub and have the runtime wait for the build there. Say "@tailor make the strip at the
 top thinner" to the device (the example also gives it a Chinese alias), or
-just say what should change and let Xiaoyou decide to hand it over. "Go back to the previous one" is its job as well.
+just say what should change and let Xiaoyu decide to hand it over. "Go back to the previous one" is its job as well.
 
 What has to be in place first: the repository on this computer can `git push`;
 `tailor` has `Bash` in `allowed_tools`, which lets it run commands in this
@@ -1959,8 +1963,8 @@ git clone -b feature/pocket-hub-app https://github.com/yanyuliu01/ai-passport.gi
 cd ai-passport\runtime
 copy config.example.json config.json
 python -c "import secrets; print(secrets.token_urlsafe(32))"   # paste into server.token
-python -m xiaoyou_runtime --config config.json --once "hello"
-$env:XIAOYOU_HOST = "0.0.0.0"; python -m xiaoyou_runtime --config config.json
+python -m xiaoyu_runtime --config config.json --once "hello"
+$env:XIAOYU_HOST = "0.0.0.0"; python -m xiaoyu_runtime --config config.json
 ```
 
 Use `python`, not `python3`. The first time the service listens on the network,
@@ -1986,7 +1990,7 @@ turns and hands them to the runtime you switch to:
    in front of the owner's words, once, with a note that they happened
    elsewhere.
 
-What carries over is what was said: the owner's words and Xiaoyou's full
+What carries over is what was said: the owner's words and Xiaoyu's full
 replies, each shortened to 500 and 1000 characters when quoted to the model.
 What does not carry over is everything else the other session knew: files it
 read, tool output, and anything older than the turns the phone still holds.
@@ -2010,12 +2014,12 @@ Runtime ownership, while the conversation-history endpoint transfers text only.
 
 The other arrangement is not to switch at all: the phone talks to one runtime,
 and the other computer is registered there as a `remote` agent. Work that
-belongs on that computer is then handed over by Xiaoyou, or sent there when the
+belongs on that computer is then handed over by Xiaoyu, or sent there when the
 owner names it, and the transcript stays on the main runtime. A message that
 another runtime has already passed on is not passed on again, so two runtimes
 that list each other do not bounce it back and forth.
 
-### The Xiaoyou mesh: every runtime has everything (since 0.10.0)
+### The Xiaoyu mesh: every runtime has everything (since 0.10.0)
 
 Both arrangements above depend on the phone. With the mesh, the runtimes sync
 with each other directly, so the runtime you start anywhere, and whichever one
@@ -2025,18 +2029,18 @@ and at least one address of another member:
 
 ```json
 "mesh": {
-  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "secret_file": "~/.config/xiaoyu/mesh-secret",
   "peers": ["https://home.tail1234.ts.net"],
   "advertise": ["https://laptop.tail1234.ts.net"]
 }
 ```
 
-- `secret` (or `secret_file`, or `XIAOYOU_MESH_SECRET`): at least 16 characters,
-  identical on every member. Without it the runtime does not join. Xiaoyou's
+- `secret` (or `secret_file`, or `XIAOYU_MESH_SECRET`): at least 16 characters,
+  identical on every member. Without it the runtime does not join. Xiaoyu's
   `subject_id` is derived from it, so all members report the same subject.
-- `peers` (or `XIAOYOU_MESH_PEERS`, comma separated): where to look first. One
+- `peers` (or `XIAOYU_MESH_PEERS`, comma separated): where to look first. One
   reachable member is enough; members tell each other about the rest.
-- `advertise` (or `XIAOYOU_MESH_ADVERTISE`): how others reach this runtime.
+- `advertise` (or `XIAOYU_MESH_ADVERTISE`): how others reach this runtime.
   When omitted it is derived from `server.host`; a runtime that only listens on
   `127.0.0.1` advertises nothing and still takes part by connecting out, pushing
   its records and pulling the others' (useful in a cloud sandbox or behind NAT).
@@ -2069,13 +2073,13 @@ What each member sees: another runtime's task is a local card (`cN`, with
 origin's first 12 hex digits in front, and its approvals appear like local ones.
 Records are only ever changed by the runtime that made them, so there are no
 write conflicts; records reach members that cannot reach their origin through
-the others. Xiaoyou on every member is told what was said on the others before
+the others. Xiaoyu on every member is told what was said on the others before
 she answers next.
 
 What you can do from any member: talking inside another runtime's task,
 cancelling it and answering its approvals are sent to that runtime as commands
 and done there (a sentence keeps the same id on both sides, so it shows once).
-Xiaoyou can also hand work to a helper on another runtime: those helpers are
+Xiaoyu can also hand work to a helper on another runtime: those helpers are
 listed as `<helper>@<runtime name>`, for example `@codex@Mac check the logs`. The other
 runtime's card for that work records `delegated_from`, and progress and the result
 come back to the card here. A member that has not been reached for five minutes
@@ -2093,7 +2097,7 @@ again:
 
 ```json
 "mesh": {
-  "secret_file": "~/.config/xiaoyou/mesh-secret",
+  "secret_file": "~/.config/xiaoyu/mesh-secret",
   "share": {
     "env": ["DEEPSEEK_API_KEY"],
     "folders": {"claude-memory": "~/.claude/projects/-Users-me-ai-passport/memory"}
@@ -2102,9 +2106,9 @@ again:
 ```
 
 - `share.env`: only the names listed here are shared, none by default. The value
-  lives in `~/.config/xiaoyou/shared/<NAME>` (readable only by you; seeded from the
+  lives in `~/.config/xiaoyu/shared/<NAME>` (readable only by you; seeded from the
   runtime's environment the first time) and agents read it through `env_files`,
-  for example `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyou/shared/DEEPSEEK_API_KEY"}`.
+  for example `"env_files": {"DEEPSEEK_API_KEY": "~/.config/xiaoyu/shared/DEEPSEEK_API_KEY"}`.
   A runtime that does not list a name never writes it.
 - `share.folders`: a name mapped to a folder on this computer; the same name can
   point to a different path on each computer (Claude Code's memory folder differs
@@ -2144,7 +2148,7 @@ Then set `"stt": {"engine": "sense_voice", "model_dir": "stt-models/sense-voice"
 and check it with a recording of your own, or with one shipped with the model:
 
 ```bash
-python3 -m xiaoyou_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
+python3 -m xiaoyu_runtime --config config.json --stt stt-models/sense-voice/test_wavs/zh.wav
 ```
 
 The download is about 160 MB. `stt-models/` is ignored by Git.
@@ -2162,8 +2166,8 @@ explanation; typed messages are unaffected.
 ## Pairing the phone app
 
 ```bash
-XIAOYOU_HOST=0.0.0.0 python3 -m xiaoyou_runtime --config config.json   # listen on the local network
-python3 -m xiaoyou_runtime --config config.json --pair                 # prints http://<address>:<port>#<token>
+XIAOYU_HOST=0.0.0.0 python3 -m xiaoyu_runtime --config config.json   # listen on the local network
+python3 -m xiaoyu_runtime --config config.json --pair                 # prints http://<address>:<port>#<token>
 ```
 
 Paste the printed line into the Pocket Hub app (see
@@ -2199,12 +2203,12 @@ runtime (any address, Funnel included), checks its SHA-256 and hands it to
 Android, which asks the owner to confirm:
 
 ```bash
-python3 -m xiaoyou_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "what changed"
-python3 -m xiaoyou_runtime app status
+python3 -m xiaoyu_runtime app publish companion/android/app/build/outputs/apk/debug/app-universal-debug.apk --note "what changed"
+python3 -m xiaoyu_runtime app status
 ```
 
 Incremental updates (since 0.8.3): large files that rarely change (speech models) stay out
-of the APK and are published with `python3 -m xiaoyou_runtime app pack <name> <folder>` as a
+of the APK and are published with `python3 -m xiaoyu_runtime app pack <name> <folder>` as a
 resource pack, stored and served per file by SHA-256, so the phone downloads only what changed.
 `app publish` and `app pack` upload to GitHub Releases by default, then publish
 locally only after upload succeeds. Every supplied APK gets a public URL;
@@ -2268,7 +2272,7 @@ not conversation or recording destinations.
 
 ## Auto-iteration and the model gateway
 
-The runtime can collect usage signals from the phone app (`POST /v1/app/events`), complaints in chat, failed tasks and reply latency, turn them into an issue book with rule detectors, pick one issue per run and ask a model for a small, checked iteration plan. Model calls go through `model_gateway.py`, which prefers local endpoints (Ollama, llama.cpp, LM Studio, vLLM) and uses network endpoints only within a daily budget. Every stage is a plugin. Code changes, gates and automatic release are not implemented yet. See the [auto-iteration design](../docs/development/auto-iteration.md); commands: `python3 -m xiaoyou_runtime iterate --help` and `python3 -m xiaoyou_runtime models --help`.
+The runtime can collect usage signals from the phone app (`POST /v1/app/events`), complaints in chat, failed tasks and reply latency, turn them into an issue book with rule detectors, pick one issue per run and ask a model for a small, checked iteration plan. Model calls go through `model_gateway.py`, which prefers local endpoints (Ollama, llama.cpp, LM Studio, vLLM) and uses network endpoints only within a daily budget. Every stage is a plugin. Code changes, gates and automatic release are not implemented yet. See the [auto-iteration design](../docs/development/auto-iteration.md); commands: `python3 -m xiaoyu_runtime iterate --help` and `python3 -m xiaoyu_runtime models --help`.
 
 ## How a sentence is processed
 
@@ -2277,7 +2281,7 @@ The runtime can collect usage signals from the phone app (`POST /v1/app/events`)
 2. The order in [Who gets a message](#who-gets-a-message) says whether it was
    decided who does this. If so, a card is opened, the work goes to the
    background, and the sentence has been dealt with.
-3. Otherwise the agent that speaks as Xiaoyou takes it. For Claude Code that is
+3. Otherwise the agent that speaks as Xiaoyu takes it. For Claude Code that is
    `claude -p --output-format json --append-system-prompt <persona + helpers +
    the things at the moment> --json-schema <reply, brief, mood, card, action>
    --tools "" --permission-mode dontAsk [--model ...] [--effort <a level the
@@ -2288,7 +2292,7 @@ The runtime can collect usage signals from the phone app (`POST /v1/app/events`)
 4. A thing in the background: for Claude Code that is `claude -p
    --output-format stream-json --verbose [--append-system-prompt <persona>
    --json-schema <reply, brief, mood>] --permission-mode <mode>
-   --permission-prompt-tool mcp__xiaoyou__approve --mcp-config <a temporary
+   --permission-prompt-tool mcp__xiaoyu__approve --mcp-config <a temporary
    file in state> --add-dir <directory> [--allowedTools ...] [--model ...]
    [--effort <level>] [--resume <the session of this thing>]`. It still starts in `workdir`. The
    runtime reads its events line by line: the session identifier is recorded
@@ -2298,16 +2302,16 @@ The runtime can collect usage signals from the phone app (`POST /v1/app/events`)
    the whole tree is found by parentage). The runtime does the same clean-up
    when it is itself killed.
 5. Session identifiers are stored in `state/sessions.json`: per conversation
-   and agent for Xiaoyou's own line, per conversation/card and agent for things
+   and agent for Xiaoyu's own line, per conversation/card and agent for things
    in the background.
-6. Every sentence and every result from the background is added to Xiaoyou's
+6. Every sentence and every result from the background is added to Xiaoyu's
    own transcript, `state/transcript.json`, together with whether the agent
    that speaks for her witnessed it. What it did not witness (results from the
    background, sentences that went straight to another agent, turns the phone
    carried over) it is told first, once, when it next takes a sentence.
 
-The transcript is Xiaoyou's, not any agent's: when a different agent takes the
-next message, Xiaoyou still knows what was just said. Each agent's own session
+The transcript is Xiaoyu's, not any agent's: when a different agent takes the
+next message, Xiaoyu still knows what was just said. Each agent's own session
 holds only the part it took part in.
 
 ## Running on another machine or a virtual machine
@@ -2340,7 +2344,7 @@ Verified by `runtime/tests/test_runtime.py` (run by `./tools/validate.sh
 command line and standard input given to fake `claude` and `codex` executables,
 result and error parsing, session continuation; naming an agent, the order of
 routing rules and a command as the router; storing cards, their sequence numbers, writing them to
-disk and marking legacy unfinished ones as failed after a restart; Xiaoyou answering
+disk and marking legacy unfinished ones as failed after a restart; Xiaoyu answering
 directly, being free for the next sentence right after handing work out,
 several things in progress at once, adding to a thing, changing its request
 (including really stopping a process and running it again), cancelling
@@ -2368,7 +2372,7 @@ keeping quota per login, dropping expired numbers, writing to disk and
 restarting; really asking a fake Claude Code and a fake app-server (including
 the cases where nothing can be asked: not a subscription, a version that is
 too old, not signed in); the difference between the start and the end of a
-round; the lines in Xiaoyou's prompt; how the level she picks, the level the
+round; the lines in Xiaoyu's prompt; how the level she picks, the level the
 caller picks and the level carried over from the last round reach the helper
 and the card; redoing a round when the level changes with the request; usage
 in the feed, and the feed returning early when usage changes.
@@ -2389,7 +2393,7 @@ stream under a subscription login (their shape follows the definitions shipped
 in Claude Code 2.1.294; no real answer has been seen); Codex quota under a
 subscription login; whether either matches the tool's own display; whether
 `d5` and `d7` are useful on real jobs; whether the model that speaks as
-Xiaoyou follows the prompt when it picks a level or weighs quota (only real
+Xiaoyu follows the prompt when it picks a level or weighs quota (only real
 conversations can show that); whether Claude Code and Codex accept another
 model or level within one continued session.
 
@@ -2398,13 +2402,13 @@ Linux, in a cloud workspace rather than on the intended computer, with one
 `claude_code` agent that had `Bash` allowed, through the HTTP interface:
 
 - First sentence, "run sleep 20 and then count the .conf files under /etc":
-  it had been dealt with after 7.6 seconds; Xiaoyou said she had handed it to
+  it had been dealt with after 7.6 seconds; Xiaoyu said she had handed it to
   Claude Code, and the card was `working`.
 - Second sentence right after, "how many eggs are in a dozen": answered after
   13.7 seconds ("12", with a remark that the other thing was still running),
   on a card of its own. The first thing was still in progress.
 - After 37 seconds the feed delivered the first card as `done`, with the count.
-- Xiaoyou takes about 6 to 7 seconds over a sentence, most of it Claude Code
+- Xiaoyu takes about 6 to 7 seconds over a sentence, most of it Claude Code
   starting up and answering.
 
 The same day, in the same environment, with the default `manual` mode (only
@@ -2413,16 +2417,16 @@ the tools that read files approved in advance), through the HTTP interface:
 - Asked to write one line into a file: two approvals came in turn (a `Bash`
   command, then a `Write`), the card became `waiting`, and the feed carried
   the content as it was. Both answered `deny`: the file was not written, and
-  Xiaoyou said so. Answering the same approval again returned `409`.
+  Xiaoyu said so. Answering the same approval again returned `409`.
 - Asked again, both answered `allow`: the file was written with the right
   content, and no temporary file was left in `state/`.
 - Separately, an approval was left unanswered for 100 seconds; Claude Code
   waited and then carried on as usual.
 - Changing a request: asked to `sleep 45` and then read a file, and told after
-  9 seconds to skip the sleep. Xiaoyou picked that card and `redo`; Claude
+  9 seconds to skip the sleep. Xiaoyu picked that card and `redo`; Claude
   Code was stopped, continued in the same session, and had the result about
   10 seconds later, without waiting out the 45 seconds.
-- Cancelling: asked to `sleep 60`, then told to forget it. Xiaoyou picked that
+- Cancelling: asked to `sleep 60`, then told to forget it. Xiaoyu picked that
   card and `cancel`; Claude Code and the `sleep` it had started both ended.
   Killing the runtime ends things in progress in the same way.
 - Two things found and fixed on the way: the model often writes a card number
@@ -2440,7 +2444,7 @@ stand-in helper of type `command`. In that version a helper finished within
 the same turn, so the timings below do not apply to the current one:
 
 - A direct answer took about 5 seconds, and a second turn continued the first.
-- Xiaoyou deciding to hand over: asked to "find someone who reviews code",
+- Xiaoyu deciding to hand over: asked to "find someone who reviews code",
   Claude Code produced the hand-over in the requested structure, the runtime ran
   the helper, and Claude Code summed it up; it noticed that the stand-in had
   answered a different question and told the owner so. Polling the HTTP
@@ -2513,7 +2517,7 @@ Not verified:
   logged-in Codex in the cloud workspace. The options of `exec` mode come from
   its help output, and no turn has completed for real there either.
 - The `remote` agent against another real computer over a real network.
-- A local model: a `command` agent answering as Xiaoyou has only been
+- A local model: a `command` agent answering as Xiaoyu has only been
   exercised with a script in the tests.
 - A virtual machine, and a long-running service over days.
 - Version 0.5 on macOS and together with the phone app and the device. Phone
@@ -2608,7 +2612,7 @@ are rejected. A phone can preview migrating old local pin/archive marks; existin
 shared edits are skipped. Old scoped message APIs and side-chat rename remain
 compatible. A damaged metadata file is preserved and editing it is disabled.
 
-`python3 -m xiaoyou_runtime conversations list --query <text>` and its
+`python3 -m xiaoyu_runtime conversations list --query <text>` and its
 `show`, `history`, `rename`, `pin`, `unpin`, `archive`, `restore`, `project`,
 `metadata` and `open` actions use the same authenticated API. Select the exact
 `--id` returned by list. Both desktop agents can use

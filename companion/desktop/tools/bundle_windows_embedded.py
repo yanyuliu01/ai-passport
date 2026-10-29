@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 DESKTOP = Path(__file__).resolve().parents[1]
-PACKAGE = DESKTOP.parents[1] / 'runtime/xiaoyou_runtime'
+PACKAGE = DESKTOP.parents[1] / 'runtime/xiaoyu_runtime'
 
 def main():
     lock = json.loads((DESKTOP / 'tools/windows-runtime-lock.json').read_text(encoding='utf-8'))
@@ -35,9 +35,10 @@ def main():
                 if path.is_absolute() or '..' in path.parts or '\\' in entry.filename:
                     raise RuntimeError('Unsafe dependency archive path')
             archive.extractall(directory)
-    shutil.copytree(PACKAGE, app / 'xiaoyou_runtime', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    shutil.copytree(PACKAGE, app / 'xiaoyu_runtime', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     shutil.copyfile(DESKTOP / 'tools/runtime_entry.py', app / 'runtime_entry.py')
     (output / 'python/python313._pth').write_text('python313.zip\n.\n../app\n', encoding='utf-8')
+    shutil.copyfile(PACKAGE.parent / 'persona.txt', output / 'persona.txt')
     digest = hashlib.sha256()
     for path in sorted(PACKAGE.rglob('*.py')):
         digest.update(path.relative_to(PACKAGE).as_posix().encode()); digest.update(b'\0')
@@ -46,6 +47,7 @@ def main():
     manifest = {'layout': 'python-embedded', 'platform': 'win32', 'architecture': 'AMD64',
         'runtime_version': version, 'python': lock['python']['version'], 'pillow': lock['pillow']['version'],
         'source_sha256': digest.hexdigest(), 'dependencies': lock, 'native_execution_verified': False}
+    manifest['persona_sha256'] = hashlib.sha256((PACKAGE.parent / 'persona.txt').read_bytes()).hexdigest()
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'bundle': 'runtime-dist-win', 'python': manifest['python'], 'native_execution_verified': False}))
 

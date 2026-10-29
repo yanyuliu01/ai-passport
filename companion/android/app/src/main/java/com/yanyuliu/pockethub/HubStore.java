@@ -32,7 +32,7 @@ public final class HubStore {
         public final String title;
         public final String text;
         public final long time;
-        /** 小幽自己说的话带一句简报；别的来源的通知没有，为 null。 */
+        /** 小鱼自己说的话带一句简报；别的来源的通知没有，为 null。 */
         public final String brief;
 
         Event(String key, String source, String title, String text, long time) {
@@ -117,13 +117,13 @@ public final class HubStore {
         void onHubChanged();
     }
 
-    /** 小幽此刻在干什么：设备的第一屏显示的就是它。 */
+    /** 小鱼此刻在干什么：设备的第一屏显示的就是它。 */
     public static final class Turn {
         /** idle、thinking、helper、done、failed 之一。 */
         public final String phase;
         public final String said;
         public final String reply;
-        /** 正在替小幽干活的帮手；没有就是空串。 */
+        /** 正在替小鱼干活的帮手；没有就是空串。 */
         public final String agent;
         /** 她转交时说的那句话，或者帮手做完时的一句说明。 */
         public final String stage;
@@ -152,7 +152,7 @@ public final class HubStore {
 
     private static final int EVENT_LIMIT = 40;
     private static final int LOG_LIMIT = 60;
-    private static final String CHAT_SOURCE = "小幽";
+    private static final String CHAT_SOURCE = "小鱼";
     private static final HubStore INSTANCE = new HubStore();
 
     private final List<Event> events = new ArrayList<>();
@@ -165,7 +165,7 @@ public final class HubStore {
     /** 已经发给 Runtime、还没等到结果的消息数。 */
     private int pending;
     private String busyText = "";
-    /** 小幽正在说、还没说完的那段回复（Runtime 流式给的）；没有就是空串。只给 App 画，不发设备。 */
+    /** 小鱼正在说、还没说完的那段回复（Runtime 流式给的）；没有就是空串。只给 App 画，不发设备。 */
     private String streaming = "";
     /** 这一轮的卡已经到了：之后晚到的片段不再画，免得和卡上的回复重复。 */
     private ChatHistory history = new ChatHistory();
@@ -319,7 +319,7 @@ public final class HubStore {
     synchronized String retryMessage(String id) { return history.retry(id); }
     private long sequence;
     private Turn turn = new Turn("idle", "", "", "", "", "idle");
-    /** 换了一台 Runtime，或者别的原因让“小幽有哪些帮手”需要重新问一次。 */
+    /** 换了一台 Runtime，或者别的原因让“小鱼有哪些帮手”需要重新问一次。 */
     private long helpersVersion;
     /** Runtime 上的卡，按开卡的先后。 */
     private final TreeMap<Long, Card> cards = new TreeMap<>();
@@ -531,7 +531,7 @@ public final class HubStore {
         return count;
     }
 
-    /** /v1/sync 给的、还没上卡的消息（别的手机刚发的话、小幽正在写的回复）：画在聊天里。 */
+    /** /v1/sync 给的、还没上卡的消息（别的手机刚发的话、小鱼正在写的回复）：画在聊天里。 */
     public void applyPending(List<SyncCache.Pending> items) {
         boolean dirty = false, settled = false;
         synchronized (this) {
@@ -653,7 +653,7 @@ public final class HubStore {
                 dirty = true;
                 // 桌面活动状态的更新不改聊天记录，不必把整份记录重存一遍。
                 if (history.ingest(card)) historyChanged();
-                // 后台的一件事有了结果：第一屏说这件事。正在等小幽回话时不打断那一轮。
+                // 后台的一件事有了结果：第一屏说这件事。正在等小鱼回话时不打断那一轮。
                 if (!card.monitoringOnly && previous != null && previous.active()
                         && !card.active() && pending == 0) {
                     turnCard = card.id;
@@ -791,9 +791,9 @@ public final class HubStore {
         return sent;
     }
 
-    // ---- 和小幽聊天 ----
+    // ---- 和小鱼聊天 ----
 
-    /** 我说了一句话，小幽开始想。语音在识别出来之前，说的是什么还不知道。 */
+    /** 我说了一句话，小鱼开始想。语音在识别出来之前，说的是什么还不知道。 */
     void chatImages(String id, List<Attachment> items) {
         synchronized (this) { history.images(id, items); saveHistory(); }
         notifyChanged();
@@ -822,7 +822,7 @@ public final class HubStore {
     }
 
     /**
-     * Runtime 说这一轮走到了哪一步：helper 不为空表示小幽把活交给了它，stage 是她当时说的话。
+     * Runtime 说这一轮走到了哪一步：helper 不为空表示小鱼把活交给了它，stage 是她当时说的话。
      * 没有变化时不通知，免得白白重发。
      */
     public void chatProgress(String helper, String stage) {
@@ -846,7 +846,7 @@ public final class HubStore {
     }
 
     /**
-     * 小幽这句回复已经生成出来的部分（整段，不是增量）。空串或 null 表示收回。
+     * 小鱼这句回复已经生成出来的部分（整段，不是增量）。空串或 null 表示收回。
      * 没在等回复、卡已经到了、或者内容没变时不通知。key 是这句话在聊天记录里的编号
      * （RuntimeClient 自己记着）：回话途中主人又说了一句时，好几句可能同时在等回复，
      * 各写各的气泡；首页那一句只跟最新的那句。
@@ -930,7 +930,7 @@ public final class HubStore {
     }
 
     /**
-     * 小幽答完了：brief 给小屏幕，reply 是完整回复，mood 是她此刻的表情；card 是这句话归到的那张卡。
+     * 小鱼答完了：brief 给小屏幕，reply 是完整回复，mood 是她此刻的表情；card 是这句话归到的那张卡。
      * key 是这句话在聊天记录里的编号（同时有几句在等时各结各的）。
      */
     public void chatAnswered(String key, String brief, String reply, String mood, String card) {
@@ -1001,7 +1001,7 @@ public final class HubStore {
         return new ArrayList<>(events.subList(0, Math.min(count, events.size())));
     }
 
-    /** 最近的通知，不含小幽自己说的话：那些在设备首页上，不用在“通知”里再出现一遍。 */
+    /** 最近的通知，不含小鱼自己说的话：那些在设备首页上，不用在“通知”里再出现一遍。 */
     public synchronized List<Event> recentNotices(int count) {
         List<Event> notices = new ArrayList<>();
         for (Event event : events) {

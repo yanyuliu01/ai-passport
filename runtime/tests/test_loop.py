@@ -8,12 +8,12 @@ import time
 import unittest
 from unittest import mock
 
-from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyou, until
-from xiaoyou_runtime.helpers.agents import AgentError, Outcome
-from xiaoyou_runtime.loop.effects import EffectFenceError
-from xiaoyou_runtime.loop.loop import ConversationLoop
-from xiaoyou_runtime.loop.proactive import GATE_RULES, UPKEEP_RULES
-from xiaoyou_runtime.api.service import Service
+from test_runtime import GateTalker, Scripted, TempDirCase, make_xiaoyu, until
+from xiaoyu_runtime.helpers.agents import AgentError, Outcome
+from xiaoyu_runtime.loop.effects import EffectFenceError
+from xiaoyu_runtime.loop.loop import ConversationLoop
+from xiaoyu_runtime.loop.proactive import GATE_RULES, UPKEEP_RULES
+from xiaoyu_runtime.api.service import Service
 
 
 class LoopTests(unittest.TestCase):
@@ -77,7 +77,7 @@ class LoopTests(unittest.TestCase):
 class WakeTests(TempDirCase):
     def runtime(self, service=False):
         voice = GateTalker()
-        x, store = make_xiaoyou(self.folder, [voice, Scripted("codex", speaks=False)])
+        x, store = make_xiaoyu(self.folder, [voice, Scripted("codex", speaks=False)])
         self.addCleanup(x.close)
         if service:
             server = Service(x, store)
@@ -214,7 +214,7 @@ class WakeFenceTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.voice = GateTalker()
-        self.x, self.store = make_xiaoyou(self.folder, [self.voice])
+        self.x, self.store = make_xiaoyu(self.folder, [self.voice])
         self.addCleanup(self.x.close)
         self.x.mesh = mock.Mock(runtime_id="local")
         self.x.mesh.owner_of.return_value = {"owner": "local", "generation": 1}

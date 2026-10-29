@@ -11,20 +11,20 @@ import urllib.request
 from types import SimpleNamespace
 from unittest import mock
 
-from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime, write_config
-from xiaoyou_runtime.api import conformance
-from xiaoyou_runtime.events import reports
-from xiaoyou_runtime.__main__ import main
-from xiaoyou_runtime.events.desktop_sync import DesktopSync
-from xiaoyou_runtime.events.message_log import DESKTOP_CONVERSATION
-from xiaoyou_runtime.api.service import RequestError, Service
+from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyu, start_runtime, write_config
+from xiaoyu_runtime.api import conformance
+from xiaoyu_runtime.events import reports
+from xiaoyu_runtime.__main__ import main
+from xiaoyu_runtime.events.desktop_sync import DesktopSync
+from xiaoyu_runtime.events.message_log import DESKTOP_CONVERSATION
+from xiaoyu_runtime.api.service import RequestError, Service
 
 
 class ReportsTest(TempDirCase):
     def setUp(self):
         super().setUp()
-        self.xiaoyou, self.store = make_xiaoyou(self.folder, [Scripted("claude")])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(self.folder, [Scripted("claude")])
+        self.service = Service(self.xiaoyu, self.store)
         self.addCleanup(self.service.close)
 
     def everything(self):
@@ -39,7 +39,7 @@ class ReportsTest(TempDirCase):
     def test_a_report_is_a_read_only_card_with_deduplicated_messages(self):
         first = self.service.report({"origin": "claude-web", "session_id": "chat-1", "title": "同步方案",
                                      "text": "在看代码", "upstream_id": "m1"})
-        card = self.xiaoyou.cards.get(first["card"])
+        card = self.xiaoyu.cards.get(first["card"])
         self.assertEqual((DESKTOP_CONVERSATION, "claude", "external", True, "working"),
                          (card["conversation"], card["agent"], card["source"], card["monitoring_only"], card["state"]))
         self.assertEqual("同步方案", card["title"])
@@ -59,19 +59,19 @@ class ReportsTest(TempDirCase):
         # Another session gets its own card; a status-only report adds no message.
         other = self.service.report({"origin": "claude-web", "session_id": "chat-2", "state": "done"})
         self.assertNotEqual(first["card"], other["card"])
-        self.assertEqual([], self.xiaoyou.cards.get(other["card"])["entries"])
+        self.assertEqual([], self.xiaoyu.cards.get(other["card"])["entries"])
 
     def test_turn_ended_and_stale_reports(self):
         clock = mock.Mock(return_value=1000.0)
-        board = reports.Reports(self.xiaoyou.cards, clock=clock)
+        board = reports.Reports(self.xiaoyu.cards, clock=clock)
         card = board.report({"origin": "codex-cloud", "session_id": "s", "state": "turn_ended"})["card"]
-        self.assertEqual("codex", self.xiaoyou.cards.get(card)["agent"])
+        self.assertEqual("codex", self.xiaoyu.cards.get(card)["agent"])
         self.assertEqual("turn_ended", next(task for task in self.service.sync("default", 0)["tasks"]
                                             if task["id"] == card)["state"])
         board.report({"origin": "codex-cloud", "session_id": "s", "state": "working"})
         clock.return_value = 1000.0 + reports.STALE_SECONDS + 1
         board.sweep()
-        self.assertTrue(self.xiaoyou.cards.get(card)["stale"])
+        self.assertTrue(self.xiaoyu.cards.get(card)["stale"])
         # Not updated for a while: /v1/sync says unavailable (never finished); /v1/feed is unchanged.
         def synced():
             return next(task for task in self.service.sync("default", 0, states=["unavailable"])["tasks"]
@@ -83,10 +83,10 @@ class ReportsTest(TempDirCase):
         self.assertEqual("working", next(item for item in self.service.feed("default", 0)["cards"]
                                          if item["id"] == card)["state"])
         board.report({"origin": "codex-cloud", "session_id": "s", "state": "working"})
-        self.assertFalse(self.xiaoyou.cards.get(card)["stale"])
+        self.assertFalse(self.xiaoyu.cards.get(card)["stale"])
         self.assertEqual("working", synced()["state"])
         # A restarted runtime finds the same card again.
-        self.assertEqual(card, reports.Reports(self.xiaoyou.cards).report(
+        self.assertEqual(card, reports.Reports(self.xiaoyu.cards).report(
             {"origin": "codex-cloud", "session_id": "s"})["card"])
 
     def test_bad_reports_are_refused(self):
@@ -106,10 +106,10 @@ class ReportsTest(TempDirCase):
 
     def test_desktop_observation_leaves_reported_sessions_alone(self):
         card = self.service.report({"origin": "claude-web", "session_id": "chat", "state": "working"})["card"]
-        sync = DesktopSync(self.xiaoyou.cards, self.folder / "state", home=self.folder / "home")
+        sync = DesktopSync(self.xiaoyu.cards, self.folder / "state", home=self.folder / "home")
         self.assertNotIn(("claude", "chat"), sync.sessions)
         sync.close()
-        self.assertEqual("working", self.xiaoyou.cards.get(card)["state"])
+        self.assertEqual("working", self.xiaoyu.cards.get(card)["state"])
 
 
 class ReportsHttpTest(TempDirCase):

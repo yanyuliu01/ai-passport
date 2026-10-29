@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_runtime import TempDirCase, ToolTalker, make_xiaoyou
-from xiaoyou_runtime.loop.xiaoyou import lane_prompt, voice_prompt, task_prompt
-from xiaoyou_runtime.loop.prompt_rules import RUNTIME_RULES
-from xiaoyou_runtime.loop.proactive import Pulse, GATE_RULES
-from xiaoyou_runtime.helpers.agents import Outcome
+from test_runtime import TempDirCase, ToolTalker, make_xiaoyu
+from xiaoyu_runtime.loop.xiaoyu import lane_prompt, voice_prompt, task_prompt
+from xiaoyu_runtime.loop.prompt_rules import RUNTIME_RULES
+from xiaoyu_runtime.loop.proactive import Pulse, GATE_RULES
+from xiaoyu_runtime.helpers.agents import Outcome
 
 
 class PromptRulesTests(unittest.TestCase):
@@ -33,9 +33,9 @@ class PromptRulesTests(unittest.TestCase):
 class WakeRulesTests(TempDirCase):
     def test_background_wake_keeps_rules_with_a_custom_character(self):
         voice = ToolTalker('voice')
-        xiaoyou, _ = make_xiaoyou(self.folder, [voice], persona="A quiet owl.")
-        self.addCleanup(xiaoyou.close)
-        pulse = Pulse(xiaoyou)
+        xiaoyu, _ = make_xiaoyu(self.folder, [voice], persona="A quiet owl.")
+        self.addCleanup(xiaoyu.close)
+        pulse = Pulse(xiaoyu)
         with patch.object(voice, 'run', return_value=Outcome('（不说）', None)) as run:
             pulse._ask('A task completed.', ['recall'], GATE_RULES)
         job = run.call_args[0][0]

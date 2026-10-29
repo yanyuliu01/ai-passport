@@ -12,7 +12,7 @@ final class AccountManager {
     static final String PIN="9c5e10134c225cf6d19e566532ee8464f85f1be97ccff4ccf8aa3653ba1f442b";
     private static final ScheduledExecutorService worker=Executors.newSingleThreadScheduledExecutor();
     private static volatile Set<String> allowed=Collections.emptySet();
-    private static volatile String message="登录小幽账号，连接自己的电脑",username="";
+    private static volatile String message="登录小鱼账号，连接自己的电脑",username="";
     private static volatile boolean busy,signedIn;
     private static Context app;
     private static SharedPreferences storage;
@@ -23,7 +23,7 @@ final class AccountManager {
     static synchronized void init(Context context) throws Exception {
         if(app!=null)return;
         Context next=context.getApplicationContext();
-        SharedPreferences prefs=next.getSharedPreferences("xiaoyou-account-v1",Context.MODE_PRIVATE);
+        SharedPreferences prefs=next.getSharedPreferences("xiaoyu-account-v1",Context.MODE_PRIVATE);
         String sealed=prefs.getString("device","");
         RelayCrypto identity=new RelayCrypto(android.os.Build.MODEL,sealed.isEmpty()?null:RelayManager.decrypt(sealed));
         if(!prefs.edit().putString("device",RelayManager.encrypt(identity.seed)).commit())throw new IOException("登录身份未能保存");

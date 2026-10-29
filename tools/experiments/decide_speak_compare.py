@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 ROOT = Path(__file__).resolve().parents[2]
 CASES = Path(__file__).with_name("decide_speak_cases.jsonl")
 BASE_URL = "https://api.deepseek.com/anthropic"
-KEY_FILE = "~/.config/xiaoyou/deepseek.key"
+KEY_FILE = "~/.config/xiaoyu/deepseek.key"
 DEFAULT_NOW = "2026-10-27 周二 23:40（上海时区）"
 DEFAULT_HELPERS = ["cc", "codex", "project"]
 DECIDE_DEADLINE = 1.3
@@ -49,7 +49,7 @@ DECIDE_RULES = (
 NOTHING_DONE = "这轮没有启动任务、改记忆或新增约定。"
 TIMEOUT_FACTS = "决定阶段超时。这轮没有执行任何承诺，不能声称已经安排或记下。"
 SPECULATIVE_FACTS = "这轮没有执行任何承诺，不能声称已经安排或记下。"
-# 和 R7 loop/xiaoyou.py 的 _converse_decided 一致。
+# 和 R7 loop/xiaoyu.py 的 _converse_decided 一致。
 SPEAK_RULES = ("\n现在只向主人说话或查记录，不得再启动任务、改记忆或作新的约定。"
                "根据上述真实结果回答一次；没有执行就不能说已经做了，失败就照实说明。")
 BUBBLE = re.compile(r"\n\s*---\s*\n")
@@ -689,7 +689,7 @@ def command_review(args: argparse.Namespace) -> int:
         key[case_id] = {"A": arms[0], "B": arms[1]}
         sheet += ["## %s（%s）" % (case_id, case["category"]), ""]
         for item in case["history"][-4:]:
-            sheet.append("> %s：%s" % ("主人" if item["role"] == "owner" else "小幽", item["text"].replace("\n", " ")))
+            sheet.append("> %s：%s" % ("主人" if item["role"] == "owner" else "小鱼", item["text"].replace("\n", " ")))
         sheet += ["> 主人：%s" % " / ".join(case["owner"]), ""]
         for label, arm in zip("AB", arms):
             bubbles = [part.strip() for part in BUBBLE.split(picked[case_id][arm]) if part.strip()]

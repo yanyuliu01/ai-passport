@@ -85,10 +85,10 @@ Two rules learned from trial runs: **look at use around releases separately** (w
 ### Management (implemented)
 
 ```bash
-python3 -m xiaoyou_runtime events types        # registered types, fields, privacy class, retention
-python3 -m xiaoyou_runtime events summary      # recent counts per client and type, and where they are
-python3 -m xiaoyou_runtime events export --since 7d
-python3 -m xiaoyou_runtime events delete --type rage_tap --before 2026-10-01
+python3 -m xiaoyu_runtime events types        # registered types, fields, privacy class, retention
+python3 -m xiaoyu_runtime events summary      # recent counts per client and type, and where they are
+python3 -m xiaoyu_runtime events export --since 7d
+python3 -m xiaoyu_runtime events delete --type rage_tap --before 2026-10-01
 ```
 
 ## Outer loop: one version plan per batch (design)
@@ -204,7 +204,7 @@ Verdicts are saved in the run directory and feed the next batch; a theme that ke
 | `observer` | release + new signals → verdict | `theme_compare` | design |
 | `triage` / `planner` | single-issue pick / single-issue plan | `score_by_impact` / `template_plan` | implemented; superseded by the outer loop and kept as a fallback for single fixes |
 
-Built-ins live in `runtime/xiaoyou_runtime/iterate/builtin/`; your own go in `iterate.plugin_dirs`, each `.py` holding a `PLUGINS` list. A later plugin with the same kind and name replaces an earlier one; a file that fails to load records one error:
+Built-ins live in `runtime/xiaoyu_runtime/iterate/builtin/`; your own go in `iterate.plugin_dirs`, each `.py` holding a `PLUGINS` list. A later plugin with the same kind and name replaces an earlier one; a file that fails to load records one error:
 
 ```python
 def detect(ctx, signals):              # ctx opens only the permissions this plugin declared
@@ -230,7 +230,7 @@ It is the **Provider/model** layer of the agent gateway proposal (`docs/developm
   "providers": {
     "local":    {"protocol": "openai", "base_url": "http://127.0.0.1:11434/v1"},
     "deepseek": {"protocol": "openai", "base_url": "https://api.deepseek.com/v1",
-                 "key_file": "~/.config/xiaoyou/deepseek.key", "price": {"input": 2, "output": 8}}
+                 "key_file": "~/.config/xiaoyu/deepseek.key", "price": {"input": 2, "output": 8}}
   },
   "routes": {
     "default":              ["local/qwen2.5:7b"],
@@ -251,9 +251,9 @@ It is the **Provider/model** layer of the agent gateway proposal (`docs/developm
 - Keys come from `key_file` or `key_env`, never `config.json`.
 
 ```bash
-python3 -m xiaoyou_runtime models list
-python3 -m xiaoyou_runtime models test iterate.plan
-python3 -m xiaoyou_runtime models usage
+python3 -m xiaoyu_runtime models list
+python3 -m xiaoyu_runtime models test iterate.plan
+python3 -m xiaoyu_runtime models usage
 ```
 
 ## Making a small local model sufficient: what the harness does
@@ -296,22 +296,22 @@ With `enabled` true the runtime checks every 15 minutes: if the owner has nothin
 
 ```bash
 # implemented
-python3 -m xiaoyou_runtime iterate plugins
-python3 -m xiaoyou_runtime iterate run --dry-run --force   # trial run, saves no state
-python3 -m xiaoyou_runtime iterate run [--force]
-python3 -m xiaoyou_runtime iterate status
-python3 -m xiaoyou_runtime iterate issues [--all]
-python3 -m xiaoyou_runtime iterate issue <prefix> --open|--ignore
-python3 -m xiaoyou_runtime events types|summary|export|delete
+python3 -m xiaoyu_runtime iterate plugins
+python3 -m xiaoyu_runtime iterate run --dry-run --force   # trial run, saves no state
+python3 -m xiaoyu_runtime iterate run [--force]
+python3 -m xiaoyu_runtime iterate status
+python3 -m xiaoyu_runtime iterate issues [--all]
+python3 -m xiaoyu_runtime iterate issue <prefix> --open|--ignore
+python3 -m xiaoyu_runtime events types|summary|export|delete
 # design
-python3 -m xiaoyou_runtime iterate map                     # issue map: groups and root causes
-python3 -m xiaoyou_runtime iterate replay <run> --stage <stage> --plugin <other>
-python3 -m xiaoyou_runtime iterate rollback <run>
+python3 -m xiaoyu_runtime iterate map                     # issue map: groups and root causes
+python3 -m xiaoyu_runtime iterate replay <run> --stage <stage> --plugin <other>
+python3 -m xiaoyu_runtime iterate rollback <run>
 ```
 
 ## Relation to the earlier proposal
 
-The 10-16 discussion with Codex about collecting the owner's conversations with Xiaoyou and batch-optimizing the main agent's delegation and the DSH loop uses the same skeleton: the same collection gateway, the same issue book, the same outer loop. With `areas` set to `agent` and implementation plugins that edit prompts and routing configuration, it becomes main-flow optimization, not a separate system.
+The 10-16 discussion with Codex about collecting the owner's conversations with Xiaoyu and batch-optimizing the main agent's delegation and the DSH loop uses the same skeleton: the same collection gateway, the same issue book, the same outer loop. With `areas` set to `agent` and implementation plugins that edit prompts and routing configuration, it becomes main-flow optimization, not a separate system.
 
 ## Phases
 

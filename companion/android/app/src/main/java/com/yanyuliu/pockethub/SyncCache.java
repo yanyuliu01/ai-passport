@@ -11,7 +11,7 @@ import java.util.Set;
  * One Runtime's state from /v1/sync (see docs/development/unified-message-model): its tasks and
  * messages by id, rebuilt into the cards the screens already draw. A card carries only final
  * messages, as /v1/feed did; messages still queued or being written are handed out separately so
- * other phones can show them while Xiaoyou is still answering.
+ * other phones can show them while Xiaoyu is still answering.
  *
  * The cursor is kept as the string the Runtime gave and sent back unchanged. A page is applied
  * whole before the cursor moves. Not thread-safe: one sync loop owns it.

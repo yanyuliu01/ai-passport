@@ -26,7 +26,7 @@ try {
     $BuildPython = Join-Path $DesktopRoot '.runtime-venv/Scripts/python.exe'
     if (-not $SkipDependencyInstall) { Invoke-Checked $BuildPython @('-m', 'pip', 'install', '-r', 'requirements-build.txt') }
     Invoke-Checked $BuildPython @('tools/bundle_runtime.py')
-    $env:XIAOYOU_TEST_RUNTIME = Join-Path $DesktopRoot 'runtime-dist/xiaoyou-runtime/xiaoyou-runtime.exe'
+    $env:XIAOYU_TEST_RUNTIME = Join-Path $DesktopRoot 'runtime-dist/xiaoyu-runtime/xiaoyu-runtime.exe'
     Invoke-Checked 'npm.cmd' @('test')
     Invoke-Checked 'npm.cmd' @('run', 'package:win')
     Get-ChildItem 'release/*.exe' | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize

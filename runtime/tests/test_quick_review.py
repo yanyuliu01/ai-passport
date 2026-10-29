@@ -11,8 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from xiaoyou_runtime.world.approvals import Approvals
-from xiaoyou_runtime.world.quick_review import QuickReview, ReviewConflict
+from xiaoyu_runtime.world.approvals import Approvals
+from xiaoyu_runtime.world.quick_review import QuickReview, ReviewConflict
 
 
 class QuickReviewTests(unittest.TestCase):
@@ -158,7 +158,7 @@ class QuickReviewTests(unittest.TestCase):
 
     def test_failed_durable_write_cannot_restore_previous_grant_after_restart(self):
         self.mode(seconds=0)
-        with patch("xiaoyou_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
+        with patch("xiaoyu_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
             aid = self.ask()
         self.assertIsNone(self.approvals.get(aid)["decision"])
         self.assertTrue((self.folder / "approval-review.disabled").exists())
@@ -273,7 +273,7 @@ class QuickReviewTests(unittest.TestCase):
         self.ask(context=dict(source="desktop", remote_actionable=True, expires_at=2000),
                  responder=lambda decision: self.fail("must record intent before allowing"))
         snapshot = self.review.snapshot("default")
-        with patch("xiaoyou_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
+        with patch("xiaoyu_runtime.world.quick_review.os.replace", side_effect=OSError("disk full")):
             with self.assertRaises(OSError): self.batch(snapshot)
         self.assertEqual(self.review.snapshot("default")["mode"], "manual")
 
@@ -308,21 +308,21 @@ class QuickReviewTests(unittest.TestCase):
         self.assertNotIn("private fixture", json.dumps(events))
 
     def test_service_restores_policy_before_recovered_work_can_ask_for_a_tool(self):
-        from test_runtime import make_xiaoyou, Scripted
-        from xiaoyou_runtime.api.service import Service
-        xiaoyou, store = make_xiaoyou(self.folder / "startup", [Scripted("helper")])
-        grant = QuickReview(xiaoyou.approvals, store.state_dir)
+        from test_runtime import make_xiaoyu, Scripted
+        from xiaoyu_runtime.api.service import Service
+        xiaoyu, store = make_xiaoyu(self.folder / "startup", [Scripted("helper")])
+        grant = QuickReview(xiaoyu.approvals, store.state_dir)
         snap = grant.snapshot("default")
         grant.configure("default", dict(epoch=snap["epoch"], revision=snap["revision"],
                                          mode="auto_allow", seconds=0))
         grant.close()
         decisions = []
         def recover(service):
-            aid = service._xiaoyou.approvals.ask("c1", "default", "helper", "Read", "fixture",
+            aid = service._xiaoyu.approvals.ask("c1", "default", "helper", "Read", "fixture",
                                                  context={"operation": "Read"})
-            decisions.append(service._xiaoyou.approvals.get(aid)["decision"])
+            decisions.append(service._xiaoyu.approvals.get(aid)["decision"])
         with patch.object(Service, "_recover", recover):
-            service = Service(xiaoyou, store)
+            service = Service(xiaoyu, store)
         self.addCleanup(service.close)
         self.assertEqual(decisions, ["allow"])
         self.assertEqual([row["fields"]["action"] for row in service.events.all()],
@@ -331,14 +331,14 @@ class QuickReviewTests(unittest.TestCase):
 
 class QuickReviewHttpTests(unittest.TestCase):
     def setUp(self):
-        from test_runtime import write_config, config_module, factory, Xiaoyou, Store, Service, TOKEN
-        from xiaoyou_runtime.api.server import make_server
+        from test_runtime import write_config, config_module, factory, Xiaoyu, Store, Service, TOKEN
+        from xiaoyu_runtime.api.server import make_server
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.config = config_module.load(write_config(Path(self.temp.name)), {"XIAOYOU_PORT": "8765"})
+        self.config = config_module.load(write_config(Path(self.temp.name)), {"XIAOYU_PORT": "8765"})
         store = Store(self.config.state_dir)
-        xiaoyou = Xiaoyou(self.config, [factory.create(spec) for spec in self.config.agents], store)
-        self.service = Service(xiaoyou, store)
+        xiaoyu = Xiaoyu(self.config, [factory.create(spec) for spec in self.config.agents], store)
+        self.service = Service(xiaoyu, store)
         self.addCleanup(self.service.close)
         # Config is frozen; a private test port never touches the running Runtime.
         from dataclasses import replace
@@ -348,7 +348,7 @@ class QuickReviewHttpTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % server.server_address[1]
-        self.approvals = xiaoyou.approvals
+        self.approvals = xiaoyu.approvals
         self.token = TOKEN
 
     def call(self, path, body=None, token=True):
@@ -396,7 +396,7 @@ class QuickReviewHttpTests(unittest.TestCase):
             revision=snapshot["revision"], mode="auto_allow", seconds=31536001))[0], 400)
 
     def test_operational_events_are_registered_persisted_and_sanitized(self):
-        from xiaoyou_runtime.iterate.events import EventStore
+        from xiaoyu_runtime.iterate.events import EventStore
         snapshot = self.call("/v1/review")[1]
         for seconds in (0, 5400):
             _, snapshot = self.call("/v1/review/mode", dict(epoch=snapshot["epoch"],
@@ -419,16 +419,16 @@ class QuickReviewHttpTests(unittest.TestCase):
         self.assertIn("review", [kind["name"] for kind in self.call("/v1/info")[1]["events"]["types"]])
 
     def test_permission_gate_passes_a_typed_read_without_changing_manual_gate_protocol(self):
-        from xiaoyou_runtime.world.approvals import Gate
+        from xiaoyu_runtime.world.approvals import Gate
         gate = Gate(self.approvals)
         self.addCleanup(gate.close)
         env = gate.open("c-read", "default", "claude")
         snapshot = self.call("/v1/review")[1]
         self.call("/v1/review/mode", dict(epoch=snapshot["epoch"], revision=snapshot["revision"],
                                         mode="auto_allow"))
-        request = urllib.request.Request(env["XIAOYOU_GATE_URL"],
+        request = urllib.request.Request(env["XIAOYU_GATE_URL"],
                   data=json.dumps(dict(tool_name="Read", input=dict(file_path="/fixture.txt"))).encode())
-        request.add_header("X-Xiaoyou-Key", env["XIAOYOU_GATE_KEY"])
+        request.add_header("X-Xiaoyu-Key", env["XIAOYU_GATE_KEY"])
         with urllib.request.urlopen(request, timeout=5) as response:
             self.assertEqual(json.load(response)["decision"], "allow")
         item = self.approvals.since("default", 0)[-1]

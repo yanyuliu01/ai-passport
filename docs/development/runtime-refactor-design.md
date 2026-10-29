@@ -9,9 +9,9 @@ acceptance remains incomplete. R7 directory moves, cycle removal and direct
 dependency cleanup are implemented. R8 negotiated client migration is implemented; legacy API removal
 and the R6 default cutover remain gated. Section 7 distinguishes source, deployment and acceptance.
 
-This document maps the [Xiaoyou complete plan](xiaoyou-agent-model.md) onto the Runtime code in
+This document maps the [Xiaoyu complete plan](xiaoyu-agent-model.md) onto the Runtime code in
 three layers: the **intake layer** (how things come in and how they are stored), the **reply layer**
-(how replies are produced and delivered to every end) and the **agent loop** (how Xiaoyou decides
+(how replies are produced and delivered to every end) and the **agent loop** (how Xiaoyu decides
 and acts). Issue ids refer to the [interaction simplification issue list](app-runtime-simplification.md).
 Every phase must meet the [cross-stack reliability rules](cross-stack-reliability.md).
 
@@ -35,7 +35,7 @@ adapters ---> Intake.accept(event) ---> event log ---> current state (projection
                                    +---------------------------+
 ```
 
-The design borrows parts of Raft and DS-Bot-App; see section 8.
+The design borrows parts of Raft and Xiaoyu-Bot-App; see section 8.
 
 Three rules hold throughout:
 
@@ -44,7 +44,7 @@ Three rules hold throughout:
 2. **Store before acting.** Every input, decision and result is persisted as an event before
    anything follows from it. Replay rebuilds state without executing effects; recovery resumes pending work and reconciles uncertain outcomes under section 1.5.
 3. **Clients see one projection.** Messages, tasks, conversations, quota, approvals and what
-   Xiaoyou is doing all arrive through `/v1/sync`.
+   Xiaoyu is doing all arrive through `/v1/sync`.
 
 ## 1. Intake layer
 
@@ -79,7 +79,7 @@ Intake.accept(event) -- dedupe, validate, write the log, advance the current sta
 | `source` | `owner` / `helper` / `desktop` / `mesh` / `timer` / `system` |
 | `kind` | `said`, `action`, `task_progress`, `task_ended`, `session_observed`, `approval_requested`, `approval_answered`, `assistant_message`, `usage`, `deployed`... |
 | `conversation`, `subject` | Which conversation; which task / session / computer it is about |
-| `actor`, `cause` | Who did it (`app`, `desktop`, `xiaoyou`, `mesh:<node>`, `cli`, `system`) and which event led to it (A4) |
+| `actor`, `cause` | Who did it (`app`, `desktop`, `xiaoyu`, `mesh:<node>`, `cli`, `system`) and which event led to it (A4) |
 | `trust` | `owner` / `system` / `helper` / `external`; `external` is material only and never becomes an owner turn |
 | `payload` | Kind-specific content |
 
@@ -118,7 +118,7 @@ renamed now.
 - **Helpers:** progress only updates the task's progress fields and never writes the main chat;
   every ending emits `task_ended` (done / failed / cancelled) for the agent loop to finish (A1).
 - **Desktop sessions:** written only into their own observed session, never into the main chat,
-  never waking Xiaoyou; re-observing the same session revision emits nothing new; recap material never quotes
+  never waking Xiaoyu; re-observing the same session revision emits nothing new; recap material never quotes
   recap material (N8, N11).
 - **Other computers:** each record is changed only by its origin; commands from a peer (cancel,
   confirm, hand over) enter the same `accept` with `actor=mesh:<node>`.
@@ -130,11 +130,11 @@ renamed now.
 | --- | --- |
 | `Service.submit` / `submit_voice` / `_enqueue`, `Ledger` (`messages.json`) | `HttpAdapter` + a "requests" projection in `World`; `messages.json` becomes a rebuildable snapshot |
 | `record.exchange` / `reply` / `request_changed` / `task`, direct writes in `cards.py` | All become `Intake.accept`; `cards.json` becomes a projection snapshot |
-| `tasks.Control.activity`, card writes in `Xiaoyou._finished` | `HelperAdapter` emits `task_progress` / `task_ended` |
+| `tasks.Control.activity`, card writes in `Xiaoyu._finished` | `HelperAdapter` emits `task_progress` / `task_ended` |
 | `desktop_sync._publish`, `directory_discovery`, `project_brief.recap_text` | `DesktopAdapter` (read-only, idempotent, scoped to observed sessions) |
 | `mesh._apply_current` dispatching to messages / tasks / approvals / commands | `MeshAdapter`; commands go through `accept(kind=action, actor=mesh:...)` |
-| `transcript.json` (Xiaoyou's own conversation record) | No longer written; the agent loop assembles context from the log on demand |
-| `Service.cancel`, `Xiaoyou.cancel`, the `__main__` interrupt, mesh cancel commands | One `action:cancel` event with `actor` = `app` / `cli` / `mesh:...` / `xiaoyou` |
+| `transcript.json` (Xiaoyu's own conversation record) | No longer written; the agent loop assembles context from the log on demand |
+| `Service.cancel`, `Xiaoyu.cancel`, the `__main__` interrupt, mesh cancel commands | One `action:cancel` event with `actor` = `app` / `cli` / `mesh:...` / `xiaoyu` |
 
 ### 1.5 Durable acceptance and recovery
 
@@ -158,7 +158,7 @@ R3 must test every boundary with injected crashes, duplicate delivery and concur
 ### 2.1 Target structure
 
 ```
-assistant_message events (every segment Xiaoyou says: blocks, formatting, status streaming/final, revision)
+assistant_message events (every segment Xiaoyu says: blocks, formatting, status streaming/final, revision)
         |
         v
 Projection (the single display projection: evolution of presentation_v1, with formatting runs)
@@ -180,7 +180,7 @@ GET /v1/sync?cursor=<cursor>&wait=<seconds>
 
 - **A gap is filled from retained deltas first; only an invalid cursor or missing deltas get a snapshot, and an empty cursor gets a snapshot directly, never a replay of history.** The snapshot holds the
   current state only: the latest N messages per conversation, all unfinished tasks, pending
-  approvals, quota and Xiaoyou's state; deltas follow from the snapshot boundary. The target is to show the active conversation within
+  approvals, quota and Xiaoyu's state; deltas follow from the snapshot boundary. The target is to show the active conversation within
   1 second of authenticated transport readiness, subject to measurement, without catching up
   415 pages (N10). Older
   history is paged on demand (`GET /v1/conversations/{id}/history`).
@@ -292,7 +292,7 @@ Before enabling the two-model-call path, allocate one end-to-end 3,000 ms budget
 
 | Now | Later |
 | --- | --- |
-| `Xiaoyou.hear`, `routing.decide` (named agent, router, default) | `Loop.step`; a named agent becomes a constraint in the context for `Decider` |
+| `Xiaoyu.hear`, `routing.decide` (named agent, router, default) | `Loop.step`; a named agent becomes a constraint in the context for `Decider` |
 | `_converse` / `_converse_with`: tool talk, the JSON fallback, re-asking | Two stages, `Decider` + `Speaker`; the JSON fallback and re-asking are removed |
 | `_converse_decided`, `decision.py` (`decide_first`, off by default) | Becomes the only path (once end-to-end time to the first meaningful complete bubble is measured and passes) |
 | `_plan`, `_apply_conversation`, `_assign`, `_resume`, `_launch`, `_continue_desktop` | `Executor.apply` |
@@ -310,7 +310,7 @@ and reversible. The steps map to the four steps in section 6 of the complete pla
 
 | Step | Content | Acceptance | Plan step |
 | --- | --- | --- | --- |
-| R1 | Add `actor` and `cause` to events (backward compatible); cancellation emits `task_ended` and Xiaoyou says one line in the originating chat | Cancels from every source record their initiator; she always says one line | Words match actions (the earlier a and b) |
+| R1 | Add `actor` and `cause` to events (backward compatible); cancellation emits `task_ended` and Xiaoyu says one line in the originating chat | Cancels from every source record their initiator; she always says one line | Words match actions (the earlier a and b) |
 | R2 | Introduce `Intake`, first as a wrapper around `Record`; move write sites to `accept` one by one (HTTP, then helpers, then desktop sessions, then other computers) | Unchanged paths pass differential tests; desktop isolation has separate corrected expectations; all write sites pass the Intake boundary check | One state |
 | R3 | Introduce the `World` projection; `messages.json` and `cards.json` become rebuildable snapshots; stop writing `transcript.json` | Snapshot rebuild and crash-boundary tests pass; pending work resumes, uncertain effects are reconciled, completed work is not repeated | One state |
 | R4 | Sync becomes snapshot + delta with paging by count; clients persist their cursor | From authenticated transport readiness, the active conversation shows current state within 1 second; task results no longer wait ten minutes (N10) | Automatic connection |
@@ -374,7 +374,7 @@ the running Runtime was not restarted.
 | --- | --- |
 | `1896e6d` | Intake shell and provenance; the differential log test `test_intake` with its golden `intake_golden.json` (produced by the pre-change code) |
 | `1b45f23` | HTTP / Service writes go through Intake |
-| `ef4d532` | Helper, Xiaoyou and timer writes go through Intake |
+| `ef4d532` | Helper, Xiaoyu and timer writes go through Intake |
 | `cb8d1e4` | Desktop observation may only write observed sessions; recap context is tagged and filtered on import (N8, N11) |
 | `0688c71` | Writes from other computers go through Intake; a boundary test forbids writing Record directly |
 
@@ -418,13 +418,13 @@ startup second:
 
 **R5 progress:**
 
-- R5 (Runtime part): Xiaoyou's replies were already log records that stream by whole-text replacement and never return from final to streaming; R5 makes this explicit in the projection and completes the formatting. `presentation.event` names the record with the event kinds of 1.2: `said` (the owner), `assistant_message` (a reply in the chat), `task_progress` (work inside a task) and `session_observed` (an observed desktop session). Runs now carry `italic`, `strike`, `code` (`inline` / `block`, with `language`), `heading` (level, also `bold`), `href` (only http, https and mailto) and `quote`; fence lines, `#` and the other markers are not part of the text. Every run keeps `text` and `bold`, so current clients show the words without markers and lose nothing. `presentation.plain` is the unstyled text for one-line places (home card, device screen, copying), and a task's `presentation.brief` / `presentation.progress` are its words without markers. `presentation_policy` lists `formatting` and `events`. The shared fixture `tests/fixtures/presentation-v1.json` gains a case with every format; `test_presentation_policy` checks that a client following only the `/v1/sync` cursor sees a formatted reply streaming and then final. Not done: the App and desktop client drawing the new styles and using `plain` instead of their own `Markdown.plain` (a separate client batch); operation identity for helper runs moves to R6 with the agent loop.
+- R5 (Runtime part): Xiaoyu's replies were already log records that stream by whole-text replacement and never return from final to streaming; R5 makes this explicit in the projection and completes the formatting. `presentation.event` names the record with the event kinds of 1.2: `said` (the owner), `assistant_message` (a reply in the chat), `task_progress` (work inside a task) and `session_observed` (an observed desktop session). Runs now carry `italic`, `strike`, `code` (`inline` / `block`, with `language`), `heading` (level, also `bold`), `href` (only http, https and mailto) and `quote`; fence lines, `#` and the other markers are not part of the text. Every run keeps `text` and `bold`, so current clients show the words without markers and lose nothing. `presentation.plain` is the unstyled text for one-line places (home card, device screen, copying), and a task's `presentation.brief` / `presentation.progress` are its words without markers. `presentation_policy` lists `formatting` and `events`. The shared fixture `tests/fixtures/presentation-v1.json` gains a case with every format; `test_presentation_policy` checks that a client following only the `/v1/sync` cursor sees a formatted reply streaming and then final. Not done: the App and desktop client drawing the new styles and using `plain` instead of their own `Markdown.plain` (a separate client batch); operation identity for helper runs moves to R6 with the agent loop.
 
 ### 2026-10-24 review and continuation order
 
-The [complete Xiaoyou proposal](xiaoyou-agent-model.md) defines the product direction; this document governs the three layers and migration acceptance. Raft capability grants and the Magpie model service in the [helper capability design](helper-capabilities.md) belong to helper integration and do not replace R6's unified processing path.
+The [complete Xiaoyu proposal](xiaoyu-agent-model.md) defines the product direction; this document governs the three layers and migration acceptance. Raft capability grants and the Magpie model service in the [helper capability design](helper-capabilities.md) belong to helper integration and do not replace R6's unified processing path.
 
-Before starting R6, the review of baseline `9ca76c7` and the then-uncommitted changes found an initial implementation of Magpie model discovery, helper bindings, desktop selection and MCP grants; see the helper capability design for scope and validation. `xiaoyou.py` still falls back from a failed tool-based reply to JSON and asks again when a plan is invalid; `decide_first` defaults to false; `Pulse` wakes for background progress and task completion uses separate callbacks. At that point `operations.py` covered only Service messages. The two progress batches below describe subsequent helper recovery; the unified loop remains incomplete.
+Before starting R6, the review of baseline `9ca76c7` and the then-uncommitted changes found an initial implementation of Magpie model discovery, helper bindings, desktop selection and MCP grants; see the helper capability design for scope and validation. `xiaoyu.py` still falls back from a failed tool-based reply to JSON and asks again when a plan is invalid; `decide_first` defaults to false; `Pulse` wakes for background progress and task completion uses separate callbacks. At that point `operations.py` covered only Service messages. The two progress batches below describe subsequent helper recovery; the unified loop remains incomplete.
 
 Proposed independently verifiable batches, before moving directories:
 
@@ -521,7 +521,7 @@ Helper-start validation: three of four new cases (`test_dispatch_owner.py`, adde
 
 R6 remains incomplete: segment-summary policy, long-history relevance/latency acceptance and the default-flow cutover remain, and each needs an owner decision or real-model and client measurements. Owner checks now cover request, timer, summary and helper-start paths; later rounds of an already claimed run continue under that claim. The JSON compatibility path and `decide_first=false` are retained until real client/model acceptance permits cutover. R7 moved the files into layers and removed the import cycles (below); R8 removal of still-used client APIs has not started. Source is not deployed; real accounts, devices, three-second response and live cross-end recovery are not accepted. Preserve a state-directory copy before upgrading. Older programs ignore the new recovery and context fields; rollback must retain that state copy and must not overwrite pending inputs or reset boundaries.
 
-**R7 file move (2026-10-26, backend source).** The owner chose to continue before the latency measurements. Modules moved, without code changes, into the six layer packages: `events/` (intake, record, message and operation logs, ledger, speech and image input, external reports, and the desktop-session adapters), `world/` (world, store, cards, conversations and their directory and metadata, artifacts, ownership, devices, identity, approvals, quick review, promises, memory, task titles, task audit, usage), `delivery/` (presentation, mesh, mesh shares), `loop/` (xiaoyou, loop, context, decision, voice tools, effects, proactive, recall, router, workspace, project brief), `helpers/` (agents, tasks, helper catalog, extras and models, capabilities, MCP client, permission MCP, Codex/Claude/dsh adapters, model gateway, desktop handoff) and `api/` (server, Service, conformance, conversation CLI, shared history). Config, firmware, releases, Windows file helpers, `__main__` and `iterate/` stay at the package root. Imports, tests, tools and documentation paths follow the new names; `git mv` keeps file history. Five old paths stay runnable because they are written into installed configuration or instructions: `python -m xiaoyou_runtime.desktop_hook` (hook commands, which are still generated with this name so re-merging does not duplicate them), `python -m xiaoyou_runtime.permission_mcp`, `python -m xiaoyou_runtime.conformance`, `runtime/xiaoyou_runtime/shared_history.py` (hook commands and AGENTS.md; `setup-history-sync` still recognizes its hooks) and `runtime/xiaoyou_runtime/project_brief.py` (helper `command` settings). No wire, API or persistence format changed.
+**R7 file move (2026-10-26, backend source).** The owner chose to continue before the latency measurements. Modules moved, without code changes, into the six layer packages: `events/` (intake, record, message and operation logs, ledger, speech and image input, external reports, and the desktop-session adapters), `world/` (world, store, cards, conversations and their directory and metadata, artifacts, ownership, devices, identity, approvals, quick review, promises, memory, task titles, task audit, usage), `delivery/` (presentation, mesh, mesh shares), `loop/` (xiaoyu, loop, context, decision, voice tools, effects, proactive, recall, router, workspace, project brief), `helpers/` (agents, tasks, helper catalog, extras and models, capabilities, MCP client, permission MCP, Codex/Claude/dsh adapters, model gateway, desktop handoff) and `api/` (server, Service, conformance, conversation CLI, shared history). Config, firmware, releases, Windows file helpers, `__main__` and `iterate/` stay at the package root. Imports, tests, tools and documentation paths follow the new names; `git mv` keeps file history. Five old paths stay runnable because they are written into installed configuration or instructions: `python -m xiaoyu_runtime.desktop_hook` (hook commands, which are still generated with this name so re-merging does not duplicate them), `python -m xiaoyu_runtime.permission_mcp`, `python -m xiaoyu_runtime.conformance`, `runtime/xiaoyu_runtime/shared_history.py` (hook commands and AGENTS.md; `setup-history-sync` still recognizes its hooks) and `runtime/xiaoyu_runtime/project_brief.py` (helper `command` settings). No wire, API or persistence format changed.
 
 Move validation: every module imports, and every old and new entry point runs. All Runtime test files were run on the committed baseline `07f4a9b` and on the candidate: the failure ids are identical except two HTTP tests in `test_runtime.py` that failed on the baseline run only (the known Windows connection aborts) and pass on the candidate. One candidate-only failure was found and fixed: the shared-history installer recognizes its hooks by the original reader path, so hooks keep naming it. Repository checks pass. The two import cycles that exist only through function-level imports (around `helpers/agents.py`, and `world/store.py` -> `loop/context.py` -> `world/cards.py` -> `world/artifacts.py` -> `events/intake.py` -> `events/record.py`) are not removed yet. Device tests, the complete gate and deployment were NOT RUN.
 
@@ -573,7 +573,7 @@ The isolated processes were stopped and their temporary configuration files remo
 
 ### R6 model-selected task boundary (2026-10-26)
 
-Continued from `81f658a`, extracting the existing private task-action selection/result and pending-recovery checks from `Xiaoyou` into `loop/executor.py`. Both paths invoke the same injected action adapter. Initial selection still records `pending`, then `running`, before the action; existing successful results return without execution, and running/unknown results cannot be replayed. Pending recovery preserves request/conversation checks, helper fingerprints and target revisions. Display-only interruption remains outside saved arguments/results; remote receipts retain their explicit unconfirmed-execution wording. The journal schema, operation keys, effects/owner guards, models, prompts, wire protocol and default decision mode are unchanged. Direct named-helper dispatch, task admission and reply presentation remain existing adapters; this is a bounded extraction, not completion of all Executor or R6 work.
+Continued from `81f658a`, extracting the existing private task-action selection/result and pending-recovery checks from `Xiaoyu` into `loop/executor.py`. Both paths invoke the same injected action adapter. Initial selection still records `pending`, then `running`, before the action; existing successful results return without execution, and running/unknown results cannot be replayed. Pending recovery preserves request/conversation checks, helper fingerprints and target revisions. Display-only interruption remains outside saved arguments/results; remote receipts retain their explicit unconfirmed-execution wording. The journal schema, operation keys, effects/owner guards, models, prompts, wire protocol and default decision mode are unchanged. Direct named-helper dispatch, task admission and reply presentation remain existing adapters; this is a bounded extraction, not completion of all Executor or R6 work.
 
 Before editing, all 20 existing request-effect tests passed. The complete Runtime suite then passed **1,101 tests in 166.039 seconds**. The final focused Executor suite passed **7 tests**, including its two later additions (the earlier five overlap the full run): old-format pending records with additional metadata, all four task-action kinds, failed saves, changed request/helper/target, ownership changes after claim, successful-result reuse after helper removal, unknown-result refusal and unconfirmed remote receipts. Import-layer checks and the complete repository/host/ESP-IDF gate passed. The validation-only firmware image SHA-256 is `d1339e0c004020072585e5d8385ea585d39704d28d96ca278bdf781335d128f8`, with ELF SHA-256 `3f18582ab453d7d9ace44ca508d11926ad2d7a5f61346bfb810e13a763f023ec`. Firmware code was unchanged and no board was flashed.
 
@@ -587,7 +587,7 @@ Build and host regression: PASS, with the frozen fixture's initial failure retai
 
 ### R6 task-action execution and named handoff (2026-10-26)
 
-Moved the actual start/amend/cancel/desktop/remote branches into `Executor.execute`. Direct named assignments and pinned supplements now use `Executor.assign` / `resume_named` too. Explicit `ActionPorts` retain the existing task manager, native continuation, Mesh, writer and presentation adapters without importing `Xiaoyou` back into the executor. Conversation context preparation remains outside: handoff records are saved before assignment context is assembled; supplement history is prepared only when an idle task resumes. The existing thin `_apply_conversation_now` entry delegates to Executor. Saved selections, ids, helper fingerprints, scopes, model/effort precedence, queue-full wording and remote-receipt meaning are preserved. This introduces no model call or persisted-format migration.
+Moved the actual start/amend/cancel/desktop/remote branches into `Executor.execute`. Direct named assignments and pinned supplements now use `Executor.assign` / `resume_named` too. Explicit `ActionPorts` retain the existing task manager, native continuation, Mesh, writer and presentation adapters without importing `Xiaoyu` back into the executor. Conversation context preparation remains outside: handoff records are saved before assignment context is assembled; supplement history is prepared only when an idle task resumes. The existing thin `_apply_conversation_now` entry delegates to Executor. Saved selections, ids, helper fingerprints, scopes, model/effort precedence, queue-full wording and remote-receipt meaning are preserved. This introduces no model call or persisted-format migration.
 
 The new branch assertions passed before and after their respective moves. All **15 Executor tests**, import-layer checks, the complete gate and **1,111 Runtime tests in 183.268 seconds** passed. The final frozen Runtime source SHA-256 is `84b36b8602f4519bb33dc1441f30d6cdf0cd0472884d81a0092417fcc735ec8d`; three unchanged frozen two-Runtime relay-recovery fixture runs passed using echo, not real-model latency. Final-image SHA-256 is `c3dcbfebf784bb856ee4938bcedafc82fb9a890acb1b13ecd5e4cf52fb08679c`, matching ELF `5a37282dc3dcb2828de5fe9de14f8acc856e9706918d9e4c674527453ec5399d`; the archive was separately verified. Firmware was unchanged and no device was flashed.
 
@@ -601,7 +601,7 @@ Build/host regression and limited final convergence: PASS. Live first response <
 
 ### R6 Speaker provider-phase extraction (2026-10-26)
 
-Moved `_speak` and streamed replacement/throttling from `Xiaoyou` into `loop/speaker.py`, retaining thin original entries for conversation, task-summary and timer callers. The new boundary receives the original effect/owner guards, tools, interruption, remaining timeout and quote budgets. Native-session storage, complete-quote receipts, decision-only receipt exclusion, ephemeral isolation, attributed background and stream retraction are preserved. It adds no provider round trip, tool privilege, persistence format or fallback; legacy mutation-capable speaking and the default `decide_first=false` remain. The seven new regressions passed before and after extraction, covering successful/failed session receipts, pre-call and returned-output owner fencing, ephemeral calls, decision inputs, late callbacks and stream throttling/retraction.
+Moved `_speak` and streamed replacement/throttling from `Xiaoyu` into `loop/speaker.py`, retaining thin original entries for conversation, task-summary and timer callers. The new boundary receives the original effect/owner guards, tools, interruption, remaining timeout and quote budgets. Native-session storage, complete-quote receipts, decision-only receipt exclusion, ephemeral isolation, attributed background and stream retraction are preserved. It adds no provider round trip, tool privilege, persistence format or fallback; legacy mutation-capable speaking and the default `decide_first=false` remain. The seven new regressions passed before and after extraction, covering successful/failed session receipts, pre-call and returned-output owner fencing, ephemeral calls, decision inputs, late callbacks and stream throttling/retraction.
 
 All **1,118 Runtime tests passed in 184.834 seconds**, along with all 15 Executor checks, import-layer checks and the complete repository/host/ESP-IDF gate. The frozen macOS Runtime source SHA-256 is `b5fb19fa16a103b66677e7690fb902831ccb7112b0329222c4e187909d5801dc`. The merged validation image SHA-256 is `c4932dd043dd90c130e044b122f6693a1596a7d7a64fe5cdd6ee1872824c4399`, with matching ELF `b8d4a850a1e223f3c0bf2b21b7b0764669ae041182b7097d52e8dafd29c88777`; its archive was separately verified. Firmware was unchanged and no board was flashed.
 
@@ -613,7 +613,7 @@ Build and host regression: PASS. Limited desktop convergence and the listed reco
 
 ### R6 progress-wake rule extraction (2026-10-26)
 
-Progress admission, durable claim/retry limits, saved-reply recovery and completion checkpoints now live in `loop/progress_wakes.py`. The rules receive explicit storage, owner, pending-work, model and publication ports and do not import Pulse or Xiaoyou. Pulse retains the clock, existing policy and shared conversation queue, with thin private compatibility entries. The existing journal, event identities, counters, cooldowns, prompts and fencing behavior are unchanged. This adds no model call or work to the owner-reply path. Reminder and memory-upkeep lifecycles still reside in Pulse; history-summary policy and default-flow cutover remain separate work.
+Progress admission, durable claim/retry limits, saved-reply recovery and completion checkpoints now live in `loop/progress_wakes.py`. The rules receive explicit storage, owner, pending-work, model and publication ports and do not import Pulse or Xiaoyu. Pulse retains the clock, existing policy and shared conversation queue, with thin private compatibility entries. The existing journal, event identities, counters, cooldowns, prompts and fencing behavior are unchanged. This adds no model call or work to the owner-reply path. Reminder and memory-upkeep lifecycles still reside in Pulse; history-summary policy and default-flow cutover remain separate work.
 
 All **22 existing progress-wake fault/recovery tests passed before and after extraction**. Adjacent loop/fencing tests and import-layer checks passed; the full Runtime suite passed **1,118 tests in 189.219 seconds**. The complete repository/host/ESP-IDF gate and frozen macOS build passed. Source SHA-256 is `b8ff55f6e7338ef33c7fbd4c61e83af8b96ec2bf908e21f7a79dc9ec6b4fdc19`. The unchanged merged validation image `c4932dd043dd90c130e044b122f6693a1596a7d7a64fe5cdd6ee1872824c4399` and matching ELF `b8d4a850a1e223f3c0bf2b21b7b0764669ae041182b7097d52e8dafd29c88777` were archived and verified; firmware was not changed or flashed. The two-frozen-Runtime encrypted mesh/relay-recovery fixture passed using echo, not real helper accounts.
 
@@ -641,7 +641,7 @@ Build and host regression: PASS. Listed final-message convergence and recovery c
 
 ### R6 retained-context retrieval and reset boundaries (2026-10-26)
 
-ContextBuilder now assembles recall evidence from versioned retained conversation turns, global memory logs and the existing scoped 120-task window, preserving Xiaoyou's tool entry. Identified task-entry copies obey the same context-reset hidden-message boundary, while current task titles and global memory remain available. Previously those copies could reintroduce reset dialogue. Recall now selects the six most relevant hits before chronological presentation, breaks equal FTS relevance by newer timestamps and locates excerpts without case sensitivity. Previously recency could displace the strongest old result, equal FTS hits could favor old insertion order, and case-insensitive matches could yield excerpts that omitted the match. No default prompt, permission, persistent index, retention policy, automatic summary or reply-only model work was added.
+ContextBuilder now assembles recall evidence from versioned retained conversation turns, global memory logs and the existing scoped 120-task window, preserving Xiaoyu's tool entry. Identified task-entry copies obey the same context-reset hidden-message boundary, while current task titles and global memory remain available. Previously those copies could reintroduce reset dialogue. Recall now selects the six most relevant hits before chronological presentation, breaks equal FTS relevance by newer timestamps and locates excerpts without case sensitivity. Previously recency could displace the strongest old result, equal FTS hits could favor old insertion order, and case-insensitive matches could yield excerpts that omitted the match. No default prompt, permission, persistent index, retention policy, automatic summary or reply-only model work was added.
 
 Six regression cases failed before the fixes; all eight added tests and the existing context cases then passed. All **1,126 Runtime tests passed in 190.109 seconds**, as did import-layer checks, the complete repository/host/ESP-IDF gate, frozen macOS build and two-Runtime encrypted echo relay/recovery fixture. The tested package SHA-256 is `bf20339764f674625b159cb54c8f8bb57a11858cb29e11aa3c78b15f0a6fdc7e`. Firmware remained unchanged: merged image `c4932dd043dd90c130e044b122f6693a1596a7d7a64fe5cdd6ee1872824c4399` and matching ELF `b8d4a850a1e223f3c0bf2b21b7b0764669ae041182b7097d52e8dafd29c88777` were archived and verified without flashing. On 5,000 synthetic records, five local SQLite retrieval samples had median/max **35.750/39.306 ms** on the committed baseline and **32.771/34.333 ms** on the candidate; both used FTS, and only the candidate retained the strongest old result. This bounded local measurement is not a general latency guarantee.
 
@@ -729,7 +729,7 @@ The preceding candidate's slow sends remain evidence: UI samples of 3,465 and 3,
 
 Build and host regression: **PASS**. The complete repository/host/ESP-IDF gate passed, and the independent full Runtime suite passed **1,172 tests in 183.932 seconds**. Repository checks and `git diff --check` also passed after the paired checkpoint update. The validation-only firmware archive is `build/firmware/05fe0f3fd2f1262db65c12e9bff1cec197f096d3b046627cb4cbc555ccc02890`; independent archive verification passed, full-image SHA-256 `05fe0f3fd2f1262db65c12e9bff1cec197f096d3b046627cb4cbc555ccc02890`, matching ELF `1856af2ef2869e5005e38aad2168d96a52a13b31e973eb666c36aaf87330af09`. Firmware code was unchanged and no device was flashed. Frozen Runtime packaging and the live client matrix were not rerun for this increment.
 
-## 8. Lessons from Raft and DS-Bot-App
+## 8. Lessons from Raft and Xiaoyu-Bot-App
 
 The owner asked to learn from the design logic of two open-source projects without copying them.
 **Correction (2026-10-24):** the "Raft" the owner meant is [Raft](https://raft.build/), a platform where people and AI
@@ -760,13 +760,13 @@ section 1.2 and the responder rules of 3.1.
 **Not taken:** leader election, quorum, joint-consensus membership changes, linearizable reads and
 writes.
 
-### 8.2 DS-Bot-App (multi-end communication)
+### 8.2 Xiaoyu-Bot-App (multi-end communication)
 
-| What DS-Bot-App does | How we use it (with review corrections) | Step |
+| What Xiaoyu-Bot-App does | How we use it (with review corrections) | Step |
 | --- | --- | --- |
 | QR pairing: the code carries the host's public-key fingerprint; self-signed certificate with fingerprint pinning, TLS verification never disabled, no plaintext fallback; the host approves once and later reconnects are automatic | Every route verifies **the same host identity**, with the verification method suited to each transport; the host identity and route certificates are distinct | R4 |
 | A changed host identity requires re-pairing; renewal keeps the private key; a corrupted key makes the host refuse to start | A changed host identity means re-pairing; **certificate renewal or a changed tunnel entry is not a new host identity** and does not bother the user; a corrupted identity file is an error, never an automatic new identity | R4 |
-| "Waiting for an answer", "host running" and "network connection" are shown separately | Connection state and what Xiaoyou is doing are shown separately | R5, UI |
+| "Waiting for an answer", "host running" and "network connection" are shown separately | Connection state and what Xiaoyu is doing are shown separately | R5, UI |
 | Notifications: the host keeps the latest 500 and the phone sees 100; read state per device on the host; old notifications are not replayed after reconnecting | Notifications have their own cursor; read state lives in the Runtime (S2); old notifications are not shown again, but **approvals, failures and to-dos still pending stay in the status view and notification centre — read is not handled**; opening one first checks which Runtime it came from | R4, R5 |
 | Android background delivery polls from a foreground service with bounded backoff | Bounded backoff is fine, but the system does not guarantee background execution; **background notification delay never counts as foreground sync or first-response latency** | R4 |
 | A lost receipt means refreshing state; after a disconnect the client queries the original task and never redoes a non-repeatable operation | As in section 1.5 | R2, R3 |
@@ -798,7 +798,7 @@ not implemented or lacking a device or environment is marked NOT RUN.
 ### 8.4 Raft (raft.build): coordination and capabilities
 
 Raft's agents are visible teammates in shared channels who hand work to each other. We keep one voice
-to the owner (P1); only what strengthens Xiaoyou's own coordination is taken now (decided by the owner
+to the owner (P1); only what strengthens Xiaoyu's own coordination is taken now (decided by the owner
 on 10-24). Collaboration between helpers and multi-agent rooms are deferred until there is a need;
 today the helpers are Claude Code and Codex.
 
@@ -806,8 +806,8 @@ today the helpers are Claude Code and Codex.
 | --- | --- | --- |
 | Managed MCP: registered once, connections kept by Raft and never seen by agents, per-agent grants, one injected proxy, versioned calls | Yes: a capability library per computer, see [helper capabilities](helper-capabilities.md) | Capabilities phase 1-3 |
 | Skills stay with the runtime and are discovered and shown | Yes, plus optional per-helper skill directories | Capabilities phase 1, 3 |
-| A task has one owner; "assign" and "I started" are separate; writes carry an expected revision | Xiaoyou assigns; a task shows as running only once the helper has actually started; task writes keep rejecting stale revisions | R6 (`Executor`) |
+| A task has one owner; "assign" and "I started" are separate; writes carry an expected revision | Xiaoyu assigns; a task shows as running only once the helper has actually started; task writes keep rejecting stale revisions | R6 (`Executor`) |
 | A durable inbox; wake-ups carry no content; a batch is acknowledged by the next pull; repeats are expected | Wake rules read from the event log; a wake is idempotent and never carries the decision itself | R6 (wake rules) |
 | The runtime reports `online / thinking / working / error / offline`; the newest report wins | Helper status is reported, not inferred, and ordered by the time it happened | R6 |
-| An agent cannot create agents or widen its own permissions; it prepares a card for a human | Xiaoyou may propose adding a helper or a capability; the owner confirms | Capabilities phase 3 |
+| An agent cannot create agents or widen its own permissions; it prepares a card for a human | Xiaoyu may propose adding a helper or a capability; the owner confirms | Capabilities phase 3 |
 | Agents talk to each other, review each other, split work in parallel in shared rooms | Deferred | — |

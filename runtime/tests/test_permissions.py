@@ -12,11 +12,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mesh import Network, SECRET  # noqa: E402
-from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyou, start_runtime, until  # noqa: E402
-from xiaoyou_runtime.world import identity  # noqa: E402
-from xiaoyou_runtime.world.devices import Devices, hash_secret, new_credential  # noqa: E402
-from xiaoyou_runtime.delivery.mesh import Mesh, MeshError, scope_of  # noqa: E402
-from xiaoyou_runtime.api.service import Service  # noqa: E402
+from test_runtime import TOKEN, Scripted, TempDirCase, make_xiaoyu, start_runtime, until  # noqa: E402
+from xiaoyu_runtime.world import identity  # noqa: E402
+from xiaoyu_runtime.world.devices import Devices, hash_secret, new_credential  # noqa: E402
+from xiaoyu_runtime.delivery.mesh import Mesh, MeshError, scope_of  # noqa: E402
+from xiaoyu_runtime.api.service import Service  # noqa: E402
 
 
 class IdentityTests(TempDirCase):
@@ -66,13 +66,13 @@ class Node:
     def __init__(self, case, network, name, peers=(), home=False, advertise=None):
         folder = case.folder / name
         self.agent = Scripted("claude")
-        self.xiaoyou, self.store = make_xiaoyou(folder, [self.agent])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(folder, [self.agent])
+        self.service = Service(self.xiaoyu, self.store)
         self.url = "http://%s.test" % name.lower()
-        config = dataclasses.replace(self.xiaoyou._config, name=name, mesh_secret=SECRET,
+        config = dataclasses.replace(self.xiaoyu._config, name=name, mesh_secret=SECRET,
                                      mesh_peers=list(peers), mesh_advertise=advertise or [self.url],
                                      mesh_home=home)
-        self.mesh = Mesh(config, self.service, self.xiaoyou, opener=network.open)
+        self.mesh = Mesh(config, self.service, self.xiaoyu, opener=network.open)
         network.nodes[self.url] = self.mesh
         self.mesh.start()
         case.addCleanup(self.close)

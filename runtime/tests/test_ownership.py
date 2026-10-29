@@ -15,10 +15,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mesh import Network, SECRET  # noqa: E402
-from test_runtime import Scripted, TempDirCase, make_xiaoyou, until  # noqa: E402
-from xiaoyou_runtime.world import ownership  # noqa: E402
-from xiaoyou_runtime.delivery.mesh import Mesh  # noqa: E402
-from xiaoyou_runtime.api.service import Service  # noqa: E402
+from test_runtime import Scripted, TempDirCase, make_xiaoyu, until  # noqa: E402
+from xiaoyu_runtime.world import ownership  # noqa: E402
+from xiaoyu_runtime.delivery.mesh import Mesh  # noqa: E402
+from xiaoyu_runtime.api.service import Service  # noqa: E402
 
 MAC, WIN, OTHER = "a" * 32, "b" * 32, "c" * 32
 
@@ -59,12 +59,12 @@ class Node:
     def __init__(self, case, network, name, peers=(), home=False):
         folder = case.folder / name
         self.agent = Scripted("claude")
-        self.xiaoyou, self.store = make_xiaoyou(folder, [self.agent])
-        self.service = Service(self.xiaoyou, self.store)
+        self.xiaoyu, self.store = make_xiaoyu(folder, [self.agent])
+        self.service = Service(self.xiaoyu, self.store)
         self.url = "http://%s.test" % name.lower()
-        config = dataclasses.replace(self.xiaoyou._config, name=name, mesh_secret=SECRET,
+        config = dataclasses.replace(self.xiaoyu._config, name=name, mesh_secret=SECRET,
                                      mesh_peers=list(peers), mesh_advertise=[self.url], mesh_home=home)
-        self.mesh = Mesh(config, self.service, self.xiaoyou, opener=network.open)
+        self.mesh = Mesh(config, self.service, self.xiaoyu, opener=network.open)
         network.nodes[self.url] = self.mesh
         self.mesh.start()
         case.addCleanup(self.close)
@@ -82,7 +82,7 @@ class Node:
 
     def has_card_from(self, other, card_id):
         return any(card.get("mesh_origin") == other.id and card.get("mesh_id") == card_id
-                   for card in self.xiaoyou.cards.recent(None, 1000, include_desktop=True))
+                   for card in self.xiaoyu.cards.recent(None, 1000, include_desktop=True))
 
 
 class OwnershipMeshTests(TempDirCase):
@@ -144,22 +144,22 @@ class OwnershipMeshTests(TempDirCase):
         self.assertFalse(any(text.endswith("交之后说的") for text in self.mac.agent.texts))
         # 交之前 Mac 写的照收；交出去以后 Mac 还硬写的回复，Windows 不收。
         self.assertTrue(until(lambda: self.win.has_card_from(self.mac, early), 15))
-        stale = self.mac.xiaoyou.intake.writer("xiaoyou").task_open("default", "交出去以后硬写的", "done")
-        self.mac.xiaoyou.intake.writer("xiaoyou").exchange(stale["id"], said=None, say="不该被收下",
+        stale = self.mac.xiaoyu.intake.writer("xiaoyou").task_open("default", "交出去以后硬写的", "done")
+        self.mac.xiaoyu.intake.writer("xiaoyou").exchange(stale["id"], said=None, say="不该被收下",
                                                            turn_id="t-stale")
         # Mac 之后写的电脑会话卡不受负责人限制：它到了，说明比它早的硬写的那张也已经送到过。
-        marker = self.mac.xiaoyou.intake.writer("desktop", actor="test").observed_open(
+        marker = self.mac.xiaoyu.intake.writer("desktop", actor="test").observed_open(
             "__desktop__", "之后的电脑会话", "unknown", "claude")
         self.assertTrue(until(lambda: self.win.has_card_from(self.mac, marker["id"]), 15))
         self.assertFalse(self.win.has_card_from(self.mac, stale["id"]))
 
     def test_a_busy_conversation_is_not_handed_off(self):
-        busy = self.mac.xiaoyou.cards.open("default", "还在做的事", "working", "claude")
+        busy = self.mac.xiaoyu.cards.open("default", "还在做的事", "working", "claude")
         result = self.mac.service.handoff("default", "Windows")
         self.assertEqual(result["status"], "refused")
         self.assertIn("还在做的事", result["reason"])
         self.assertEqual(self.mac.service.owner("default")["owner"], self.mac.id)
-        self.mac.xiaoyou.cards.update(busy["id"], state="done")
+        self.mac.xiaoyu.cards.update(busy["id"], state="done")
         self.assertEqual(self.mac.service.handoff("default", "Windows")["status"], "applied")
 
     def test_an_offline_target_is_not_handed_to(self):
@@ -183,7 +183,7 @@ class OwnershipMeshTests(TempDirCase):
         self.assertEqual(self.win.agent.texts, [])
 
     def test_side_conversations_belong_to_their_creator(self):
-        side = self.win.xiaoyou.intake.writer("owner").conversation_create()
+        side = self.win.xiaoyu.intake.writer("owner").conversation_create()
         self.assertEqual(side["owner"], self.win.id)
         self.win.mesh.shares.scan(time.time())  # 旁聊目录随共享记录同步（平时 30 秒一次）
         self.assertTrue(until(lambda: self.mac.service.owner(side["id"])["owner"] == self.win.id, 20))
@@ -194,19 +194,19 @@ class OwnershipMeshTests(TempDirCase):
 
     def test_unknown_side_conversation_waits_for_its_creator_metadata(self):
         with mock.patch.object(self.win.mesh.shares, 'scan', return_value=None):
-            side = self.win.xiaoyou.intake.writer('owner').conversation_create()
-            self.assertIsNone(self.mac.xiaoyou.cards.conversations.get(side['id']))
+            side = self.win.xiaoyu.intake.writer('owner').conversation_create()
+            self.assertIsNone(self.mac.xiaoyu.cards.conversations.get(side['id']))
             sent = self.mac.service.submit('wait for side owner', conversation=side['id'], client_id='side-gap')
             self.assertTrue(until(lambda: sent['id'] in self.mac.service._parked))
             self.assertEqual(self.mac.get(sent['id'])['operation_state'], 'pending')
             self.assertEqual(self.mac.agent.texts, [])
-            self.assertIsNone(self.mac.xiaoyou.cards.conversations.get(side['id']))
-            self.mac.xiaoyou.intake.writer('mesh').conversation_replica(self.win.id, side)
+            self.assertIsNone(self.mac.xiaoyu.cards.conversations.get(side['id']))
+            self.mac.xiaoyu.intake.writer('mesh').conversation_replica(self.win.id, side)
             self.mac.service.retry_parked()
             self.assertTrue(until(lambda: self.mac.get(sent['id']).get('status') == 'done', 20))
             self.assertEqual(self.mac.agent.texts, [])
             self.assertTrue(any(text.endswith('wait for side owner') for text in self.win.agent.texts))
-            self.assertEqual(self.mac.xiaoyou.cards.conversations.get(side['id'])['owner'], self.win.id)
+            self.assertEqual(self.mac.xiaoyu.cards.conversations.get(side['id'])['owner'], self.win.id)
 
 
 if __name__ == "__main__":

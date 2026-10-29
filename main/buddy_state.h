@@ -46,7 +46,7 @@ typedef struct {
     uint8_t brightness_level;
     char reply[BUDDY_REPLY_MAX];
     bool reply_truncated;
-    /* The conversation with Xiaoyou, when the host is a hub. */
+    /* The conversation with Xiaoyu, when the host is a hub. */
     buddy_chat_t chat;
     uint64_t chat_since_ms;
     /* The cards the hub has sent. They outlive the connection: what was said

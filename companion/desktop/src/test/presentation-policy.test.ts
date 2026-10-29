@@ -36,7 +36,7 @@ test('replicated arrival order cannot change canonical message order', () => {
   assert.deepEqual(orderMessages([owner, next, one]).map(m => m.id), ['turn:you', 'turn:reply', 'next:reply']);
 });
 test('projection survives SQLite recovery and a newer stale partial cannot replace final', t => {
-  const folder = mkdtempSync(join(tmpdir(), 'xiaoyou-projection-')), path = join(folder, 'cache.sqlite');
+  const folder = mkdtempSync(join(tmpdir(), 'xiaoyu-projection-')), path = join(folder, 'cache.sqlite');
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   const db = new ClientDatabase(path), runtime = 'a'.repeat(32), space = 'b'.repeat(32);
   const page = (wire: Message, seq: number): SyncPage => ({ runtime_id: runtime, subject_id: space, epoch: 'test', seq,
@@ -58,7 +58,7 @@ test('unknown presentation revisions and native task states remain explicit', ()
 });
 
 test('same-revision snapshot upgrades only presentation and preserves pending work', t => {
-  const folder=mkdtempSync(join(tmpdir(),'xiaoyou-policy-upgrade-')), db=new ClientDatabase(join(folder,'cache.sqlite'));
+  const folder=mkdtempSync(join(tmpdir(),'xiaoyu-policy-upgrade-')), db=new ClientDatabase(join(folder,'cache.sqlite'));
   t.after(()=>{db.close();rmSync(folder,{recursive:true,force:true});});
   const runtime='a'.repeat(32),space='b'.repeat(32),wire=fixture.cases[0].wire;
   const legacy={...wire,presentation:undefined};

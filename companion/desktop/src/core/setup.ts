@@ -78,7 +78,7 @@ export class Setup {
       .some(endpoint => this.allowed(endpoint) && endpoint.url.startsWith('peer://')))
       throw new Error('这台电脑已加入已有空间。同空间本机服务配置尚未开放，请继续使用已配对服务；不会另建无关空间');
     const dsh = this.scan.agents.find(item => item.id === 'dsh' && item.installed);
-    if (!dsh) throw new Error('尚未检测到 DeepSeek Harness，请安装后重新检测，或连接已有小幽');
+    if (!dsh) throw new Error('尚未检测到 DeepSeek Harness，请安装后重新检测，或连接已有小鱼');
     if (input.agents.some(id => !['codex', 'claude'].includes(id))) throw new Error('帮手选择无效');
     const selected = [...new Set(input.agents)].map(id => {
       const agent = this.scan!.agents.find(item => item.id === id && item.installed);

@@ -20,7 +20,7 @@ export function messageStatusText(record: Message): string {
   return !view.complete || view.interrupted === true || ['failed', 'cancelled'].includes(view.status) ? view.status_label : '';
 }
 export function authorLabel(record: Json): string {
-  return projection(record)?.author.label || String((record.author as Json)?.name || '小幽');
+  return projection(record)?.author.label || String((record.author as Json)?.name || '小鱼');
 }
 export function taskStatusLabel(record: Json): string {
   const view = record.presentation as Json | undefined;

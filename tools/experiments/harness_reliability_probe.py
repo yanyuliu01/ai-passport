@@ -13,11 +13,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'runtime'))
-from xiaoyou_runtime.cards import Cards
-from xiaoyou_runtime.service import ConflictError, Service
-from xiaoyou_runtime.store import Store
-from xiaoyou_runtime.tasks import Tasks, Task, MAX_PENDING
-from xiaoyou_runtime.desktop_sync import Session, DesktopSync
+from xiaoyu_runtime.cards import Cards
+from xiaoyu_runtime.service import ConflictError, Service
+from xiaoyu_runtime.store import Store
+from xiaoyu_runtime.tasks import Tasks, Task, MAX_PENDING
+from xiaoyu_runtime.desktop_sync import Session, DesktopSync
 
 results = {}
 with tempfile.TemporaryDirectory() as folder:

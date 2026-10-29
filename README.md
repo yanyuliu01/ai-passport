@@ -5,7 +5,7 @@
 <h1 align="center">Claude Pocket</h1>
 
 <p align="center">
-  <strong>Xiaoyou, a little whale maid, lives on your wrist.<br>
+  <strong>Xiaoyu, a little whale maid, lives on your wrist.<br>
   You talk to her; she hands the big jobs to Claude and Codex.</strong>
 </p>
 
@@ -13,38 +13,38 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/MCU-ESP32--C3-14b8a6?style=flat-square" alt="ESP32-C3">
   <img src="https://img.shields.io/badge/ESP--IDF-5.5.3-2563eb?style=flat-square" alt="ESP-IDF 5.5.3">
-  <img src="https://img.shields.io/badge/Xiaoyou-DeepSeek%20%C2%B7%20dsh-7cc8f2?style=flat-square" alt="Xiaoyou runs on DeepSeek through dsh">
+  <img src="https://img.shields.io/badge/Xiaoyu-DeepSeek%20%C2%B7%20dsh-7cc8f2?style=flat-square" alt="Xiaoyu runs on DeepSeek through dsh">
 </p>
 
 <p align="center">
-  <img src="assets/images/readme/readme-hero.jpg" alt="Xiaoyou, a blue-haired whale maid, waves next to her pixel-art form with a heart; a dotted trail runs from her to two waving helpers, an orange-haired scholar (Claude) and a silver-haired companion (Codex)." width="100%">
+  <img src="assets/images/readme/readme-hero.jpg" alt="Xiaoyu, a blue-haired whale maid, waves next to her pixel-art form with a heart; a dotted trail runs from her to two waving helpers, an orange-haired scholar (Claude) and a silver-haired companion (Codex)." width="100%">
 </p>
 
 **Claude Pocket** is firmware for a small, open ESP32-C3 wearable from
-[FoloToy](https://ai-passport.folotoy.cn/en/). Hold the button and talk. Xiaoyou
+[FoloToy](https://ai-passport.folotoy.cn/en/). Hold the button and talk. Xiaoyu
 answers on the screen. When the job is bigger than a chat, she hands it to a
 coding agent, shows who is working and which step they're on, and asks you
 before anything that needs your say.
 
 The device talks over encrypted Bluetooth LE to a phone companion app. The app
-also works on its own: its home screen shows Xiaoyou moving with what she is
+also works on its own: its home screen shows Xiaoyu moving with what she is
 really doing, and you hold the microphone to talk. Codex and Claude Code
 conversations already open on your computer can be mirrored to the phone and
 the device, and through Tailscale Funnel the phone reaches the computer at home
 from any network. Without the app, the device also works with the Claude
 desktop app in Developer Mode.
 
-## Meet Xiaoyou
+## Meet Xiaoyu
 
-Xiaoyou is the DeepSeek whale, a whale maid nicknamed *Big Fat Fish*. She is
+Xiaoyu is the DeepSeek whale, a whale maid nicknamed *Big Fat Fish*. She is
 the only one you talk to, and the runtime runs her on DeepSeek through the
 DeepSeek Harness CLI (`dsh`), streaming her replies as they are written. The
-app and firmware docs also call her DS.
+app and firmware docs also call her Xiaoyu.
 
 <p align="center">
-  <img src="assets/images/readme/readme-xiaoyou-idle.gif" alt="Xiaoyou's pixel head breathing gently while idle." width="160">
+  <img src="assets/images/readme/readme-xiaoyu-idle.gif" alt="Xiaoyu's pixel head breathing gently while idle." width="160">
   &nbsp;&nbsp;
-  <img src="assets/images/readme/readme-xiaoyou-moods.png" alt="Six moods of Xiaoyou's pixel head: asleep with Zz, idle, busy with bouncing dots, asking for you, happy with a heart, and failed." width="480">
+  <img src="assets/images/readme/readme-xiaoyu-moods.png" alt="Six moods of Xiaoyu's pixel head: asleep with Zz, idle, busy with bouncing dots, asking for you, happy with a heart, and failed." width="480">
 </p>
 
 On the device she is a 60 × 60 pixel head compiled from the whale-maid artwork
@@ -61,17 +61,17 @@ hands a job to a helper, a letter flies from her to that helper's badge.
 
 ## Her helpers
 
-Xiaoyou answers what she can herself and hands longer work to an agent in the
+Xiaoyu answers what she can herself and hands longer work to an agent in the
 background. Each helper has a colour of its own on the device:
 
 | | Who | Runs as |
 | --- | --- | --- |
-| 🐋 | **Xiaoyou**: the whale maid, the one you talk to | DeepSeek through `dsh` |
+| 🐋 | **Xiaoyu**: the whale maid, the one you talk to | DeepSeek through `dsh` |
 | 🧡 | **Claude**: the orange-haired scholar | Claude Code (`claude`, `tailor`) |
 | 🌙 | **Codex**: the silver-haired companion | Codex app-server |
 
 <p align="center">
-  <img src="assets/images/readme/readme-crew.jpg" alt="Three rows: Xiaoyou the whale maid, Claude and Codex, each in four poses: thinking, typing on a laptop, waving while waiting for your approval, and cheering when the task is done." width="100%">
+  <img src="assets/images/readme/readme-crew.jpg" alt="Three rows: Xiaoyu the whale maid, Claude and Codex, each in four poses: thinking, typing on a laptop, waving while waiting for your approval, and cheering when the task is done." width="100%">
 </p>
 
 <p align="center"><sub>Thinking · working · waiting for your OK · done</sub></p>
@@ -79,7 +79,7 @@ background. Each helper has a colour of its own on the device:
 And as pixel heads, sized for a small screen:
 
 <p align="center">
-  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="Pixel-art heads of Xiaoyou, Claude and Codex, eight expressions each: neutral, happy, thinking, focused, puzzled, surprised, error, and sleeping." width="100%">
+  <img src="assets/images/readme/readme-pixel-heads.jpg" alt="Pixel-art heads of Xiaoyu, Claude and Codex, eight expressions each: neutral, happy, thinking, focused, puzzled, surprised, error, and sleeping." width="100%">
 </p>
 
 > The chibi characters are unofficial, fan-inspired concept art. See the
@@ -89,9 +89,9 @@ And as pixel heads, sized for a small screen:
 ## Four parts
 
 ```text
- Device (firmware)  ──encrypted BLE──>  Phone app "Pocket Hub" ──HTTP(S)──>  Xiaoyou Runtime (computer)
+ Device (firmware)  ──encrypted BLE──>  Phone app "Pocket Hub" ──HTTP(S)──>  Xiaoyu Runtime (computer)
  push-to-talk, four screens,            chat, tasks, helpers,                persona · conversation · cards · routing
- approval prompts                       approvals; relays voice,             ├─> dsh (DeepSeek Harness, speaks as Xiaoyou)
+ approval prompts                       approvals; relays voice,             ├─> dsh (DeepSeek Harness, speaks as Xiaoyu)
                                         cards, usage, firmware               ├─> claude / tailor (Claude Code)
                                         LAN / Tailscale Funnel               ├─> codex (Codex app-server)
                                                                              ├─> deepseek (Claude Code shell + DeepSeek API)
@@ -101,10 +101,10 @@ And as pixel heads, sized for a small screen:
 
 | Part | Directory | What it does | Docs |
 | --- | --- | --- | --- |
-| Firmware | `main/`, `components/` | Four screens (Xiaoyou / conversation / tasks / usage), push-to-talk, approval prompts, firmware updates over Bluetooth (two slots, automatic rollback if not confirmed) | [Claude Pocket](docs/claude-pocket.md) |
-| Phone app | `companion/android/` | Android. Chat, tasks, helpers, status and settings; voice, owner reviews, images and files, and the device/Runtime relay; updates through Runtime | [DS companion (Pocket Hub)](companion/README.md) |
-| Desktop client | `companion/desktop/` | Mac and Windows. Five entries, account sign-in, local Runtime connection, direct/encrypted relay routes, owner reviews and helper model selection | [Xiaoyou desktop](companion/desktop/README.md) |
-| Runtime | `runtime/` | Xiaoyou herself: one card per request, several requests in parallel, add / change / cancel; streamed replies; picks effort tiers and watches subscription limits when handing work out; watches long tasks for silence; downloadable task images and files; mirrors Codex and Claude Code conversations on the computer, with an optional approval bridge; shared history for desktop agents; can write to a shared Notion workspace | [Xiaoyou Runtime](runtime/README.md) |
+| Firmware | `main/`, `components/` | Four screens (Xiaoyu / conversation / tasks / usage), push-to-talk, approval prompts, firmware updates over Bluetooth (two slots, automatic rollback if not confirmed) | [Claude Pocket](docs/claude-pocket.md) |
+| Phone app | `companion/android/` | Android. Chat, tasks, helpers, status and settings; voice, owner reviews, images and files, and the device/Runtime relay; updates through Runtime | [Xiaoyu companion (Pocket Hub)](companion/README.md) |
+| Desktop client | `companion/desktop/` | Mac and Windows. Five entries, account sign-in, local Runtime connection, direct/encrypted relay routes, owner reviews and helper model selection | [Xiaoyu desktop](companion/desktop/README.md) |
+| Runtime | `runtime/` | Xiaoyu herself: one card per request, several requests in parallel, add / change / cancel; streamed replies; picks effort tiers and watches subscription limits when handing work out; watches long tasks for silence; downloadable task images and files; mirrors Codex and Claude Code conversations on the computer, with an optional approval bridge; shared history for desktop agents; can write to a shared Notion workspace | [Xiaoyu Runtime](runtime/README.md) |
 
 Claude desktop alone also works: in developer mode the same firmware connects directly
 to Claude desktop's Hardware Buddy (no voice or cards in that mode).
@@ -129,7 +129,7 @@ Development happens on `feature/usage-history`, which is also the GitHub default
 | `feature/usage-history` | Latest committed source for all four parts |
 | `claude/client-five-entries`, `runtime/r4-recovery-review` | Client/refactor and recovery review work; their inspected remote heads are included in the integration line |
 | `feature/multi-end-sync` | Earlier mesh/client milestone, included in the integration line |
-| `feature/usage-effort`, `feature/xiaoyou-agent-router`, `feature/ble-firmware-update`, `feature/pocket-hub-app`, `feature/claude-pocket` | Historical development milestones |
+| `feature/usage-effort`, `feature/xiaoyu-agent-router`, `feature/ble-firmware-update`, `feature/pocket-hub-app`, `feature/claude-pocket` | Historical development milestones |
 | `main` | Upstream hardware-test baseline, not the current product/default branch |
 
 ## Upgrading and source synchronization
@@ -144,18 +144,18 @@ Preserve pairing, history, permissions and pending requests.
    or restart a Runtime running a task without the owner's approval. See the
    [Runtime startup guide](runtime/README.md).
 2. The phone app updates through the runtime from 0.11.0 on. Under `runtime/`, run
-   `python3 -m xiaoyou_runtime app publish <path to apk> --note "what changed"`, then
+   `python3 -m xiaoyu_runtime app publish <path to apk> --note "what changed"`, then
    install from the app's prompt or from Connection and settings → App update. A phone
    still on a version before 0.11.0 needs the newest `companion-build-N` installed by
    hand once (`pocket-hub-debug.apk` under Releases).
 3. Push the new firmware to the device over Bluetooth:
-   `python3 -m xiaoyou_runtime firmware fetch --push`.
+   `python3 -m xiaoyu_runtime firmware fetch --push`.
    A device still on the old single-slot firmware needs one flash by cable first:
    `bash tools/flash_pocket.sh`.
 4. Build and install the desktop client using its [platform instructions](companion/desktop/README.md).
    Source synchronization does not replace an installed client or its bundled Runtime.
 
-To go back to a version: `python3 -m xiaoyou_runtime firmware restore previous` (or a
+To go back to a version: `python3 -m xiaoyu_runtime firmware restore previous` (or a
 number from `firmware list`).
 
 ## Where to go next
@@ -163,8 +163,8 @@ number from `firmware list`).
 | I want to… | Start here |
 | --- | --- |
 | Learn what the device does, its controls, protocol, and memory | [Claude Pocket](docs/claude-pocket.md) |
-| Install the phone app and pair the device | [DS companion (Pocket Hub)](companion/README.md) |
-| Run Xiaoyou on a computer, register agents, configure tiers and usage | [Xiaoyou Runtime](runtime/README.md) |
+| Install the phone app and pair the device | [Xiaoyu companion (Pocket Hub)](companion/README.md) |
+| Run Xiaoyu on a computer, register agents, configure tiers and usage | [Xiaoyu Runtime](runtime/README.md) |
 | Mirror Codex and Claude Code conversations on the computer to the phone and device | [Sync existing desktop conversations](runtime/README.md#sync-existing-desktop-conversations) |
 | Reach the runtime at home while you're out | [Tailscale Funnel](runtime/README.md#reaching-the-runtime-from-anywhere-tailscale-funnel) |
 | Ship a new app version to the phone | [App updates](companion/README.md#app-updates) |
@@ -179,15 +179,15 @@ Engineering and contribution guides define the rules; archives and references pr
 | Resource | What you will find |
 | --- | --- |
 | [Claude Pocket](docs/claude-pocket.md) | The application on this branch: pairing, controls, text coverage, acceptance |
-| [Xiaoyou harness review](docs/assets/xiaoyou-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
+| [Xiaoyu harness review](docs/assets/xiaoyu-harness-review.md) | Fork architecture audit, local reliability findings, connector boundaries, experiments and incremental PR plan |
 | [Project status and source synchronization](docs/development/project-status.md) | Current Windows/Mac baseline, versions, pending work, branches and acceptance gaps |
 | [Development](docs/development/README.md) | AI workflow, engineering conventions, CI, and release guidance |
 | [App / Runtime / firmware reliability](docs/development/cross-stack-reliability.md) | Mandatory regression, 3-second first-response, connection recovery, and multi-end consistency contracts |
-| [Xiaoyou desktop client plan](docs/development/xiaoyou-desktop-plan.md) | Mac/Windows owner-test delivery target before Friday, shared conversations, encrypted self-hosted transport, dependencies and acceptance |
-| [Xiaoyou desktop implementation](companion/desktop/README.md) | Current client increment, native builds, encrypted relay, test commands and remaining acceptance |
+| [Xiaoyu desktop client plan](docs/development/xiaoyu-desktop-plan.md) | Mac/Windows owner-test delivery target before Friday, shared conversations, encrypted self-hosted transport, dependencies and acceptance |
+| [Xiaoyu desktop implementation](companion/desktop/README.md) | Current client increment, native builds, encrypted relay, test commands and remaining acceptance |
 | [Agent gateway proposal](docs/development/agent-gateway.md) | App-controlled CLI installation, capability adapters, audit, lifecycle and rollback design |
 | [Auto-iteration pipeline](docs/development/auto-iteration.md) | Plugin-based loop that finds app usage problems, patches them with a local model, gates, publishes and rolls back |
-| [Product principles](docs/product-principles.md) | Draft v0.1: what Xiaoyou is, what it does not do, and the numbered principles version plans must check against |
+| [Product principles](docs/product-principles.md) | Draft v0.1: what Xiaoyu is, what it does not do, and the numbered principles version plans must check against |
 | [AI skills](skills/README.md) | Development, environment setup, builds, device testing, and debugging |
 | [Hardware](docs/hardware-design/README.md) | Board facts, interface boundaries, acceptance checklists, and troubleshooting |
 | [Chinese fonts](docs/development/engineering/lvgl-chinese-fonts.md) | Glyph coverage, widget font selection, and blank-text troubleshooting |

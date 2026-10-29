@@ -5,7 +5,7 @@ import java.util.function.LongSupplier;
 
 /**
  * Names main-thread messages that run long enough to drop frames. Off unless the debug property
- * debug.xiaoyou.slowmain is 1 (set over adb), so normal use pays nothing. Lines carry the handler
+ * debug.xiaoyu.slowmain is 1 (set over adb), so normal use pays nothing. Lines carry the handler
  * and callback class names Looper prints and the duration, never message content.
  */
 final class SlowMain {
@@ -40,7 +40,7 @@ final class SlowMain {
         String enabled = "";
         try {
             enabled = String.valueOf(Class.forName("android.os.SystemProperties")
-                    .getMethod("get", String.class, String.class).invoke(null, "debug.xiaoyou.slowmain", ""));
+                    .getMethod("get", String.class, String.class).invoke(null, "debug.xiaoyu.slowmain", ""));
         } catch (ReflectiveOperationException | RuntimeException ignored) { }
         if (!enabled.equals("1")) return;
         SlowMain watch = new SlowMain(android.os.SystemClock::uptimeMillis,

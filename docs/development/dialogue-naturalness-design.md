@@ -2,7 +2,7 @@
   <a href="dialogue-naturalness-design.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# Xiaoyou Dialogue Naturalness: Design Notes
+# Xiaoyu Dialogue Naturalness: Design Notes
 
 Date: 2026-10-26. Status: recorded proposal; implementation is deferred until
 the Runtime refactor is complete and its acceptance checks have finished.
@@ -12,7 +12,7 @@ mechanisms for review. Animation remains a separate later work item.
 
 ## Product direction clarification: growth and daughter-like companionship
 
-The owner clarified that the desired experience is nurturing Xiaoyou and
+The owner clarified that the desired experience is nurturing Xiaoyu and
 participating in her growth, with daughter-like companionship. Natural short
 replies are only one supporting mechanism. The design must make continuity,
 shared experiences and observable changes in character central to review.
@@ -27,7 +27,7 @@ Candidate design responsibilities, still to be agreed:
 - Keep chat/work context selection and the three mechanisms below as supporting
   architecture; they do not by themselves define this product experience.
 
-The owner further clarified that Xiaoyou remains an AI with broad knowledge.
+The owner further clarified that Xiaoyu remains an AI with broad knowledge.
 The desired growth is learning the personal meaning and consequences of events
 through interaction, such as what earning money enables and costs, or which
 experiences the owner finds joyful. Biological ageing and a childlike knowledge
@@ -176,7 +176,7 @@ requires separate research and tests.
 
 The Runtime should store a drive's supporting evidence, confidence, learned
 weights, current opportunities and allocated budget. Model-call spending
-belongs here as one more resource: no fixed owner-set limit; Xiaoyou weighs
+belongs here as one more resource: no fixed owner-set limit; Xiaoyu weighs
 it against her goals and expected benefit (owner decision 2026-10-27, design
 pending). Update from recorded
 events and measured outcomes; elapsed time alone need not generate a new need.
@@ -250,7 +250,7 @@ security and personal significance separately. The same owner may reasonably
 save on one purchase and value a gift enough to spend more on another. Learn
 the conditions and tradeoffs from attributed feedback rather than hardcode
 money maximization or interpret every expenditure as bad. Owner-reported
-feelings and Xiaoyou's own observed action outcomes are different evidence types.
+feelings and Xiaoyu's own observed action outcomes are different evidence types.
 Actual financial actions require their existing specific authorization; this
 proposal does not expand it.
 
@@ -283,7 +283,7 @@ prove subjective consciousness or human-equivalent understanding.
 
 ## Recorded direction: two context profiles
 
-One Xiaoyou identity and one authoritative conversation history serve both
+One Xiaoyu identity and one authoritative conversation history serve both
 profiles. Select context per turn; a running task does not force all later
 conversation into the task profile.
 
@@ -316,16 +316,16 @@ plus its then-current uncommitted refactor, and MaiBot commit
 not claims about installed versions, comparative conversational quality or
 passing runtime/device acceptance.
 
-| Responsibility | Existing Xiaoyou | MaiBot reference | Proposed extension |
+| Responsibility | Existing Xiaoyu | MaiBot reference | Proposed extension |
 | --- | --- | --- | --- |
 | Remember interaction preferences | Owner memory, source quotes, replacement/deletion, logs, recall and quiet-time upkeep | A_memorix builds evidence-backed person-profile snapshots with separate relationship, preference and uncertain-information buckets | Retrieve relevant interaction preferences with scope and provenance |
 | Speak while doing work | Optional decide-then-speak path, tool outcome checks, background results; R7 adds durable action/effect recovery | Planner requests visible replies with contextual guidance | Produce a small reply frame from authoritative outcomes for either profile |
 | Maintain expression habits | Persona, fixed chat-style instructions and conversation context | Separate expression learner and per-reply selector | Reviewed situation/style examples, contextual selection and repetition controls |
 
 Current-checkout anchors: [persona](../../runtime/persona.txt),
-[owner memory](../../runtime/xiaoyou_runtime/world/memory.py),
-[conversation and reply orchestration](../../runtime/xiaoyou_runtime/loop/xiaoyou.py),
-[background wakes](../../runtime/xiaoyou_runtime/loop/proactive.py).
+[owner memory](../../runtime/xiaoyu_runtime/world/memory.py),
+[conversation and reply orchestration](../../runtime/xiaoyu_runtime/loop/xiaoyu.py),
+[background wakes](../../runtime/xiaoyu_runtime/loop/proactive.py).
 R7 moves the corresponding responsibilities into `loop/`, `world/` and `api/`;
 recheck the final refactor before implementing this proposal.
 
@@ -360,7 +360,7 @@ flowchart TD
 ## 1. Remember how to interact
 
 An interaction preference records what the owner wants in a situation. An
-expression habit records a way Xiaoyou may phrase a response. For example,
+expression habit records a way Xiaoyu may phrase a response. For example,
 preferring a short acknowledgement before advice is an interaction preference;
 a recurring phrasing pattern is an expression habit. Both can be represented
 without inventing a numerical relationship score.
@@ -374,7 +374,7 @@ fingerprint and expiry; unchanged evidence reuses the snapshot. Manual
 overrides and feedback-driven refresh are separate supported paths. These
 source mechanisms do not establish that a deployment remembers every interaction.
 
-Existing Xiaoyou memory accepts explicit remember/replace/forget operations,
+Existing Xiaoyu memory accepts explicit remember/replace/forget operations,
 keeps source quotes and a change log, and injects a bounded collection of notes.
 Quiet-time upkeep can extract preferences from recent conversation. R7 adds
 revision checks and durable handling around related effects. This already
@@ -409,7 +409,7 @@ indexes are invalidated when a source preference changes or is deleted.
 ## 2. Speak appropriately while doing work
 
 MaiBot's Planner decides when to call its visible-reply tool and supplies
-contextual guidance to the reply path. Xiaoyou already has an optional
+contextual guidance to the reply path. Xiaoyu already has an optional
 `decide_first` route: select an operation, apply it, then generate language from
 the resulting facts with mutation tools unavailable in the speaking phase.
 R7's executor unifies saved selections and recovery. These mechanisms describe
@@ -448,7 +448,7 @@ Check known state/tool claims at the existing deterministic boundary; do not
 promise that every free-form claim can be mechanically verified or add an
 unbounded extra review-model call.
 
-## 3. Maintain Xiaoyou's expression habits
+## 3. Maintain Xiaoyu's expression habits
 
 MaiBot has a genuine learning/selection pipeline. Its learner extracts
 `situation/style/source` candidates, validates content and sources, writes the
@@ -475,7 +475,7 @@ flowchart TD
   I -. explicit feedback .-> A
 ```
 
-For Xiaoyou, start with a small curated library. Candidate fields could be
+For Xiaoyu, start with a small curated library. Candidate fields could be
 `id`, `situation`, `style`, `examples`, `scope`, `source_message_ids`, `status`,
 and `revision`; keep recent-use statistics separate from the examples. Prefer
 zero to two relevant habits initially, as a tunable proposal, not a fixed
@@ -486,7 +486,7 @@ Learning and index maintenance run outside the first-response path. Cached or
 local retrieval can prepare candidates within the shared deadline. Optional
 model ranking requires measured benefit and a bounded budget. Do not infer that
 frequent self-generated wording is preferred, copy the owner's identity into
-Xiaoyou, or force a catchphrase into every turn. Deleting or correcting a learned
+Xiaoyu, or force a catchphrase into every turn. Deleting or correcting a learned
 habit must invalidate cached selections.
 
 ## Acceptance before implementation is considered complete

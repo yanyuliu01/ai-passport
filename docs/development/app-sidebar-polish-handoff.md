@@ -24,7 +24,7 @@ Handoff date: 2026-10-28, Asia/Shanghai. This is a checkpoint, not proof of impl
 
   Baseline: all 240 unit tests pass.
 - Install on the phone (serial `20c3b39d`) with `$T/android-sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk`. Locate text with `uiautomator dump` before tapping; fixed coordinates are unreliable.
-- Publish the same way Codex did before. From `runtime/`, run `python3 -m xiaoyou_runtime --config /Users/weihaoliu/ai-passport/runtime/config.json app publish <universal.apk> --variant <abi>=<apk> … --note '…'`.
+- Publish the same way Codex did before. From `runtime/`, run `python3 -m xiaoyu_runtime --config /Users/weihaoliu/ai-passport/runtime/config.json app publish <universal.apk> --variant <abi>=<apk> … --note '…'`.
 
 ## 2. Fix two bugs first
 
@@ -50,7 +50,7 @@ Match the desktop client's `<aside className="sidebar">` in `companion/desktop/s
 
 ```text
 ┌ fixed ──────────────────────┐
-│ avatar · Xiaoyou · ● connected│  ← the only place connection state appears
+│ avatar · Xiaoyu · ● connected│  ← the only place connection state appears
 │ Main chat                    │
 │ In progress            [2]   │
 │ Side chats              ＋    │
@@ -95,7 +95,7 @@ Before 0.37.4, no image could be sent through the relay, for three reasons:
 
 Images are also compressed like WeChat's default (non-original) send: a 1920 long edge for photos and at most 1 MB per image; tall screenshots are bounded by total pixels so text stays readable; the phone now reads originals up to 40 MB. The reason is that every relayed request has a 30-second desktop deadline, and large bodies do not finish on mobile networks.
 
-Device result: on 0.37.4, three test images (an 11 MB photo, a 17 MB tall noise image and a screenshot) all uploaded within 18 seconds. With desktop 0.1.20 on the Mac, an image message sent from a temporary side chat landed in that side chat and Xiaoyou received the image (it then handed viewing to Codex, which was out of quota at the time).
+Device result: on 0.37.4, three test images (an 11 MB photo, a 17 MB tall noise image and a screenshot) all uploaded within 18 seconds. With desktop 0.1.20 on the Mac, an image message sent from a temporary side chat landed in that side chat and Xiaoyu received the image (it then handed viewing to Codex, which was out of quota at the time).
 
 ### 4.2 Interaction to build
 
@@ -114,10 +114,10 @@ Change only `companion/android`. Keep the 0.37.4 transport fixes (`ImagePreparat
 - **Quoted context in side chats is not rendered as Markdown.** The quoted-context block (taken from the main chat) shows raw `**bold**` markers and `---` rules. Render it like a message bubble, covering at least bold, rules and lists.
 - **The In progress page is too bare.** It has one line of 12sp gray text plus a collapsed "› Finished 4". Use `emptyState()` for the empty state, matching the chat page, and make Finished a clear group entry.
 - **Settings**
-  - Companion persona shows the bare code "DS" on the right; show the persona name instead.
-  - Xiaoyou account and Helper management use the same computer icon; give them different icons.
+  - Companion persona shows the bare code "Xiaoyu" on the right; show the persona name instead.
+  - Xiaoyu account and Helper management use the same computer icon; give them different icons.
   - Hide Developer under About, or show it only after tapping the version several times.
-- **Cold start briefly shows the "Sign in to Xiaoyou" button.** When an account is signed in, show a loading state or skeleton until the account state is read, instead of drawing the sign-in page first.
+- **Cold start briefly shows the "Sign in to Xiaoyu" button.** When an account is signed in, show a loading state or skeleton until the account state is read, instead of drawing the sign-in page first.
 
 ## 6. Same issues on desktop (noted, out of scope)
 
@@ -135,7 +135,7 @@ Change only `companion/android`. Keep the 0.37.4 transport fixes (`ImagePreparat
 7. "Connected" appears only once in the sidebar.
 8. Idle helpers are gray, working helpers blue, and waiting-for-you helpers amber.
 9. 0.37.3 long-press, selection, select all, archive selected and delete still work. Test them on temporary side chats, never on the owner's real ones.
-10. In a temporary side chat, pick five images: two image messages (four and one) appear at once, each shows progress, both send by themselves when uploaded, and Xiaoyou can see the images.
+10. In a temporary side chat, pick five images: two image messages (four and one) appear at once, each shows progress, both send by themselves when uploaded, and Xiaoyu can see the images.
 11. Turn the network off mid-upload: the bubble shows a red exclamation mark; after the network returns, one tap resends it successfully.
 12. Tapping a sent image opens full screen, with zoom, left-right switching and long-press to save.
 13. All unit tests pass and `assembleDebug` passes. If the sidebar structure changes, add matching presentation tests.

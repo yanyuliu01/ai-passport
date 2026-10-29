@@ -41,7 +41,7 @@ export class RelayAccounts {
     renameSync(this.file + '.tmp', this.file);
   }
   private relayToken(account: string): string {
-    return account + '.' + createHmac('sha256', this.master).update('xiaoyou-account-v1:' + account).digest('base64url');
+    return account + '.' + createHmac('sha256', this.master).update('xiaoyu-account-v1:' + account).digest('base64url');
   }
   authorizeRelay(token: string, room: string): boolean {
     return typeof token === 'string' && /^[a-f0-9]{32}$/.test(room) && this.state.accounts.some(a => a.id === room) && equal(token, this.relayToken(room));
@@ -56,11 +56,11 @@ export class RelayAccounts {
   }
   private session(req: IncomingMessage): { session: Session; account: Account } {
     const auth = req.headers.authorization || '';
-    if (!auth.startsWith('Bearer ') || auth.length > 256) throw new Failure(401, '请重新登录小幽账号');
+    if (!auth.startsWith('Bearer ') || auth.length > 256) throw new Failure(401, '请重新登录小鱼账号');
     const hash = digest(auth.slice(7));
     const session = this.state.sessions.find(s => equal(s.hash, hash) && s.expires > this.now());
     const account = session && this.state.accounts.find(a => a.id === session.account);
-    if (!session || !account) throw new Failure(401, '登录已过期，请重新登录小幽账号');
+    if (!session || !account) throw new Failure(401, '登录已过期，请重新登录小鱼账号');
     return { session, account };
   }
   private async body(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -132,7 +132,7 @@ export class RelayAccounts {
         if (body.invitation !== undefined) {
           if (typeof body.invitation !== 'string' || body.invitation.length > 12_000) throw new Failure(400, '邀请无效');
           let invite;
-          try { const url = new URL(body.invitation); if (url.protocol !== 'xiaoyou:' || url.hostname !== 'join') throw new Error();
+          try { const url = new URL(body.invitation); if (url.protocol !== 'xiaoyu:' || url.hostname !== 'join') throw new Error();
             invite = JSON.parse(Buffer.from(url.hash.slice(1), 'base64url').toString('utf8')); }
           catch { throw new Failure(400, '邀请无效'); }
           const identity = device(invite.device);

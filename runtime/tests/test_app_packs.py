@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_app_release import write_apk  # noqa: E402
 from test_runtime import TOKEN, TempDirCase, start_runtime, write_config  # noqa: E402
-from xiaoyou_runtime import app_release, github_release  # noqa: E402
-from xiaoyou_runtime.__main__ import main  # noqa: E402
-from xiaoyou_runtime.app_release import AppRelease, AppReleaseError  # noqa: E402
+from xiaoyu_runtime import app_release, github_release  # noqa: E402
+from xiaoyu_runtime.__main__ import main  # noqa: E402
+from xiaoyu_runtime.app_release import AppRelease, AppReleaseError  # noqa: E402
 
 MODEL = bytes(range(256)) * 64
 TOKENS = "a 1\nb 2\n".encode("utf-8")

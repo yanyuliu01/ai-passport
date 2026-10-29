@@ -18,7 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * App 自己的更新：电脑上发布一版（`python3 -m xiaoyou_runtime app publish`），手机经 Runtime 取走，
+ * App 自己的更新：电脑上发布一版（`python3 -m xiaoyu_runtime app publish`），手机经 Runtime 取走，
  * 校验后交给系统安装。安装一定要主人在系统界面上点确认，这里不能也不该绕过。
  */
 final class AppUpdate {

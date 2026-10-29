@@ -110,3 +110,22 @@ test('attaching an existing service does not grant process ownership or automati
   assert.equal(await f.host.recover(), undefined);
   assert.deepEqual(await f.launches(), []);
 });
+
+test('new Runtime profiles get the complete supplied character and existing profiles retain theirs', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xiaoyu-persona-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const personaFile = join(dir, 'character.txt');
+  const persona = '你是小鱼，叫他老板。你有自己的想法，故事来自实际经历。\n';
+  await writeFile(personaFile, persona);
+  const transport = new HTTPRuntimeTransport(async () => new Response(JSON.stringify({
+    runtime_id: 'a'.repeat(32), subject_id: 'b'.repeat(32), capabilities: ['sync'],
+  })));
+  const host = new RuntimeHost(dir, { command: process.execPath, args: [], cwd: dir, personaFile }, transport);
+  t.after(() => host.stopOwned());
+  await host.start({ dsh: 'synthetic' });
+  const installed = join(dir, 'runtime/persona.txt');
+  assert.equal(await readFile(installed, 'utf8'), persona);
+  await writeFile(installed, 'Existing custom character');
+  await host.start();
+  assert.equal(await readFile(installed, 'utf8'), 'Existing custom character');
+});

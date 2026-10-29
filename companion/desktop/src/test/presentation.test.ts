@@ -15,7 +15,7 @@ const endpoint: Endpoint = { runtimeId: runtime, spaceId: space, name: 'Syntheti
 const page = (extra = {}): SyncPage => ({ runtime_id: runtime, subject_id: space, epoch: 'new', seq: 'opaque:1', reset: false, more: false, messages: [], tasks: [], approvals: [], removed: [], ...extra });
 const message = (id: string, conversation = 'default', extra = {}): Message => ({ id, conversation, rev: 1, status: 'final', text: 'synthetic', created_at: 1, author: { kind: 'assistant' }, ...extra });
 function fixture(t: { after(callback: () => void): void }) {
-  const folder = mkdtempSync(join(tmpdir(), 'xiaoyou-presentation-')), db = new ClientDatabase(join(folder, 'cache.sqlite'));
+  const folder = mkdtempSync(join(tmpdir(), 'xiaoyu-presentation-')), db = new ClientDatabase(join(folder, 'cache.sqlite'));
   const values = new Map<string, unknown>(), secrets: SecretStore = { load: <T>(key: string) => values.get(key) as T | undefined, save(key, value) { values.set(key, value); } };
   t.after(() => { db.close(); rmSync(folder, { recursive: true, force: true }); }); return { db, secrets };
 }

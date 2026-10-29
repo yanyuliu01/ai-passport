@@ -9,20 +9,20 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 ## AI workflow
 
 - [project-status.md](project-status.md): current Windows/Mac baseline, versions, pending work, branch roles and acceptance gaps.
-- [xiaoyou-system-prompt.md](xiaoyou-system-prompt.md): base prompt, full Grok Bot reference mapping, capability adaptations and acceptance boundaries.
+- [xiaoyu-system-prompt.md](xiaoyu-system-prompt.md): base prompt, full Grok Bot reference mapping, capability adaptations and acceptance boundaries.
 - [cross-stack-reliability.md](cross-stack-reliability.md): mandatory App/Runtime/firmware regression, 3-second first-response, connection recovery, and multi-end consistency rules.
 - [first-response-measurement.md](first-response-measurement.md): how to measure and record the 3-second first response on a real phone before the default-flow cutover.
 - [unified-message-model.md](unified-message-model.md): the unified message structure: one message log, id rules, the sync interface, and how a new runtime or agent connects.
 - [conversation-presentation.md](conversation-presentation.md): proposed shared project/conversation presentation, source and directory bindings, title repair, event authorship and native-client boundaries.
 - [app-runtime-simplification.md](app-runtime-simplification.md): confirmed issue list for simplifying App and Runtime interaction across code, experience and interaction, with root causes, targets and open decisions.
-- [xiaoyou-agent-model.md](xiaoyou-agent-model.md): the complete simplification plan: simplicity principle, five-screen interface and one vocabulary, pair-once connection, the Xiaoyou agent model (events, world state, attention and commitments, one decision loop), eight-endpoint interface, module split and phased rollout.
+- [xiaoyu-agent-model.md](xiaoyu-agent-model.md): the complete simplification plan: simplicity principle, five-screen interface and one vocabulary, pair-once connection, the Xiaoyu agent model (events, world state, attention and commitments, one decision loop), eight-endpoint interface, module split and phased rollout.
 - [code-cleanup-plan.md](code-cleanup-plan.md): phase-one cleanup: align local with the remote, then remove the hidden nudge, unused App code and old-Runtime compatibility in separately verified batches.
 - [runtime-refactor-design.md](runtime-refactor-design.md): three-layer Runtime refactor design (intake, reply, agent loop): target structure, interfaces, mapping to existing code and migration order R1-R8.
-- [helper-capabilities.md](helper-capabilities.md): which MCP servers and skills helpers can use, managed by Xiaoyou per computer (after Raft's managed MCP): library, connections, grants, the injected proxy and phases.
-- [runtime-refactor-review.md](runtime-refactor-review.md): CC handoff correcting coordination, replay and connectivity prerequisites in the Raft/DS-Bot-App lessons.
+- [helper-capabilities.md](helper-capabilities.md): which MCP servers and skills helpers can use, managed by Xiaoyu per computer (after Raft's managed MCP): library, connections, grants, the injected proxy and phases.
+- [runtime-refactor-review.md](runtime-refactor-review.md): CC handoff correcting coordination, replay and connectivity prerequisites in the Raft/Xiaoyu-Bot-App lessons.
 - [windows-public-node-handoff.md](windows-public-node-handoff.md): Windows Codex handoff for the home public node, source snapshot, network-permission findings, native build and external acceptance.
-- [xiaoyou-desktop-plan.md](xiaoyou-desktop-plan.md): Mac/Windows client proposal, shared conversations, encrypted self-hosted transport, Thursday candidate milestones and acceptance dependencies.
-- [decide-then-speak.md](decide-then-speak.md): design draft that replaces the Runtime's promise reminder with a decide step before Xiaoyou speaks; also records the chat fixes of App 0.25.2 / Runtime 0.18.2 and how to hand the work over.
+- [xiaoyu-desktop-plan.md](xiaoyu-desktop-plan.md): Mac/Windows client proposal, shared conversations, encrypted self-hosted transport, Thursday candidate milestones and acceptance dependencies.
+- [decide-then-speak.md](decide-then-speak.md): design draft that replaces the Runtime's promise reminder with a decide step before Xiaoyu speaks; also records the chat fixes of App 0.25.2 / Runtime 0.18.2 and how to hand the work over.
 - [dialogue-naturalness-design.md](dialogue-naturalness-design.md): deferred post-refactor proposal for companion/work context profiles, interaction preferences, truthful task replies and expression habits, with logical diagrams.
 - [decide-speak-experiment.md](decide-speak-experiment.md): experiment plan comparing serial and speculative parallel decide-then-speak, with 46 cases in 12 categories, measures and a decision rule fixed in advance.
 - [decide-speak-handoff.md](decide-speak-handoff.md): handoff for Codex to run that experiment: steps, limits and report format.

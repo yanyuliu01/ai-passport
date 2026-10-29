@@ -49,7 +49,7 @@ final class RelayConnection implements AutoCloseable {
         timer.scheduleWithFixedDelay(()->{try{tick();}catch(Exception ignored){}},0,1,TimeUnit.SECONDS);
     }
     static Map<String,Object> invitation(String text,String name) throws Exception {
-        if(text.length()>16384 || !text.startsWith("xiaoyou://join#"))throw new Exception("请粘贴小幽邀请");
+        if(text.length()>16384 || !text.startsWith("xiaoyu://join#"))throw new Exception("请粘贴小鱼邀请");
         Map<String,Object> value=Json.parseObject(new String(RelayCrypto.decode(text.substring(15),-1),StandardCharsets.UTF_8));
         if(value==null || Json.number(value,"v")!=1 || Json.number(value,"expires")<System.currentTimeMillis() || Json.number(value,"expires")>System.currentTimeMillis()+150000 || Json.string(value,"token").length()<32)throw new Exception("邀请无效或已过期");
         value.put("name",name);return value;

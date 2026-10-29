@@ -58,7 +58,7 @@ Windows 原有的两个未跟踪 Python 缓存文件保留并排除。
 | R7 | 六层目录和消除循环导入已提交 | 后续行为变化继续过依赖测试 |
 | R8 | 协商展示/请求同步和客户端迁移已部分实现 | 客户端验收完成后才能删旧接口、适配器或强制新最低版本 |
 | 桌面账号与中继 | 0.1.16 源码已提交，包有本地使用记录；已包含 peer 同步重启修复 `3f1b905`，核心测试通过 | 重连修复安装后的验收；关闭 Tailscale 后的公网路径；真实断网恢复及历史收敛 |
-| 共享历史 H1-H4 | `12bbd86` 已记录问题 | 正确标明回答电脑；让小幽 recall 能读已复制的桌面历史；向用户呈现统一历史；排除自动化噪声 |
+| 共享历史 H1-H4 | `12bbd86` 已记录问题 | 正确标明回答电脑；让小鱼 recall 能读已复制的桌面历史；向用户呈现统一历史；排除自动化噪声 |
 | 对话风格 | 串行/推测并行方案和实验程序已提交 | Mac 另有未提交的实验结果/设计改动。私有 30 题陪伴盲评交接记录 v3 胜 16、R7 胜 9、平 5（p 约 0.23，不显著）；该结果本身不构成修改正式提示词的依据 |
 
 继续工作前阅读：[重构验收记录](runtime-refactor-design.zh_CN.md)、
@@ -90,7 +90,7 @@ Windows 原有的两个未跟踪 Python 缓存文件保留并排除。
 | `claude/client-five-entries` | 重构/客户端开发线；远端位置 `aba494e` 已包含在集成线中 |
 | `runtime/r4-recovery-review` | 恢复审查线；`9d6cc37` 经 `28f3244` 合入 |
 | `feature/multi-end-sync` | 较早的 mesh/客户端里程碑 `5631087`，已包含在集成线中 |
-| `feature/usage-effort`、`feature/xiaoyou-agent-router`、`feature/ble-firmware-update`、`feature/pocket-hub-app`、`feature/claude-pocket` | 历史开发阶段，分支名及其版本说明不代表当前发布 |
+| `feature/usage-effort`、`feature/xiaoyu-agent-router`、`feature/ble-firmware-update`、`feature/pocket-hub-app`、`feature/claude-pocket` | 历史开发阶段，分支名及其版本说明不代表当前发布 |
 | `main` | `33d3d1d` 的上游硬件测试基线，不是当前产品或默认分支 |
 | [PR #1](https://github.com/yanyuliu01/ai-passport/pull/1) | 指向 `feature/pocket-hub-app` 的历史未关闭草稿；Runtime 0.4.1 / App 0.5.0 说明不代表项目最新状态 |
 

@@ -11,7 +11,7 @@ is a later increment.
 
 The phone should let the owner choose a computer, discover agents, install a
 supported CLI/harness, authenticate, inspect capabilities, and enable it for
-Xiaoyou. The computer runs the executable; Android remains the control surface.
+Xiaoyu. The computer runs the executable; Android remains the control surface.
 Each Runtime is a peer gateway, with its existing pairing, mesh,
 approval, record, task, and sync services. A separate service or another model
 loop is unnecessary for the first version.
@@ -40,11 +40,11 @@ taking over. A native CLI session may require a fresh process with shared task
 context; do not claim transparent live migration of unsupported native sessions.
 
 This is an advanced connection/settings page requested by the owner. Ordinary
-chat still addresses Xiaoyou; it does not gain a model/helper/effort picker.
+chat still addresses Xiaoyu; it does not gain a model/helper/effort picker.
 
 ## Existing foundations and gaps
 
-`runtime/xiaoyou_runtime/helpers/agents.py` exposes `Agent`, `Job`, `Outcome`, and
+`runtime/xiaoyu_runtime/helpers/agents.py` exposes `Agent`, `Job`, `Outcome`, and
 `Control`; `config.py` defines `AgentSpec`. Current transports include Claude
 stream JSON, Codex app-server, DeepSeek ACP, plain commands and remote Runtime.
 `tasks.py` owns cancellation/steering; `record.py` owns record writes;

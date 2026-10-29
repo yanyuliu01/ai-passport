@@ -11,11 +11,11 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RUNTIME))
 
-from xiaoyou_runtime.helpers.agents import Agent, Outcome
-from xiaoyou_runtime.world.cards import MAX_ENTRY_CHARS, Cards
-from xiaoyou_runtime.config import AgentSpec, load
-from xiaoyou_runtime.world.store import Store
-from xiaoyou_runtime.loop.xiaoyou import Xiaoyou
+from xiaoyu_runtime.helpers.agents import Agent, Outcome
+from xiaoyu_runtime.world.cards import MAX_ENTRY_CHARS, Cards
+from xiaoyu_runtime.config import AgentSpec, load
+from xiaoyu_runtime.world.store import Store
+from xiaoyu_runtime.loop.xiaoyu import Xiaoyu
 
 
 class OutputAgent(Agent):
@@ -47,7 +47,7 @@ class OutputAgent(Agent):
 
 class ArtifactDeliveryTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="xiaoyou-delivery-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="xiaoyu-delivery-test-")
         self.addCleanup(self.temporary.cleanup)
         self.folder = Path(self.temporary.name).resolve()
         (self.folder / "persona.txt").write_text("Test persona")
@@ -60,7 +60,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
                                      default_agent=agent.name, voice_agent=agent.name,
                                      usage_enabled=False)
         store = Store(config.state_dir)
-        runtime = Xiaoyou(config, [agent], store)
+        runtime = Xiaoyu(config, [agent], store)
         self.addCleanup(runtime.close)
         return runtime, config
 
@@ -119,7 +119,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
         for file in inbox.iterdir():
             file.unlink()
         runtime.close()
-        restarted = Xiaoyou(config, [OutputAgent("unused")], Store(config.state_dir))
+        restarted = Xiaoyu(config, [OutputAgent("unused")], Store(config.state_dir))
         self.addCleanup(restarted.close)
         restored = restarted.cards.get(card["id"])
         self.assertEqual(restored["attachments"], card["attachments"])
@@ -155,7 +155,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
         self.assertTrue(restored["result_ready"])
 
     def test_old_summary_cannot_close_a_new_task_run(self):
-        from xiaoyou_runtime.helpers.tasks import Task
+        from xiaoyu_runtime.helpers.tasks import Task
         agent = OutputAgent("unused")
         runtime, _ = self.runtime(agent)
         card = runtime.cards.open("default", "task", "working", "fixture")
@@ -169,8 +169,8 @@ class ArtifactDeliveryTests(unittest.TestCase):
 
     def test_original_is_available_before_streamed_summary_finishes(self):
         import threading
-        from test_runtime import Scripted, make_xiaoyou, until
-        from xiaoyou_runtime.api.service import Service
+        from test_runtime import Scripted, make_xiaoyu, until
+        from xiaoyu_runtime.api.service import Service
         ready, finish = threading.Event(), threading.Event()
         class Voice(Scripted):
             def run(self, job):
@@ -181,7 +181,7 @@ class ArtifactDeliveryTests(unittest.TestCase):
                     return Outcome('summary', None, {"reply": "summary", "brief": "done", "mood": "happy"})
                 return super().run(job)
         voice, helper = Voice("ds"), Scripted("worker", speaks=False)
-        runtime, _ = make_xiaoyou(self.folder / "relay", [voice, helper])
+        runtime, _ = make_xiaoyu(self.folder / "relay", [voice, helper])
         service = Service(runtime, runtime._store)
         self.addCleanup(service.close); self.addCleanup(finish.set)
         message = service.get(service.submit("@worker read evidence")["id"], wait=5)

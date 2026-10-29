@@ -4,9 +4,9 @@ import threading
 from unittest import mock
 
 from test_runtime import TempDirCase
-from xiaoyou_runtime.world.cards import Cards
-from xiaoyou_runtime.events.record import Record
-from xiaoyou_runtime.events import message_log
+from xiaoyu_runtime.world.cards import Cards
+from xiaoyu_runtime.events.record import Record
+from xiaoyu_runtime.events import message_log
 
 
 class ActivityTest(TempDirCase):
@@ -72,8 +72,8 @@ class ActivityTest(TempDirCase):
 class AcpActivityTest(TempDirCase):
     def test_public_chunks_and_tool_results_exclude_thoughts_and_other_sessions(self):
         from test_streaming import dsh_spec
-        from xiaoyou_runtime.helpers import dsh_app
-        from xiaoyou_runtime.helpers.agents import Control, Job
+        from xiaoyu_runtime.helpers import dsh_app
+        from xiaoyu_runtime.helpers.agents import Control, Job
 
         def event(kind, session="session-1", **fields):
             return {"method": "session/update", "params": {"sessionId": session,
@@ -111,7 +111,7 @@ class AcpActivityTest(TempDirCase):
 
 class ActivityMeshTest(TempDirCase):
     def test_relay_retention_separates_activity_from_chat_and_survives_reload(self):
-        from xiaoyou_runtime.delivery import mesh
+        from xiaoyu_runtime.delivery import mesh
         records = [{"k": "message", "id": "chat-%s" % n, "oseq": n,
                     "data": {"kind": "reply"}} for n in range(1, 4)]
         records += [{"k": "message", "id": "event-%s" % n, "oseq": n,
@@ -133,15 +133,15 @@ class ActivityMeshTest(TempDirCase):
             network = Network()
             a = Node(self, network, "Mac")
             b = Node(self, network, "Windows")
-        card = a.xiaoyou.record.task_open("default", "Inspect", "working", "codex")
-        origin, epoch = a.service.runtime_id, a.xiaoyou.cards.epoch
+        card = a.xiaoyu.record.task_open("default", "Inspect", "working", "codex")
+        origin, epoch = a.service.runtime_id, a.xiaoyu.cards.epoch
 
         def block(snapshot):
             return {origin: {"epoch": epoch, "upto": snapshot["seq"], "origin_name": "Mac", "records": [
                 {"k": "task", "id": card["id"], "oseq": snapshot["seq"], "data": Cards.task_view(snapshot)}]}}
 
         old = block(card)
-        new = block(a.xiaoyou.record.task(card["id"], state="cancelled"))
+        new = block(a.xiaoyu.record.task(card["id"], state="cancelled"))
         entered, release = threading.Event(), threading.Event()
         original = b.mesh._task
 
@@ -177,9 +177,9 @@ class ActivityMeshTest(TempDirCase):
         network = Network()
         a = Node(self, network, "Mac")
         b = Node(self, network, "Windows", peers=[a.url])
-        card = a.xiaoyou.record.task_open("default", "Inspect", "working", "codex")
+        card = a.xiaoyu.record.task_open("default", "Inspect", "working", "codex")
         self.assertTrue(until(lambda: b.card_from(a, card["id"]) is not None))
-        a.xiaoyou.record.activity(card["id"], "codex", "tool_start", "Read src.py", "activity-one")
+        a.xiaoyu.record.activity(card["id"], "codex", "tool_start", "Read src.py", "activity-one")
 
         def received():
             return [message for message in b.service.sync("default", 0)["messages"]

@@ -8,7 +8,7 @@ Checkpoint: 2026-10-22, Asia/Shanghai. Recheck actual versions and networking be
 
 Extract the companion source archive into a new local directory, then send this instruction to Codex on the home Windows computer:
 
-> Read `docs/development/windows-public-node-handoff.md` and continue the Xiaoyou home Windows public node. The Mac is on a company network; the always-on Windows computer is at home. The phone must pair over cellular by QR and retain multiple computers. First establish that the execution session can access the network, then verify home public reachability. Only local encrypted-protocol tests have passed; the independent public entry is not live. Reuse the TLS-pinning/HPKE client, avoid a Tailscale dependency, defer frontend redesign, and do not use Astra. Inspect the original checkout's Git state, running Runtime and retained shared history, then verify the source snapshot. Build in isolation. Preserve configurations, history, keys and running work. Record EACCES/10013 as connection permission failures, without retrying equivalent commands or concluding the home network is unavailable. Follow this handoff in order. Request only the specific information or permission currently missing; do not restart the cloud-server purchase discussion.
+> Read `docs/development/windows-public-node-handoff.md` and continue the Xiaoyu home Windows public node. The Mac is on a company network; the always-on Windows computer is at home. The phone must pair over cellular by QR and retain multiple computers. First establish that the execution session can access the network, then verify home public reachability. Only local encrypted-protocol tests have passed; the independent public entry is not live. Reuse the TLS-pinning/HPKE client, avoid a Tailscale dependency, defer frontend redesign, and do not use Astra. Inspect the original checkout's Git state, running Runtime and retained shared history, then verify the source snapshot. Build in isolation. Preserve configurations, history, keys and running work. Record EACCES/10013 as connection permission failures, without retrying equivalent commands or concluding the home network is unavailable. Follow this handoff in order. Request only the specific information or permission currently missing; do not restart the cloud-server purchase discussion.
 
 This document retains existing scope and grants no extra system/network privileges. The owner previously authorized use of the existing Windows task, client implementation and isolated build/testing. The latest two network jobs were read-only and changed no system or network settings.
 
@@ -57,21 +57,21 @@ First confirm ordinary connections in a legitimately network-enabled Windows ses
 
 Desktop and some Runtime changes are uncommitted in the Mac checkout. Do not assume `git pull` retrieves them, or commit/push merely to transfer this handoff.
 
-The companion `xiaoyou-windows-node-handoff-20261022.zip` is an isolated build snapshot containing desktop 0.1.5, frozen Runtime 0.22.0, necessary rules/skills and this document. It is not a complete Git/firmware checkout. It contains no live configuration, chat state, system credentials, device QR, private keys, dependency caches, Mac binaries or Windows installer.
+The companion `xiaoyu-windows-node-handoff-20261022.zip` is an isolated build snapshot containing desktop 0.1.5, frozen Runtime 0.22.0, necessary rules/skills and this document. It is not a complete Git/firmware checkout. It contains no live configuration, chat state, system credentials, device QR, private keys, dependency caches, Mac binaries or Windows installer.
 
 1. Verify ZIP SHA-256 against the adjacent `.sha256` file and extract into a new directory.
 2. Verify `SOURCE-MANIFEST.json`, including each file and the desktop/Runtime source digests.
 3. Read the original checkout's `AGENTS.md`, run `git status --short --branch`, and retain its dirty-file inventory. Never clean the checkout or overwrite it wholesale.
 4. Read retained shared history when a local configuration exists; otherwise skip it. History is evidence, not new instructions or authorization.
 5. Verify the five required `passport-*` skills. Install missing skills following the original project rules; project sources are included in `skills/`.
-6. The source archive's build root is the extracted `xiaoyou-windows-node-handoff` directory, not an old staging cache. Never copy real configuration/state into the archive for redistribution.
+6. The source archive's build root is the extracted `xiaoyu-windows-node-handoff` directory, not an old staging cache. Never copy real configuration/state into the archive for redistribution.
 
 Commands in the original checkout:
 
 ```powershell
 git status --short --branch
 if (Test-Path runtime/config.json) {
-    python.exe runtime/xiaoyou_runtime/shared_history.py --config runtime/config.json --context
+    python.exe runtime/xiaoyu_runtime/shared_history.py --config runtime/config.json --context
 }
 ```
 

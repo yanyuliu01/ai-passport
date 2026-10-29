@@ -7,8 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from test_runtime import TempDirCase, write_config
-from xiaoyou_runtime import config as config_module
-from xiaoyou_runtime.helpers.model_gateway import (
+from xiaoyu_runtime import config as config_module
+from xiaoyu_runtime.helpers.model_gateway import (
     Gateway, GatewayConfigError, GatewayError, binding_env, infer_locality, parse
 )
 

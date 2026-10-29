@@ -4,9 +4,9 @@ import json
 import unittest
 from pathlib import Path
 
-from test_runtime import TempDirCase, Scripted, make_xiaoyou, until
-from xiaoyou_runtime.delivery import presentation
-from xiaoyou_runtime.api.service import Service
+from test_runtime import TempDirCase, Scripted, make_xiaoyu, until
+from xiaoyu_runtime.delivery import presentation
+from xiaoyu_runtime.api.service import Service
 
 FIXTURE = Path(__file__).resolve().parents[2] / 'tests/fixtures/presentation-v1.json'
 
@@ -47,7 +47,7 @@ class ProjectionIntegrationTests(TempDirCase):
     def setUp(self):
         super().setUp()
         self.agent = Scripted('claude')
-        self.x, self.store = make_xiaoyou(self.folder, [self.agent])
+        self.x, self.store = make_xiaoyu(self.folder, [self.agent])
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
         self.addCleanup(self.x.close)

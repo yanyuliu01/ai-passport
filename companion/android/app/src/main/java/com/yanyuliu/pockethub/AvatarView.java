@@ -82,9 +82,9 @@ final class AvatarView extends View {
             case "claude": return happy ? R.drawable.portrait_claude_happy
                     : focused ? R.drawable.portrait_claude_focus
                     : thinking ? R.drawable.portrait_claude_think : R.drawable.portrait_claude_idle;
-            case "ds": return happy ? R.drawable.portrait_ds_happy
-                    : focused ? R.drawable.portrait_ds_focus
-                    : thinking ? R.drawable.portrait_ds_think : R.drawable.portrait_ds_idle;
+            case "ds": return happy ? R.drawable.portrait_xiaoyu_happy
+                    : focused ? R.drawable.portrait_xiaoyu_focus
+                    : thinking ? R.drawable.portrait_xiaoyu_think : R.drawable.portrait_xiaoyu_idle;
             default: return 0;
         }
     }

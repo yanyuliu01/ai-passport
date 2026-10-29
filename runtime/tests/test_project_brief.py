@@ -18,7 +18,7 @@ sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_runtime import TempDirCase  # noqa: E402
-from xiaoyou_runtime.loop import project_brief as pb  # noqa: E402
+from xiaoyu_runtime.loop import project_brief as pb  # noqa: E402
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -291,7 +291,7 @@ class BriefTests(TempDirCase):
         home = self.folder / "home"
         escaped = str(repo).replace("/", "-")
         _write_jsonl(home / ".claude" / "projects" / escaped / "s.jsonl",
-                     [{"type": "user", "message": {"content": "问小幽的事"}}])
+                     [{"type": "user", "message": {"content": "问小鱼的事"}}])
         _write_jsonl(home / ".codex" / "sessions" / "2026" / "10" / "10" / "rollout-x.jsonl", [
             {"type": "session_meta", "payload": {"cwd": str(repo)}},
             {"type": "response_item", "payload": {"type": "message", "role": "user",
@@ -299,7 +299,7 @@ class BriefTests(TempDirCase):
         ])
         text = pb.brief(repo, now=time.time(), home=home)
         self.assertIn("init repo", text)
-        self.assertIn("问小幽的事", text)
+        self.assertIn("问小鱼的事", text)
         self.assertIn("问 codex 的事", text)
 
     def test_empty_everything(self):

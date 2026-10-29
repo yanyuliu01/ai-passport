@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs ESP-IDF 5.5.3 for this firmware (ESP32-C3 only) on macOS or Linux,
-# so that the computer that runs the Xiaoyou runtime can build the firmware
+# so that the computer that runs the Xiaoyu runtime can build the firmware
 # itself and nothing has to be pushed to GitHub.
 #
 #   tools/install_idf.sh             install into ~/esp/esp-idf-v5.5.3
@@ -56,7 +56,7 @@ else
 fi
 
 say ""
-say "要让小幽 Runtime 在这台电脑上自己编译固件，在 runtime/config.json 的 firmware 里写："
+say "要让小鱼 Runtime 在这台电脑上自己编译固件，在 runtime/config.json 的 firmware 里写："
 say "  \"source_dir\": \"..\","
 say "  \"build_command\": [\"bash\", \"-c\", \"source '${DEST}/export.sh' >/dev/null && idf.py build\"]"
-say "然后试一次：cd ${ROOT}/runtime && python3 -m xiaoyou_runtime firmware build --note 本机编译"
+say "然后试一次：cd ${ROOT}/runtime && python3 -m xiaoyu_runtime firmware build --note 本机编译"

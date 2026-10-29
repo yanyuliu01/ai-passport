@@ -6,8 +6,8 @@ export function bundledRuntimeLaunch(root: string, platform: string, cwd: string
   if (manifest.layout === 'python-embedded') {
     if (platform !== 'win32') throw new Error('嵌入式 Windows Runtime 不能在此系统运行');
     return { command: join(root, 'python/python.exe'),
-      args: ['-I', '-X', 'utf8', '-u', join(root, 'app/runtime_entry.py')], cwd };
+      args: ['-I', '-X', 'utf8', '-u', join(root, 'app/runtime_entry.py')], cwd, personaFile: join(root, 'persona.txt') };
   }
   if (manifest.layout && manifest.layout !== 'pyinstaller') throw new Error('未知的 Runtime 包格式');
-  return { command: join(root, 'xiaoyou-runtime', platform === 'win32' ? 'xiaoyou-runtime.exe' : 'xiaoyou-runtime'), args: [], cwd };
+  return { command: join(root, 'xiaoyu-runtime', platform === 'win32' ? 'xiaoyu-runtime.exe' : 'xiaoyu-runtime'), args: [], cwd, personaFile: join(root, 'persona.txt') };
 }

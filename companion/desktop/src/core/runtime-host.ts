@@ -3,6 +3,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { identify, HTTPRuntimeTransport } from './runtime-client.js';
@@ -12,6 +13,7 @@ export interface RuntimeLaunch {
   command: string;
   args: string[];
   cwd: string;
+  personaFile?: string;
 }
 export interface StartOptions { dsh?: string; helpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
 export function managedAgents(dsh: string, helpers: LocalAgent[]): Record<string, Json> {
@@ -124,18 +126,18 @@ export class RuntimeHost {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('本机服务配置无法读取，请检查已有配置；记录未改动');
       if (!options.dsh) throw new Error('请先检测并确认启用 DeepSeek Harness');
       await mkdir(join(configDir, 'workdir'), { recursive: true });
+      const personaFile = this.launch.personaFile || resolve(dirname(fileURLToPath(import.meta.url)), '../../../../runtime/persona.txt');
+      const persona = await readFile(personaFile, 'utf8');
+      if (!persona.trim()) throw new Error('小鱼人设文件为空，未创建替代人设');
       config = {
         server: { host: '127.0.0.1', port: 18765, name: hostname(), token: randomBytes(32).toString('base64url') },
         state_dir: 'state', persona_file: 'persona.txt', desktop_sync: false,
         agents: managedAgents(options.dsh, options.helpers || []),
-        xiaoyou: { default_agent: 'deepseek', voice_agent: 'deepseek' }, usage: { enabled: true },
+        xiaoyu: { default_agent: 'deepseek', voice_agent: 'deepseek' }, usage: { enabled: true },
         ...(options.meshSecret ? { mesh: { secret: options.meshSecret } } : {}),
       };
       await writeFile(configFile, JSON.stringify(config, null, 2), { mode: 0o600, flag: 'wx' });
-      await writeFile(join(configDir, 'persona.txt'),
-        '你是小幽，主人的 AI 伙伴。用中文自然交流，先回答重点，保留上下文。'
-        + '工具操作需要真实执行；不能虚构结果。遵守主人的权限和预算，不自行使用 Astra。',
-        { mode: 0o600, flag: 'wx' });
+      await writeFile(join(configDir, 'persona.txt'), persona, { mode: 0o600, flag: 'wx' });
     }
     if (existing && options.dsh) throw new Error('已有本机服务配置，请重新检测并确认复用；不会覆盖原配置或记录');
     try { return await this.attach(configFile); } catch { /* Start only this client's confirmed private config. */ }
@@ -144,11 +146,11 @@ export class RuntimeHost {
     this.desired = true;
     this.child = spawn(this.launch.command, [...this.launch.args, '--config', configFile], {
       cwd: this.launch.cwd, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
-      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XIAOYOU_'))),
-        ...(this.providerKey ? { DEEPSEEK_API_KEY: this.providerKey } : {}), PYTHONUNBUFFERED: '1', XIAOYOU_CONFIG: configFile,
-        XIAOYOU_HOST: this.externalConfig ? String((config.server as Json).host || '127.0.0.1') : '127.0.0.1', XIAOYOU_PORT: String((config.server as Json).port),
-        XIAOYOU_TOKEN: String((config.server as Json).token),
-        XIAOYOU_STATE_DIR: resolve(configDir, String(config.state_dir || 'state')) },
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XIAOYU_') && !key.startsWith('XIAOYOU_'))),
+        ...(this.providerKey ? { DEEPSEEK_API_KEY: this.providerKey } : {}), PYTHONUNBUFFERED: '1', XIAOYU_CONFIG: configFile,
+        XIAOYU_HOST: this.externalConfig ? String((config.server as Json).host || '127.0.0.1') : '127.0.0.1', XIAOYU_PORT: String((config.server as Json).port),
+        XIAOYU_TOKEN: String((config.server as Json).token),
+        XIAOYU_STATE_DIR: resolve(configDir, String(config.state_dir || 'state')) },
     });
     const child = this.child;
     this.awaitingAttach = true;

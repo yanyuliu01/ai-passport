@@ -10,11 +10,11 @@ import unittest
 
 from test_runtime import TempDirCase
 
-import xiaoyou_runtime.helpers.agents as agents_module
-import xiaoyou_runtime.world.approvals as approvals_module
-import xiaoyou_runtime.config as config_module
-from xiaoyou_runtime.helpers import capabilities, helper_extras, mcp_client, permission_mcp
-from xiaoyou_runtime.helpers.agents import Job
+import xiaoyu_runtime.helpers.agents as agents_module
+import xiaoyu_runtime.world.approvals as approvals_module
+import xiaoyu_runtime.config as config_module
+from xiaoyu_runtime.helpers import capabilities, helper_extras, mcp_client, permission_mcp
+from xiaoyu_runtime.helpers.agents import Job
 
 # 一个最小的 stdio MCP 服务：两个工具，echo 原样返回参数，boom 报错。
 FAKE_SERVER = r'''
@@ -141,30 +141,30 @@ class LibraryTests(TempDirCase):
 
 
 class GatewayTests(TempDirCase):
-    def test_xiaoyou_mcp_lists_and_calls_only_what_the_key_allows(self):
+    def test_xiaoyu_mcp_lists_and_calls_only_what_the_key_allows(self):
         gate = approvals_module.Gate(approvals_module.Approvals())
         self.addCleanup(gate.close)
         gate.capabilities = capabilities.Library(settings(grants={"codex": {"fake": False}}), self.folder)
         self.addCleanup(gate.capabilities.close)
         claude, codex = gate.open("c1", "default", "claude"), gate.open("c2", "default", "codex")
         state = {}
-        listed = permission_mcp.handle({"id": 1, "method": "tools/list"}, claude["XIAOYOU_GATE_URL"],
-                                       claude["XIAOYOU_GATE_KEY"], approve=False, state=state)
+        listed = permission_mcp.handle({"id": 1, "method": "tools/list"}, claude["XIAOYU_GATE_URL"],
+                                       claude["XIAOYU_GATE_KEY"], approve=False, state=state)
         self.assertEqual([tool["name"] for tool in listed["result"]["tools"]], ["fake__echo", "fake__boom"])
         called = permission_mcp.handle({"id": 2, "method": "tools/call",
                                         "params": {"name": "fake__echo", "arguments": {"q": "hi"}}},
-                                       claude["XIAOYOU_GATE_URL"], claude["XIAOYOU_GATE_KEY"],
+                                       claude["XIAOYU_GATE_URL"], claude["XIAOYU_GATE_KEY"],
                                        approve=False, state=state)
         self.assertEqual(json.loads(called["result"]["content"][0]["text"])["args"], {"q": "hi"})
         # 另一个帮手的钥匙列不出、也调不了这个服务。
         other = {}
-        listed = permission_mcp.handle({"id": 3, "method": "tools/list"}, codex["XIAOYOU_GATE_URL"],
-                                       codex["XIAOYOU_GATE_KEY"], approve=False, state=other)
+        listed = permission_mcp.handle({"id": 3, "method": "tools/list"}, codex["XIAOYU_GATE_URL"],
+                                       codex["XIAOYU_GATE_KEY"], approve=False, state=other)
         self.assertEqual(listed["result"]["tools"], [])
         gate.shut(claude)
         refused = permission_mcp.handle({"id": 4, "method": "tools/call",
                                          "params": {"name": "fake__echo", "arguments": {}}},
-                                        claude["XIAOYOU_GATE_URL"], claude["XIAOYOU_GATE_KEY"],
+                                        claude["XIAOYU_GATE_URL"], claude["XIAOYU_GATE_KEY"],
                                         approve=False, state=state)
         self.assertTrue(refused["result"]["isError"])
 
@@ -209,17 +209,17 @@ class HttpClientTests(unittest.TestCase):
 
 
 class HarnessTests(TempDirCase):
-    gate = {"XIAOYOU_GATE_URL": "http://127.0.0.1:1/approve", "XIAOYOU_GATE_KEY": "k"}
+    gate = {"XIAOYU_GATE_URL": "http://127.0.0.1:1/approve", "XIAOYU_GATE_KEY": "k"}
 
-    def test_each_harness_gets_the_same_xiaoyou_mcp(self):
-        claude = agents_module.ClaudeCodeAgent.mcp_config(self.gate)["mcpServers"]["xiaoyou"]
-        self.assertEqual(claude["env"]["XIAOYOU_GATE_APPROVE"], "1")
+    def test_each_harness_gets_the_same_xiaoyu_mcp(self):
+        claude = agents_module.ClaudeCodeAgent.mcp_config(self.gate)["mcpServers"]["xiaoyu"]
+        self.assertEqual(claude["env"]["XIAOYU_GATE_APPROVE"], "1")
         codex = helper_extras.codex_overrides(self.gate)
-        self.assertIn('mcp_servers.xiaoyou.args=["-m","xiaoyou_runtime.helpers.permission_mcp"]', codex)
+        self.assertIn('mcp_servers.xiaoyu.args=["-m","xiaoyu_runtime.helpers.permission_mcp"]', codex)
         self.assertEqual(helper_extras.codex_overrides(None), [])
         acp = helper_extras.acp_servers(self.gate)[0]
-        self.assertEqual((acp["name"], {"name": "XIAOYOU_GATE_KEY", "value": "k"} in acp["env"]), ("xiaoyou", True))
-        self.assertNotIn("XIAOYOU_GATE_APPROVE", [row["name"] for row in acp["env"]])
+        self.assertEqual((acp["name"], {"name": "XIAOYU_GATE_KEY", "value": "k"} in acp["env"]), ("xiaoyu", True))
+        self.assertNotIn("XIAOYU_GATE_APPROVE", [row["name"] for row in acp["env"]])
 
     def test_codex_puts_the_override_before_the_subcommand_only_with_a_key(self):
         spec = config_module._agent("codex", {"type": "codex", "mode": "exec"}, self.folder, 600, {})
