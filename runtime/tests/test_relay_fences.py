@@ -1,4 +1,5 @@
 """Saved helper results survive obsolete summary calls without publishing them."""
+import dataclasses
 import unittest
 from unittest import mock
 
@@ -39,6 +40,84 @@ class RelayFenceTests(TempDirCase):
                         and not summary["text"] and not summary.get("partial"))
         self.assertIsNone(self.store.session("default", "voice"))
         self.assertIn("history", [turn["id"] for turn in self.x.context.unseen("default", "voice")])
+
+    def run_with_budget(self, run):
+        self.now = 0.0
+        self.x._config = dataclasses.replace(self.x.config, voice_timeout_seconds=10)
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.voice, "run", side_effect=run) as provider:
+            self.finish()
+        return provider
+
+    def assert_expired_summary(self):
+        self.assertEqual("saved worker result", self.x.cards.message("original-run-result:reply")["text"])
+        self.assertEqual("saved worker result", self.x.cards.message("original-run-summary:reply")["text"])
+        self.assertEqual("done", self.x.cards.get(self.task.card)["state"])
+        self.assertEqual("", self.x.cards.get(self.task.card).get("summary_partial", ""))
+        self.assertIsNone(self.store.session("default", "voice"))
+        self.assertIn("history", [turn["id"] for turn in self.x.context.unseen("default", "voice")])
+
+    def test_summary_persona_preparation_cannot_restart_the_deadline(self):
+        notes = self.x.memory.notes
+        def prepare():
+            self.now = 10.1
+            return notes()
+        with mock.patch.object(self.x.memory, "notes", side_effect=prepare):
+            provider = self.run_with_budget(lambda job: Outcome("obsolete summary", "late-session"))
+        provider.assert_not_called()
+        self.assert_expired_summary()
+
+    def test_summary_context_preparation_consumes_the_provider_budget(self):
+        jobs = []
+        window = self.x.context.window
+        def prepare(*args, **kwargs):
+            self.now = 7.3
+            return window(*args, **kwargs)
+        def run(job):
+            jobs.append(job)
+            return Outcome("valid summary", "valid-session")
+        with mock.patch.object(self.x.context, "window", side_effect=prepare):
+            self.run_with_budget(run)
+        self.assertAlmostEqual(2.7, jobs[0].timeout)
+        self.assertEqual("valid summary", self.x.cards.message("original-run-summary:reply")["text"])
+
+    def test_summary_expired_context_does_not_start_the_provider(self):
+        window = self.x.context.window
+        def prepare(*args, **kwargs):
+            self.now = 10.1
+            return window(*args, **kwargs)
+        with mock.patch.object(self.x.context, "window", side_effect=prepare):
+            provider = self.run_with_budget(lambda job: Outcome("obsolete summary", "late-session"))
+        provider.assert_not_called()
+        self.assert_expired_summary()
+
+    def test_summary_late_result_cannot_save_session_receipts_or_generated_text(self):
+        def run(job):
+            self.now = 10.1
+            return Outcome("obsolete summary", "late-session")
+        self.assertEqual(1, self.run_with_budget(run).call_count)
+        self.assert_expired_summary()
+
+    def test_summary_expired_stream_is_retracted_without_repeating_worker_or_model(self):
+        def run(job):
+            job.on_text('{"reply":"valid partial')
+            self.assertIn("valid partial", self.x.cards.get(self.task.card)["summary_partial"])
+            self.now = 10.1
+            job.on_text('{"reply":"obsolete partial')
+            return Outcome("obsolete summary", "late-session")
+        with mock.patch.object(self.worker, "run") as worker:
+            self.assertEqual(1, self.run_with_budget(run).call_count)
+        worker.assert_not_called()
+        self.assert_expired_summary()
+
+    def test_summary_expiry_with_owner_change_cannot_publish_saved_result_on_old_grant(self):
+        def run(job):
+            self.now = 10.1
+            self.change_owner()
+            return Outcome("obsolete summary", "late-session")
+        self.run_with_budget(run)
+        self.assert_saved_only()
+        self.assertEqual("unknown", self.x.cards.get(self.task.card)["state"])
 
     def test_owner_change_during_summary_preserves_result_without_session_or_receipts(self):
         def run(job):

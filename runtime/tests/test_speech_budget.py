@@ -1,11 +1,11 @@
 """Speech retries share one deadline and obsolete callbacks cannot act."""
 
-import threading
+import dataclasses
 import unittest
 from unittest import mock
 
 from test_runtime import ToolTalker, TempDirCase, make_xiaoyu
-from xiaoyu_runtime.helpers.base import AgentError, Outcome
+from xiaoyu_runtime.helpers.base import AgentError, Cut, Outcome
 from xiaoyu_runtime.helpers.deadline import Deadline
 from xiaoyu_runtime.loop.effects import Effects
 
@@ -17,7 +17,7 @@ class SpeechBudgetTests(TempDirCase):
         self.x, self.store = make_xiaoyu(self.folder, [self.voice], voice_timeout_seconds=10)
         self.addCleanup(self.x.close)
         self.now = 0.0
-        self.cut = threading.Event()
+        self.cut = Cut()
 
     def converse(self):
         tools = self.x._toolbox("side", None, [self.voice], False)
@@ -27,6 +27,87 @@ class SpeechBudgetTests(TempDirCase):
     @staticmethod
     def answer():
         return Outcome("answer", "session", {"reply": "answer", "action": {"type": "none"}})
+
+    def test_decision_context_preparation_can_exhaust_the_turn_before_provider_start(self):
+        self.x._config = dataclasses.replace(self.x.config, decide_first=True)
+        window = self.x.context.window
+        def prepare(*args, **kwargs):
+            result = window(*args, **kwargs)
+            self.now = 10.1
+            return result
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.x.context, "window", side_effect=prepare), \
+                mock.patch.object(self.voice, "run", return_value=self.answer()) as provider:
+            with self.assertRaises(AgentError):
+                self.converse()
+        provider.assert_not_called()
+
+    def test_decided_speaking_does_not_start_after_postdecision_preparation_expires(self):
+        jobs, prompts = [], []
+        def prompt(tools):
+            prompts.append(tools)
+            if len(prompts) == 2:
+                self.now = 10.1
+            return "system"
+        def run(job):
+            jobs.append(job)
+            self.now = 8.0
+            return self.answer()
+        tools = self.x._toolbox("side", None, [self.voice], False)
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.voice, "run", side_effect=run):
+            result = self.x._converse_decided(self.voice, "question", "side", "turn", None,
+                [self.voice], 0, lambda *args: None, False, None, None, prompt, tools, self.cut)
+        self.assertEqual(1, len(jobs))
+        self.assertIn("回复中断", result.reply)
+
+    def test_background_preparation_consumes_the_same_deadline(self):
+        def style():
+            self.now = 10.1
+            return "style"
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.x, "style", side_effect=style), \
+                mock.patch.object(self.voice, "run", return_value=self.answer()) as provider:
+            result = self.x._pulse._ask("event", ["recall"], "rules", "side")
+        provider.assert_not_called()
+        self.assertIsNone(result)
+
+    def test_background_late_output_cannot_save_a_session_or_reply(self):
+        def run(job):
+            self.now = 10.1
+            return self.answer()
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.voice, "run", side_effect=run) as provider:
+            result = self.x._pulse._ask("event", ["recall"], "rules", "side")
+        self.assertIsNone(result)
+        self.assertEqual(1, provider.call_count)
+        self.assertIsNone(self.store.session("side", self.voice.name))
+
+    def test_background_saved_mutation_survives_expiry_without_another_provider_call(self):
+        def run(job):
+            job.tools.call("remember", {"note": "saved preference", "kind": "偏好"})
+            self.now = 10.1
+            return self.answer()
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.voice, "run", side_effect=run) as provider:
+            result = self.x._pulse._ask("event", ["remember"], "rules", "side")
+        self.assertIsNone(result)
+        self.assertEqual(1, provider.call_count)
+        self.assertEqual(1, len(self.x.memory.notes()))
+        self.assertIn("saved preference", self.x.memory.notes()[0])
+        self.assertIsNone(self.store.session("side", self.voice.name))
+
+    def test_background_expired_tool_callback_cannot_mutate_memory(self):
+        def run(job):
+            self.now = 10.1
+            job.tools.call("remember", {"note": "late preference", "kind": "偏好"})
+            return self.answer()
+        with mock.patch("time.monotonic", side_effect=lambda: self.now), \
+                mock.patch.object(self.voice, "run", side_effect=run) as provider:
+            result = self.x._pulse._ask("event", ["remember"], "rules", "side")
+        self.assertIsNone(result)
+        self.assertEqual(1, provider.call_count)
+        self.assertEqual([], self.x.memory.notes())
 
     def test_json_fallback_uses_the_original_remaining_budget(self):
         jobs = []
