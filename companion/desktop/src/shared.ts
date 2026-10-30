@@ -195,5 +195,6 @@ export interface DesktopAPI {
   acceptJoin(id: string): Promise<void>;
   configureRelay(): Promise<void>;
   loginStart(enabled: boolean): Promise<void>;
+  loginStartState(): Promise<boolean>;
   subscribe(listener: (view: ClientView) => void): () => void;
 }

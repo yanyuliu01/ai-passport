@@ -1,7 +1,7 @@
 import { quotaLeft } from '../core/presentation';
 import React from 'react';
 import type { HelperView, Json } from '../shared';
-import { activeTask, helperMatchesTask } from '../core/presentation';
+import { activeTask, helperMatchesTask, helperState } from '../core/presentation';
 import xiaoyu from './images/xiaoyu.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
@@ -37,10 +37,12 @@ export function QuotaAvatar({ helper, onClick }: { helper: HelperView; onClick()
   </button>;
 }
 export function HelperPill({ helper, tasks, onUsage, onTask }: { helper: HelperView; tasks: Json[]; onUsage(): void; onTask(task: Json): void }) {
-  const task = helperTask(helper, tasks), waiting = task?.state === 'waiting';
-  return <div className={'helper-pill ' + (waiting ? 'waiting' : task ? 'running' : '')}>
+  // 只算小鱼派给它的事；电脑上的会话在跑时写“电脑上在跑”，点了看帮手页（和侧边栏一个说法）。
+  const task = tasks.find(item => helperMatchesTask(helper, item) && !item.monitoring_only && activeTask(item)), waiting = task?.state === 'waiting';
+  const word = helperState(helper, tasks);
+  return <div className={'helper-pill ' + (waiting ? 'waiting' : word !== '空闲' && word !== '连不上' ? 'running' : '')}>
     <QuotaAvatar helper={helper} onClick={onUsage} />
-    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{waiting ? '等你确认' : task ? '在做' : helper.connected ? '空闲' : '连不上'}</small></button>
+    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{word}</small></button>
   </div>;
 }
 export function elapsed(value: unknown): string {

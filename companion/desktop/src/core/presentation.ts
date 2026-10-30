@@ -261,6 +261,15 @@ export function helperMatchesTask(helper: HelperView, task: Json): boolean {
     || Boolean(task.monitoring_only) && native(String(member.type)) === native(String(task.agent))));
 }
 
+/** One status word for a helper everywhere (sidebar, chips, helper page), same as the phone. */
+export function helperState(helper: HelperView, tasks: Json[], now = Date.now()): string {
+  const mine = tasks.filter(task => helperMatchesTask(helper, task));
+  if (mine.some(task => !task.monitoring_only && task.state === 'waiting')) return '等你确认';
+  if (mine.some(task => !task.monitoring_only && activeTask(task))) return '在做';
+  if (mine.some(task => desktopRunning(task, now))) return '电脑上在跑';
+  return helper.connected ? '空闲' : '连不上';
+}
+
 /** The limiting known subscription window, excluding windows already reset. */
 export function quotaLeft(helper: HelperView, now = Date.now()): number | null {
   if (!helper.connected || helper.quotaProblem) return null;

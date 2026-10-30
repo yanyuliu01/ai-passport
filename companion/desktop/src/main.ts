@@ -318,6 +318,7 @@ async function main(): Promise<void> {
     return client.submitEffectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140), outcomes as Record<string, 'applied' | 'not_applied'>, requiredString(input.revision, 128)); });
   ipc('timer-reviews', value => client.timerReviews(requiredString(object(value).space, 100)));
   ipc('reconcile', value => { const input = object(value); return client.reconcileTask(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100), requiredString(input.run, 128)); });
+  ipc('login-start-state', () => app.getLoginItemSettings().openAtLogin);
   ipc('login-start', value => {
     if (typeof value !== 'boolean') throw new Error('启动选项无效');
     app.setLoginItemSettings({ openAtLogin: value, args: ['--background'] });

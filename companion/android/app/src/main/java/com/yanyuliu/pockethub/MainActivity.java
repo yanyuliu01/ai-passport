@@ -2433,8 +2433,33 @@ public class MainActivity extends Activity implements HubStore.Listener {
      * 整条从左上角弹出来，几条同时到时一条接一条地弹，中间隔一小会儿，像对方在接着发。
      * 返回是否变了。
      */
+    /** 上一条回复气泡出来（或排好要出来）的时刻，跨消息、跨同步共用，这样连着到的两条也一条一条出。 */
+    private long lastRevealAt;
+
+    /**
+     * 新到的回复气泡排队出：离上一条至少隔“打这条字”的时间（AppPresentation.bubbleDelay）。
+     * 没轮到之前它不占位置（GONE），轮到了才放出来、弹一下；这期间回复下面显示“正在输入”，
+     * 复制、重问等最后一条出来再出现。
+     */
+    private void reveal(View bubble, String text) {
+        long now = android.os.SystemClock.uptimeMillis();
+        long at = lastRevealAt == 0 ? now : Math.max(now, lastRevealAt + AppPresentation.bubbleDelay(text));
+        lastRevealAt = at;
+        if (at <= now) { Motion.pop(bubble, false, 0); return; }
+        bubble.setVisibility(View.GONE);
+        bubble.postDelayed(() -> {
+            boolean atBottom = scroll.getScrollY() + scroll.getHeight() >= body.getHeight() - dp(48);
+            bubble.setVisibility(View.VISIBLE); Motion.pop(bubble, false, 0);
+            if (atBottom) scrollDown();
+            refreshMarker();
+        }, at - now);
+    }
+
+    /** 还有气泡在排队等着出来。 */
+    private boolean revealing() { return lastRevealAt > android.os.SystemClock.uptimeMillis(); }
+
     private boolean setBubbles(LinearLayout group, List<String> parts, boolean animate, Presentation presentation) {
-        int had = group.getChildCount(); long popDelay = 0;
+        int had = group.getChildCount();
         boolean changed = false;
         while (group.getChildCount() > parts.size()) { group.removeViewAt(group.getChildCount() - 1); changed = true; }
         for (int index = 0; index < parts.size(); index++) {
@@ -2451,8 +2476,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             words.setTag(parts.get(index)); words.setText(presentation != null && presentation.supported
                     ? Markdown.projected(presentation,index) : Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
-            // 一条接一条地出，每条按它的字数等一会儿，像对方在接着打字（AppPresentation.bubbleDelay）。
-            if (animate) { if (index > had) popDelay += AppPresentation.bubbleDelay(parts.get(index)); Motion.pop(bubble, false, popDelay); }
+            if (animate) reveal(bubble, parts.get(index));
         }
         return changed;
     }
@@ -2608,7 +2632,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 HubStore.Turn turn = store.turn();
                 if (!turn.agent.isEmpty()) label = "等 " + AppPresentation.name(turn.agent) + " 做完…";
                 else if (waited >= 8) label = turn.stage.isEmpty() ? "还在想，稍等…" : turn.stage;
-            } else if (last.status.equals("streaming")) state = ReplyMarker.TYPING;
+            } else if (last.status.equals("streaming") || revealing()) state = ReplyMarker.TYPING;
             else if (last.status.equals("done")) state = ReplyMarker.RESTING;
         } else if (last != null && last.status.equals("sending")) state = ReplyMarker.TYPING;
         boolean changed = !state.equals(marker.state()) || !label.contentEquals(markerLabel.getText());

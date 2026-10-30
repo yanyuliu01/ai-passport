@@ -2,7 +2,7 @@ import { AccountPanel } from './account';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView } from '../shared';
-import { localHelpers, activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, messageStatusText, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, desktopRunning, sessionState, readableProgress, clock, splitQuote, withQuote, quoteSnippet, relayLabel, bubbleDelay, type ReviewOutcome } from '../core/presentation';
+import { localHelpers, activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, messageStatusText, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, desktopRunning, sessionState, readableProgress, clock, splitQuote, withQuote, quoteSnippet, relayLabel, bubbleDelay, helperState, type ReviewOutcome } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -231,17 +231,27 @@ function App() {
     {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyu.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
   </div>;
 }
+/** When the last reply bubble came (or is queued to come) out, shared by every message. */
+let lastRevealAt = 0;
+function queueReveal(text: string): number {
+  const now = Date.now(), at = lastRevealAt ? Math.max(now, lastRevealAt + bubbleDelay(text)) : now;
+  lastRevealAt = at; return at;
+}
 function Bubble({ message, task, onTask, onReview, onMenu, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onReview?: () => void; onMenu(event: React.MouseEvent, text: string, author: string): void; highlight: boolean }) {
   const mine = message.author?.kind === 'owner' || message.kind === 'user';
   const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message), status = messageStatusText(message);
-  // 刚到的一组回复一条接一条地出：每条按字数等一会儿，像在接着打字（bubbleDelay，和手机一致）。
-  const fresh = !mine && blocks.length > 1 && Date.now() - Number(message.updated_at || message.created_at || 0) * 1000 < 15_000;
-  const [shown, setShown] = useState(fresh ? 1 : Infinity);
+  // 刚到的回复气泡排队出，和手机一致：离上一条至少隔“打这条字”的时间（bubbleDelay），跨消息共用一个队列；
+  // 没轮到的不占位置，其间显示“正在输入”。
+  const fresh = useRef(!mine && Date.now() - Number(message.updated_at || message.created_at || 0) * 1000 < 15_000);
+  const times = useRef<number[]>([]);
+  while (times.current.length < blocks.length) times.current.push(fresh.current ? queueReveal(String(blocks[times.current.length]?.text || '')) : 0);
+  const [, tick] = useState(0);
+  const now = Date.now(), shown = times.current.filter(at => at <= now).length, next = times.current.find(at => at > now);
   useEffect(() => {
-    if (shown >= blocks.length) return;
-    const timer = setTimeout(() => setShown(count => count + 1), bubbleDelay(String(blocks[shown]?.text || '')));
+    if (next === undefined) return;
+    const timer = setTimeout(() => tick(value => value + 1), next - Date.now());
     return () => clearTimeout(timer);
-  }, [shown, blocks.length]);
+  }, [next, shown]);
   if (!mine && !blocks.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
   const author = mine ? '我' : authorLabel(message) || '小鱼';
   return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}
@@ -295,13 +305,6 @@ function SessionChat({ task, tasks, detail, state, text, busy, onText, onSend, o
         onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSend(); } }} />
       <button className="send" type="submit" aria-label="发送" disabled={busy || !text.trim()}><Icon name="up" /></button></form>}
   </div>;
-}
-function helperState(helper: HelperView, tasks: Json[]): string {
-  const mine = tasks.filter(task => helperMatchesTask(helper, task));
-  if (mine.some(task => !task.monitoring_only && task.state === 'waiting')) return '等你确认';
-  if (mine.some(task => !task.monitoring_only && activeTask(task))) return '在做';
-  if (mine.some(task => desktopRunning(task))) return '电脑上在跑';
-  return helper.connected ? '空闲' : '连不上';
 }
 /** 帮手页（和手机一致）：头像、名字、一句状态、用量一行；一个“最近”列表，派给它的事和电脑会话合在一起。 */
 function HelperPage({ helper, tasks, connected, all, onAll, onUsage, onManage, onTask }: { helper?: HelperView; tasks: Json[]; connected: boolean; all: boolean; onAll(): void; onUsage(): void; onManage(): void; onTask(task: Json): void }) {
@@ -396,30 +399,48 @@ function Usage({ helper, tasks, disabled, onClose, onRefresh, onTask }: { helper
   </section></div>;
 }
 /**
- * 设置按“东西在哪”分组，和手机一致：电脑（账号和连着的电脑合成一组）、这台电脑、已归档、关于。
- * 帮手不在这里：加帮手用侧边栏“帮手”旁的 ＋，管理某位帮手进它的页面点 ⋯。
+ * 设置按“东西在哪”分组，和手机一致：电脑、这台电脑、已归档、关于。每一行是“名字 · 现在的状态 · 一个动作”，
+ * 不堆按钮。帮手不在这里：加帮手用侧边栏“帮手”旁的 ＋，管理某位帮手进它的页面点 ⋯。
  */
 function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory }: { view: ClientView; space?: SpaceView; disabled: boolean; onSetup(): void; onRun(action: () => Promise<unknown>): Promise<void>; onSelect(id: string): void; onDirectory(): void }) {
+  const [loginStart, setLoginStart] = useState<boolean>();
+  useEffect(() => { void window.xiaoyu.loginStartState().then(setLoginStart).catch(() => setLoginStart(undefined)); }, []);
   const archived = space?.conversations.filter(item => item.archived && !item.deleted && item.id !== 'default') || [];
   const runtime = space?.connections?.find(item => item.local)?.runtime || space?.connections?.[0]?.runtime || '';
+  const others = space?.connections?.filter(item => !item.local) || [];
+  if (!view.account?.signedIn) return <section className="settings-page"><div className="settings-group">电脑</div><AccountPanel view={view.account} onConfigure={onSetup} /></section>;
+  const connected = Boolean(space?.connected);
   return <section className="settings-page">
-    <div className="settings-group">电脑</div><AccountPanel view={view.account} onConfigure={onSetup} />
-    {space?.connections?.some(item => !item.local) && <article className="settings-card vertical"><h3>其他登录了这个账号的电脑</h3>
-      {space.connections.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '离线，等待恢复'}</small></div>)}
-      <p role="status">{view.pairing.relayState}</p></article>}
+    <div className="settings-group">电脑</div>
+    <div className="settings-list">
+      <Row label="小鱼账号" value={view.account.username || ''} action={<button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.accountLogout())}>退出登录</button>} />
+      <Row label="连接" value={<><i className={'dot ' + (connected ? 'online' : '')} />{connected ? '已连接' : view.account.message || '没连上'}</>}
+        action={!connected ? <button disabled={disabled} onClick={() => void window.xiaoyu.accountRefresh()}>重新连接</button> : undefined} />
+      {others.map(item => <Row key={item.runtime} label={item.name} value={<><i className={'dot ' + (item.connected ? 'online' : '')} />{item.connected ? '已连接' : '离线'}</>} />)}
+    </div>
     <div className="settings-group">这台电脑</div>
-    <article className="settings-card"><div><h3>小鱼在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
-    <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(false))}>关闭</button></article>
+    <div className="settings-list">
+      <Row label="本机服务" value={view.runtime.message} hint="关掉窗口也在后台；退出客户端才停" action={<button disabled={disabled} onClick={onSetup}>检测与配置</button>} />
+      <Row label="开机时启动" hint="系统登录后在后台恢复连接" action={<button className={'switch ' + (loginStart ? 'on' : '')} role="switch" aria-checked={Boolean(loginStart)} aria-label="开机时启动" disabled={disabled || loginStart === undefined}
+        onClick={() => void onRun(async () => { await window.xiaoyu.loginStart(!loginStart); setLoginStart(!loginStart); })}><i /></button>} />
+    </div>
     <div className="settings-group">已归档</div>
-    <article className="settings-card vertical">{archived.length === 0 ? <p>没有归档的旁聊。</p> : archived.map(item => <div className="connection-row" key={item.id}><span>{item.title || '旁聊'}</span>
-      <button disabled={disabled || !item.directoryId || !space} onClick={() => space && void onRun(() => window.xiaoyu.directoryEdit({ space: space.id, runtime, id: String(item.directoryId), revision: Number(item.metadataRevision || 0), fields: { archived: false } }))}>放回</button></div>)}</article>
+    <div className="settings-list">
+      {archived.length === 0 ? <Row label="没有归档的旁聊" /> : archived.map(item => <Row key={item.id} label={item.title || '旁聊'} value={clock(item.updatedAt)}
+        action={<button disabled={disabled || !item.directoryId || !space} onClick={() => space && void onRun(() => window.xiaoyu.directoryEdit({ space: space.id, runtime, id: String(item.directoryId), revision: Number(item.metadataRevision || 0), fields: { archived: false } }))}>放回</button>} />)}
+    </div>
     <div className="settings-group">关于</div>
-    <article className="settings-card"><div><h3>小鱼桌面版</h3><p>现在是 {view.version}</p></div></article>
-    <details className="advanced"><summary>开发者</summary>
-      <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
-      {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}
-    </details>
+    <div className="settings-list">
+      <Row label="小鱼桌面版" value={view.version} />
+      <details className="settings-row developer"><summary>开发者</summary><div>
+        <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
+        {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}
+      </div></details>
+    </div>
   </section>;
+}
+function Row({ label, value, hint, action }: { label: string; value?: React.ReactNode; hint?: string; action?: React.ReactNode }) {
+  return <div className="settings-row"><div className="settings-row-text"><span>{label}</span>{hint && <small>{hint}</small>}</div>{value !== undefined && <span className="settings-row-value">{value}</span>}{action}</div>;
 }
 function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(task.worker_session && !task._staleEpoch && !activeTask(task)
   && space?.connections?.some(item => item.runtime === task._runtimeId && item.local && item.connected && item.capabilities.includes('desktop_handoff'))
