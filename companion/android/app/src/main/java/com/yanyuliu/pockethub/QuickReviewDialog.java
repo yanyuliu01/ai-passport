@@ -36,7 +36,8 @@ final class QuickReviewDialog {
     private final Sheet sheet;
     private final TextView status, pendingHeading, modeHint, historyToggle;
     private final LinearLayout pendingRows, durations, history;
-    private final TextView batch, modeSwitch;
+    private final TextView batch, modeSwitch, details;
+    private String lastProblem;
     private final EditText minutes;
     private final Runnable individual;
     private final boolean legacyFallback;
@@ -66,7 +67,11 @@ final class QuickReviewDialog {
         sheet = new Sheet(activity, "快速审核", false);
         LinearLayout page = column(); page.setPadding(dp(4), 0, dp(4), 0);
 
-        status = text("正在读取…", 14, INK); status.setPadding(dp(4), 0, dp(4), dp(12)); page.addView(status);
+        status = text("正在读取…", 14, INK); status.setPadding(dp(4), 0, dp(4), dp(4)); page.addView(status);
+        // 出错时多一个“详细信息”：原始报错在那里看，界面上只说一句人话。
+        details = text("详细信息 ›", 13, BLUE); details.setPadding(dp(4), dp(2), dp(4), dp(10)); details.setVisibility(View.GONE);
+        details.setOnClickListener(v -> ErrorDetails.show(activity, "快速审核的报错", "电脑：" + target.name + "\n" + lastProblem));
+        page.addView(details);
 
         pendingHeading = text("等你确认", 12, HINT); pendingHeading.setPadding(dp(4), 0, dp(4), dp(6)); page.addView(pendingHeading);
         pendingRows = column(); page.addView(pendingRows);
@@ -149,6 +154,7 @@ final class QuickReviewDialog {
             busy = false;
             if (!current()) return;
             batch.setEnabled(true); modeSwitch.setEnabled(true);
+            lastProblem = problem; details.setVisibility(problem == null ? View.GONE : View.VISIBLE);
             if (problem != null) {
                 if (legacyFallback && operation == null && RuntimeClient.REVIEW_UNAVAILABLE.equals(problem)) {
                     sheet.dismiss(); individual.run(); return;
@@ -160,7 +166,7 @@ final class QuickReviewDialog {
                 }
                 if (problem.contains("409")) {
                     // 连读都被拒：这台电脑现在不接受从手机做快速审核（比如经中继连着），重试也一样，不再循环。
-                    status.setText("这台电脑现在不能从手机做快速审核，可以点下面“逐条确认”。"); status.setTextColor(AMBER);
+                    status.setText("这台电脑现在不接受手机上的快速审核（多半是电脑上的小鱼版本旧了），可以先点下面“逐条确认”。"); status.setTextColor(AMBER);
                     modeSwitch.setText(""); batch.setVisibility(View.GONE); pendingHeading.setVisibility(View.GONE); return;
                 }
                 status.setText("没读到电脑上的审核状态：" + problem.replaceFirst("^远端返回 \\d+：", "") + "。过一会儿会再试。");

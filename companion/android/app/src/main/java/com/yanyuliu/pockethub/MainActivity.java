@@ -300,7 +300,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         connectionTitle = text("小鱼", 17, true);
         connectionTitle.setSingleLine(true); connectionTitle.setEllipsize(TextUtils.TruncateAt.END);
         header.addView(connectionTitle, new LinearLayout.LayoutParams(0, -2, 1));
-        moreButton = iconAction("more", "这件事的操作", view -> taskActions(CardViews.find(HubStore.get().cards(), openTask), view));
+        moreButton = iconAction("more", "更多操作", view -> {
+            // 帮手页的 ⋯ 是管理这位帮手（改名、删除）；任务页的 ⋯ 是这件事的操作。
+            if (tab == TAB_AGENT && openAgent != null && agentName(openAgent) != null)
+                new HelperManagement(this, this::helpersChanged).actions(view, agentName(openAgent), helperTitle(openAgent));
+            else taskActions(CardViews.find(HubStore.get().cards(), openTask), view);
+        });
         header.addView(moreButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
         voiceButton = iconAction("mic", "切到语音", view -> mainAs(false, false));
         header.addView(voiceButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
@@ -521,7 +526,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         noticeView = text("", 13, false); noticeView.setTextColor(Color.WHITE);
         noticeView.setPadding(dp(16), dp(10), dp(16), dp(10)); noticeView.setMaxWidth(dp(320));
         noticeView.setGravity(Gravity.CENTER); noticeView.setVisibility(View.GONE); noticeView.setElevation(dp(6));
-        noticeView.setOnClickListener(view -> hideNotice());
+        // 红色的出错提示点一下看完整内容（能选中复制），其余提示点一下收起。
+        noticeView.setOnClickListener(view -> { String detail = noticeDetail; hideNotice(); if (detail != null) ErrorDetails.show(this, "出了什么问题", detail); });
         FrameLayout.LayoutParams noticeParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         noticeParams.setMargins(dp(16), dp(64), dp(16), 0);
         frame.addView(noticeView, noticeParams);
@@ -606,10 +612,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
      * 页面顶上一条小提示，代替系统 Toast：从上面滑下来，停一会儿自己收起，点一下立刻收起。
      * 出错的是红底，其余深色底；读屏会念出来。
      */
+    private String noticeDetail;
+
     private void notice(String message, boolean error) {
         if (noticeView == null || message == null || message.isEmpty()) return;
         noticeView.removeCallbacks(noticeHide);
-        noticeView.setText(message);
+        noticeDetail = error ? message : null;
+        noticeView.setText(error ? message + "  · 详情" : message);
         noticeView.setBackground(surface(error ? DANGER : INK, error ? DANGER : INK, 20));
         noticeView.setContentDescription(message);
         noticeView.announceForAccessibility(message);
@@ -1141,53 +1150,51 @@ public class MainActivity extends Activity implements HubStore.Listener {
         mineKey = key;
         minePane.removeAllViews();
         // Account selection chooses the receiving Runtime; helper assignment stays with Xiaoyu.
-        minePane.addView(groupHeading("小鱼"));
-        LinearLayout links = group();
-        final int busyCount = running;
-        links.addView(groupRow("chat", companionName(), target == null ? "登录同一个小鱼账号"
-                        : running > 0 ? running + " 件事在做" : null,
-                connectionWord() + (target != null && running > 0 ? " ›" : ""), target != null && store.runtimeConnected() ? GREEN : AMBER,
-                // 有事在做就点进“在做的事”；还没登录点了去配对；都没有就不响应（也不画箭头）。
-                view -> { if (target == null) scanPairing(); else if (busyCount > 0) topWork(); }, true));
-        links.addView(groupRow("computer", "小鱼账号", AccountManager.signedIn() && target != null
-                        ? "新消息发送到 · " + target.name : AccountManager.status(), "›", HINT,
-                view -> scanPairing(), false));
-        minePane.addView(links);
-        LinearLayout management = group();
-        management.addView(groupRow("computer", "帮手管理", target == null ? "连接电脑后添加或移除帮手" : "管理 · " + target.name,
-                "›", HINT, view -> new HelperManagement(this, () -> { helpersTarget = ""; mineKey = ""; onHubChanged(); }).open(), false));
-        LinearLayout.LayoutParams managementGap = new LinearLayout.LayoutParams(-1, -2);
-        managementGap.setMargins(0, dp(12), 0, 0); minePane.addView(management, managementGap);
+        // 设置按“东西在哪”分组：电脑、随身设备、审核与通知、外观、已归档、关于。
+        // 帮手的增删改不在这里：加帮手用侧边栏“帮手”旁的 ＋，管理某位帮手进它的页面点 ⋯。
+        minePane.addView(groupHeading("电脑"));
+        LinearLayout computer = group();
+        boolean online = target != null && store.runtimeConnected();
+        computer.addView(groupRow("computer", target == null ? "还没连电脑" : target.name,
+                target == null ? "登录小鱼账号，手机就能找到你的电脑" : AccountManager.signedIn() ? "账号 " + AccountManager.username() : null,
+                (target == null ? "去登录" : connectionWord()) + " ›", online ? GREEN : AMBER, view -> scanPairing(), false));
+        minePane.addView(computer);
         minePane.addView(groupHeading("随身设备"));
         LinearLayout devices = group();
-        devices.addView(groupRow("device", "随身设备", null, device ? "已连接 ›" : "未连接 ›",
-                device ? GREEN : AMBER, view -> show(TAB_DEVICE), false));
+        devices.addView(groupRow("device", "随身小鱼", null, device ? "在身边 ›" : "›",
+                device ? GREEN : HINT, view -> show(TAB_DEVICE), false));
         minePane.addView(devices);
-        minePane.addView(groupHeading("偏好"));
-        LinearLayout settings = group();
-        settings.addView(groupRow(null, "伴侣形象", null, AppPresentation.name(companionChoice) + " ›", HINT,
+        minePane.addView(groupHeading("审核与通知"));
+        LinearLayout review = group();
+        review.addView(groupRow(null, "快速审核", "帮手要你点头的操作，一次处理", "›", HINT,
+                view -> QuickReviewDialog.show(this, this::showIndividualApprovals), true));
+        review.addView(groupRow(null, "通知", null, "›", HINT, view -> openSettings(1), false));
+        minePane.addView(review);
+        minePane.addView(groupHeading("外观"));
+        LinearLayout looks = group();
+        looks.addView(groupRow(null, "伴侣形象", null, AppPresentation.name(companionChoice) + " ›", HINT,
                 view -> { refreshCompanions(); show(TAB_COMPANIONS); }, true));
-        settings.addView(groupRow(null, "形象呼吸动画", null, animate ? "开" : "关", animate ? BLUE : HINT, view -> {
+        looks.addView(groupRow(null, "形象呼吸动画", null, animate ? "开" : "关", animate ? BLUE : HINT, view -> {
             getSharedPreferences("ds_ui", MODE_PRIVATE).edit().putBoolean("animate", !animate).apply();
             refreshAvatarAnimations(getWindow().getDecorView()); mineKey = null; refreshMine();
-        }, true));
-        settings.addView(groupRow(null, "快速审核", null, "›", HINT,
-                view -> QuickReviewDialog.show(this, this::showIndividualApprovals), true));
-        settings.addView(groupRow(null, "通知", null, "›", HINT, view -> openSettings(1), true));
+        }, false));
+        minePane.addView(looks);
+        LinearLayout archive = group();
         int archivedItems = archivedCount();
-        settings.addView(groupRow(null, "已归档", null, (archivedItems > 0 ? archivedItems + " " : "") + "›", HINT, view -> showArchived(), true));
+        archive.addView(groupRow(null, "已归档", "收起来的旁聊和任务", (archivedItems > 0 ? archivedItems + " " : "") + "›", HINT, view -> showArchived(), false));
+        LinearLayout.LayoutParams archiveGap = new LinearLayout.LayoutParams(-1, -2); archiveGap.setMargins(0, dp(18), 0, 0);
+        minePane.addView(archive, archiveGap);
+        minePane.addView(groupHeading("关于"));
+        LinearLayout about = group();
         String installed = "";
         try { installed = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
-        settings.addView(speechPackRow());
-        settings.addView(groupRow(null, "App 更新",
+        about.addView(groupRow(null, "App 更新",
                 update == null ? "现在是 " + installed : update.label() + (update.note.isEmpty() ? "" : " · " + update.note),
                 updateProgress >= 0 ? "下载中 " + updateProgress + "%" : update != null ? "安装 ›" : "检查 ›",
-                update != null ? BLUE : HINT, view -> updateApp(), false));
-        minePane.addView(settings);
-        LinearLayout developer = group();
-        developer.addView(groupRow(null, "开发者", null, "›", HINT, view -> openSettings(2), false));
-        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(-1, -2); gap.setMargins(0, dp(18), 0, 0);
-        minePane.addView(developer, gap);
+                update != null ? BLUE : HINT, view -> updateApp(), true));
+        about.addView(speechPackRow());
+        about.addView(groupRow(null, "开发者", "排查问题时用", "›", HINT, view -> openSettings(2), false));
+        minePane.addView(about);
         TextView note = text("FoloToy AI Passport", 11, false); note.setTextColor(HINT);
         note.setGravity(Gravity.CENTER); note.setPadding(0, dp(28), 0, dp(14)); minePane.addView(note);
     }
@@ -1196,7 +1203,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private void scanPairing() {
         if (accountDialog != null) accountDialog.dismiss();
         accountRuntimeList = null; accountRuntimeKey = "";
-        Sheet sheet = new Sheet(this, "小鱼账号", false);
+        Sheet sheet = new Sheet(this, "电脑和账号", false);
         accountDialog = sheet;
         sheet.setOnDismissListener(ignored -> {
             if (accountDialog == sheet) {
@@ -2021,7 +2028,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean chat = tab == TAB_CHAT;
         lead.setVisibility(chat ? View.VISIBLE : View.GONE);
         Card opened = tab == TAB_TASKS ? CardViews.find(HubStore.get().cards(), openTask) : null;
-        moreButton.setVisibility(opened != null ? View.VISIBLE : View.GONE);
+        moreButton.setVisibility(opened != null || (tab == TAB_AGENT && openAgent != null && agentName(openAgent) != null) ? View.VISIBLE : View.GONE);
         voiceButton.setVisibility(chat && currentConversation.equals("default") && supplementCard == null ? View.VISIBLE : View.GONE);
         devicePill.setVisibility(tab == TAB_HOME ? View.VISIBLE : View.GONE);
         String title = tab == TAB_HOME ? "" : tab == TAB_DEVICE ? "随身小鱼" : chat ? "对话记录"
@@ -2746,69 +2753,63 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (key.toString().equals(agentKey)) return;
         agentKey = key.toString(); agentPane.removeAllViews();
         Card now = helper.current(connected);
-        LinearLayout hero = column(); hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(0, dp(4), 0, dp(20));
-        AvatarView portrait = avatar(helper.role, now != null ? "focus" : "idle", 112);
-        hero.addView(portrait);
+        // 顶部：头像、名字、一句状态；用量一行小字，点了看详情。
+        LinearLayout hero = column(); hero.setGravity(Gravity.CENTER_HORIZONTAL); hero.setPadding(0, dp(4), 0, dp(16));
+        hero.addView(avatar(helper.role, now != null ? "focus" : "idle", 88));
         TextView name = text(helperTitle(helper.role), 22, true); name.setPadding(0, dp(10), 0, dp(2));
         name.setGravity(Gravity.CENTER); hero.addView(name);
         TextView line = now != null ? stateText(XiaoyuState.state(now, connected).equals("waiting")
                 ? "等你确认「" + now.title + "」" : "正在做「" + now.title + "」", 13) : text(helper.status(connected), 13, false);
         line.setGravity(Gravity.CENTER); hero.addView(line);
-        TextView energyView = text((energy.isEmpty() ? "查看用量" : energy) + "  ›", 13, false); energyView.setGravity(Gravity.CENTER);
-        energyView.setPadding(dp(12), dp(10), dp(12), dp(4)); energyView.setTextColor(BLUE);
-        String quotaRole = helper.role;
-        energyView.setOnClickListener(view -> showQuota(quotaRole)); ctl(energyView, "agent-usage"); hero.addView(energyView);
+        if (!energy.isEmpty()) {
+            TextView energyView = text(energy.split("\n")[0] + "  ›", 12, false); energyView.setGravity(Gravity.CENTER);
+            energyView.setPadding(dp(12), dp(8), dp(12), dp(4)); energyView.setTextColor(HINT);
+            String quotaRole = helper.role;
+            energyView.setOnClickListener(view -> showQuota(quotaRole)); ctl(energyView, "agent-usage"); hero.addView(energyView);
+        }
         agentPane.addView(hero);
-        agentPane.addView(groupHeading("小鱼派给它的"));
-        if (helper.dispatched.isEmpty()) {
+        // 一个列表：派给它的事和它在电脑上的会话合在一起，新的在前；默认 5 条，接不上的会话只在“全部”里。
+        double at = System.currentTimeMillis() / 1000.0;
+        List<Card> all = new ArrayList<>(helper.dispatched); all.addAll(helper.desktop);
+        all.sort(java.util.Comparator.comparingDouble((Card c) -> -Math.max(c.createdAt, c.observedAt)));
+        List<Card> recent = new ArrayList<>();
+        for (Card card : all) if (agentDesktopOpen || !card.monitoringOnly || !WorkRecords.session(card, connected, at).equals("unavailable")) recent.add(card);
+        int total = all.size();
+        if (!agentDesktopOpen && recent.size() > 5) recent = new ArrayList<>(recent.subList(0, 5));
+        LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.addView(groupHeading(agentDesktopOpen ? "全部" : "最近"), new LinearLayout.LayoutParams(0, -2, 1));
+        if (total > recent.size() || agentDesktopOpen) {
+            TextView toggle = text(agentDesktopOpen ? "收起" : "全部 " + total + " ›", 13, false); toggle.setTextColor(BLUE);
+            toggle.setPadding(dp(8), dp(10), dp(4), dp(6));
+            toggle.setOnClickListener(view -> { agentDesktopOpen = !agentDesktopOpen; agentKey = null; refreshAgent(HubStore.get().cards()); });
+            heading.addView(toggle);
+        }
+        agentPane.addView(heading);
+        if (recent.isEmpty()) {
             TextView none = text("还没有。在聊天里说「让" + helperTitle(helper.role) + "做……」，小鱼会安排。", 13, false);
-            none.setTextColor(HINT); none.setPadding(dp(4), 0, dp(4), 0); agentPane.addView(none);
-        } else {
-            LinearLayout list = group();
-            for (int index = 0; index < helper.dispatched.size(); index++) {
-                Card card = helper.dispatched.get(index);
-                String word = AppPresentation.stateWord(card, connected);
-                String detail = card.outstanding() && !card.progress.isEmpty()
-                        ? card.progress.get(card.progress.size() - 1) : AppPresentation.stateLabel(card, connected);
-                list.addView(groupRow(null, card.title, CardViews.oneLine(detail, 40), word.isEmpty() ? "›" : word,
-                        word.isEmpty() ? HINT : word.contains("确认") ? AMBER : BLUE, view -> open(card.id),
-                        index < helper.dispatched.size() - 1));
-            }
-            agentPane.addView(list);
+            none.setTextColor(HINT); none.setPadding(dp(4), 0, dp(4), 0); agentPane.addView(none); return;
         }
-        if (!helper.desktop.isEmpty()) {
-            // 电脑上的会话按能不能接着说分组；接不上的收在最后的“更多”里，默认不展开。
-            double at = System.currentTimeMillis() / 1000.0;
-            Map<String, List<Card>> groups = new java.util.LinkedHashMap<>();
-            for (String state : new String[] {"ready", "open", "running", "unavailable"}) groups.put(state, new ArrayList<>());
-            for (Card card : helper.desktop) groups.get(WorkRecords.session(card, connected, at)).add(card);
-            String[][] labels = {{"ready", "可以接着聊", "点进去就能接着说"}, {"open", "在电脑上开着", "到电脑上继续"}, {"running", "在跑", "这一轮结束后可以接着说"}};
-            agentPane.addView(groupHeading("电脑上的会话"));
-            for (String[] label : labels) {
-                List<Card> list = groups.get(label[0]); if (list.isEmpty()) continue;
-                TextView sub = text(label[1] + " · " + label[2], 12, false); sub.setTextColor(HINT); sub.setPadding(dp(4), dp(10), dp(4), dp(4));
-                agentPane.addView(sub);
-                LinearLayout box = group();
-                for (int index = 0; index < list.size(); index++) {
-                    Card card = list.get(index);
-                    box.addView(groupRow(null, WorkRecords.title(card), null, "›", HINT, view -> open(card.id), index < list.size() - 1));
+        LinearLayout list = group();
+        for (int index = 0; index < recent.size(); index++) {
+            Card card = recent.get(index);
+            String when = AppPresentation.clock(Math.max(card.createdAt, card.observedAt), at, java.time.ZoneId.systemDefault());
+            String word; int color = HINT;
+            if (card.monitoringOnly) {
+                switch (WorkRecords.session(card, connected, at)) {
+                    case "running": word = "在跑"; color = BLUE; break;
+                    case "open": word = "开在电脑上"; break;
+                    case "unavailable": word = "接不上"; break;
+                    default: word = "›";
                 }
-                agentPane.addView(box);
+            } else {
+                word = AppPresentation.stateWord(card, connected);
+                if (word.isEmpty()) word = card.state.equals("done") ? "✓" : AppPresentation.stateLabel(card, connected);
+                else color = word.contains("确认") ? AMBER : BLUE;
             }
-            List<Card> rest = groups.get("unavailable");
-            if (!rest.isEmpty()) {
-                View gap = new View(this); agentPane.addView(gap, new LinearLayout.LayoutParams(-1, dp(12)));
-                LinearLayout more = group();
-                more.addView(groupRow(null, "更多", "接不上的会话，只能看", rest.size() + (agentDesktopOpen ? " ⌃" : " ›"), HINT,
-                        view -> { agentDesktopOpen = !agentDesktopOpen; agentKey = null; refreshAgent(HubStore.get().cards()); },
-                        agentDesktopOpen));
-                if (agentDesktopOpen) for (int index = 0; index < rest.size(); index++) {
-                    Card card = rest.get(index);
-                    more.addView(groupRow(null, WorkRecords.title(card), null, "›", HINT, view -> open(card.id), index < rest.size() - 1));
-                }
-                agentPane.addView(more);
-            }
+            list.addView(groupRow(null, WorkRecords.title(card), (card.monitoringOnly ? "电脑上" : "小鱼派的") + (when.isEmpty() ? "" : " · " + when),
+                    word, color, view -> open(card.id), index < recent.size() - 1));
         }
+        agentPane.addView(list);
     }
 
     // ---- 首页：小鱼本人 ----
@@ -4739,8 +4740,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
             else if (latest.state.equals("failed")) note = "刚才那句没送到：" + CardViews.oneLine(latest.brief.replaceFirst("^.*?没做成：", ""), 80);
         }
         if (!note.isEmpty()) {
-            TextView line = text(note, 13, false); line.setTextColor(latest != null && latest.state.equals("failed") ? DANGER : HINT);
+            boolean failed = latest != null && latest.state.equals("failed") && note.startsWith("刚才那句没送到");
+            TextView line = text(failed ? note + "  详情 ›" : note, 13, false); line.setTextColor(failed ? DANGER : HINT);
             line.setPadding(dp(4), 0, dp(4), dp(8)); head.addView(line);
+            if (failed) { String detail = latest.brief; line.setOnClickListener(v -> ErrorDetails.show(this, "没送到的原因", detail)); }
         }
         List<Card.Entry> recent = new ArrayList<>();
         for (Card.Entry entry : card.entries) if (!entry.text.trim().isEmpty() || !entry.attachments.isEmpty()) recent.add(entry);
