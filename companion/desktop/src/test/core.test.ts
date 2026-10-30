@@ -7,6 +7,19 @@ import { ClientDatabase } from '../core/database.js';
 import { EndpointCrypto } from '../core/crypto.js';
 import { allowedRPC } from '../core/peers.js';
 
+test('quick review is reachable from the phone with bounded mode and batch inputs', () => {
+  assert.equal(allowedRPC('GET', '/v1/review?conversation=default'), true);
+  assert.equal(allowedRPC('GET', '/v1/review?conversation=../x'), false);
+  const mode = { epoch: 'e1', conversation: 'default', revision: 3, mode: 'auto_allow', seconds: 3600 };
+  assert.equal(allowedRPC('POST', '/v1/review/mode', mode), true);
+  assert.equal(allowedRPC('POST', '/v1/review/mode', { ...mode, mode: 'everything' }), false);
+  assert.equal(allowedRPC('POST', '/v1/review/mode', { ...mode, scope: 'all' }), false);
+  const batch = { epoch: 'e1', conversation: 'default', items: [{ id: 'a1', key: 'k1' }] };
+  assert.equal(allowedRPC('POST', '/v1/review/batch', batch), true);
+  assert.equal(allowedRPC('POST', '/v1/review/batch', { ...batch, items: [] }), false);
+  assert.equal(allowedRPC('POST', '/v1/review/batch', { ...batch, items: [{ id: 'a1', key: 'k1', command: 'rm' }] }), false);
+});
+
 test('session gateway relay admits only bounded idempotent continuation inputs', () => {
   const body = { text: 'continue original work', client_id: 'a'.repeat(32), conversation: 'default' };
   assert.equal(allowedRPC('GET', '/v1/sessions?query=project'), true);
