@@ -65,6 +65,15 @@ final class NavIconView extends View {
             Path back = new Path(); back.moveTo(16, 5); back.lineTo(16, 4); back.cubicTo(16, 4, 16, 4, 15, 4);
             back.lineTo(6, 4); back.cubicTo(5, 4, 4, 5, 4, 6); back.lineTo(4, 15); back.cubicTo(4, 16, 5, 16, 5, 16);
             canvas.drawPath(back, paint);
+        } else if (icon.equals("quote")) {
+            // 引用：一对实心的前引号。
+            Paint.Style was = paint.getStyle(); paint.setStyle(Paint.Style.FILL);
+            for (float left : new float[] {5, 13}) {
+                canvas.drawCircle(left + 3, 13, 3, paint);
+                Path tail = new Path(); tail.moveTo(left, 13); tail.quadTo(left, 7, left + 5, 6); tail.lineTo(left + 5, 7.6f);
+                tail.quadTo(left + 2.2f, 8.6f, left + 2.4f, 12); tail.close(); canvas.drawPath(tail, paint);
+            }
+            paint.setStyle(was);
         } else if (icon.equals("retry")) {
             canvas.drawArc(new RectF(5, 5, 19, 19), -60, 300, false, paint);
             canvas.drawLine(18.5f, 4, 18.5f, 8.5f, paint); canvas.drawLine(18.5f, 8.5f, 14, 8.5f, paint);
@@ -80,6 +89,13 @@ final class NavIconView extends View {
         } else if (icon.equals("more")) {
             paint.setStyle(Paint.Style.FILL);
             canvas.drawCircle(5.5f, 12, 1.7f, paint); canvas.drawCircle(12, 12, 1.7f, paint); canvas.drawCircle(18.5f, 12, 1.7f, paint);
+        } else if (icon.equals("camera")) {
+            Path body = new Path();
+            body.moveTo(3, 9); body.quadTo(3, 7, 5, 7); body.lineTo(8, 7); body.lineTo(9.5f, 4.5f);
+            body.lineTo(14.5f, 4.5f); body.lineTo(16, 7); body.lineTo(19, 7); body.quadTo(21, 7, 21, 9);
+            body.lineTo(21, 18); body.quadTo(21, 20, 19, 20); body.lineTo(5, 20); body.quadTo(3, 20, 3, 18); body.close();
+            canvas.drawPath(body, paint);
+            canvas.drawCircle(12, 13.5f, 3.6f, paint);
         } else if (icon.equals("image")) {
             canvas.drawRoundRect(new RectF(3, 3, 21, 21), 3, 3, paint);
             canvas.drawCircle(8, 8, 1.5f, paint);

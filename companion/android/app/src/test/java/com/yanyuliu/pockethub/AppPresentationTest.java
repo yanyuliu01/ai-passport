@@ -118,13 +118,30 @@ public class AppPresentationTest {
         assertEquals("空闲", helpers.get(2).status(true));
     }
 
+    @Test public void quotedMessagesRoundTripAndPlainTextIsUntouched() {
+        String sent = AppPresentation.withQuote(AppPresentation.quoteSnippet("小鱼", "对哦，之前是\n小幽」"), "那现在呢");
+        assertEquals("「小鱼：对哦，之前是 小幽”」\n那现在呢", sent);
+        String[] parts = AppPresentation.splitQuote(sent);
+        assertEquals("小鱼：对哦，之前是 小幽”", parts[0]);
+        assertEquals("那现在呢", parts[1]);
+        assertNull(AppPresentation.splitQuote("「好」就行")[0]);
+        assertEquals("「好」就行", AppPresentation.splitQuote("「好」就行")[1]);
+        assertEquals("你好", AppPresentation.withQuote(null, "你好"));
+        String longLine = new String(new char[80]).replace('\0', '字');
+        assertTrue(AppPresentation.quoteSnippet("我", longLine).endsWith("…"));
+        assertEquals(2 + 60 + 1, AppPresentation.quoteSnippet("我", longLine).length());
+    }
+
     @Test public void homeAndSidebarShareOneHelperMode() {
         // Codex only busy in a session on the computer: not idle anywhere (the home chip used to say idle).
-        Card desktop = card("\"id\":\"c1\",\"agent\":\"codex\",\"source\":\"desktop\",\"state\":\"working\"");
+        // Same rule as 在做的事: only a session observed in the last few minutes counts as running.
+        long seen = System.currentTimeMillis() / 1000L - 2;
+        Card desktop = card("\"id\":\"c1\",\"agent\":\"codex\",\"source\":\"desktop\",\"state\":\"working\",\"observed_at\":" + seen);
         Card ended = card("\"id\":\"c2\",\"agent\":\"cc\",\"source\":\"desktop\",\"state\":\"done\"");
+        Card unobserved = card("\"id\":\"c4\",\"agent\":\"cc\",\"source\":\"desktop\",\"state\":\"working\"");
         Card asking = card("\"id\":\"c3\",\"agent\":\"tailor\",\"state\":\"waiting\"");
         List<AppPresentation.Helper> helpers = AppPresentation.helpers(
-                Arrays.asList(desktop, ended, asking), Arrays.asList("codex", "cc", "tailor"));
+                Arrays.asList(desktop, ended, unobserved, asking), Arrays.asList("codex", "cc", "tailor"));
         assertEquals("desktop", helpers.get(0).mode(true));
         assertEquals("电脑上在跑", helpers.get(0).status(true));
         assertEquals("idle", helpers.get(1).mode(true));

@@ -154,7 +154,8 @@ final class AppPresentation {
         }
 
         boolean desktopRunning(boolean connected) {
-            for (Card card : desktop) if (XiaoyuState.state(card, connected).equals("working")) return true;
+            double now = System.currentTimeMillis() / 1000.0;
+            for (Card card : desktop) if (WorkRecords.desktopRunning(card, connected, now)) return true;
             return false;
         }
 
@@ -262,6 +263,29 @@ final class AppPresentation {
     }
 
     /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
+    /**
+     * 引用：Runtime 的消息没有单独的引用字段，所以引用写在你那句话的第一行「小鱼：……」，
+     * 小鱼和电脑上都看得懂；App 把它拆出来，在你的气泡下面画成灰色的引用块（像微信）。
+     * 返回 {引用, 正文}；没有引用时引用为 null。
+     */
+    static String[] splitQuote(String text) {
+        if (text == null || !text.startsWith("「")) return new String[] {null, text};
+        int end = text.indexOf("」\n");
+        if (end < 2 || text.substring(0, end).contains("\n")) return new String[] {null, text};
+        return new String[] {text.substring(1, end), text.substring(end + 2)};
+    }
+
+    static String withQuote(String quote, String text) {
+        return quote == null || quote.isEmpty() ? text : "「" + quote + "」\n" + text;
+    }
+
+    /** 引用时只带一行、最多 60 个字，长了加省略号。 */
+    static String quoteSnippet(String author, String text) {
+        String line = text == null ? "" : text.replaceAll("\\s+", " ").trim();
+        if (line.codePointCount(0, line.length()) > 60) line = line.substring(0, line.offsetByCodePoints(0, 60)) + "…";
+        return author + "：" + line.replace("」", "”");
+    }
+
     static boolean listedSideChat(Map<String, Object> item, String open) {
         String id = Json.string(item, "id");
         if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived") || Json.flag(item,"deleted")) return false;

@@ -30,6 +30,22 @@ final class WorkRecords {
     /** The three groups 在做的事 shows; an unconfirmed task has not ended, so it stays with the running ones. */
     enum Section { WAITING, RUNNING, ENDED }
 
+    /**
+     * A computer session that is running right now. 在做的事, the helper chip and the settings count all
+     * use this one rule, so "电脑上在跑" on one screen is never "没有在做的事" on another.
+     */
+    static boolean desktopRunning(Card card, boolean connected, double now) {
+        return card.monitoringOnly && card.state.equals("working") && group(card, connected, now) == Group.RUNNING;
+    }
+
+    /** Everything 在做的事 counts as not finished: handed-over work that has not ended, plus running computer sessions. */
+    static int inProgress(java.util.List<Card> cards, boolean connected, double now) {
+        int count = 0;
+        for (Card card : cards)
+            if (listed(card) ? section(card, connected, now) != Section.ENDED : desktopRunning(card, connected, now)) count++;
+        return count;
+    }
+
     /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
     static boolean listed(Card card) { return AppPresentation.dispatched(card); }
 
