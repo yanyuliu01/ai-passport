@@ -69,7 +69,10 @@ final class HelperManagement {
             if(Boolean.TRUE.equals(agent.get("default")) || "mesh".equals(Json.string(agent,"type")))continue;
             count++;
             String model=Json.string(agent,"configured_model");
-            sheet.option(name,model.isEmpty()?"使用默认模型":model,false,()->{
+            // 名字用侧边栏里那个（cc 显示成 Claude），电脑上的配置名放在第二行。
+            String shown=AppPresentation.name(AppPresentation.role(name));
+            String sub=(shown.equalsIgnoreCase(name)?"":"配置名 "+name+" · ")+(model.isEmpty()?"默认模型":model);
+            sheet.option(shown,sub,false,()->{
                 Sheet details=Sheet.centered(activity,name).message("所在电脑 · "+target.name);
                 if(removable.contains(name))details.option("移除帮手","不再接收新任务，已有任务继续完成",true,()->
                     new android.app.AlertDialog.Builder(activity).setTitle("移除 "+name+"？")
@@ -81,11 +84,11 @@ final class HelperManagement {
             });
         }
         if(count==0)sheet.message("这台电脑还没有可管理的帮手。");
-        sheet.action("添加帮手",true,()->add(options));
+        // 以前移除过、电脑配置里还在的帮手：放在列表后面，写清楚是“加回来”。
         for(Object raw:Json.list(options,"restorable"))if(raw instanceof String){String name=(String)raw;
-            sheet.option("恢复 "+name,"使用电脑原有配置",false,()->{Map<String,Object> body=new LinkedHashMap<>();body.put("restore",name);mutate("/v1/helpers",body);});
+            sheet.option("加回 "+AppPresentation.name(AppPresentation.role(name)),"之前移除过，按电脑上原来的配置加回",false,()->{Map<String,Object> body=new LinkedHashMap<>();body.put("restore",name);mutate("/v1/helpers",body);});
         }
-        sheet.action("刷新列表",false,this::open).show();
+        sheet.action("添加帮手",true,()->add(options)).show();
     }
     private void mutate(String path,Map<String,Object> body){
         RuntimeClient.helperRequest(activity,target,path,body,(value,error)->{

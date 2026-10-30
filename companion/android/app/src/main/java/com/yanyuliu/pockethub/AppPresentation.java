@@ -287,6 +287,48 @@ final class AppPresentation {
         return author + "：" + line.replace("」", "”");
     }
 
+    /**
+     * 进展里的一行给人看：帮手跑的命令写成“运行命令：…”（去掉 /bin/zsh -lc 和引号），
+     * 开头的英文结果词换成中文，纯内部的标记（Native execution association）返回空串不显示。
+     */
+    /** 列表里的时间：今天只写几点，昨天写“昨天”，今年写几月几日，更早写年份。 */
+    static String clock(double at, double now, ZoneId zone) {
+        if (!(at > 0)) return "";
+        java.time.ZonedDateTime stamp = Instant.ofEpochSecond((long) at).atZone(zone);
+        LocalDate day = stamp.toLocalDate(), today = Instant.ofEpochSecond((long) now).atZone(zone).toLocalDate();
+        if (day.equals(today)) return DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT).format(stamp);
+        if (day.equals(today.minusDays(1))) return "昨天 " + DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT).format(stamp);
+        if (day.getYear() == today.getYear()) return day.getMonthValue() + "月" + day.getDayOfMonth() + "日";
+        return day.getYear() + "/" + day.getMonthValue() + "/" + day.getDayOfMonth();
+    }
+
+    static String readableProgress(String line) {
+        if (line == null) return "";
+        String text = line.trim();
+        if (text.isEmpty() || text.equalsIgnoreCase("Native execution association")) return "";
+        String outcome = "";
+        java.util.regex.Matcher head = java.util.regex.Pattern.compile("^(declined|completed|failed|cancelled|denied|approved)\\s*[·:：-]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (head.find()) {
+            switch (head.group(1).toLowerCase(Locale.ROOT)) {
+                case "declined": case "denied": outcome = "被拒绝 · "; break;
+                case "completed": case "approved": outcome = "完成 · "; break;
+                case "failed": outcome = "失败 · "; break;
+                default: outcome = "已停止 · ";
+            }
+            text = text.substring(head.end());
+        }
+        java.util.regex.Matcher shell = java.util.regex.Pattern.compile("^(?:/bin/)?(?:ba|z)?sh\\s+-l?c\\s+(.*)$", java.util.regex.Pattern.DOTALL).matcher(text);
+        if (shell.find()) {
+            String command = shell.group(1).trim();
+            if (command.length() >= 2 && (command.charAt(0) == '\'' || command.charAt(0) == '"') && command.charAt(command.length() - 1) == command.charAt(0))
+                command = command.substring(1, command.length() - 1);
+            // 很长的绝对路径只留最后一段，手机上看得出在跑什么就够了。
+            command = command.replaceAll("(?:/[\\w.+-]+){2,}/([\\w.+-]+)", "$1");
+            text = "运行命令：" + command;
+        }
+        return outcome + text;
+    }
+
     static boolean listedSideChat(Map<String, Object> item, String open) {
         String id = Json.string(item, "id");
         if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived") || Json.flag(item,"deleted")) return false;

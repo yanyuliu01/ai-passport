@@ -227,7 +227,7 @@ final class Usage {
         Agent helper = helper(role);
         Account account = account(helper, role);
         if (account == null) return "还没有这个帮手的订阅额度数据。";
-        StringBuilder out = new StringBuilder(account.note.isEmpty() ? "绿圈显示以下两项中较少的剩余额度。" : "额度刷新未成功，头像圈暂不显示。以下为上次收到的数据。");
+        StringBuilder out = new StringBuilder(account.note.isEmpty() ? "头像外圈是下面两项里剩得少的那一项：多是绿色，快用完变橙、变红。" : "额度刷新未成功，头像圈暂不显示。以下为上次收到的数据。");
         window(out, "5 小时", account.left5h, account.reset5h, now, zone);
         window(out, "本周", account.left7d, account.reset7d, now, zone);
         if (accountAgents(account).size() > 1) out.append("\n这份额度由多个帮手共用。");

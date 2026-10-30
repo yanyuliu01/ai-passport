@@ -206,6 +206,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private final List<View> chatRows = new ArrayList<>();
     private int chatHeaderViews = 0;
     private LinearLayout markerRow;
+    /** 打开 App 后最多等这么久和电脑对上，再在首页说上一句回复。 */
+    private static final long SETTLE_MS = 4000;
+    private final long launchedAt = android.os.SystemClock.uptimeMillis();
+    private final Runnable homeSettle = () -> refreshHome(HubStore.get(), HubStore.get().cards());
     private ReplyMarker marker;
     private TextView markerLabel;
     private LinearLayout replyActions;
@@ -336,14 +340,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         settingsPane = column();
         connectionSettingsPane = column(); notificationSettingsPane = column(); preferenceSettingsPane = column();
         settingsPane.addView(connectionSettingsPane); settingsPane.addView(notificationSettingsPane); settingsPane.addView(preferenceSettingsPane);
-        // 通知：只有两个系统开关。
-        notificationSettingsPane.addView(button("开启审批通知", view -> {
-            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
-                requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 2);
-            else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
-        }));
-        notificationSettingsPane.addView(button("开启通知读取", view -> startActivity(
-                new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))));
+        // 通知：两个系统开关，各写清楚现在开没开、开了有什么用（refreshNotificationSettings）。
 
         // 开发者：地址、连接串、固件版本、通知来源、测试和日志。正常使用不用打开。
         LinearLayout root = preferenceSettingsPane;
@@ -580,15 +577,17 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String requestedCard = getIntent().getStringExtra("card");
         if (requestedCard != null) pendingTask = requestedCard;
         pendingApproval = getIntent().getStringExtra("approval");
-        // 上次是连着的：App 被系统关掉再打开后自己连回去，不用再点一次。
-        if (hasBluetoothPermission()
-                && getSharedPreferences("link", MODE_PRIVATE).getBoolean("connect", false)) {
-            LinkService.start(this);
-        }
+        // 只有主人打开了“找随身小鱼”才用蓝牙；关着就一直不扫、不配对。
+        if (hasBluetoothPermission() && deviceSearchOn()) LinkService.start(this);
+    }
+
+    /** “找随身小鱼”开关。新键名、默认关：以前存的“连过就一直自动连”不再沿用。 */
+    private boolean deviceSearchOn() {
+        return getSharedPreferences("link", MODE_PRIVATE).getBoolean("search", false);
     }
 
     private void rememberConnect(boolean connect) {
-        getSharedPreferences("link", MODE_PRIVATE).edit().putBoolean("connect", connect).apply();
+        getSharedPreferences("link", MODE_PRIVATE).edit().putBoolean("search", connect).remove("connect").apply();
     }
 
     /** An ordinary hint (progress, confirmation, guidance). Recorded as a notice, not an error. */
@@ -1035,7 +1034,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             TextView title = text(Json.string(item, "title"), 14, false); title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END);
             row.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
             double at = Json.number(item, "updated_at");
-            TextView time = text(at > 0 ? new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date((long) (at * 1000))) : "", 11, false);
+            TextView time = text(AppPresentation.clock(at, System.currentTimeMillis() / 1000.0, java.time.ZoneId.systemDefault()), 11, false);
             long read = getSharedPreferences("conversation_read", MODE_PRIVATE).getLong(runtimeUrl() + ":" + id, 0);
             if (at * 1000 > read && !(tab == TAB_CHAT && id.equals(currentConversation))) { time.setText("●"); time.setTextColor(BLUE); } else time.setTextColor(HINT);
             row.addView(time); row.setOnClickListener(v -> {
@@ -1144,10 +1143,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
         // Account selection chooses the receiving Runtime; helper assignment stays with Xiaoyu.
         minePane.addView(groupHeading("小鱼"));
         LinearLayout links = group();
+        final int busyCount = running;
         links.addView(groupRow("chat", companionName(), target == null ? "登录同一个小鱼账号"
                         : running > 0 ? running + " 件事在做" : null,
-                connectionWord(), target != null && store.runtimeConnected() ? GREEN : AMBER,
-                view -> { if (target == null) scanPairing(); }, true));
+                connectionWord() + (target != null && running > 0 ? " ›" : ""), target != null && store.runtimeConnected() ? GREEN : AMBER,
+                // 有事在做就点进“在做的事”；还没登录点了去配对；都没有就不响应（也不画箭头）。
+                view -> { if (target == null) scanPairing(); else if (busyCount > 0) topWork(); }, true));
         links.addView(groupRow("computer", "小鱼账号", AccountManager.signedIn() && target != null
                         ? "新消息发送到 · " + target.name : AccountManager.status(), "›", HINT,
                 view -> scanPairing(), false));
@@ -1531,6 +1532,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         super.onResume();
         HubStore.get().addListener(this);
         refreshSources();
+        if (tab == TAB_SETTINGS && settingsSection == 1) refreshNotificationSettings();
         onHubChanged();
         checkForUpdate();
         uiHandler.removeCallbacks(tick);
@@ -1989,6 +1991,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         settingsPane.setVisibility(tab == TAB_SETTINGS ? View.VISIBLE : View.GONE);
         connectionSettingsPane.setVisibility(View.GONE);
         notificationSettingsPane.setVisibility(settingsSection == 1 ? View.VISIBLE : View.GONE);
+        if (tab == TAB_SETTINGS && settingsSection == 1) refreshNotificationSettings();
         preferenceSettingsPane.setVisibility(settingsSection != 1 ? View.VISIBLE : View.GONE);
         boolean inTask = tab == TAB_TASKS && openTask != null;
         Card opened = inTask ? CardViews.find(HubStore.get().cards(), openTask) : null;
@@ -2603,6 +2606,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean changed = !state.equals(marker.state()) || !label.contentEquals(markerLabel.getText());
         marker.state(state);
         markerRow.setVisibility(state.equals(ReplyMarker.HIDDEN) ? View.GONE : View.VISIBLE);
+        // 说完以后那个星芒只是装饰，和复制、重问并排看着像按钮：说完就不画它，只留两个真按钮。
+        marker.setVisibility(state.equals(ReplyMarker.RESTING) ? View.GONE : View.VISIBLE);
         if (!label.contentEquals(markerLabel.getText())) {
             markerLabel.setText(label);
             if (!label.isEmpty() && tab == TAB_CHAT) Motion.appear(markerLabel);
@@ -3110,7 +3115,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (homePane == null) return;
         boolean device = store.linkState().equals("已连接");
         ((View) devicePill.findViewWithTag("dot")).setBackground(surface(device ? 0xff2f9a5b : 0xffc3ccd8, device ? 0xff2f9a5b : 0xffc3ccd8, 4));
-        ((TextView) devicePill.findViewWithTag("label")).setText(device ? "随身小鱼在身边" : "随身小鱼没连上");
+        ((TextView) devicePill.findViewWithTag("label")).setText(device ? "随身小鱼在身边" : !deviceSearchOn() ? "随身小鱼" : store.linkState().startsWith("正在找") ? "正在找随身小鱼…" : "随身小鱼没连上");
         boolean connected = store.runtimeConnected();
         RuntimeClient.Target target = RuntimeClient.selected(this);
         List<AppPresentation.Helper> roster = AppPresentation.localHelpers(cards, offeredHelpers());
@@ -3155,6 +3160,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
             line = !turn.stage.isEmpty() ? turn.stage : "正在回应…";
         } else if (pokeLine != null) {
             state = "happy"; mood = "happy"; line = pokeLine;
+        } else if (!connected && android.os.SystemClock.uptimeMillis() - launchedAt < SETTLE_MS) {
+            // 刚打开、还没和电脑对上：手机里存的可能是旧的一句，先不说，免得一会儿又换成新的那句。
+            state = "idle"; mood = "happy"; line = "…";
+            homeSpeech.removeCallbacks(homeSettle); homeSpeech.postDelayed(homeSettle, SETTLE_MS);
         } else if (!latestMainReply(store).isEmpty()) {
             state = "idle"; mood = "happy"; line = CardViews.oneLine(HomeMessage.display(latestMainReply(store)), 180);
         } else if (turn.phase.equals("failed")) {
@@ -3396,7 +3405,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean near = store.linkState().equals("已连接");
         HubStore.Turn turn = store.turn();
         String screen = store.busy() ? (turn.stage.isEmpty() ? "在想…" : CardViews.oneLine(turn.stage, 10)) : near ? "在身边" : "睡着了";
-        String key = store.linkState() + "|" + store.firmwareLine() + "|" + screen;
+        String key = store.linkState() + "|" + store.firmwareLine() + "|" + screen + "|" + deviceSearchOn();
         if (key.equals(deviceKey)) return;
         deviceKey = key; devicePane.removeAllViews();
         LinearLayout mirror = column(); mirror.setGravity(Gravity.CENTER_HORIZONTAL); mirror.setPadding(0, dp(8), 0, dp(18));
@@ -3405,25 +3414,31 @@ public class MainActivity extends Activity implements HubStore.Listener {
         LinearLayout lcd = column(); lcd.setGravity(Gravity.CENTER);
         lcd.setBackground(surface(0xff14243a, 0xff14243a, 18));
         lcd.addView(new AvatarView(this, "ds", near ? "happy" : "idle"), new LinearLayout.LayoutParams(dp(64), dp(64)));
-        TextView line = text(screen, 11, false); line.setTextColor(0xffcfe0ff); line.setPadding(0, dp(4), 0, 0); lcd.addView(line);
+        TextView line = text(screen, 11, false); line.setTextColor(0xffcfe0ff); line.setPadding(dp(6), dp(4), dp(6), 0);
+        line.setGravity(Gravity.CENTER); line.setSingleLine(true); line.setEllipsize(TextUtils.TruncateAt.END);
+        lcd.addView(line, new LinearLayout.LayoutParams(-1, -2));
         shell.addView(lcd, new LinearLayout.LayoutParams(dp(124), dp(124)));
         mirror.addView(shell, new LinearLayout.LayoutParams(dp(156), dp(196)));
-        TextView status = text(near ? "● 在身边 · 屏幕和手机同步" : "● " + store.linkState(), 13, false);
-        status.setTextColor(near ? GREEN : AMBER); status.setPadding(0, dp(12), 0, 0); mirror.addView(status);
+        // 只有一句状态：在身边 / 正在找 / 没找到（和原因）。首页的胶囊用同一个说法。
+        boolean searching = deviceSearchOn() && store.linkState().startsWith("正在找");
+        TextView status = text(near ? "● 在身边 · 屏幕和手机同步" : !deviceSearchOn() ? "● 没开启，下面打开“找随身小鱼”" : searching ? "● 正在找，把设备拿近一点" : "● " + store.linkState(), 13, false);
+        status.setTextColor(near ? GREEN : searching ? BLUE : !deviceSearchOn() ? HINT : AMBER); status.setPadding(0, dp(12), 0, 0); mirror.addView(status);
         devicePane.addView(mirror);
         LinearLayout list = group();
-        list.addView(groupRow("device", near ? "断开设备" : "连接设备", null, "›", HINT, view -> {
-            if (near) { rememberConnect(false); LinkService.stop(this); } else connect();
+        boolean on = deviceSearchOn();
+        list.addView(groupRow("device", "找随身小鱼", on ? "开着时手机用蓝牙找你配过的那台，找到就连上" : "关着时不用蓝牙、不弹配对",
+                on ? "开" : "关", on ? BLUE : HINT, view -> {
+            if (on) { rememberConnect(false); LinkService.stop(this); HubStore.get().setLinkState("没开启"); toast("已关掉，不再找设备"); }
+            else { connect(); toast("正在找随身小鱼，把它拿近一点"); }
+            deviceKey = null; refreshDevice(HubStore.get());
         }, true));
-        list.addView(groupRow(null, "固件", null, "开发者 ›", HINT, view -> openSettings(2), false));
+        if (!getSharedPreferences("link", MODE_PRIVATE).getString("device", "").isEmpty())
+            list.addView(groupRow(null, "换一台设备", "忘掉配过的那台，下次打开时重新配对", "›", HINT, view -> {
+                BleLink.forget(this); toast("已忘掉，下次打开“找随身小鱼”时重新配对"); deviceKey = null; refreshDevice(HubStore.get());
+            }, true));
+        String firmware = store.firmwareLine();
+        list.addView(groupRow(null, "固件", firmware.isEmpty() ? null : CardViews.oneLine(firmware, 40), "›", HINT, view -> openSettings(2), false));
         devicePane.addView(list);
-        TextView later = text("更多玩法 · 随固件更新到来\n按键怎么用、提醒、表盘……设备能做什么，这里就会多出什么。", 12, false);
-        later.setTextColor(HINT); later.setLineSpacing(dp(3), 1f);
-        later.setPadding(dp(16), dp(14), dp(16), dp(14));
-        GradientDrawable dashed = new GradientDrawable(); dashed.setCornerRadius(dp(18));
-        dashed.setStroke(dp(1), 0xffd5dde8, dp(5), dp(4)); later.setBackground(dashed);
-        LinearLayout.LayoutParams laterParams = new LinearLayout.LayoutParams(-1, -2); laterParams.setMargins(0, dp(18), 0, 0);
-        devicePane.addView(later, laterParams);
     }
 
     @Override protected void onDestroy() {
@@ -4034,6 +4049,23 @@ public class MainActivity extends Activity implements HubStore.Listener {
         onHubChanged();
     }
 
+    /** 通知页：每次打开、从系统设置回来都重画，开关状态以系统为准。 */
+    private void refreshNotificationSettings() {
+        if (notificationSettingsPane == null) return;
+        notificationSettingsPane.removeAllViews();
+        boolean post = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        boolean shown = post && ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).areNotificationsEnabled();
+        boolean reading = listenerEnabled();
+        LinearLayout box = group();
+        box.addView(groupRow(null, "审批提醒", "帮手要你点头时，手机弹一条通知", shown ? "已开启 ›" : "去开启 ›", shown ? GREEN : AMBER, view -> {
+            if (!post) requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 2);
+            else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+        }, true));
+        box.addView(groupRow(null, "读取手机通知", "让随身小鱼显示你选的应用的新消息", reading ? "已开启 ›" : "去开启 ›", reading ? GREEN : HINT,
+                view -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)), false));
+        notificationSettingsPane.addView(box);
+    }
+
     private boolean listenerEnabled() {
         String enabled = Settings.Secure.getString(getContentResolver(),
                 "enabled_notification_listeners");
@@ -4607,7 +4639,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             TextView end = text(card.state.equals("failed") ? "未成功" : card.state.equals("cancelled") ? "已停止" : "✓", 13, false);
             end.setTextColor(card.state.equals("done") ? GREEN : HINT); return end;
         }
-        double last = card.lastMeaningfulAt > 0 ? card.lastMeaningfulAt : card.startedAt;
+        // 电脑上的会话报进展没那么勤，在跑就转圈；只有小鱼派出的事才按“多久没进展”提醒。
+        double last = card.monitoringOnly ? 0 : card.lastMeaningfulAt > 0 ? card.lastMeaningfulAt : card.startedAt;
         if (group == WorkRecords.Group.UNCERTAIN || last > 0 && now - last > 300) {
             long minutes = last > 0 ? Math.max(1, (long) (now - last) / 60) : 0;
             TextView quiet = text(group == WorkRecords.Group.UNCERTAIN ? "待确认" : minutes < 60 ? minutes + " 分钟" : minutes / 60 + " 小时", 12, false);
@@ -4777,12 +4810,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
             }); ctl(all, "work:all-steps"); steps.addView(all);
         }
         steps.setPadding(0, dp(18), 0, dp(4)); head.addView(steps);
-        int first = Math.max(0, card.activity.size() - 3);
-        for (int i = first; i < card.activity.size(); i++) {
-            Card.Entry event = card.activity.get(i);
-            head.addView(groupRow(null, CardViews.oneLine(event.text, 60), stepLabel(event), stepTime(event.at), HINT, v -> activityDetail(event), i < card.activity.size() - 1));
+        // 最近三条看得懂的：命令写成“运行命令：…”，内部标记不显示。
+        List<Card.Entry> shown = new ArrayList<>();
+        for (int i = card.activity.size() - 1; i >= 0 && shown.size() < 3; i--)
+            if (!AppPresentation.readableProgress(card.activity.get(i).text).isEmpty()) shown.add(0, card.activity.get(i));
+        for (int i = 0; i < shown.size(); i++) {
+            Card.Entry event = shown.get(i);
+            head.addView(groupRow(null, CardViews.oneLine(AppPresentation.readableProgress(event.text), 60), stepLabel(event), stepTime(event.at), HINT, v -> activityDetail(event), i < shown.size() - 1));
         }
-        if (card.activity.isEmpty()) for (int i = Math.max(0, card.progress.size() - 3); i < card.progress.size(); i++) head.addView(text(card.progress.get(i), 13, false));
+        if (card.activity.isEmpty()) for (int i = Math.max(0, card.progress.size() - 3); i < card.progress.size(); i++) {
+            String line = AppPresentation.readableProgress(card.progress.get(i));
+            if (!line.isEmpty()) head.addView(text(line, 13, false));
+        }
         if (total == 0) head.addView(text("还没有进展", 13, false));
         // 一行安静的信息：电脑、来源聊天、原会话；目录、会话编号这些收在 ⓘ 里。
         LinearLayout info = new LinearLayout(this); info.setGravity(Gravity.CENTER_VERTICAL); info.setPadding(0, dp(18), 0, dp(8));
@@ -4830,8 +4869,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private static String stepTime(double at) {
-        if (!(at > 0)) return "";
-        return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date((long) (at * 1000)));
+        return AppPresentation.clock(at, System.currentTimeMillis() / 1000.0, java.time.ZoneId.systemDefault());
     }
 
     private void refreshNative(List<Card> cards) {

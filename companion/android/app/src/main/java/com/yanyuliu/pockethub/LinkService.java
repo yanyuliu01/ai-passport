@@ -105,7 +105,9 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+        // 系统自己重启这个服务（intent 为空）也要看开关：主人关了“找随身小鱼”就不用蓝牙。
+        if ((intent != null && ACTION_STOP.equals(intent.getAction()))
+                || !getSharedPreferences("link", MODE_PRIVATE).getBoolean("search", false)) {
             stopSelf();
             return START_NOT_STICKY;
         }

@@ -74,7 +74,11 @@ final class WorkRecords {
     static String progress(Card card) {
         if (card.presentation != null && card.presentation.supported && !card.presentation.value("progress").isEmpty())
             return card.presentation.value("progress");
-        return card.progress.isEmpty() ? "" : card.progress.get(card.progress.size() - 1);
+        for (int i = card.progress.size() - 1; i >= 0; i--) {
+            String line = AppPresentation.readableProgress(card.progress.get(i));
+            if (!line.isEmpty()) return line;
+        }
+        return "";
     }
 
     /** 补充要求走到哪一步，各自来自对应的事实；和电脑客户端用同一套说法。 */

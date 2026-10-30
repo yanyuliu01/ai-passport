@@ -61,7 +61,9 @@ final class BleLink {
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final String NAME_PREFIX = "Claude";
     private static final long SCAN_TIMEOUT_MS = 20000;
-    private static final long RETRY_MS = 5000;
+    /** 一直找不到时越等越久再找（5 秒、30 秒、1 分钟、之后每 3 分钟），不再每 25 秒扫一次耗电。 */
+    private static final long[] BACKOFF_MS = {5000, 30000, 60000, 180000};
+    private int misses;
     private static final long STEP_TIMEOUT_MS = 30000;
 
     private final Context context;
@@ -91,6 +93,10 @@ final class BleLink {
 
     void start() {
         wanted = true;
+        // 主人点了“连接设备”：马上重新找，不等退避。
+        misses = 0;
+        if (scanning) { stopScan(); }
+        main.removeCallbacks(retry);
         if (!receiverRegistered) {
             context.registerReceiver(bondReceiver,
                     new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
@@ -188,8 +194,9 @@ final class BleLink {
             // 不按服务过滤：设备的广播包里放的是名字，服务 UUID 在扫描响应里，
             // 有的手机带过滤条件时收不到。
             List<ScanFilter> filters = Collections.emptyList();
+            // 头两次全力找；之后改省电模式，靠近了一样能找到，只是慢一点。
             ScanSettings settings = new ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
+                    .setScanMode(misses < 2 ? ScanSettings.SCAN_MODE_LOW_LATENCY : ScanSettings.SCAN_MODE_BALANCED).build();
             scanner.startScan(filters, settings, scanCallback);
         } catch (SecurityException error) {
             HubStore.get().setLinkState("缺少蓝牙权限");
@@ -204,6 +211,7 @@ final class BleLink {
         if (scanning) {
             stopScan();
             HubStore.get().setLinkState("没找到设备，稍后再找");
+            misses++;
             retryLater();
         }
     };
@@ -228,7 +236,7 @@ final class BleLink {
     private void retryLater() {
         main.removeCallbacks(retry);
         if (wanted) {
-            main.postDelayed(retry, RETRY_MS);
+            main.postDelayed(retry, BACKOFF_MS[Math.min(misses, BACKOFF_MS.length - 1)]);
         }
     }
 
@@ -254,6 +262,11 @@ final class BleLink {
                 if (!byName && !byService) {
                     return;
                 }
+                // 配过对的那台以外一律不理：不然走到哪儿碰上别人的设备都会弹配对。
+                String mine = paired();
+                if (!mine.isEmpty() && !mine.equalsIgnoreCase(result.getDevice().getAddress())) {
+                    return;
+                }
                 stopScan();
                 connect(result.getDevice(), name);
             });
@@ -268,6 +281,20 @@ final class BleLink {
             });
         }
     };
+
+    /** 配过对的那台设备的地址；还没配过是空串。 */
+    private String paired() {
+        return context.getSharedPreferences("link", Context.MODE_PRIVATE).getString("device", "");
+    }
+
+    private void remember(BluetoothDevice device) {
+        if (device != null) context.getSharedPreferences("link", Context.MODE_PRIVATE).edit().putString("device", device.getAddress()).apply();
+    }
+
+    /** 忘掉配过的那台：下次打开“找随身小鱼”时重新认一台。 */
+    static void forget(Context context) {
+        context.getSharedPreferences("link", Context.MODE_PRIVATE).edit().remove("device").apply();
+    }
 
     private void connect(BluetoothDevice device, String name) {
         HubStore.get().setLinkState("正在连接 " + (name == null ? device.getAddress() : name));
@@ -328,6 +355,7 @@ final class BleLink {
                 return;
             }
             if (state == BluetoothDevice.BOND_BONDED) {
+                if (gatt != null) remember(gatt.getDevice());
                 HubStore.get().setLinkState("配对成功，正在准备");
                 armStepTimeout();
                 gatt.discoverServices();
@@ -369,6 +397,7 @@ final class BleLink {
                 }
                 BluetoothDevice device = source.getDevice();
                 if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                    remember(device);
                     source.discoverServices();
                 } else if (device.getBondState() == BluetoothDevice.BOND_NONE) {
                     HubStore.get().setLinkState("请输入小鱼屏幕上的六位数字");
@@ -422,7 +451,7 @@ final class BleLink {
                 }
                 main.removeCallbacks(stepTimeout);
                 ready = true;
-                HubStore.get().setLinkState("已连接");
+                HubStore.get().setLinkState("已连接"); misses = 0;
                 listener.onReady();
             });
         }
