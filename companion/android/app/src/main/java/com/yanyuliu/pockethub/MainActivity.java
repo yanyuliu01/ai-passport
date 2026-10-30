@@ -2434,7 +2434,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
      * 返回是否变了。
      */
     private boolean setBubbles(LinearLayout group, List<String> parts, boolean animate, Presentation presentation) {
-        int had = group.getChildCount();
+        int had = group.getChildCount(); long popDelay = 0;
         boolean changed = false;
         while (group.getChildCount() > parts.size()) { group.removeViewAt(group.getChildCount() - 1); changed = true; }
         for (int index = 0; index < parts.size(); index++) {
@@ -2451,7 +2451,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             words.setTag(parts.get(index)); words.setText(presentation != null && presentation.supported
                     ? Markdown.projected(presentation,index) : Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
-            if (animate) Motion.pop(bubble, false, (index - had) * 380L);
+            // 一条接一条地出，每条按它的字数等一会儿，像对方在接着打字（AppPresentation.bubbleDelay）。
+            if (animate) { if (index > had) popDelay += AppPresentation.bubbleDelay(parts.get(index)); Motion.pop(bubble, false, popDelay); }
         }
         return changed;
     }

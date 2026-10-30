@@ -291,6 +291,15 @@ final class AppPresentation {
      * 进展里的一行给人看：帮手跑的命令写成“运行命令：…”（去掉 /bin/zsh -lc 和引号），
      * 开头的英文结果词换成中文，纯内部的标记（Native execution association）返回空串不显示。
      */
+    /**
+     * 小鱼一次说几条时，第 2 条起每条等多久再出来：按这条的字数“打字”，大约每秒 12 个字
+     * （比人打字快一点），最少 0.6 秒、最多 2.5 秒。桌面客户端用同一个规则（presentation.ts bubbleDelay）。
+     */
+    static long bubbleDelay(String text) {
+        int chars = text == null ? 0 : text.replaceAll("\\s+", "").codePointCount(0, text.replaceAll("\\s+", "").length());
+        return Math.max(600L, Math.min(2500L, chars * 1000L / 12));
+    }
+
     /** 列表里的时间：今天只写几点，昨天写“昨天”，今年写几月几日，更早写年份。 */
     static String clock(double at, double now, ZoneId zone) {
         if (!(at > 0)) return "";

@@ -132,6 +132,12 @@ public class AppPresentationTest {
         assertEquals(2 + 60 + 1, AppPresentation.quoteSnippet("我", longLine).length());
     }
 
+    @Test public void bubblesArePacedByLengthLikeFastTyping() {
+        assertEquals(600, AppPresentation.bubbleDelay("好"));
+        assertEquals(2000, AppPresentation.bubbleDelay(new String(new char[24]).replace('\0', '一')));
+        assertEquals(2500, AppPresentation.bubbleDelay(new String(new char[200]).replace('\0', '一')));
+    }
+
     @Test public void homeAndSidebarShareOneHelperMode() {
         // Codex only busy in a session on the computer: not idle anywhere (the home chip used to say idle).
         // Same rule as 在做的事: only a session observed in the last few minutes counts as running.
