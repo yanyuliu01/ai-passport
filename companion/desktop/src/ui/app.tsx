@@ -2,7 +2,7 @@ import { AccountPanel } from './account';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ClientView, DesktopAPI, HelperView, Json, Message, SpaceView } from '../shared';
-import { localHelpers, activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, messageStatusText, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, type ReviewOutcome } from '../core/presentation';
+import { localHelpers, activeTask, unverifiedTask, helperMatchesTask, mainMessages, taskStatusLabel, messageBlocks, messageStatusText, authorLabel, projection, displayIssue, connectionWord, listedSideChat, listedTask, workSection, taskProgress, requestOf, reviewItems, reviewMissing, reviewLabel, desktopRunning, sessionState, readableProgress, clock, splitQuote, withQuote, quoteSnippet, relayLabel, bubbleDelay, type ReviewOutcome } from '../core/presentation';
 import { Avatar, elapsed, HelperPill, Icon, QuotaAvatar, shortTime, taskKey } from './components';
 import { Directory } from './directory';
 import { HelperSettings } from './helpers';
@@ -13,7 +13,7 @@ import './style.css';
 declare global { interface Window { xiaoyu: DesktopAPI } }
 const empty: ClientView = { version: '0.1.17', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
-type Page = 'chat' | 'work' | 'settings' | 'native';
+type Page = 'chat' | 'work' | 'settings' | 'native' | 'helper';
 type TaskRef = { id: string; runtime: string };
 function App() {
   const [directoryOpen,setDirectoryOpen]=useState(false);
@@ -25,6 +25,9 @@ function App() {
   const [review, setReview] = useState<{ runtime: string; record: string }>(), [timerRows, setTimerRows] = useState<Json[]>([]);
   const [stopping, setStopping] = useState(''), [reconcileNote, setReconcileNote] = useState('');
   const [usage, setUsage] = useState<string>(), [detail, setDetail] = useState<Json>(), [detailError, setDetailError] = useState(''), [allSteps, setAllSteps] = useState(false), [highlight, setHighlight] = useState('');
+  const [quote, setQuote] = useState<string>(), [menu, setMenu] = useState<{ x: number; y: number; text: string; author: string }>();
+  const [openHelper, setOpenHelper] = useState<string>(), [helperAll, setHelperAll] = useState(false), [manageHelpers, setManageHelpers] = useState(false);
+  const [sessionText, setSessionText] = useState(''), [errorDetail, setErrorDetail] = useState<string>();
   const detailGeneration = useRef(0), selection = useRef('');
   const bottom = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
   const space = view.spaces.find(item => item.id === view.selectedSpace) || view.spaces[0];
@@ -45,16 +48,17 @@ function App() {
   const work = tasks.filter(listedTask);
   const awaiting = work.filter(task => workSection(task) === 'waiting'), running = work.filter(task => workSection(task) === 'running');
   const completed = work.filter(task => workSection(task) === 'ended').slice().reverse();
+  const desktopNow = tasks.filter(task => desktopRunning(task));
   const connection = space?.catchingUp ? '正在同步' : connectionWord(Boolean(space), Boolean(space?.connected));
   selection.current = space?.id + '/' + space?.selectedConversation;
   const title = page === 'chat' ? target?.legacy ? '任务续聊' : conversation?.id === 'default' ? '主对话' : conversation?.title || '主对话'
-    : page === 'work' ? '在做的事' : page === 'native' ? '原会话记录' : '设置';
+    : page === 'work' ? '在做的事' : page === 'native' ? '原会话' : page === 'helper' ? '' : '设置';
   const messageVersion = messages.filter(message => ['final', 'done', 'failed', 'cancelled'].includes(message.status)).map(message => message.id + ':' + message.rev).join('|');
   useEffect(() => {
     void window.xiaoyu.snapshot().then(value => { setView(value); if (!value.setup?.confirmed) setSetupOpen(true); setLoaded(true); }).catch(() => setProblem('暂时无法连接后台服务'));
     return window.xiaoyu.subscribe(setView);
   }, []);
-  useEffect(() => { setHistoryLimit(100); setText(''); setUsage(undefined); }, [space?.id, space?.selectedConversation]);
+  useEffect(() => { setHistoryLimit(100); setText(''); setUsage(undefined); setQuote(undefined); }, [space?.id, space?.selectedConversation]);
   useEffect(() => { setSelectedTask(undefined); setDetail(undefined); setTarget(undefined); setPage('chat'); }, [space?.id]);
   useEffect(() => setReconcileNote(''), [selectedTask?.id, selectedTask?.runtime]);
   useEffect(() => {
@@ -64,11 +68,12 @@ function App() {
   useEffect(() => {
     let current = true; detailGeneration.current++; setDetail(undefined); setDetailError(''); setAllSteps(false);
     if (!space || !selectedTask || !['work', 'native'].includes(page)) return;
+    setSessionText('');
     void window.xiaoyu.taskDetail({ space: space.id, ...selectedTask }).then(value => { if (current) setDetail(value); }).catch(() => { if (current) setDetailError('进展暂时读不到，稍后会自动重试。'); });
     return () => { current = false; };
   }, [space?.id, selectedTask?.id, selectedTask?.runtime, selected?.rev, selected?.seq, page]);
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setUsage(undefined); setAttachmentsOpen(false); setSidebarOpen(false); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setUsage(undefined); setAttachmentsOpen(false); setSidebarOpen(false); setMenu(undefined); } };
     window.addEventListener('keydown', escape); return () => window.removeEventListener('keydown', escape);
   }, []);
   useEffect(() => {
@@ -82,7 +87,13 @@ function App() {
     setProblem(''); setWorking(true);
     try { await action(); } catch (error) { setProblem(clean(error)); } finally { setWorking(false); }
   }
-  function openTask(task: Json) { setSelectedTask({ id: String(task.id), runtime: String(task._runtimeId) }); setPage('work'); setSidebarOpen(false); }
+  function openTask(task: Json) {
+    // A "continue this computer session" card is part of that session: open the session.
+    const session = task.desktop_card ? tasks.find(item => item.id === task.desktop_card && item._runtimeId === task._runtimeId) : undefined;
+    const shown = session || task;
+    setSelectedTask({ id: String(shown.id), runtime: String(shown._runtimeId) }); setPage('work'); setSidebarOpen(false);
+  }
+  function showHelper(id: string) { setOpenHelper(id); setHelperAll(false); go('helper'); }
   function go(next: Page) { setPage(next); setSidebarOpen(false); setAttachmentsOpen(false); }
   async function chooseConversation(id: string) {
     if (!space) return;
@@ -99,9 +110,21 @@ function App() {
     event.preventDefault(); if (!space || !text.trim() || sending) return;
     const value = text, source = selection.current; setSending(true); setProblem('');
     try {
-      await window.xiaoyu.send({ space: space.id, text: value, ...(target ? { card: target.id, runtime: target.runtime, mainReply: !target.legacy } : {}) });
-      if (selection.current === source) setText(current => current === value ? '' : current);
+      await window.xiaoyu.send({ space: space.id, text: withQuote(quote, value), ...(target ? { card: target.id, runtime: target.runtime, mainReply: !target.legacy } : {}) });
+      if (selection.current === source) { setText(current => current === value ? '' : current); setQuote(undefined); }
     } catch (error) { setProblem(clean(error)); } finally { setSending(false); }
+  }
+  /** Right-click a bubble: 复制 / 引用 the selected part, or the whole bubble when nothing is selected. */
+  function bubbleMenu(event: React.MouseEvent, whole: string, author: string) {
+    event.preventDefault();
+    const picked = window.getSelection()?.toString().trim();
+    const inside = picked && (event.currentTarget as HTMLElement).contains(window.getSelection()?.anchorNode || null);
+    setMenu({ x: event.clientX, y: event.clientY, text: inside ? picked! : whole, author });
+  }
+  async function sendToSession(task: Json) {
+    if (!space || !sessionText.trim()) return;
+    const value = sessionText;
+    await run(async () => { await window.xiaoyu.continueSession({ space: space.id, id: String(task.id), runtime: String(task._runtimeId), text: withQuote(quote, value) }); setSessionText(''); setQuote(undefined); });
   }
   async function branch(message: Message) {
     if (!space) return;
@@ -129,15 +152,18 @@ function App() {
       <button className={'nav ' + (page === 'chat' && conversation?.id === 'default' && !target?.legacy ? 'selected' : '')} onClick={() => void chooseConversation('default')}><Icon name="chat" /><span>主对话</span>{space?.conversations.find(item => item.id === 'default')?.unread && page !== 'chat' && <i className="unread-dot" />}</button>
       <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length}</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
       <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyu.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
-      <div className="side-conversations">{space?.conversations.filter(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{shortTime(item.updatedAt)}</small>}</button>)}
+      <div className="side-conversations">{space?.conversations.filter(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{clock(item.updatedAt)}</small>}</button>)}
         {!space?.conversations.some(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')) && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
-      <div className="side-heading helpers-heading"><span>帮手</span></div>
-      <div className="side-helpers">{helpers.map(item => <div className="side-helper" key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => { const task = tasks.find(task => helperMatchesTask(item, task) && activeTask(task)); task ? openTask(task) : setUsage(item.id); }}><span>{item.label}</span><small>{tasks.some(task => helperMatchesTask(item, task) && activeTask(task)) ? tasks.some(task => helperMatchesTask(item, task) && task.state === 'waiting') ? '等你确认' : '在做' : item.connected ? '空闲' : '连不上'}</small></button></div>)}
-        {!helpers.length && <p className="side-empty">尚无帮手数据</p>}</div>
+      {/* 帮手固定在设置上面：旁聊再多也不会把它们挤下去（和手机一致）。点帮手进它的页面。 */}
+      <div className="side-pinned">
+        <div className="side-heading helpers-heading"><span>帮手</span><button className="icon-button" aria-label="添加或管理帮手" disabled={!space} onClick={() => setManageHelpers(true)}><Icon name="plus" /></button></div>
+        <div className="side-helpers">{helpers.map(item => <div className={'side-helper ' + (page === 'helper' && openHelper === item.id ? 'selected' : '')} key={item.id}><QuotaAvatar helper={item} onClick={() => setUsage(item.id)} /><button onClick={() => showHelper(item.id)}><span>{item.label}</span><small>{helperState(item, tasks)}</small></button></div>)}
+          {!helpers.length && <p className="side-empty">尚无帮手数据</p>}</div>
+      </div>
       <div className="sidebar-bottom"><button className={'nav ' + (page === 'settings' ? 'selected' : '')} onClick={() => go('settings')}><Icon name="settings" /><span>设置</span></button><small>小鱼桌面版 {view.version}</small></div>
     </aside>
     <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')}><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</button>}</header>
-      {problem && <div role="alert" className="alert"><span>{problem}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
+      {problem && <div role="alert" className="alert"><span>{problem}</span><button className="quiet-button" onClick={() => setErrorDetail(problem)}>详情</button><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
       {page === 'chat' && <>
         <section className="companion-header"><Avatar size={64} /><div className="companion-intro"><div><strong>小鱼</strong><span>换个地方，接着聊。</span></div><div className="helper-pills">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}{!helpers.length && <small>帮手信息暂未上报</small>}</div></div></section>
         <section className="timeline" aria-label="聊天记录" aria-live="polite">
@@ -148,8 +174,8 @@ function App() {
           {messages.slice(-historyLimit).map(message => {
             const task = tasks.find(task => task.id === message.task && task._runtimeId === message._runtimeId);
             const showTask = task && activeTask(task) && latestTaskMessage.get(taskKey(task)) === message.id;
-            return <Bubble key={String(message._canonical || message.id)} message={message} task={showTask ? task : undefined} onTask={openTask} onBranch={() => void branch(message)} highlight={highlight === message.id || highlight + ':you' === message.id}
-              onReview={reviewable(message) ? () => setReview({ runtime: String(message._runtimeId), record: 'messages/' + requestOf(message.id) }) : undefined} canBranch={Boolean(space?.connections?.find(item => item.runtime === message._runtimeId)?.capabilities.includes('side_chats'))} />;
+            return <Bubble key={String(message._canonical || message.id)} message={message} task={showTask ? task : undefined} onTask={openTask} highlight={highlight === message.id || highlight + ':you' === message.id}
+              onMenu={bubbleMenu} onReview={reviewable(message) ? () => setReview({ runtime: String(message._runtimeId), record: 'messages/' + requestOf(message.id) }) : undefined} />;
           })}
           {pending.map(item => <article className="message-row mine" key={item.clientId}><div className="message-bubble"><p>{item.payload.text}</p><small>{item.state === 'accepted' ? '已接收，等待回复' : item.state === 'blocked' ? item.error : item.error || '已存本机，等待发送'}</small></div></article>)}
           {waiting && <div className="thinking" role="status"><span className="working-dot" />{waitingProblem ? '回复状态待确认：' + waitingProblem : space?.connected ? '正在等待小鱼回复…' : '连接恢复中，回复状态待确认…'}</div>}
@@ -158,22 +184,24 @@ function App() {
         </section>
         <div className="compose-area">{linkedTask && <div className="task-target"><Icon name="quote" /><span>补充：{String(linkedTask.title)}</span><button className="icon-button" aria-label="取消任务关联" onClick={() => setTarget(undefined)}><Icon name="close" /></button></div>}
           <form className="composer" onSubmit={submit}><textarea ref={input} aria-label="消息" value={text} disabled={!space} placeholder={target ? '补充这件事的要求…' : '跟小鱼说…'} rows={1} maxLength={32000} onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(event); } }} />
-            <button className="icon-button" type="button" aria-label="语音输入" title="语音输入暂不可用" onClick={() => setProblem('当前桌面版本暂未接入语音输入，请先使用文字。')}><Icon name="mic" /></button>
-            <div className="attachment-wrap"><button className="icon-button" type="button" aria-label="添加照片或文件" aria-expanded={attachmentsOpen} onClick={() => setAttachmentsOpen(value => !value)}><Icon name="plus" /></button>{attachmentsOpen && <div className="attachment-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送照片，可在手机 App 发送。'); }}><Icon name="image" />照片</button><button type="button" role="menuitem" onClick={() => { setAttachmentsOpen(false); setProblem('当前桌面连接暂不支持发送文件。'); }}><Icon name="file" />文件</button></div>}</div>
+            {/* 桌面版还不能发语音和图片：不放点了只会报错的按钮（和手机一致）。 */}
             <button className="send" type="submit" aria-label="发送" disabled={!space || !text.trim() || sending}><Icon name="up" /></button>
-          </form><p className="compose-hint">{space?.connected ? 'Enter 发送 · Shift + Enter 换行' : '连不上，消息先存在本机，连上后自动发送'}</p></div>
+          </form>{quote && <QuoteBar text={quote} onClear={() => setQuote(undefined)} />}<p className="compose-hint">{space?.connected ? 'Enter 发送 · Shift + Enter 换行' : '连不上，消息先存在本机，连上后自动发送'}</p></div>
       </>}
       {page === 'work' && <section className="work-page"><div className="work-list">{timerRows.length > 0 && <><h2>需要你核对</h2>{timerRows.map(row => <button key={String(row._runtimeId) + String(row.timer_id || row.source_id)} className="task-row timer-review" disabled={!row.reviewable || !row.timer_id}
           title={row.reviewable ? '' : String(row.reason || '暂时不能核对')} onClick={() => setReview({ runtime: String(row._runtimeId), record: 'timers/' + String(row.timer_id) })}>
           <Icon name="clock" /><span>{row.kind === 'promise' ? '提醒' : '记忆整理'}结果不明</span><small>{row.reviewable ? reviewLabel(row.status) : String(row.reason || '暂时不能核对')}</small></button>)}
         {timerRows.some(row => row.more) && <p className="quiet-empty">还有更多，处理完这些后会接着列出</p>}</>}
         {awaiting.length > 0 && <h2>等你确认</h2>}{awaiting.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
-        {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小鱼会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+        {running.length > 0 && <h2>进行中</h2>}{awaiting.length + running.length + desktopNow.length === 0 && <p className="quiet-empty">现在没有在做的事。在聊天里交代一件事，小鱼会安排帮手。</p>}{running.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
+        {desktopNow.length > 0 && <h2>电脑上在跑</h2>}{desktopNow.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}
         {completed.length > 0 && <button className="completed-toggle" aria-expanded={completedOpen} onClick={() => setCompletedOpen(value => !value)}><Icon name={completedOpen ? 'down' : 'next'} />已结束 {completed.length}</button>}{completedOpen && completed.map(task => <TaskRow key={taskKey(task)} task={task} selected={taskKey(task) === (selected ? taskKey(selected) : '')} onClick={() => openTask(task)} />)}</div>
         <div className="work-detail">{selected ? <><div className="task-detail-title"><Avatar type={String(selected.worker_agent || selected.agent)} size={40} /><h2>{String(selected.title || '一件事')}</h2></div>
-          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{stopping === taskKey(selected) && activeTask(selected) ? '正在停止…' : selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{taskProgress(selected) || '暂无新的进展'}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(selected.relay_state) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
+          <div className={'task-state ' + (selected.state === 'waiting' ? 'waiting' : '')}><strong>{stopping === taskKey(selected) && activeTask(selected) ? '正在停止…' : selected._staleEpoch ? '状态待确认' : taskStatusLabel(selected)}</strong><p>{taskProgress(selected) || '暂无新的进展'}</p><small>{selected._staleEpoch ? '状态待确认' : elapsed(selected.last_meaningful_at || selected.updated_at)}</small>{Boolean(relayLabel(String(selected.relay_state || ''))) && <p>{relayLabel(String(selected.relay_state))}</p>}</div>
           {space?.approvals.filter(approval => approval._runtimeId === selected._runtimeId && (approval.card === selected.id || approval.task === selected.id || (selected.approval as Json | undefined)?.id === approval.id)).map(approval => <Decision key={String(approval.id)} approval={approval} disabled={working} onDecision={decision => void run(() => window.xiaoyu.approve({ space: space.id, id: String(approval.id), runtime: String(approval._runtimeId), decision }))} />)}
-          <div className="task-detail-actions"><button className="primary" disabled={working || Boolean(selected._staleEpoch) || Boolean(selected.monitoring_only)} onClick={() => void run(() => supplement(selected))}>补充要求</button>
+          {selected.monitoring_only ? <SessionChat task={selected} tasks={tasks} detail={detail} state={sessionState(selected, Boolean(space?.connected))} text={sessionText} busy={working}
+            onText={setSessionText} onSend={() => void sendToSession(selected)} onMenu={bubbleMenu} onDetails={setErrorDetail} /> : null}
+          <div className="task-detail-actions">{!selected.monitoring_only && <button className={workSection(selected) === 'ended' ? '' : 'primary'} disabled={working || Boolean(selected._staleEpoch)} onClick={() => void run(() => supplement(selected))}>{workSection(selected) === 'ended' ? '接着让它做…' : '补充要求'}</button>}
             {canOpenNative(selected, space) && <button disabled={working} onClick={() => space && void run(() => window.xiaoyu.openNative({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId) }))}>在 Codex 打开 <Icon name="external" /></button>}</div>
           <div className="progress-heading"><h3>最近进展</h3><button className="quiet-button" onClick={() => setAllSteps(value => !value)}>{allSteps ? '收起' : '全部' + (progressCount(detail) ? ' ' + progressCount(detail) : '')}</button></div>
           {detailError && <p className="quiet-empty">{detailError}</p>}{Boolean(detail?.cached) && <p className="quiet-empty">连不上，显示上次的记录</p>}
@@ -185,21 +213,114 @@ function App() {
           {unverifiedTask(selected) && !selected.monitoring_only && Boolean(selected.run_id) && space?.connections?.find(item => item.runtime === selected._runtimeId)?.capabilities.includes('execution_reconciliation')
             && <div className="reconcile"><button disabled={working} onClick={() => space && void run(async () => { setReconcileNote(''); const status = await window.xiaoyu.reconcile({ space: space.id, id: String(selected.id), runtime: String(selected._runtimeId), run: String(selected.run_id) }); setReconcileNote(status === 'confirmed' ? '核对好了，结果已回到原对话' : '没找到足够的完成证据，保持待确认'); })}>核对结果</button>{reconcileNote && <small role="status">{reconcileNote}</small>}</div>}
         </> : <div className="work-unselected">选一件事，查看进展。</div>}</div></section>}
-      {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里只查看已记录内容。补充要求经小鱼转交；记录缺失不代表原会话没有更多内容。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
+      {page === 'native' && <section className="native-page"><h2>{String(selected?.title || '原会话记录')}</h2><p className="native-notice">这里是同步过来的片段，完整对话在来源电脑上。</p>{Boolean(detail?.cached) && <p className="native-notice">当前显示本机缓存</p>}{detailError && <p className="native-notice">{detailError}</p>}
         {Array.isArray(detail?.entries) && (detail.entries as Json[]).map((entry, index) => <article className={'native-entry ' + (entry.role === 'you' ? 'owner' : '')} key={String(entry.id || index)}><small>{entry.role === 'you' ? '你' : String(entry.author || selected?.agent || '小鱼')} · {shortTime(Number(entry.at) * 1000)}</small><p>{String(entry.text || '')}</p></article>)}
-        {(!detail || !(detail.entries as Json[] | undefined)?.length) && <p className="quiet-empty">尚无可读取的原会话片段。</p>}{selected && !selected.monitoring_only && <button className="primary" onClick={() => void run(() => supplement(selected))}>补充要求</button>}</section>}
+        {(!detail || !(detail.entries as Json[] | undefined)?.length) && <p className="quiet-empty">还没有同步过来的内容。</p>}{selected && !selected.monitoring_only && <button onClick={() => void run(() => supplement(selected))}>在这段对话里接着说…</button>}</section>}
+      {page === 'helper' && <HelperPage helper={helpers.find(item => item.id === openHelper)} tasks={tasks} connected={Boolean(space?.connected)} all={helperAll} onAll={() => setHelperAll(value => !value)}
+        onUsage={() => openHelper && setUsage(openHelper)} onManage={() => setManageHelpers(true)} onTask={openTask} />}
       {page === 'settings' && <Settings view={view} space={space} disabled={working} onSetup={() => setSetupOpen(true)} onRun={run} onSelect={id => void run(() => window.xiaoyu.select(id))} onDirectory={() => setDirectoryOpen(true)} />}
     </main>
+    {manageHelpers && <div className="modal-shade" onMouseDown={event => { if (event.target === event.currentTarget) setManageHelpers(false); }}><section className="usage-modal manage-helpers" role="dialog" aria-modal="true" aria-label="管理帮手">
+      <header><h2>帮手</h2><button className="icon-button" aria-label="关闭" onClick={() => setManageHelpers(false)}><Icon name="close" /></button></header>
+      <HelperSettings space={space} helpers={space?.helpers || []} disabled={working} onRun={run} /></section></div>}
+    {menu && <BubbleMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)} onCopy={() => { void navigator.clipboard.writeText(menu.text); setMenu(undefined); }}
+      onQuote={() => { setQuote(quoteSnippet(menu.author, menu.text)); setMenu(undefined); (page === 'work' ? null : input.current)?.focus(); }} />}
+    {errorDetail && <ErrorDetail text={errorDetail} onClose={() => setErrorDetail(undefined)} />}
     {directoryOpen && space && <Directory key={space.id} space={space} onClose={()=>setDirectoryOpen(false)}/>}
     {review && space && <EffectReview key={review.runtime + '/' + review.record} space={space.id} target={review} onClose={() => { setReview(undefined); loadTimers(); }} />}
     {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyu.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
   </div>;
 }
-function Bubble({ message, task, onTask, onBranch, onReview, canBranch, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onBranch(): void; onReview?: () => void; canBranch: boolean; highlight: boolean }) {
+function Bubble({ message, task, onTask, onReview, onMenu, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onReview?: () => void; onMenu(event: React.MouseEvent, text: string, author: string): void; highlight: boolean }) {
   const mine = message.author?.kind === 'owner' || message.kind === 'user';
   const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message), status = messageStatusText(message);
+  // 刚到的一组回复一条接一条地出：每条按字数等一会儿，像在接着打字（bubbleDelay，和手机一致）。
+  const fresh = !mine && blocks.length > 1 && Date.now() - Number(message.updated_at || message.created_at || 0) * 1000 < 15_000;
+  const [shown, setShown] = useState(fresh ? 1 : Infinity);
+  useEffect(() => {
+    if (shown >= blocks.length) return;
+    const timer = setTimeout(() => setShown(count => count + 1), bubbleDelay(String(blocks[shown]?.text || '')));
+    return () => clearTimeout(timer);
+  }, [shown, blocks.length]);
   if (!mine && !blocks.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
-  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}{blocks.map(block => <div className="message-bubble" key={block.id} data-block-id={block.id}><DisplayText block={block} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small><button className="message-branch" disabled={!canBranch} title={canBranch ? '从这条消息开旁聊' : '当前服务暂不支持从消息分出旁聊'} onClick={onBranch}>开旁聊</button></div></div>)}{status && <small role="status">{status}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
+  const author = mine ? '我' : authorLabel(message) || '小鱼';
+  return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}
+    {blocks.slice(0, shown).map(block => {
+      // 你引用过的那句：像微信，灰色小块贴在你的气泡下面（和手机一致）。
+      const quoted = mine ? splitQuote(String(block.text || '')) : { body: String(block.text || '') };
+      const shown = quoted.quote ? { ...block, text: quoted.body } : block;
+      return <div key={block.id} className="bubble-stack"><div className="message-bubble" data-block-id={block.id} onContextMenu={event => onMenu(event, quoted.body, author)}><DisplayText block={shown} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small></div></div>
+        {quoted.quote && <div className="quoted">{quoted.quote}</div>}</div>;
+    })}{shown < blocks.length && <div className="typing-dots" aria-label="正在输入"><i /><i /><i /></div>}
+    {status && <small role="status">{status}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
+}
+/** 右键气泡，照微信：深色小条，复制、引用；选中了一部分就只取那一部分。 */
+function BubbleMenu({ x, y, onCopy, onQuote, onClose }: { x: number; y: number; onCopy(): void; onQuote(): void; onClose(): void }) {
+  useEffect(() => { const close = () => onClose(); window.addEventListener('mousedown', close); window.addEventListener('scroll', close, true); return () => { window.removeEventListener('mousedown', close); window.removeEventListener('scroll', close, true); }; }, []);
+  return <div className="bubble-menu" role="menu" style={{ left: Math.min(x, window.innerWidth - 140), top: Math.max(8, y - 64) }} onMouseDown={event => event.stopPropagation()}>
+    <button role="menuitem" onClick={onCopy}><Icon name="copy" /><span>复制</span></button><button role="menuitem" onClick={onQuote}><Icon name="quote" /><span>引用</span></button></div>;
+}
+function QuoteBar({ text, onClear }: { text: string; onClear(): void }) {
+  return <div className="quote-bar"><span>{text}</span><button className="icon-button" aria-label="取消引用" onClick={onClear}><Icon name="close" /></button></div>;
+}
+/** 出错的“详情”：界面上一句人话，原始报错在这里看、能复制（和手机一致）。 */
+function ErrorDetail({ text, onClose }: { text: string; onClose(): void }) {
+  const full = text + '\n\n时间：' + new Date().toLocaleString('zh-CN');
+  return <div className="modal-shade" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section className="usage-modal" role="dialog" aria-modal="true" aria-label="报错详情">
+    <header><h2>出了什么问题</h2><button className="icon-button" aria-label="关闭" onClick={onClose}><Icon name="close" /></button></header>
+    <pre className="error-detail">{full}</pre><footer><span /><button className="primary" onClick={() => void navigator.clipboard.writeText(full)}>复制</button></footer></section></div>;
+}
+/**
+ * 电脑会话的页面像跟它的聊天：最近几轮对话；能接着说时下面就是输入框，不能时写清楚为什么
+ * （开在电脑上 / 在跑 / 接不上）。从这里说的那一句另有一张卡（desktop_card），它的进度写在这里。
+ */
+function SessionChat({ task, tasks, detail, state, text, busy, onText, onSend, onMenu, onDetails }: { task: Json; tasks: Json[]; detail?: Json; state: string; text: string; busy: boolean;
+  onText(value: string): void; onSend(): void; onMenu(event: React.MouseEvent, text: string, author: string): void; onDetails(text: string): void }) {
+  const who = String(task.worker_agent || task.agent || '') === 'codex' ? 'Codex' : 'Claude';
+  const latest = tasks.filter(item => item.desktop_card === task.id && item._runtimeId === task._runtimeId).sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0))[0];
+  const recentLatest = latest && Date.now() - Number(latest.created_at || 0) * 1000 < 6 * 3600_000 ? latest : undefined;
+  const failed = recentLatest?.state === 'failed';
+  const note = recentLatest && activeTask(recentLatest) ? '正在把你的话送进去，' + who + ' 回完会出现在下面。'
+    : failed ? '刚才那句没送到：' + String(recentLatest!.brief || '').replace(/^.*?没做成：/, '')
+    : state === 'open' ? '它正开在电脑上，从这里发的话进不了那个窗口。到电脑上继续，或者关掉那个窗口后再从这里说。'
+    : state === 'running' ? '它这一轮还在跑，结束后可以从这里接着说。' : state === 'unavailable' ? '这个会话现在接不上，只能看。' : '';
+  const entries = (Array.isArray(detail?.entries) ? detail!.entries as Json[] : []).filter(entry => String(entry.text || '').trim()).slice(-8);
+  return <div className="session-chat">
+    {note && <p className={'session-note ' + (failed ? 'failed' : '')}>{note}{failed && <button className="quiet-button" onClick={() => onDetails(String(recentLatest!.brief || ''))}>详情</button>}</p>}
+    {entries.length > 0 && <h3>最近的对话</h3>}
+    {entries.map((entry, index) => { const mine = entry.role === 'you'; return <article key={String(entry.id || index)} className={'message-row ' + (mine ? 'mine' : '')}>
+      <div className="message-bubble" onContextMenu={event => onMenu(event, String(entry.text || ''), mine ? '我' : who)}><p>{String(entry.text || '')}</p><div className="message-meta"><small>{clock(Number(entry.at) * 1000)}</small></div></div></article>; })}
+    {state === 'ready' && <form className="composer session-composer" onSubmit={event => { event.preventDefault(); onSend(); }}>
+      <textarea aria-label={'跟 ' + who + ' 说'} value={text} rows={1} maxLength={32000} placeholder={'跟 ' + who + ' 说…'} onChange={event => onText(event.target.value)}
+        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSend(); } }} />
+      <button className="send" type="submit" aria-label="发送" disabled={busy || !text.trim()}><Icon name="up" /></button></form>}
+  </div>;
+}
+function helperState(helper: HelperView, tasks: Json[]): string {
+  const mine = tasks.filter(task => helperMatchesTask(helper, task));
+  if (mine.some(task => !task.monitoring_only && task.state === 'waiting')) return '等你确认';
+  if (mine.some(task => !task.monitoring_only && activeTask(task))) return '在做';
+  if (mine.some(task => desktopRunning(task))) return '电脑上在跑';
+  return helper.connected ? '空闲' : '连不上';
+}
+/** 帮手页（和手机一致）：头像、名字、一句状态、用量一行；一个“最近”列表，派给它的事和电脑会话合在一起。 */
+function HelperPage({ helper, tasks, connected, all, onAll, onUsage, onManage, onTask }: { helper?: HelperView; tasks: Json[]; connected: boolean; all: boolean; onAll(): void; onUsage(): void; onManage(): void; onTask(task: Json): void }) {
+  if (!helper) return <section className="helper-page"><p className="quiet-empty">这位帮手现在不在列表里。</p></section>;
+  const now = Date.now();
+  const at = (task: Json) => Math.max(Number(task.created_at || 0), Number(task.observed_at || 0)) * 1000;
+  const mine = tasks.filter(task => helperMatchesTask(helper, task) && !task.desktop_card).sort((a, b) => at(b) - at(a));
+  const visible = mine.filter(task => all || !task.monitoring_only || sessionState(task, connected, now) !== 'unavailable');
+  const shown = all ? visible : visible.slice(0, 5);
+  const usage = [helper.fiveHour.left === null ? '' : '5 小时 ' + helper.fiveHour.left + '%', helper.week.left === null ? '' : '本周 ' + helper.week.left + '%'].filter(Boolean).join(' · ');
+  const word = (task: Json) => task.monitoring_only ? ({ running: '在跑', open: '开在电脑上', unavailable: '接不上', ready: '' } as Record<string, string>)[sessionState(task, connected, now)]
+    : activeTask(task) ? (task.state === 'waiting' ? '等你确认' : '在做') : task.state === 'done' ? '✓' : taskStatusLabel(task);
+  return <section className="helper-page">
+    <div className="helper-hero"><Avatar type={helper.type} size={88} /><h2>{helper.label}</h2><p>{helperState(helper, tasks)}</p>{usage && <button className="quiet-button" onClick={onUsage}>{usage} ›</button>}
+      <button className="icon-button helper-more" aria-label="管理帮手" onClick={onManage}><Icon name="more" /></button></div>
+    <div className="progress-heading"><h3>{all ? '全部' : '最近'}</h3>{(mine.length > shown.length || all) && <button className="quiet-button" onClick={onAll}>{all ? '收起' : '全部 ' + mine.length + ' ›'}</button>}</div>
+    {shown.length === 0 && <p className="quiet-empty">还没有。在聊天里说「让{helper.label}做……」，小鱼会安排。</p>}
+    <div className="helper-list">{shown.map(task => <button key={taskKey(task)} className="task-row" onClick={() => onTask(task)}><span><strong>{String(task.title || '一件事')}</strong><small>{(task.monitoring_only ? '电脑上' : '小鱼派的') + ' · ' + clock(at(task))}</small></span><em>{word(task)}</em></button>)}</div>
+  </section>;
 }
 /**
  * The owner's word on a request whose operations ended unknown. Records a disposition only: nothing
@@ -255,8 +376,8 @@ function progressCount(detail?: Json): number {
 }
 function Progress({ detail, all }: { detail?: Json; all: boolean }) {
   const events = Array.isArray(detail?.events) ? detail.events as Json[] : [], entries = Array.isArray(detail?.entries) ? detail.entries as Json[] : [];
-  const rows = events.length ? events : entries.filter(entry => entry.kind !== 'user' && entry.role !== 'you');
-  return <div className="progress-list">{(all ? rows : rows.slice(-3)).map((row, index) => <div key={String(row.id || index)}><Icon name={['completed', 'tool_result'].includes(String(row.phase)) ? 'check' : row.phase === 'relay_queued' ? 'clock' : 'quote'} /><p>{String(row.text || '')}<small>{shortTime(Number(row.created_at || row.at) * 1000)}</small></p></div>)}{detail && !rows.length && <p className="quiet-empty">尚未记录进展。</p>}{!detail && <p className="quiet-empty">正在读取已有进展…</p>}</div>;
+  const rows = (events.length ? events : entries.filter(entry => entry.kind !== 'user' && entry.role !== 'you')).filter(row => readableProgress(String(row.text || '')));
+  return <div className="progress-list">{(all ? rows : rows.slice(-3)).map((row, index) => <div key={String(row.id || index)}><Icon name={['completed', 'tool_result'].includes(String(row.phase)) ? 'check' : row.phase === 'relay_queued' ? 'clock' : 'quote'} /><p>{readableProgress(String(row.text || ''))}<small>{clock(Number(row.created_at || row.at) * 1000)}</small></p></div>)}{detail && !rows.length && <p className="quiet-empty">尚未记录进展。</p>}{!detail && <p className="quiet-empty">正在读取已有进展…</p>}</div>;
 }
 function Usage({ helper, tasks, disabled, onClose, onRefresh, onTask }: { helper: HelperView; tasks: Json[]; disabled: boolean; onClose(): void; onRefresh(): void; onTask(task: Json): void }) {
   const close = useRef<HTMLButtonElement>(null);
@@ -274,20 +395,27 @@ function Usage({ helper, tasks, disabled, onClose, onRefresh, onTask }: { helper
     <p className="usage-freshness">{stale ? '缓存或暂无最新数据' : '最近上报'} · {helper.updatedAt ? new Date(helper.updatedAt).toLocaleTimeString('zh-CN') : '尚未上报'}<br />{helper.device}</p><footer><button disabled={disabled || !helper.connected} onClick={onRefresh}><Icon name="refresh" />刷新用量</button>{task && <button className="primary" onClick={() => onTask(task)}>查看当前工作 <Icon name="next" /></button>}</footer>
   </section></div>;
 }
+/**
+ * 设置按“东西在哪”分组，和手机一致：电脑（账号和连着的电脑合成一组）、这台电脑、已归档、关于。
+ * 帮手不在这里：加帮手用侧边栏“帮手”旁的 ＋，管理某位帮手进它的页面点 ⋯。
+ */
 function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory }: { view: ClientView; space?: SpaceView; disabled: boolean; onSetup(): void; onRun(action: () => Promise<unknown>): Promise<void>; onSelect(id: string): void; onDirectory(): void }) {
+  const archived = space?.conversations.filter(item => item.archived && !item.deleted && item.id !== 'default') || [];
+  const runtime = space?.connections?.find(item => item.local)?.runtime || space?.connections?.[0]?.runtime || '';
   return <section className="settings-page">
-    <div className="settings-group">小鱼</div><AccountPanel view={view.account} onConfigure={onSetup} />
-    <article className="settings-card vertical"><h3>已登录的电脑</h3>
-      <p>在新电脑登录同一个小鱼账号，就会通过服务器自动连接。帮手、模型密钥和执行权限保留在各自电脑上。</p>
-      {space?.connections?.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '离线，等待恢复'}</small></div>)}
-      <p role="status">{view.pairing.relayState}</p>
-    </article>
-    <div className="settings-group">帮手</div>
-    <HelperSettings space={space} helpers={space?.helpers || []} disabled={disabled} onRun={onRun} />
-    <div className="settings-group">偏好</div>
+    <div className="settings-group">电脑</div><AccountPanel view={view.account} onConfigure={onSetup} />
+    {space?.connections?.some(item => !item.local) && <article className="settings-card vertical"><h3>其他登录了这个账号的电脑</h3>
+      {space.connections.filter(item => !item.local).map(item => <div className="connection-row" key={item.runtime}><i className={'dot ' + (item.connected ? 'online' : '')} /><span>{item.name}</span><small>{item.connected ? '已连接' : '离线，等待恢复'}</small></div>)}
+      <p role="status">{view.pairing.relayState}</p></article>}
+    <div className="settings-group">这台电脑</div>
     <article className="settings-card"><div><h3>小鱼在这台电脑上运行</h3><p>{view.runtime.message}</p><small>关掉窗口也在后台；退出客户端才停</small></div><button disabled={disabled} onClick={onSetup}>检测与配置</button></article>
     <article className="settings-card"><div><h3>开机时启动</h3><p>系统登录后在后台恢复连接。</p></div><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(true))}>开启</button><button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.loginStart(false))}>关闭</button></article>
-    <details className="advanced"><summary>会话目录</summary>
+    <div className="settings-group">已归档</div>
+    <article className="settings-card vertical">{archived.length === 0 ? <p>没有归档的旁聊。</p> : archived.map(item => <div className="connection-row" key={item.id}><span>{item.title || '旁聊'}</span>
+      <button disabled={disabled || !item.directoryId || !space} onClick={() => space && void onRun(() => window.xiaoyu.directoryEdit({ space: space.id, runtime, id: String(item.directoryId), revision: Number(item.metadataRevision || 0), fields: { archived: false } }))}>放回</button></div>)}</article>
+    <div className="settings-group">关于</div>
+    <article className="settings-card"><div><h3>小鱼桌面版</h3><p>现在是 {view.version}</p></div></article>
+    <details className="advanced"><summary>开发者</summary>
       <button disabled={!space} onClick={onDirectory}>统一会话目录</button>
       {view.spaces.length > 1 && <label>当前空间<select value={space?.id} onChange={event => onSelect(event.target.value)}>{view.spaces.map(item => <option key={item.id} value={item.id}>{item.name} · {item.runtimeName}</option>)}</select></label>}
     </details>
@@ -297,6 +425,4 @@ function canOpenNative(task: Json, space?: SpaceView): boolean { return Boolean(
   && space?.connections?.some(item => item.runtime === task._runtimeId && item.local && item.connected && item.capabilities.includes('desktop_handoff'))
   && space.helpers?.some(item => item.runtime === task._runtimeId && item.name === (task.worker_agent || task.agent) && item.type === 'codex')); }
 function clean(error: unknown): string { return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '操作未完成，请重试'; }
-/** Same wording as the phone (WorkRecords.relayLabel). */
-function relayLabel(state: string): string { return ({ supplement_received: '已收到补充要求', received: '已收到补充要求', relay_queued: '补充要求等本轮结束后转交', queued: '补充要求等本轮结束后转交', relayed: '补充要求已转交原会话', executing: '正在执行补充要求', interrupted: '小鱼重启过，补充要求还留着，等你确认后再转交' } as Record<string, string>)[state] || '补充要求状态：' + state; }
 createRoot(document.getElementById('root')!).render(<App />);

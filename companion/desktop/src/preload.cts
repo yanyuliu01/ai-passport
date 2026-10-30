@@ -25,6 +25,7 @@ const api: DesktopAPI = {
   selectConversation: value => call('select-conversation', value), createConversation: value => call('create-conversation', value),
   importConfig: () => call('import-config'), approve: value => call('approve', value),
   cancel: value => call('cancel', value), reconcile: value => call('reconcile', value),
+  continueSession: value => call('continue-session', value),
   effectReview: value => call('effect-review', value), submitEffectReview: value => call('submit-effect-review', value), timerReviews: value => call('timer-reviews', value), invite: () => call('invite'), join: value => call('join', value),
   acceptJoin: value => call('accept-join', value), configureRelay: () => call('configure-relay'),
   loginStart: value => call('login-start', value),

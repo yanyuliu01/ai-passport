@@ -626,6 +626,18 @@ export class DesktopClient {
       }
     } finally { this.submittingReviews.delete(key); }
   }
+  /**
+   * Say one more thing inside a computer session (Runtime /v1/sessions/<card>/continue). Runtime refuses
+   * a session that is open in a client window or still running, and says why; the reply comes back to
+   * the main chat like any other turn.
+   */
+  async continueSession(space: string, id: string, runtime: string, text: string): Promise<void> {
+    const endpoint = this.endpointForRecord(space, 'task', id, runtime);
+    await this.transport.request(endpoint, 'POST', '/v1/sessions/' + encodeURIComponent(id) + '/continue',
+      { text, client_id: randomUUID().replaceAll('-', ''), conversation: 'default' });
+    // Pick up the new card and reply now instead of after the current long poll.
+    this.syncPolls.get(endpoint.runtimeId + '/default')?.abort();
+  }
   async cancel(space: string, id: string, runtime: string): Promise<void> {
     const endpoint = this.endpointForRecord(space, 'task', id, runtime);
     await this.transport.request(endpoint, 'POST', '/v1/cards/' + encodeURIComponent(id) + '/cancel', {});

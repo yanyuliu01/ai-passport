@@ -85,13 +85,108 @@ export function connectionWord(paired: boolean, connected: boolean): string {
 export function listedSideChat(item: Conversation, open: string): boolean {
   return item.id !== 'default' && !item.deleted && !item.archived && (!item.pending || item.id === open);
 }
-/** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
-export const listedTask = (task: Json) => Boolean(task.agent) && !task.monitoring_only;
+/**
+ * 在做的事 lists work handed to a helper. A "continue this computer session" card (desktop_card)
+ * folds into that session instead of being a separate item; running computer sessions get their
+ * own group (desktopRunning). Same rules as the phone (WorkRecords).
+ */
+export const listedTask = (task: Json) => Boolean(task.agent) && !task.monitoring_only && !task.desktop_card;
+
+/** A computer session observed within the last five minutes as working. */
+export function desktopRunning(task: Json, now = Date.now()): boolean {
+  if (!task.monitoring_only || task.stale || task._staleEpoch) return false;
+  const seen = Number(task.observed_at || 0) * 1000;
+  return task.state === 'working' && seen > 0 && now - seen <= 300_000;
+}
+
+export type SessionState = 'ready' | 'open' | 'running' | 'unavailable';
+/** Whether a computer session can be continued from a client: the phone uses the same four words. */
+export function sessionState(task: Json, connected: boolean, now = Date.now()): SessionState {
+  if (!task.monitoring_only || task.source !== 'desktop' || !connected) return 'unavailable';
+  if (task.client_open) return 'open';
+  if (desktopRunning(task, now) || task.state === 'waiting') return 'running';
+  if (task.stale || task._staleEpoch || task.state === 'unknown' || task.state === 'unavailable') return 'unavailable';
+  return 'ready';
+}
+
+/** Everything 在做的事 counts as unfinished: handed-over work not ended plus running computer sessions. */
+export function inProgress(tasks: Json[], now = Date.now()): number {
+  return tasks.filter(task => listedTask(task) ? workSection(task) !== 'ended' : desktopRunning(task, now)).length;
+}
+
+/**
+ * A progress line people can read: shell commands become "运行命令：…", English outcome words
+ * become Chinese, and internal markers are hidden (empty string).
+ */
+export function readableProgress(line: string): string {
+  let text = String(line || '').trim();
+  if (!text || /^native execution association$/i.test(text)) return '';
+  let outcome = '';
+  const head = /^(declined|completed|failed|cancelled|denied|approved)\s*[·:：-]\s*/i.exec(text);
+  if (head) {
+    const word = head[1].toLowerCase();
+    outcome = word === 'declined' || word === 'denied' ? '被拒绝 · ' : word === 'completed' || word === 'approved' ? '完成 · ' : word === 'failed' ? '失败 · ' : '已停止 · ';
+    text = text.slice(head[0].length);
+  }
+  const shell = /^(?:\/bin\/)?(?:ba|z)?sh\s+-l?c\s+([\s\S]*)$/.exec(text);
+  if (shell) {
+    let command = shell[1].trim();
+    if (command.length >= 2 && (command[0] === "'" || command[0] === '"') && command.at(-1) === command[0]) command = command.slice(1, -1);
+    text = '运行命令：' + command.replace(/(?:\/[\w.+-]+){2,}\/([\w.+-]+)/g, '$1');
+  }
+  return outcome + text;
+}
+
+/**
+ * When Xiaoyu sends several bubbles at once, each one after the first waits as long as "typing" it
+ * would take at about 12 characters a second (a bit faster than people), between 0.6 and 2.5 seconds.
+ * The phone uses the same rule (AppPresentation.bubbleDelay).
+ */
+export function bubbleDelay(text: string): number {
+  const chars = [...String(text || '').replace(/\s+/g, '')].length;
+  return Math.max(600, Math.min(2500, Math.round(chars * 1000 / 12)));
+}
+
+/** Times in lists: today just the clock, yesterday "昨天", this year month/day, else the year. */
+export function clock(ms?: number, now = Date.now()): string {
+  if (!ms) return '';
+  const at = new Date(ms), today = new Date(now), yesterday = new Date(now - 86_400_000);
+  const same = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const hm = at.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (same(at, today)) return hm;
+  if (same(at, yesterday)) return '昨天 ' + hm;
+  if (at.getFullYear() === today.getFullYear()) return (at.getMonth() + 1) + '月' + at.getDate() + '日';
+  return at.getFullYear() + '/' + (at.getMonth() + 1) + '/' + at.getDate();
+}
+
+/**
+ * Quotes ride in the message text as a leading 「author：snippet」 line (Runtime has no quote field),
+ * so Xiaoyu and every client read them; clients draw it as a grey block under the sender's bubble.
+ */
+export function splitQuote(text: string): { quote?: string; body: string } {
+  if (!text.startsWith('「')) return { body: text };
+  const end = text.indexOf('」\n');
+  if (end < 2 || text.slice(0, end).includes('\n')) return { body: text };
+  return { quote: text.slice(1, end), body: text.slice(end + 2) };
+}
+export const withQuote = (quote: string | undefined, text: string) => quote ? '「' + quote + '」\n' + text : text;
+export function quoteSnippet(author: string, text: string): string {
+  let line = String(text || '').replace(/\s+/g, ' ').trim();
+  const chars = [...line];
+  if (chars.length > 60) line = chars.slice(0, 60).join('') + '…';
+  return author + '：' + line.replaceAll('」', '”');
+}
+
+/** Same wording as the phone (WorkRecords.relayLabel); internal states are not shown. */
+export function relayLabel(state: string): string {
+  return ({ supplement_received: '已收到补充要求', received: '已收到补充要求', relay_queued: '补充要求等本轮结束后转交', queued: '补充要求等本轮结束后转交',
+    relayed: '补充要求已转交原会话', executing: '正在执行补充要求', interrupted: '小鱼重启过，补充要求还留着，等你确认后再转交' } as Record<string, string>)[state] || '';
+}
 /** The latest progress sentence: the Gateway's marker-free text when projected, else the raw field. */
 export function taskProgress(task: Json): string {
   const view = task.presentation as Json | undefined, projected = view?.version === 1;
   for (const key of ['progress', 'brief']) {
-    const value = projected && typeof view?.[key] === 'string' ? String(view[key]) : String(task[key] || '');
+    const value = projected && typeof view?.[key] === 'string' ? String(view[key]) : readableProgress(String(task[key] || ''));
     if (value) return value;
   }
   return '';
@@ -160,7 +255,10 @@ export function localHelpers(rows: HelperView[], connections: SpaceView['connect
   return rows.flatMap(row => row.members || [row]).filter(row => local.has(row.runtime) && !row.name.includes('@'));
 }
 export function helperMatchesTask(helper: HelperView, task: Json): boolean {
-  return (helper.members || [helper]).some(member => member.runtime === task._runtimeId && member.name === (task.worker_agent || task.agent));
+  // Computer sessions are tagged by product ("claude", "codex"), not by the configured helper name ("cc").
+  const native = (type: string) => type === 'claude_code' || type === 'claude' ? 'claude' : type;
+  return (helper.members || [helper]).some(member => member.runtime === task._runtimeId && (member.name === (task.worker_agent || task.agent)
+    || Boolean(task.monitoring_only) && native(String(member.type)) === native(String(task.agent))));
 }
 
 /** The limiting known subscription window, excluding windows already reset. */

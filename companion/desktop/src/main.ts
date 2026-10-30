@@ -308,6 +308,9 @@ async function main(): Promise<void> {
     'start-relay-host', 'stop-relay-host', 'check-relay-host', 'join', 'invite', 'invitation-qr', 'import-config'])
     ipc(retired, () => { throw new Error('连接方式已统一，请登录小鱼账号；原连接资料和记录保留'); });
   ipc('approve', value => { const input = object(value); return client.approve(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.decision, 5), requiredString(input.runtime, 100)); });
+  ipc('continue-session', value => { const input = object(value); const text = requiredString(input.text, 32000);
+    if (!text.trim()) throw new Error('消息不能为空');
+    return client.continueSession(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100), text); });
   ipc('cancel', value => { const input = object(value); return client.cancel(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100)); });
   ipc('effect-review', value => { const input = object(value); return client.effectReview(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.record, 140)); });
   ipc('submit-effect-review', value => { const input = object(value), outcomes = object(input.outcomes);

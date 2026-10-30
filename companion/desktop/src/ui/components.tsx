@@ -18,7 +18,8 @@ const paths: Record<string, React.ReactNode> = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>, info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>,
   refresh: <><path d="M20 7a9 9 0 1 0 1 9M20 2v6h-6" /></>, external: <><path d="M14 3h7v7M10 14 21 3M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" /></>,
   check: <path d="m5 12 4 4L19 6" />, stop: <rect x="5" y="5" width="14" height="14" rx="2" />,
-  quote: <><path d="M4 4v9a3 3 0 0 0 3 3h13M15 11l5 5-5 5" /></>, more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
+  quote: <><path d="M5 17c0-4 1-7 5-9M14 17c0-4 1-7 5-9" /><circle cx="7" cy="16" r="2" /><circle cx="16" cy="16" r="2" /></>,
+  copy: <><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 5V4H6a2 2 0 0 0-2 2v10h1" /></>, more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
 };
 export function Icon({ name }: { name: string }) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.info}</svg>; }
 export function Avatar({ type = 'xiaoyu', size = 32 }: { type?: string; size?: number }) {
