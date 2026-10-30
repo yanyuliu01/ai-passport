@@ -161,10 +161,17 @@ test('partial copies and nested overlays cannot change the verified Runtime payl
 test('afterPack verifies the actual copy and rejects omitted dependencies', async t => {
   const f = await fixture(t);
   const packedCheck = require(fileURLToPath(new URL('../../tools/check-packed-agents.cjs', import.meta.url)));
-  const context = { ...f.context, appOutDir: f.desktop, packager: { ...f.context.packager, getResourcesDir: () => f.desktop } };
+  const context = { ...f.context, appOutDir: f.desktop, packager: { ...f.context.packager, getResourcesDir: () => f.desktop, appInfo: { productFilename: "fixture" } } };
   const { cpSync } = await import('node:fs');
   cpSync(join(f.desktop, 'agents-dist'), join(f.desktop, 'agent-tools'), { recursive: true });
   cpSync(join(f.desktop, 'runtime-dist'), join(f.desktop, 'runtime'), { recursive: true });
+  const appSource = join(f.desktop, 'app-source');
+  mkdirSync(join(appSource, 'dist-main/core'), { recursive: true });
+  writeFileSync(join(appSource, 'package.json'), '{"type":"module","dependencies":{}}');
+  for (const name of ['client', 'account', 'runtime-host', 'first-run', 'setup'])
+    writeFileSync(join(appSource, 'dist-main/core', name + '.js'), 'export {};');
+  await require('@electron/asar').createPackage(appSource, join(f.desktop, 'app.asar'));
+  if (process.platform === 'win32' && process.arch === 'x64') copyFileSync(process.execPath, join(f.desktop, 'fixture.exe'));
   await packedCheck(context);
   rmSync(join(f.desktop, 'agent-tools/pi.js'));
   await assert.rejects(() => packedCheck(context), /inventory is incomplete/);

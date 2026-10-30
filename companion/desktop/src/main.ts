@@ -1,6 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, safeStorage, shell, Tray } from 'electron';
 import { mkdir, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,6 +12,7 @@ import { bundledAgents } from './core/bundled-agents.js';
 import { agentDescriptors, scanAgents } from './core/agent-catalog.js';
 import { Setup } from './core/setup.js';
 import { FirstRun } from './core/first-run.js';
+import { legacyProfile } from './core/profile.js';
 import { bindLegacyModelKey } from './core/model-key.js';
 import { PairingPrompts } from './core/pairing-prompts.js';
 import { accountRoute } from './core/connection-policy.js';
@@ -34,10 +34,10 @@ const rendererURL = pathToFileURL(ui).href;
 for (const [key, value] of Object.entries(process.env))
   if (key.startsWith('XIAOYOU_') && process.env[key.replace('XIAOYOU_', 'XIAOYU_')] === undefined)
     process.env[key.replace('XIAOYOU_', 'XIAOYU_')] = value;
-const legacyProfile = join(app.getPath('appData'), '小幽');
-if (!process.env.XIAOYU_DESKTOP_TEST_DATA && existsSync(legacyProfile)) {
-  app.setName('小幽'); // Existing OS-protected safeStorage key identity, not a UI label.
-  app.setPath('userData', legacyProfile);
+const retainedProfile = legacyProfile(app.getPath('appData'));
+if (!process.env.XIAOYU_DESKTOP_TEST_DATA && retainedProfile) {
+  app.setName(retainedProfile.name); // Existing safeStorage key identity, not a UI label.
+  app.setPath('userData', retainedProfile.path);
 }
 if (process.env.XIAOYU_DESKTOP_TEST_DATA)
   app.setPath('userData', process.env.XIAOYU_DESKTOP_TEST_DATA);

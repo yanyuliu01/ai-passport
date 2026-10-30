@@ -2,7 +2,7 @@
 
 # Xiaoyu desktop client
 
-Implementation in progress, source version 0.1.27. Follow the
+Implementation in progress, source version 0.1.28. Follow the
 [development plan](../../docs/development/xiaoyu-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -798,3 +798,14 @@ was explicitly deferred by the owner. Clean OS-user installation, signing and
 notarization, rendered meaningful reply within 3 seconds, physical multi-end
 synchronization and real cross-network recovery remain unverified. These
 checks did not restart the production Runtime or flash firmware.
+
+## Installed dependencies and retained profiles (0.1.28)
+
+The post-pack gate traverses production dependencies inside `app.asar` and rejects missing transitive packages.
+On a build host matching the target OS and architecture, the packaged Electron also loads production dependencies and client core modules.
+Cross-platform previews receive structural checks only and do not establish native startup acceptance.
+Build with a complete, independent local `node_modules`; source tests do not prove archive completeness.
+
+The rename first reuses the actual prior `xiaoyou-desktop` directory and its safeStorage name,
+with compatibility for the earlier Chinese-named directory. An empty `xiaoyu-desktop` directory created by a failed launch does not replace retained data.
+Windows and menus still display Xiaoyu. Upgrades preserve accounts, keys and chat history.

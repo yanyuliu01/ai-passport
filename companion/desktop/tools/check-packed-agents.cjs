@@ -13,4 +13,11 @@ module.exports = async function (context) {
   verify(join(context.packager.getResourcesDir(context.appOutDir), 'agent-tools'),
     join(context.packager.projectDir, 'tools/agent-runtime'), context.electronPlatformName,
     context.arch === 1 ? 'x64' : 'arm64');
+  const resources = context.packager.getResourcesDir(context.appOutDir);
+  const native = process.platform === context.electronPlatformName && process.arch === (context.arch === 1 ? 'x64' : 'arm64');
+  const name = context.packager.appInfo.productFilename;
+  const executable = native ? context.electronPlatformName === 'darwin'
+    ? join(resources, '../MacOS', name) : join(context.appOutDir, name + '.exe') : undefined;
+  const result = require('./verify-packed-app.cjs')(join(resources, 'app.asar'), executable);
+  console.log('Packed App dependency verification:', JSON.stringify(result));
 };
