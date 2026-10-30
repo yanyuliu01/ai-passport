@@ -4,11 +4,29 @@
 
 # Project status and source synchronization
 
-Snapshot: **2026-10-28, Asia/Shanghai**. This is a progress index, not a release
+Snapshot: **2026-10-30, Asia/Shanghai**. This is a progress index, not a release
 or a claim of complete acceptance. The subsystem documents linked below remain
 authoritative for implementation and test evidence.
 
-## Current baseline
+## Local source consolidation (2026-10-30)
+
+The owner authorized consolidation and pushing, while excluding Claude's active App repair. Character and evaluation work are explicitly **unfinished drafts**; pushing a checkpoint does not approve a final persona, experiment conclusion or production rollout.
+
+| Retained work | Consolidation decision |
+| --- | --- |
+| `c8448d6`, Runtime deadlines | Merge its original history and missing decision, relay and speech-budget regression coverage. The production deadline implementation already exists in the current Runtime; 58 focused tests pass |
+| `7943e39`, decide/speak experiment | Merge the companion and holdout cases, completion/token-accounting tests, reusable-decision re-speech and full-context blind review. Keep current Xiaoyu labels; 10 offline tests pass. No new paid provider experiment was run |
+| `2cce34a`, desktop bundle validation | Merge its original history and retained verification notes. Current package checks already include this implementation and add character, helper payload and shipped App dependency validation; retain those stronger checks |
+| `016175d`, account/relay and Android pairing | Preserve and push its original `release/app-0.33.4-relay-scan` history separately as `codex/retained-pairing-20261030`. Do not merge its older Android scanner/account code over the current App while Claude is repairing it |
+| Dirty bundled-helper and session-gateway worktrees | Their implementation is already included in `a6f9c65`, with later corrections through `b45041f`. Compare the retained files without rewriting or duplicating them; original worktrees stay untouched |
+| Dirty primary Runtime timing/persona work | Current persona matches the retained draft, and added timing, stable-prefix and streaming-test lines already exist in canonical source. Keep the original worktree and live configuration untouched |
+| Active `claude/app-interaction-p0` and retained Android sidebar/image work | Excluded from this consolidation. Do not stage, commit, reset, publish or deploy another agent's in-progress files |
+
+The consolidated target is `codex/xiaoyu-identity`; no default branch, release tag or installed client is changed. Production App/Runtime/firmware code is unchanged from `b45041f`. Runtime 0.27.1, desktop 0.1.28 and Android 0.39.1/code 88 retain their prior installed evidence in [character and deployment boundaries](persona-boundaries.md). A source merge does not re-establish rendered first response within three seconds, phone synchronization or physical-device acceptance. This checkpoint does not publish an APK, restart a service or flash firmware. Push checkpoint messages include `[skip ci]` to prevent the existing push workflow from automatically publishing an old APK; local complete validation still runs. The retained branch adds only a same-tree checkpoint commit, without rewriting the original commit or worktree.
+
+The sections below retain the earlier inspection history and its validation limits.
+
+## Historical baseline (2026-10-28)
 
 | Part | Committed source included in this synchronization | Live or pending evidence |
 | --- | --- | --- |
