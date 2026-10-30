@@ -47,7 +47,20 @@ final class WorkRecords {
     }
 
     /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
-    static boolean listed(Card card) { return AppPresentation.dispatched(card); }
+    static boolean listed(Card card) { return AppPresentation.dispatched(card) && card.desktopCard.isEmpty(); }
+
+    /**
+     * 电脑会话在手机上能不能接着说，四种：open（正开在电脑上）、running（这一轮在跑或等确认）、
+     * ready（可以接着说）、unavailable（连不上、状态未知、不是本机会话等）。会话页、帮手页都用这一个说法。
+     */
+    static String session(Card card, boolean connected, double now) {
+        if (!card.monitoringOnly || !card.source.equals("desktop") || !connected) return "unavailable";
+        if (card.clientOpen) return "open";
+        Group group = group(card, connected, now);
+        if (group == Group.RUNNING || group == Group.WAITING) return "running";
+        if (group == Group.UNCERTAIN) return "unavailable";
+        return "ready";
+    }
 
     static Section section(Card card, boolean connected, double now) {
         switch (group(card, connected, now)) {
@@ -73,7 +86,7 @@ final class WorkRecords {
             case "relayed": return "补充要求已转交原会话";
             case "executing": return "正在执行补充要求";
             case "interrupted": return "小鱼重启过，补充要求还留着，等你确认后再转交";
-            default: return "补充要求状态：" + state;
+            default: return "";  // 内部状态（比如 session_bound）不给人看
         }
     }
 

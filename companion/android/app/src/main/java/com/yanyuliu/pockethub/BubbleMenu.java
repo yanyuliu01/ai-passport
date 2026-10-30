@@ -23,6 +23,11 @@ final class BubbleMenu {
     private final Activity activity;
     private final LinearLayout items;
     private PopupWindow popup;
+    private boolean sticky;
+    private Runnable onClose;
+
+    /** 选字时用：拖选区手柄会碰到菜单外面，这时不能把菜单关掉；由选区结束来关。 */
+    BubbleMenu sticky(Runnable onClose) { this.sticky = true; this.onClose = onClose; return this; }
 
     BubbleMenu(Activity activity) {
         this.activity = activity;
@@ -40,7 +45,7 @@ final class BubbleMenu {
         TextView name = new TextView(activity); name.setText(label); name.setTextSize(12); name.setTextColor(Color.WHITE);
         name.setPadding(0, dp(4), 0, 0); name.setIncludeFontPadding(false); cell.addView(name);
         cell.setContentDescription(label); cell.setFocusable(true);
-        cell.setOnClickListener(v -> { dismissOpen(); action.run(); });
+        cell.setOnClickListener(v -> { action.run(); dismissOpen(); });
         items.addView(cell, new LinearLayout.LayoutParams(dp(56), -2));
         return this;
     }
@@ -60,9 +65,12 @@ final class BubbleMenu {
         box.addView(items);
         if (above) box.addView(tail, new LinearLayout.LayoutParams(dp(14), arrow));
         popup = new PopupWindow(box, width, height + arrow, false);
-        popup.setOutsideTouchable(true); popup.setTouchable(true); popup.setAnimationStyle(0);
+        popup.setOutsideTouchable(!sticky); popup.setTouchable(true); popup.setAnimationStyle(0);
         popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-        popup.setOnDismissListener(() -> { anchor.setForeground(null); if (open == this) open = null; });
+        popup.setOnDismissListener(() -> {
+            anchor.setForeground(null); if (open == this) open = null;
+            Runnable close = onClose; onClose = null; if (close != null) close.run();
+        });
         anchor.setForeground(round(0x22000000));
         int screen = activity.getResources().getDisplayMetrics().widthPixels;
         int x = Math.max(dp(8), Math.min(screen - width - dp(8), at[0] + anchor.getWidth() / 2 - width / 2));

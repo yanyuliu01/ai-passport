@@ -1864,6 +1864,13 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
         String targetCard = tab == TAB_TASKS ? openTask : null;
+        Card session = targetCard == null ? null : CardViews.find(HubStore.get().cards(), targetCard);
+        if (session != null && session.monitoringOnly) {
+            // 在电脑会话的页面里说的：直接送进那个会话，留在这一页看它回。
+            chatInput.setText(""); drafts.remove(composerContext);
+            RuntimeClient.sendToSession(this, AppPresentation.withQuote(quoting, message), "default", targetCard);
+            clearQuote(); performHaptic(false); taskKey = null; onHubChanged(); return;
+        }
         chatInput.setText("");
         drafts.remove(composerContext);
         if (helper != null) {
@@ -1873,7 +1880,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         // 交给谁、用哪一档都由小鱼安排；想指定就直接说出来。在电脑上的会话里说的也先给小鱼
         // （Runtime 0.10.1 起）：点名能接它的帮手，或者小鱼判断要它接着干活，才接着那个会话做。
-        RuntimeClient.sendChat(this, AppPresentation.withQuote(quoting, message), currentConversation, supplementCard, null);
+        Card resumed = supplementCard == null ? null : CardViews.find(HubStore.get().cards(), supplementCard);
+        if (resumed != null && resumed.monitoringOnly) RuntimeClient.sendToSession(this, AppPresentation.withQuote(quoting, message), currentConversation, supplementCard);
+        else RuntimeClient.sendChat(this, AppPresentation.withQuote(quoting, message), currentConversation, supplementCard, null);
         supplementCard = null; supplementHint.setVisibility(View.GONE); clearQuote();
         performHaptic(false);
         scrollDown();
@@ -1903,6 +1912,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     /** All task entries lead to the same source-scoped task detail. */
     private void open(String card) {
+        // “接着电脑会话说一句”的卡并在那个会话里：点它就打开那个会话。
+        Card found = CardViews.find(HubStore.get().cards(), card);
+        if (found != null && !found.desktopCard.isEmpty() && CardViews.find(HubStore.get().cards(), found.desktopCard) != null) card = found.desktopCard;
         saveUiContext();
         if (tab != TAB_TASKS || !card.equals(openTask)) rememberPage();
         if (tab != TAB_TASKS || !card.equals(openTask)) transition(tab, TAB_TASKS);
@@ -1916,7 +1928,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             // 电脑上正有会话在跑时直接展开，点进来就能看到它在跑什么。
             agentDesktopOpen = false;
             for (AppPresentation.Helper helper : AppPresentation.localHelpers(HubStore.get().cards(), offeredHelpers()))
-                if (AppPresentation.role(helper.role).equals(AppPresentation.role(role))) agentDesktopOpen = helper.desktopRunning(HubStore.get().runtimeConnected());
+                if (AppPresentation.role(helper.role).equals(AppPresentation.role(role))) agentDesktopOpen = false;
         }
         if (tab != TAB_AGENT || !AppPresentation.role(role).equals(openAgent)) transition(tab, TAB_AGENT);
         openAgent = AppPresentation.role(role); tab = TAB_AGENT;
@@ -1983,7 +1995,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         boolean toHelper = tab == TAB_AGENT && agentName(openAgent) != null;
         // 别处上报来的会话（不在任何一台电脑上）只能看，不给输入框。
         boolean reported = opened != null && opened.source.equals("external");
-        composer.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
+        boolean sessionReady = opened != null && WorkRecords.session(opened, HubStore.get().runtimeConnected(), System.currentTimeMillis() / 1000.0).equals("ready");
+        composer.setVisibility(tab == TAB_CHAT || sessionReady ? View.VISIBLE : View.GONE);
         addImage.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
         if (frame != null) frame.reserveEdge();
         if (tab != TAB_CHAT && attachPanel != null) attachPanel.setVisibility(View.GONE);
@@ -1995,7 +2008,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (!composerContext.isEmpty()) drafts.put(composerContext, chatInput.getText().toString());
             composerContext = nextContext; chatInput.setText(drafts.getOrDefault(nextContext, ""));
         }
-        if (!(micFromComposer && (listening || transcribing))) chatInput.setHint(inTask && opened != null && opened.monitoringOnly ? "问" + companionName() + "这个会话…"
+        if (!(micFromComposer && (listening || transcribing))) chatInput.setHint(inTask && opened != null && opened.monitoringOnly ? "跟 " + AppPresentation.name(AppPresentation.owner(opened)) + " 说…"
                 : inTask ? "补充要求…" : toHelper ? "直接交给 " + AppPresentation.name(openAgent) + "…"
                 : "跟" + companionName() + "说…");
         updateHeader(); updateSendState();
@@ -2021,7 +2034,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
             glyph.icon(topLevelScreen() ? "menu" : "back");
             navigationButton.setContentDescription(topLevelScreen() ? "打开侧边栏" : "返回上一层");
         }
-        if (tab == TAB_CHAT && supplementCard != null) chatInput.setHint("补充这件事的要求…");
+        if (tab == TAB_CHAT && supplementCard != null) {
+            Card target = CardViews.find(HubStore.get().cards(), supplementCard);
+            chatInput.setHint(target != null && target.monitoringOnly ? "接着跟 " + AppPresentation.name(AppPresentation.owner(target)) + " 说…" : "补充这件事的要求…");
+        }
         if (supplementHint != null) supplementHint.setVisibility(tab == TAB_CHAT && supplementCard != null ? View.VISIBLE : View.GONE);
         connectionTitle.setText(title);
     }
@@ -2476,7 +2492,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             quotedParams.gravity = Gravity.END; quotedParams.setMargins(dp(64), dp(4), dp(4), 0);
             row.addView(quoted, quotedParams); chatQuotes.put(rowKey(message), quoted);
         }
-        for (Attachment item : message.attachments) row.addView(attachmentView(item));
+        for (Attachment item : message.attachments) row.addView(attachmentView(item, mine));
         TextView caption = statusCaption(mine);
         row.addView(caption, captionParams(mine)); chatStatus.put(rowKey(message), caption);
         if (!mine && card != null && card.outstanding() && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
@@ -2672,7 +2688,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private boolean refreshTasks(List<Card> cards) {
         if (tab != TAB_TASKS) return false;
         Card opened = CardViews.find(cards, openTask); if (opened == null) return false;
-        String key = opened.id + ":" + opened.seq + ":" + HubStore.get().runtimeConnected() + ":" + progressAge(opened);
+        String key = opened.id + ":" + opened.seq + ":" + opened.clientOpen + ":" + HubStore.get().runtimeConnected() + ":" + progressAge(opened);
+        for (Card other : cards) if (opened.id.equals(other.desktopCard)) key += ":" + other.id + other.state;
+        if (!key.equals(taskKey)) applyTab();  // 能不能接着说变了，输入框跟着出现或收起
         if (key.equals(taskKey)) return false;
         taskKey = key; taskPane.removeAllViews(); fillWorkDetail(taskPane, opened, HubStore.get().runtimeConnected()); return true;
     }
@@ -2719,7 +2737,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String energy = energyText(openAgent);
         StringBuilder key = new StringBuilder(openAgent).append(connected).append(agentDesktopOpen).append(energy);
         for (Card card : helper.dispatched) key.append(card.id).append(card.state).append(card.queued).append(card.seq).append('|');
-        for (Card card : helper.desktop) key.append(card.id).append(card.state).append('|');
+        for (Card card : helper.desktop) key.append(card.id).append(card.state).append(card.clientOpen).append(card.stale).append('|');
         if (key.toString().equals(agentKey)) return;
         agentKey = key.toString(); agentPane.removeAllViews();
         Card now = helper.current(connected);
@@ -2754,25 +2772,37 @@ public class MainActivity extends Activity implements HubStore.Listener {
             agentPane.addView(list);
         }
         if (!helper.desktop.isEmpty()) {
-            View gap = new View(this); agentPane.addView(gap, new LinearLayout.LayoutParams(-1, dp(12)));
-            LinearLayout desktop = group();
-            desktop.addView(groupRow("computer", "电脑上的会话", "打开一个会话，就能从手机接着聊",
-                    helper.desktop.size() + (agentDesktopOpen ? " ⌃" : " ›"), HINT,
-                    view -> { agentDesktopOpen = !agentDesktopOpen; agentKey = null; refreshAgent(HubStore.get().cards()); },
-                    agentDesktopOpen));
-            if (agentDesktopOpen) {
-                // 正在跑的排最前：点进来先看到它现在在做什么。
-                double at = System.currentTimeMillis() / 1000.0;
-                List<Card> sessions = new ArrayList<>(helper.desktop);
-                sessions.sort(java.util.Comparator.comparing((Card c) -> !WorkRecords.desktopRunning(c, connected, at)));
-                for (int index = 0; index < sessions.size(); index++) {
-                    Card card = sessions.get(index);
-                    String word = AppPresentation.stateWord(card, connected);
-                    desktop.addView(groupRow(null, card.title, null, word.isEmpty() ? AppPresentation.stateLabel(card, connected) : word,
-                            word.isEmpty() ? HINT : BLUE, view -> open(card.id), index < sessions.size() - 1));
+            // 电脑上的会话按能不能接着说分组；接不上的收在最后的“更多”里，默认不展开。
+            double at = System.currentTimeMillis() / 1000.0;
+            Map<String, List<Card>> groups = new java.util.LinkedHashMap<>();
+            for (String state : new String[] {"ready", "open", "running", "unavailable"}) groups.put(state, new ArrayList<>());
+            for (Card card : helper.desktop) groups.get(WorkRecords.session(card, connected, at)).add(card);
+            String[][] labels = {{"ready", "可以接着聊", "点进去就能接着说"}, {"open", "在电脑上开着", "到电脑上继续"}, {"running", "在跑", "这一轮结束后可以接着说"}};
+            agentPane.addView(groupHeading("电脑上的会话"));
+            for (String[] label : labels) {
+                List<Card> list = groups.get(label[0]); if (list.isEmpty()) continue;
+                TextView sub = text(label[1] + " · " + label[2], 12, false); sub.setTextColor(HINT); sub.setPadding(dp(4), dp(10), dp(4), dp(4));
+                agentPane.addView(sub);
+                LinearLayout box = group();
+                for (int index = 0; index < list.size(); index++) {
+                    Card card = list.get(index);
+                    box.addView(groupRow(null, WorkRecords.title(card), null, "›", HINT, view -> open(card.id), index < list.size() - 1));
                 }
+                agentPane.addView(box);
             }
-            agentPane.addView(desktop);
+            List<Card> rest = groups.get("unavailable");
+            if (!rest.isEmpty()) {
+                View gap = new View(this); agentPane.addView(gap, new LinearLayout.LayoutParams(-1, dp(12)));
+                LinearLayout more = group();
+                more.addView(groupRow(null, "更多", "接不上的会话，只能看", rest.size() + (agentDesktopOpen ? " ⌃" : " ›"), HINT,
+                        view -> { agentDesktopOpen = !agentDesktopOpen; agentKey = null; refreshAgent(HubStore.get().cards()); },
+                        agentDesktopOpen));
+                if (agentDesktopOpen) for (int index = 0; index < rest.size(); index++) {
+                    Card card = rest.get(index);
+                    more.addView(groupRow(null, WorkRecords.title(card), null, "›", HINT, view -> open(card.id), index < rest.size() - 1));
+                }
+                agentPane.addView(more);
+            }
         }
     }
 
@@ -2885,7 +2915,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
             micSay("系统麦克风已关闭"); toast("请开启系统麦克风开关后，再按住说话"); return;
         }
         voiceConversation = micFromComposer ? currentConversation : "default";
+        if (micFromComposer && tab == TAB_TASKS) { micSay("这里先打字说"); toast("接着电脑上的会话暂时只能打字"); return; }
         voiceSupplement = micFromComposer ? supplementCard : null;
+        Card voiceTarget = voiceSupplement == null ? null : CardViews.find(HubStore.get().cards(), voiceSupplement);
+        if (voiceTarget != null && voiceTarget.monitoringOnly) { micSay("接着电脑上的会话先打字说"); toast("接着电脑上的会话暂时只能打字"); return; }
         final long session = ++voiceSession;
         heard = ""; listening = true; pokeLine = null;
         micActive(true);
@@ -3594,7 +3627,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         List<String> parts = entry.presentation != null && entry.presentation.supported ? entry.presentation.blocks()
                 : java.util.Collections.singletonList(entry.text);
         if (parts.isEmpty()) {
-            for (Attachment item : entry.attachments) { parent.addView(attachmentView(item)); rendered.add(item.id); }
+            for (Attachment item : entry.attachments) { parent.addView(attachmentView(item, mine)); rendered.add(item.id); }
         }
         for (int partIndex = 0; partIndex < parts.size(); partIndex++) {
         LinearLayout bubble = bubbleShell(mine);
@@ -3620,7 +3653,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 : mine ? said : Markdown.render(entry.presentation != null ? said : String.join("\n\n", Markdown.messages(said)), dp(16)));
         words.setTextIsSelectable(true); bubble.addView(words);
         if (partIndex == parts.size() - 1)
-            for (Attachment item : entry.attachments) { bubble.addView(attachmentView(item)); rendered.add(item.id); }
+            for (Attachment item : entry.attachments) { bubble.addView(attachmentView(item, mine)); rendered.add(item.id); }
         parent.addView(bubble, bubbleParams(mine));
         }
         return rendered;
@@ -3650,30 +3683,55 @@ public class MainActivity extends Activity implements HubStore.Listener {
         return params;
     }
 
-    private View attachmentView(Attachment item) {
-        LinearLayout card = column(); card.setPadding(dp(10), dp(10), dp(10), dp(10));
-        card.setBackground(surface(0xfff3f7ff, 0xffdce6f7));
-        card.addView(text((item.image() ? "图片 · " : "文件 · ") + item.label() + "\n" + item.sizeLabel() + " · " + item.mime, 13, true));
+    private View attachmentView(Attachment item) { return attachmentView(item, false); }
+
+    /**
+     * 聊天里的附件，照微信：图片就是一张圆角缩略图，按原图比例、长边 180dp，你发的靠右、她发的靠左，
+     * 点开全屏看；不再列文件名、大小和格式。文件是一张小卡片：名字和大小，点一下打开。
+     */
+    private View attachmentView(Attachment item, boolean mine) {
         RuntimeClient.Target target = RuntimeClient.selected(this);
         long epoch = HubStore.get().cardsEpoch();
-        if (!item.ready()) card.addView(text(item.error.isEmpty() ? "附件还未准备好" : item.error, 13, false));
-        if (item.image() && item.ready()) {
-            ImageView image = new ImageView(this); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            card.addView(image, new LinearLayout.LayoutParams(-1, dp(180)));
-            TextView hint = text("正在加载预览…", 12, false); card.addView(hint);
+        LinearLayout.LayoutParams place;
+        if (!item.image()) {
+            LinearLayout card = column(); card.setPadding(dp(14), dp(10), dp(14), dp(10));
+            card.setBackground(pressable(Color.WHITE, 12));
+            TextView name = text(item.label(), 14, false); name.setTextColor(INK); name.setMaxLines(2); name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            card.addView(name);
+            TextView meta = text(item.ready() ? item.sizeLabel() : item.error.isEmpty() ? "还没准备好" : item.error, 12, false); meta.setTextColor(HINT);
+            card.addView(meta);
+            if (item.ready()) card.setOnClickListener(view -> openAttachment(item, target));
+            place = new LinearLayout.LayoutParams(dp(220), -2);
+            place.gravity = mine ? Gravity.END : Gravity.START; place.setMargins(0, dp(4), 0, dp(2)); card.setLayoutParams(place);
+            return card;
+        }
+        int longSide = dp(180), shortMin = dp(72), w = longSide, h = longSide;
+        if (item.width > 0 && item.height > 0) {
+            if (item.width >= item.height) h = Math.max(shortMin, Math.round(longSide * item.height / (float) item.width));
+            else w = Math.max(shortMin, Math.round(longSide * item.width / (float) item.height));
+        }
+        FrameLayout frame = new FrameLayout(this);
+        GradientDrawable round = new GradientDrawable(); round.setColor(0xffe6ebf2); round.setCornerRadius(dp(10));
+        frame.setBackground(round); frame.setClipToOutline(true);
+        ImageView image = new ImageView(this); image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        frame.addView(image, new FrameLayout.LayoutParams(-1, -1));
+        TextView overlay = text(item.ready() ? "" : item.error.isEmpty() ? "上传中…" : "没发出去", 12, false);
+        overlay.setTextColor(HINT); overlay.setGravity(Gravity.CENTER);
+        frame.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+        frame.setContentDescription(item.label());
+        if (item.ready()) {
             Runnable load = () -> ArtifactClient.fetch(this, target, item, item.thumbnail, (file, error) -> {
                 if (epoch != HubStore.get().cardsEpoch() || isFinishing()) return;
-                if (file != null) {
-                    Bitmap bitmap = scaledBitmap(file, 900); image.setImageBitmap(bitmap);
-                    hint.setText(bitmap == null ? "无法解码预览，可下载原文件" : "点图片查看 · 已缓存，可离线打开");
-                } else hint.setText((error == null ? "未取得预览" : error) + " · 点击重试");
+                Bitmap bitmap = file == null ? null : scaledBitmap(file, 720);
+                if (bitmap != null) { image.setImageBitmap(bitmap); overlay.setText(""); }
+                else overlay.setText("没加载出来\n点一下重试");
             });
-            hint.setOnClickListener(view -> load.run()); load.run();
-            image.setContentDescription(item.label()); image.setOnClickListener(view -> openAttachment(item, target));
+            frame.setOnClickListener(view -> { if (image.getDrawable() == null) { overlay.setText(""); load.run(); } else openAttachment(item, target); });
+            load.run();
         }
-        Button open = button(item.image() ? "查看原图 / 保存" : "打开 / 保存文件", view -> openAttachment(item, target));
-        open.setEnabled(item.ready()); card.addView(open);
-        return card;
+        place = new LinearLayout.LayoutParams(w, h);
+        place.gravity = mine ? Gravity.END : Gravity.START; place.setMargins(0, dp(4), 0, dp(2)); frame.setLayoutParams(place);
+        return frame;
     }
 
     private Bitmap scaledBitmap(File file, int max) {
@@ -3715,16 +3773,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 new AlertDialog.Builder(this).setTitle("暂时无法打开").setMessage(error).setNegativeButton("关闭", null)
                         .setPositiveButton("重试", (dialog, which) -> openAttachment(item, target)).show(); return;
             }
-            if (item.image()) {
-                LinearLayout content = column();
-                ImageView image = new ImageView(this); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                image.setImageBitmap(scaledBitmap(file, 2048));
-                content.addView(image, new LinearLayout.LayoutParams(-1, 0, 1));
-                content.addView(button("保存到手机", view -> saveAttachment(file, item)));
-                content.addView(button("用其他应用打开", view -> externalAttachment(file, item)));
-                Dialog preview = new Dialog(this); preview.setContentView(content); preview.show();
-                preview.getWindow().setLayout(-1, -1);
-            } else if (item.mime.startsWith("text/") || item.label().endsWith(".md") || item.label().endsWith(".txt")) {
+            if (item.image()) showImage(file, item); else if (item.mime.startsWith("text/") || item.label().endsWith(".md") || item.label().endsWith(".txt")) {
                 ArtifactClient.readText(file, (body, failure) -> {
                     if (isFinishing()) return;
                     LinearLayout content = column(); content.setPadding(dp(12), dp(12), dp(12), dp(8));
@@ -3740,6 +3789,28 @@ public class MainActivity extends Activity implements HubStore.Listener {
                     .option("用手机应用打开", null, false, () -> externalAttachment(file, item))
                     .option("保存到手机", null, false, () -> saveAttachment(file, item)).show();
         });
+    }
+
+    /** 看大图，照微信：黑底全屏，点一下关；底下一行“保存”“其他应用”。 */
+    private void showImage(File file, Attachment item) {
+        Dialog viewer = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        viewer.getWindow().setStatusBarColor(Color.BLACK); viewer.getWindow().setNavigationBarColor(Color.BLACK);
+        viewer.getWindow().getDecorView().setSystemUiVisibility(0);
+        FrameLayout content = new FrameLayout(this); content.setBackgroundColor(Color.BLACK);
+        ImageView image = new ImageView(this); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setImageBitmap(scaledBitmap(file, 2048)); image.setContentDescription(item.label());
+        content.addView(image, new FrameLayout.LayoutParams(-1, -1));
+        content.setOnClickListener(view -> viewer.dismiss()); image.setOnClickListener(view -> viewer.dismiss());
+        LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.CENTER_VERTICAL);
+        actions.setPadding(dp(20), dp(12), dp(20), dp(28));
+        TextView other = text("其他应用", 14, false); other.setTextColor(Color.WHITE); other.setPadding(dp(12), dp(10), dp(12), dp(10));
+        other.setOnClickListener(view -> externalAttachment(file, item));
+        actions.addView(other); actions.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
+        TextView save = text("保存", 14, false); save.setTextColor(Color.WHITE); save.setPadding(dp(16), dp(8), dp(16), dp(8));
+        save.setBackground(pressable(0x33ffffff, 16)); save.setOnClickListener(view -> saveAttachment(file, item));
+        actions.addView(save);
+        content.addView(actions, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+        viewer.setContentView(content); viewer.show();
     }
 
     private void externalAttachment(File file, Attachment item) {
@@ -4149,25 +4220,73 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
 
     /**
-     * 像微信：点气泡不弹东西，链接直接能点；长按气泡在它上方出一条深色小菜单：复制、引用。
-     * 不用系统选字，长按就不会和选字抢；菜单不抢焦点，键盘开着也不会收起。
+     * 像微信：点气泡不弹东西，点到链接就打开。长按：系统照常选字（带两个拖动手柄），我们把选区扩成整条，
+     * 并把系统那条选字工具条换成上方一条深色小菜单（复制、引用）；拖手柄可以只选一部分，
+     * 复制和引用都只取选中的那段。菜单不抢焦点。
      */
     private void bubbleGestures(TextView words, View bubble, java.util.function.Supplier<String> id, String author) {
-        words.setTextIsSelectable(false);
-        words.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
-        View.OnLongClickListener press = v -> { String key = id.get(); if (key != null) showMessageActions(key, words.getText(), author, bubble); return true; };
-        words.setOnLongClickListener(press); bubble.setOnLongClickListener(press);
+        words.setTextIsSelectable(true);
+        if (Build.VERSION.SDK_INT >= 26) words.setTextClassifier(android.view.textclassifier.TextClassifier.NO_OP);
+        float[] touch = new float[2];
+        words.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { touch[0] = event.getX(); touch[1] = event.getY(); }
+            return false;
+        });
+        words.setOnClickListener(view -> {
+            if (words.hasSelection()) return;
+            CharSequence text = words.getText();
+            if (!(text instanceof android.text.Spanned)) return;
+            int at = words.getOffsetForPosition(touch[0], touch[1]);
+            android.text.style.URLSpan[] links = ((android.text.Spanned) text).getSpans(at, at, android.text.style.URLSpan.class);
+            if (links.length == 0) return;
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(links[0].getURL()))); }
+            catch (android.content.ActivityNotFoundException none) { fail("没有能打开这个链接的应用"); }
+        });
+        words.setCustomSelectionActionModeCallback(new android.view.ActionMode.Callback() {
+            @Override public boolean onCreateActionMode(android.view.ActionMode mode, android.view.Menu menu) {
+                menu.clear(); hideSystemToolbar(mode);
+                String key = id.get(); if (key == null) return false;
+                performHaptic(false);
+                words.post(() -> {
+                    if (words.getSelectionStart() != 0 || words.getSelectionEnd() != words.length()) words.onTextContextMenuItem(android.R.id.selectAll);
+                    showMessageActions(key, words, author, bubble, () -> {
+                        CharSequence text = words.getText();
+                        if (words.hasSelection() && text instanceof android.text.Spannable) android.text.Selection.removeSelection((android.text.Spannable) text);
+                    });
+                });
+                return true;
+            }
+            @Override public boolean onPrepareActionMode(android.view.ActionMode mode, android.view.Menu menu) { menu.clear(); hideSystemToolbar(mode); return true; }
+            @Override public boolean onActionItemClicked(android.view.ActionMode mode, android.view.MenuItem item) { return false; }
+            @Override public void onDestroyActionMode(android.view.ActionMode mode) { BubbleMenu.dismissOpen(); }
+        });
     }
 
-    private void showMessageActions(String id, CharSequence shown, String author, View anchor) {
-        performHaptic(false);
-        BubbleMenu menu = new BubbleMenu(this);
+    /**
+     * 有的系统（比如 MIUI）在我们清空之后还会往选字工具条里塞“问小爱、翻译、搜索”。下一帧再清一次，
+     * 并让工具条按空菜单重新排版——空菜单的工具条不显示。
+     */
+    private static void hideSystemToolbar(android.view.ActionMode mode) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            try { mode.getMenu().clear(); mode.invalidateContentRect(); } catch (RuntimeException finished) { /* 选区已经结束 */ }
+        });
+    }
+
+    /** 选中的那段；什么都没选就是整条。 */
+    private static String selected(TextView words) {
+        CharSequence text = words.getText();
+        int start = Math.min(words.getSelectionStart(), words.getSelectionEnd()), end = Math.max(words.getSelectionStart(), words.getSelectionEnd());
+        return start >= 0 && end > start ? text.subSequence(start, end).toString() : text.toString();
+    }
+
+    private void showMessageActions(String id, TextView words, String author, View anchor, Runnable closed) {
+        BubbleMenu menu = new BubbleMenu(this).sticky(closed);
         menu.item("copy", "复制", () -> {
             android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard == null || shown == null) return;
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", shown.toString())); toast("已复制");
+            if (clipboard == null) return;
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", selected(words))); toast("已复制");
         });
-        menu.item("quote", "引用", () -> quote(AppPresentation.quoteSnippet(author, shown == null ? "" : shown.toString())));
+        menu.item("quote", "引用", () -> quote(AppPresentation.quoteSnippet(author, selected(words))));
         String request = EffectReview.requestId(id);
         if (!request.isEmpty() && HubStore.get().can("request_effect_review") && requestFailed(request))
             menu.item("info", "核对", () -> reviewEffects("messages/" + request));
@@ -4332,12 +4451,16 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private void supplement(Card card) {
         if (card.monitoringOnly) {
-            toast("这条是独立电脑会话。请在来源电脑继续，避免另建任务或抢占正在执行的会话。"); return;
+            // 电脑会话：就在它自己的页面里说，不跳回主对话。
+            if (tab != TAB_TASKS || !card.id.equals(openTask)) open(card.id);
+            chatInput.requestFocus(); return;
         }
-        rememberPage(); currentConversation = card.conversation;
+        boolean desktop = false;
+        rememberPage(); currentConversation = desktop ? "default" : card.conversation;
         HubStore.get().activeConversation(currentConversation); supplementCard = card.id;
         chatAnchor = null; chatHeader = ""; show(TAB_CHAT);
-        supplementHint.setText("补充：" + card.title + "  ×"); supplementHint.setVisibility(View.VISIBLE);
+        supplementHint.setText((desktop ? "接着 " + AppPresentation.name(AppPresentation.owner(card)) + " 的会话：" : "补充：") + card.title + "  ×");
+        supplementHint.setVisibility(View.VISIBLE);
         chatInput.requestFocus(); scrollDown();
     }
 
@@ -4565,6 +4688,34 @@ public class MainActivity extends Activity implements HubStore.Listener {
         });
     }
 
+    /**
+     * 电脑会话的页面像跟它的聊天：最近的对话一条条显示，能接着说时底部就是输入框（applyTab 决定），
+     * 不能时写清楚为什么。从手机接着说的那几句另有一张卡（desktop_card 指回这里），它的进度也写在这里。
+     */
+    private void fillSessionChat(LinearLayout head, Card card, boolean connected) {
+        String state = WorkRecords.session(card, connected, System.currentTimeMillis() / 1000.0);
+        String who = AppPresentation.name(AppPresentation.owner(card));
+        Card latest = null;
+        for (Card other : HubStore.get().cards())
+            if (card.id.equals(other.desktopCard) && (latest == null || other.createdAt > latest.createdAt)) latest = other;
+        String note = state.equals("open") ? "它正开在电脑上，手机发的话进不了那个窗口。到电脑上继续，或者关掉那个窗口后再从这里说。"
+                : state.equals("running") ? "它这一轮还在跑，结束后可以从这里接着说。"
+                : state.equals("unavailable") ? (connected ? "这个会话现在接不上，只能看。" : "连不上小鱼，先只能看。") : "";
+        if (latest != null && (System.currentTimeMillis() / 1000.0 - latest.createdAt) < 6 * 3600) {
+            if (latest.active()) note = "正在把你的话送进去，" + who + " 回完会出现在下面。";
+            else if (latest.state.equals("failed")) note = "刚才那句没送到：" + CardViews.oneLine(latest.brief.replaceFirst("^.*?没做成：", ""), 80);
+        }
+        if (!note.isEmpty()) {
+            TextView line = text(note, 13, false); line.setTextColor(latest != null && latest.state.equals("failed") ? DANGER : HINT);
+            line.setPadding(dp(4), 0, dp(4), dp(8)); head.addView(line);
+        }
+        List<Card.Entry> recent = new ArrayList<>();
+        for (Card.Entry entry : card.entries) if (!entry.text.trim().isEmpty() || !entry.attachments.isEmpty()) recent.add(entry);
+        if (recent.isEmpty()) return;
+        TextView heading = text("最近的对话", 15, true); heading.setPadding(0, dp(12), 0, dp(6)); head.addView(heading);
+        for (Card.Entry entry : recent.subList(Math.max(0, recent.size() - 8), recent.size())) addBubble(head, card, entry);
+    }
+
     private void fillWorkDetail(LinearLayout head, Card card, boolean connected) {
         LinearLayout title = new LinearLayout(this); title.setGravity(Gravity.CENTER_VERTICAL);
         title.addView(avatar(AppPresentation.owner(card), XiaoyuState.pose(card, connected), 34));
@@ -4578,7 +4729,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         status.addView(text(state, 17, true));
         // 结束了的事，时间那行常以同一个状态开头（“已停止 · 10-29 10:38”），去掉重复的那半。
         String age = connected ? progressAge(card) : "连不上，显示上次的记录";
-        if (age.startsWith(state + " · ")) age = age.substring(state.length() + 3);
+        // “本轮已结束”和“本轮结束 · …”也算重复。
+        for (String same : new String[] {state, state.replace("已", "")})
+            if (age.startsWith(same + " · ")) { age = age.substring(same.length() + 3); break; }
         if (!age.equals(state)) status.addView(text(age, 13, false));
         String latest = WorkRecords.progress(card);
         if (!latest.isEmpty()) status.addView(text((group == WorkRecords.Group.UNCERTAIN ? "最后记录：" : "") + latest, 14, false));
@@ -4602,6 +4755,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Card.Approval approval = group == WorkRecords.Group.WAITING ? approvalFor(card) : null;
         if (approval != null) status.addView(decisionButtons(approval));
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.setMargins(0, dp(16), 0, dp(12)); head.addView(status, sp);
+        if (card.monitoringOnly && card.source.equals("desktop")) fillSessionChat(head, card, connected);
         if (!card.monitoringOnly) {
             // 还在做：补充要求是这页最主要的事，蓝底；已经结束：只是“还能接着说”，换成次要样子。
             boolean ended = group == WorkRecords.Group.HISTORY;

@@ -196,6 +196,7 @@ final class AppPresentation {
             String role = owner(card);
             if (role.equals("ds") || (!card.monitoringOnly && card.agent.isEmpty())) continue;
             Helper helper = byRole.computeIfAbsent(role, Helper::new);
+            if (!card.desktopCard.isEmpty()) continue;  // 接着电脑会话说的一句并进那个会话，不算一件派出去的事
             (card.monitoringOnly ? helper.desktop : helper.dispatched).add(card);
         }
         List<Helper> result = new ArrayList<>(byRole.values());
@@ -215,7 +216,7 @@ final class AppPresentation {
                 List<Helper> aliases=new ArrayList<>();for(Helper candidate:local.values())if(role(candidate.role).equals(owner(card)))aliases.add(candidate);
                 if(aliases.size()==1)helper=aliases.get(0);
             }
-            if(helper!=null)(card.monitoringOnly?helper.desktop:helper.dispatched).add(card);
+            if(helper!=null&&card.desktopCard.isEmpty())(card.monitoringOnly?helper.desktop:helper.dispatched).add(card);
         }
         List<Helper> result=new ArrayList<>(local.values());
         result.sort(Comparator.comparingInt((Helper helper)->role(helper.role).equals("codex")?0:role(helper.role).equals("claude")?1:2).thenComparing(helper->helper.role));
