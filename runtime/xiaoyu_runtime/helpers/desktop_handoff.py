@@ -152,6 +152,9 @@ def completed(task, outcome, error):
     """Best effort, once per successful task, not once per agent turn."""
     if task.cancelled or error is not None or outcome is None or not task.agent.spec.desktop_open:
         return
+    if getattr(task, "borrowed_session", None):
+        # 接着的是主人自己的原会话：它本来就在主人电脑上，不再替他打开一次。
+        return
     warning = open_session(task.agent, outcome.session_id)
     if warning:
         task.control.progress("桌面端：" + warning)

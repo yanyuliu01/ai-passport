@@ -273,6 +273,28 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(result["state"], "cancelled")
         self.assertNotIn("SECRET", json.dumps(result))
 
+    def test_client_window_presence_is_published_and_expires(self):
+        from xiaoyu_runtime.events.desktop_sync import CLIENT_OPEN_SECONDS
+        self.codex()
+        event = {"agent": "codex", "session_id": "s-1", "cwd": "/project/a", "status": "idle",
+                 "observed_at": self.now, "client": "open", "client_at": self.now}
+        self.hook(event)
+        self.sync.poll()
+        card = self.observed()[0]
+        self.assertTrue(card["client_open"])
+        self.now += 1
+        self.hook(dict(event, observed_at=self.now, client="closed", client_at=self.now))
+        self.sync.poll()
+        self.assertFalse(self.cards.get(card["id"])["client_open"])
+        self.now += 1
+        self.hook(dict(event, observed_at=self.now, client_at=self.now))
+        self.sync.poll()
+        self.assertTrue(self.cards.get(card["id"])["client_open"])
+        # A window that crashed never says goodbye: long silence counts as closed.
+        self.now += CLIENT_OPEN_SECONDS + 1
+        self.sync.poll()
+        self.assertFalse(self.cards.get(card["id"])["client_open"])
+
     def test_stale_is_unknown_and_restart_reuses_card(self):
         path = self.codex()
         self.append(path, [self.cevent("task_started")])

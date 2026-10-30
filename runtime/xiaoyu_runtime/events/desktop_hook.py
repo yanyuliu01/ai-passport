@@ -24,6 +24,11 @@ MAX_PATH_CHARS = 4096
 MAX_TITLE_CHARS = 120
 MAX_MODEL_CHARS = 128
 
+# Set by Runtime on the Claude Code processes it starts itself (continuing an
+# owner's session). Their hooks still report status, but say nothing about
+# whether the owner has the session open in a client.
+RUNTIME_RUN_ENV = "XIAOYU_RUNTIME_RUN"
+
 EVENT_STATUS = {
     "SessionStart": "unknown",
     "UserPromptSubmit": "running",
@@ -103,6 +108,10 @@ def normalize(agent: str, payload: Any,
         raise ValueError("invalid hook timestamp")
     result = {"agent": agent, "session_id": session, "cwd": cwd,
               "status": status, "observed_at": float(at)}
+    # A client window has the session open from its first event until SessionEnd.
+    if not os.environ.get(RUNTIME_RUN_ENV):
+        result["client"] = "closed" if event == "SessionEnd" else "open"
+        result["client_at"] = float(at)
     for key, value, limit in (
             ("title", payload.get("session_title"), MAX_TITLE_CHARS),
             ("model", payload.get("model"), MAX_MODEL_CHARS),
@@ -144,6 +153,14 @@ def record(state_dir: Path, event: Dict[str, Any]) -> Path:
     identity = "%s\0%s" % (event["agent"], event["session_id"])
     name = hashlib.sha256(identity.encode("utf-8")).hexdigest() + ".json"
     path = Path(state_dir) / "desktop-events" / name
+    if "client" not in event:
+        # Runtime's own run: keep what the owner's client last said.
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(previous, dict) and previous.get("client") in ("open", "closed"):
+                event = dict(event, client=previous["client"], client_at=previous.get("client_at"))
+        except (OSError, ValueError):
+            pass
     _write(path, event)
     return path
 

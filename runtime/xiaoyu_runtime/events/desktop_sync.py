@@ -28,6 +28,7 @@ POLL_SECONDS = 1.0
 # 找新开的会话。多端一致性要求 3 秒内反映变化，所以不能隔太久。
 DISCOVERY_SECONDS = 2.0
 RECENT_SECONDS = 86400
+CLIENT_OPEN_SECONDS = 6 * 3600
 STALE_SECONDS = 300
 # 只是工具、进展或时间戳变了：同一会话最多这么久发一次，免得经中继连着的手机被刷屏。
 # 不超过 3 秒：多端一致性要求已经发生的变化 3 秒内到各端。
@@ -72,6 +73,10 @@ class Session:
     published_major: Tuple[Any, ...] = ()
     published_at: float = 0.0
     hook_at: float = 0.0
+    # Whether an owner's client window has this session open (hooks: SessionStart
+    # .. SessionEnd), and when that was last confirmed by any of its events.
+    client: str = ""
+    client_at: float = 0.0
     skip: bool = False
     unavailable: bool = False
     entries: List[Dict[str, Any]] = field(default_factory=list)
@@ -468,6 +473,10 @@ class DesktopSync:
                 session.tool = _text(event.get("progress"), 48)
                 session.transition(status, min(at, now), _text(event.get("turn_id"), 128))
                 session.hook_at = max(session.hook_at, min(at, now))
+                client, client_at = event.get("client"), event.get("client_at")
+                if (client in ("open", "closed") and isinstance(client_at, (int, float))
+                        and not isinstance(client_at, bool) and client_at >= session.client_at):
+                    session.client, session.client_at = client, float(client_at)
                 self.hooks[path] = stat.st_mtime_ns
             except (OSError, ValueError, UnicodeDecodeError, TypeError):
                 continue
@@ -499,12 +508,15 @@ class DesktopSync:
         waiting = (next((item["id"] for item in self.approvals.pending()
                          if item["card"] == session.card and item.get("source") == "desktop"), None)
                    if self.approvals is not None else None)
-        key = (status, project, session.model, session.tool, observed_at, waiting,
+        # A window that crashed never reports SessionEnd: after a long quiet spell
+        # treat it as closed so the session can be continued from the phone.
+        client_open = session.client == "open" and now - session.client_at < CLIENT_OPEN_SECONDS
+        key = (client_open, status, project, session.model, session.tool, observed_at, waiting,
                session.started_at, stale, content, session.content_truncated, tuple(session.progress),
                title.title, title.source, title.truncated)
         if key == session.published and existing:
             return
-        major = (status, project, session.model, waiting, session.started_at, stale, content,
+        major = (client_open, status, project, session.model, waiting, session.started_at, stale, content,
                  session.content_truncated, title.title, title.source, title.truncated)
         if existing and major == session.published_major and now - session.published_at < MINOR_SECONDS:
             return
@@ -531,7 +543,7 @@ class DesktopSync:
         self.writer.observed(session.card, state=STATES[status], source="desktop", project=project,
                           session_id=session.session_id, desktop_cwd=session.cwd,
                           native_scope=home_scope(next(root.parent for kind, root in self.roots if kind == session.agent)),
-                          monitoring_only=True, desktop_status=status,
+                          monitoring_only=True, desktop_status=status, client_open=client_open,
                           observed_at=observed_at, stale=stale, model=session.model or None,
                           started_at=session.started_at, approval=waiting, queued=False,
                           brief=_text(latest_reply, 120) or "%s · %s" % (project, label),

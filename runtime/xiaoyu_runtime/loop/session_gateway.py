@@ -98,6 +98,8 @@ class SessionGateway:
         if target.get('monitoring_only'):
             if not target.get('session_id') or not target.get('desktop_cwd'):
                 raise AgentError('原会话缺少编号或目录，尚未投递')
+            if target.get('client_open'):
+                raise AgentError('这个会话正开在电脑上，手机发的话进不了那个窗口；请到电脑上继续')
             if target.get('desktop_status') in ('running', 'waiting') and not target.get('stale'):
                 raise AgentError('原会话还在跑或等待审批，尚未投递；不会启动第二个写入者')
             if any(c.get('borrowed_session') == target.get('session_id')
