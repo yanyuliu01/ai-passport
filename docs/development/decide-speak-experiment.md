@@ -2,7 +2,7 @@
 
 # Decide then speak: serial vs speculative parallel experiment (plan)
 
-Date: 2026-10-27. Status: experiment plan, not implemented. It does not change the Runtime's default flow or authorize a deployment.
+Date: 2026-10-27. Status: harness implemented; exploratory measurement in progress. It does not change the Runtime's default flow or authorize a deployment.
 
 ## 1. Question
 
@@ -180,3 +180,7 @@ Extra cost is still measured and reported, but it is not a condition and has no 
 
 - Whether the case list covers the situations you care about.
 - Whether to repeat the run with a second chat model besides the live configuration.
+
+## Owner-directed exploratory measurement
+
+On 2026-10-27 the owner requested an initial pass without a decision-phase cutoff, to measure average duration before choosing a deadline. The [handoff](decide-speak-handoff.md#owner-directed-exploratory-pass-2026-10-27) records the separate 46 × 2 pilot command and simulated-queue boundary. These data must not be pooled with deadline-limited samples or presented as completion of the original five-repeat comparison. The original cases and decision rule above remain recorded for a future confirmatory run.
