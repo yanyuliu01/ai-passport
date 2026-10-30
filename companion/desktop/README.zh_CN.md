@@ -370,6 +370,14 @@ npm start
 `npm test` 包含真实回环中继测试。禁止绑定 `127.0.0.1` 的沙箱无法运行该项，
 需报告限制，不能跳过后称全部通过。单元测试使用合成内容，不调用模型。
 
+Runtime 互通测试默认使用当前 Python 源码，即使忽略的 `runtime-dist/` 已存在。
+可用 `XIAOYU_TEST_PYTHON` 选择源码解释器。验证原生包时，显式设置
+`XIAOYU_TEST_BUNDLE` 为包目录，或 `XIAOYU_TEST_RUNTIME` 为可执行文件；
+显式包缺失或平台不符会失败，不会退回源码。`tools/build-windows.ps1`
+会选择刚构建的可执行文件。源码测试和打包测试分别作为证据记录。
+自有服务生命周期夹具改用临时 `.cjs` 文件，终止进程前等待 PID 记录，
+避免 Windows 与 macOS 的内联命令引号差异和进程启动竞争。
+
 ## 内置 DSH 和 Pi（0.1.21 源码）
 
 桌面安装包在 `agent-tools` 中携带私有 Node、DeepSeek Harness 和 Pi。
@@ -417,7 +425,11 @@ Windows 原生安装、真实 Key 回复、三秒内渲染回复及公网多端�
 ## 原生 Runtime 包和安装程序
 
 PyInstaller Runtime 必须在目标 OS/架构构建，Mac Python 包不能放进 Windows 安装包。
-打包钩子验证架构和 Runtime 源码摘要，拒绝缺失/过期的包。另有 Windows 路径，
+打包钩子验证架构和 Runtime 源码摘要，拒绝缺失/过期的包。它从最终的
+`extraResources` 映射读取 Runtime 目录，包含平台专用配置；必须恰好有一个
+完整目录映射到 `runtime`，重复、嵌套或带过滤器的映射会被拒绝。若设置了
+`XIAOYOU_RUNTIME_BUNDLE`，它必须解析到同一目录，不能校验另一个包后把旧包
+装入安装程序。另有 Windows 路径，
 在构建机上仅组装官方 Windows 二进制而不执行，仍须通过 Windows 原生验收。
 
 ```bash
