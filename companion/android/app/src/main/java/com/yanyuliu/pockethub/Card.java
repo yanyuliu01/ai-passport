@@ -256,6 +256,7 @@ final class Card {
         card.workerSession = Json.string(raw, "worker_session"); card.workerCwd = Json.string(raw, "worker_cwd");
         if (card.workerCwd.isEmpty()) card.workerCwd = Json.string(raw, "desktop_cwd");
         card.originMessage = Json.string(raw, "origin_message"); card.relayState = Json.string(raw, "relay_state");
+        card.clientOpen = Json.flag(raw, "client_open"); card.desktopCard = Json.string(raw, "desktop_card");
         card.lastMeaningfulAt = Json.number(raw, "last_meaningful_at");
         card.runId = Json.string(raw, "run_id");
         for (Object item : Json.list(raw, "supplements")) {
@@ -266,6 +267,10 @@ final class Card {
     }
 
     String conversation = "default", workerSession = "", workerCwd = "", relayState = "", originMessage = "";
+    /** 电脑会话正开在主人的客户端窗口里（Runtime 从钩子知道）；这时手机不能接着说。 */
+    boolean clientOpen;
+    /** 这件事是“接着电脑上某个会话说一句”：那个会话的卡片编号。界面上它并进那个会话，不单独成一件事。 */
+    String desktopCard = "";
     /** 这件事现在那一轮执行的编号；结果不明时按它核对原执行（POST /v1/cards/<id>/reconcile）。 */
     String runId = "";
     double lastMeaningfulAt;
@@ -353,6 +358,7 @@ final class Card {
                 contentScope, contentTruncated, titleSource, titleTruncated, attachments);
         copy.activity = activity; copy.conversation = conversation; copy.workerSession = workerSession;
         copy.workerCwd = workerCwd; copy.originMessage = originMessage; copy.relayState = relayState; copy.runId = runId;
+        copy.clientOpen = clientOpen; copy.desktopCard = desktopCard;
         copy.lastMeaningfulAt = lastMeaningfulAt;
         copy.originHost = originHost; copy.pendingSupplement = pendingSupplement; copy.turnEnded = turnEnded;
         copy.directoryId = directoryId; copy.originalTitle = originalTitle; copy.displayProject = displayProject;

@@ -118,6 +118,12 @@ class SessionGatewayTests(TempDirCase):
             self.assertIsNone(plan)
             self.assertIn('尚未投递', problem)
         self.assertIsNotNone(self.plan('missing')[1])
+        # Open in the owner's client window: the phone's words would only become a hidden branch.
+        key = self.desktop()
+        self.x.cards.update(key, desktop_status='idle', client_open=True)
+        plan, problem = self.plan(key)
+        self.assertIsNone(plan)
+        self.assertIn('正开在电脑上', problem)
         self.assertEqual([], self.codex.jobs)
 
     def test_wrong_environment_fails_without_changing_original_agent(self):

@@ -43,6 +43,14 @@ from .base import (  # noqa: F401  re-exported: callers use agents.<name>
 )
 
 
+def login_problem(text: str) -> bool:
+    """Claude Code 说的是没登录、登录失效或密钥不能用：这时该告诉主人去登录，而不是转述英文报错。"""
+    lowered = (text or "").lower()
+    return any(mark in lowered for mark in (
+        "not logged in", "please run /login", "failed to authenticate", "invalid api key",
+        "oauth token has expired", "authentication_error"))
+
+
 class EchoAgent(Agent):
     """原样复述，用来在没有任何模型的情况下验证手机、Runtime、设备之间的链路。"""
 
@@ -128,6 +136,13 @@ class ClaudeCodeAgent(Agent):
             # 让这台机器上的 Claude Code 用一套单独的登录和设置，
             # 不受（也不影响）使用者平时那套 ~/.claude 配置。
             env["CLAUDE_CONFIG_DIR"] = str(self.spec.config_dir)
+            # 指的正是默认的 ~/.claude（续接主人自己的原会话）时不写这个变量：macOS 上登录存在
+            # 钥匙串里，条目名跟着这个变量变，写了就找不到主人平时 claude 登录的那份。
+            if Path(self.spec.config_dir).expanduser().resolve() == (Path.home() / ".claude").resolve():
+                env.pop("CLAUDE_CONFIG_DIR")
+        # 告诉电脑上的状态钩子：这一轮是 Runtime 自己起的，不代表主人在电脑上开着这个会话。
+        from ..events.desktop_hook import RUNTIME_RUN_ENV
+        env[RUNTIME_RUN_ENV] = "1"
         return env
 
     def _app_recap(self) -> str:
@@ -279,7 +294,10 @@ class ClaudeCodeAgent(Agent):
         session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
         result = payload.get("result") if isinstance(payload.get("result"), str) else ""
         if returncode != 0 or payload.get("is_error") is True:
-            raise AgentError("Claude Code 报告失败：%s" % clip(result or detail or "没有说明", 200))
+            said = result or detail or ""
+            if login_problem(said):
+                raise AgentError("电脑上的 Claude 没登录或登录失效：在电脑终端运行 claude auth login 后再试")
+            raise AgentError("Claude Code 报告失败：%s" % clip(said or "没有说明", 200))
         structured = payload.get("structured_output")
         if isinstance(structured, dict) and isinstance(structured.get("reply"), str):
             return Outcome(structured["reply"], session_id, structured)

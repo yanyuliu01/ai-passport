@@ -30,8 +30,37 @@ final class WorkRecords {
     /** The three groups 在做的事 shows; an unconfirmed task has not ended, so it stays with the running ones. */
     enum Section { WAITING, RUNNING, ENDED }
 
+    /**
+     * A computer session that is running right now. 在做的事, the helper chip and the settings count all
+     * use this one rule, so "电脑上在跑" on one screen is never "没有在做的事" on another.
+     */
+    static boolean desktopRunning(Card card, boolean connected, double now) {
+        return card.monitoringOnly && card.state.equals("working") && group(card, connected, now) == Group.RUNNING;
+    }
+
+    /** Everything 在做的事 counts as not finished: handed-over work that has not ended, plus running computer sessions. */
+    static int inProgress(java.util.List<Card> cards, boolean connected, double now) {
+        int count = 0;
+        for (Card card : cards)
+            if (listed(card) ? section(card, connected, now) != Section.ENDED : desktopRunning(card, connected, now)) count++;
+        return count;
+    }
+
     /** 在做的事 lists only work handed to a helper; observed computer sessions are reference material. */
-    static boolean listed(Card card) { return AppPresentation.dispatched(card); }
+    static boolean listed(Card card) { return AppPresentation.dispatched(card) && card.desktopCard.isEmpty(); }
+
+    /**
+     * 电脑会话在手机上能不能接着说，四种：open（正开在电脑上）、running（这一轮在跑或等确认）、
+     * ready（可以接着说）、unavailable（连不上、状态未知、不是本机会话等）。会话页、帮手页都用这一个说法。
+     */
+    static String session(Card card, boolean connected, double now) {
+        if (!card.monitoringOnly || !card.source.equals("desktop") || !connected) return "unavailable";
+        if (card.clientOpen) return "open";
+        Group group = group(card, connected, now);
+        if (group == Group.RUNNING || group == Group.WAITING) return "running";
+        if (group == Group.UNCERTAIN) return "unavailable";
+        return "ready";
+    }
 
     static Section section(Card card, boolean connected, double now) {
         switch (group(card, connected, now)) {
@@ -45,7 +74,11 @@ final class WorkRecords {
     static String progress(Card card) {
         if (card.presentation != null && card.presentation.supported && !card.presentation.value("progress").isEmpty())
             return card.presentation.value("progress");
-        return card.progress.isEmpty() ? "" : card.progress.get(card.progress.size() - 1);
+        for (int i = card.progress.size() - 1; i >= 0; i--) {
+            String line = AppPresentation.readableProgress(card.progress.get(i));
+            if (!line.isEmpty()) return line;
+        }
+        return "";
     }
 
     /** 补充要求走到哪一步，各自来自对应的事实；和电脑客户端用同一套说法。 */
@@ -57,7 +90,7 @@ final class WorkRecords {
             case "relayed": return "补充要求已转交原会话";
             case "executing": return "正在执行补充要求";
             case "interrupted": return "小鱼重启过，补充要求还留着，等你确认后再转交";
-            default: return "补充要求状态：" + state;
+            default: return "";  // 内部状态（比如 session_bound）不给人看
         }
     }
 

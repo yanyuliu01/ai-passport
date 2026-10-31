@@ -390,3 +390,28 @@ test('local sidebar roster excludes mesh aliases and independent remote Runtime 
   const visible = localHelpers(unifiedHelpers(rows),[{runtime,name:'Mac',local:true,connected:true,capabilities:[]}]);
   assert.deepEqual(visible.map(row=>[row.name,row.label]),[['cc','我的帮手']]);
 });
+
+test('desktop shares the phone rules for sessions, quotes, progress and bubble pacing', async () => {
+  const p = await import('../core/presentation.js');
+  const now = 1_800_000_000_000;
+  const session = { monitoring_only: true, source: 'desktop', state: 'turn_ended', observed_at: now / 1000 - 2 };
+  assert.equal(p.sessionState(session, true, now), 'ready');
+  assert.equal(p.sessionState({ ...session, client_open: true }, true, now), 'open');
+  assert.equal(p.sessionState({ ...session, state: 'working' }, true, now), 'running');
+  assert.equal(p.sessionState(session, false, now), 'unavailable');
+  assert.equal(p.listedTask({ agent: 'cc', desktop_card: 'd1' }), false);
+  assert.equal(p.listedTask({ agent: 'cc' }), true);
+  assert.equal(p.readableProgress("declined · /bin/zsh -lc '/Users/a/b/c/adb devices -l'"), '被拒绝 · 运行命令：adb devices -l');
+  assert.equal(p.readableProgress('Native execution association'), '');
+  const sent = p.withQuote(p.quoteSnippet('小鱼', '对哦」'), '那现在呢');
+  assert.deepEqual(p.splitQuote(sent), { quote: '小鱼：对哦”', body: '那现在呢' });
+  assert.deepEqual(p.splitQuote('「好」就行'), { body: '「好」就行' });
+  assert.equal(p.bubbleDelay('好'), 600);
+  assert.equal(p.bubbleDelay('一'.repeat(24)), 2000);
+  assert.equal(p.bubbleDelay('一'.repeat(200)), 2500);
+  assert.equal(p.relayLabel('session_bound'), '');
+  const cc = { id: 'claude_code', name: 'cc', type: 'claude_code', runtime: 'r1' } as never;
+  assert.equal(p.helperMatchesTask(cc, { _runtimeId: 'r1', monitoring_only: true, agent: 'claude' }), true);
+  assert.equal(p.helperMatchesTask(cc, { _runtimeId: 'r1', agent: 'cc' }), true);
+  assert.equal(p.helperMatchesTask(cc, { _runtimeId: 'r1', monitoring_only: true, agent: 'codex' }), false);
+});

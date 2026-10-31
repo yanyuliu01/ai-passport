@@ -1173,6 +1173,21 @@ class ClaudeCodeAgentTests(TempDirCase):
         # 其余环境变量原样保留，否则连 PATH 都没有。
         self.assertEqual(seen[-1]["env"].get("PATH"), os.environ.get("PATH"))
 
+        # 默认的 ~/.claude 不写 CLAUDE_CONFIG_DIR：macOS 钥匙串里的登录条目名跟着它变。
+        home = self.folder / "home"
+        with mock.patch.object(agents_module.Path, "home", return_value=home):
+            agents_module.ClaudeCodeAgent(dataclasses.replace(plain, config_dir=home / ".claude"), run=fake_run).run(Job("x"))
+        self.assertNotIn("CLAUDE_CONFIG_DIR", seen[-1]["env"])
+        # Runtime 自己起的这一轮要标出来，电脑上的状态钩子才不会把它当成主人开着会话。
+        self.assertEqual(seen[-1]["env"].get("XIAOYU_RUNTIME_RUN"), "1")
+
+    def test_login_failures_tell_the_owner_how_to_log_in(self):
+        for said in ("Not logged in · Please run /login", "Failed to authenticate. API Error: 403 x"):
+            with self.assertRaisesRegex(AgentError, "claude auth login"):
+                self.agent.parse(1, {"is_error": True, "result": said}, "")
+        with self.assertRaisesRegex(AgentError, "报告失败：boom"):
+            self.agent.parse(1, {"is_error": True, "result": "boom"}, "")
+
     def test_claude_session_login_is_not_inherited_by_claude_code(self):
         # Runtime started from inside a Claude desktop session carries that session's
         # temporary login; cc rejects it with "403 Request not allowed".

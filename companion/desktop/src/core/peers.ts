@@ -29,7 +29,9 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
     || /^\/v1\/tasks\/[a-zA-Z0-9._:-]+\/activity$/.test(url.pathname)
     || /^\/v1\/messages\/[a-zA-Z0-9._:-]+(?:\/effects)?$/.test(url.pathname)
-    || /^\/v1\/timers\/(?:[a-zA-Z0-9._:-]+\/)?effects$/.test(url.pathname);
+    || /^\/v1\/timers\/(?:[a-zA-Z0-9._:-]+\/)?effects$/.test(url.pathname)
+    // Quick review status for the phone; reading never changes the mode.
+    || url.pathname === '/v1/review' && /^[A-Za-z0-9._:-]{1,128}$/.test(url.searchParams.get('conversation') || 'default');
   if (method !== 'POST') return false;
   if (/^\/v1\/sessions\/[A-Za-z0-9._:-]+\/continue$/.test(url.pathname)) {
     return Boolean(body && typeof body.text === 'string' && body.text.trim().length > 0 && body.text.length <= 32_000
@@ -80,6 +82,21 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
       && body.image_ids.every(id => typeof id === 'string' && /^[a-zA-Z0-9._:-]{1,128}$/.test(id))))
     && (body.reply_scope === undefined || body.reply_scope === 'main'));
   if (/^\/v1\/approvals\/[a-zA-Z0-9._:-]+$/.test(url.pathname)) return ['allow', 'deny'].includes(String(body?.decision));
+  // Quick review from the phone: switch the read-only auto-pass mode, or allow exactly the listed batch.
+  if (url.pathname === '/v1/review/mode' || url.pathname === '/v1/review/batch') {
+    const scoped = Boolean(body && typeof body.epoch === 'string' && body.epoch.length <= 128
+      && typeof body.conversation === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(body.conversation));
+    if (url.pathname === '/v1/review/mode') return scoped && Object.keys(body!).every(key => ['epoch', 'conversation', 'revision', 'mode', 'seconds'].includes(key))
+      && Number.isSafeInteger(body!.revision) && ['auto_allow', 'manual'].includes(String(body!.mode))
+      && Number.isSafeInteger(body!.seconds) && Number(body!.seconds) >= 0 && Number(body!.seconds) <= 31_536_000;
+    const items = body?.items;
+    return scoped && Object.keys(body!).every(key => ['epoch', 'conversation', 'items'].includes(key))
+      && Array.isArray(items) && items.length >= 1 && items.length <= 100
+      && items.every(item => Boolean(item && typeof item === 'object' && !Array.isArray(item)
+        && Object.keys(item).every(key => ['id', 'key'].includes(key))
+        && typeof (item as Json).id === 'string' && String((item as Json).id).length <= 128
+        && typeof (item as Json).key === 'string' && String((item as Json).key).length <= 256));
+  }
   // The owner's review of an unknown request: exactly the four fields, each answer applied or not_applied.
   if (/^\/v1\/(?:messages|timers)\/[a-zA-Z0-9._:-]+\/effects$/.test(url.pathname)) {
     const outcomes = body?.outcomes as Json | undefined;

@@ -45,7 +45,8 @@ class DesktopHookTests(unittest.TestCase):
                              tool_input={"command": "private command"}, token="private token",
                              tool_response="private output", session_title="Example",
                              model="test-model", prompt_id="prompt-test")
-        clean = hook.normalize("claude", event, 10)
+        with mock.patch.dict(os.environ, {hook.RUNTIME_RUN_ENV: "1"}):
+            clean = hook.normalize("claude", event, 10)
         self.assertEqual(clean, {"agent": "claude", "session_id": "session-test",
                                  "cwd": "/example/project", "status": "running",
                                  "observed_at": 10.0, "title": "Example",
@@ -73,8 +74,23 @@ class DesktopHookTests(unittest.TestCase):
     def test_optional_bad_metadata_is_omitted(self):
         payload = self.payload(session_title="x" * (hook.MAX_TITLE_CHARS + 1),
                                model="secret\nvalue", turn_id=[])
-        self.assertEqual(set(hook.normalize("codex", payload, 10)),
-                         {"agent", "session_id", "cwd", "status", "observed_at"})
+        with mock.patch.dict(os.environ, {hook.RUNTIME_RUN_ENV: "1"}):
+            fields = set(hook.normalize("codex", payload, 10))
+        self.assertEqual(fields, {"agent", "session_id", "cwd", "status", "observed_at"})
+
+    def test_client_window_presence_survives_runtime_runs(self):
+        clean = {key: value for key, value in os.environ.items() if key != hook.RUNTIME_RUN_ENV}
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, clean, clear=True):
+            opened = hook.normalize("claude", self.payload("SessionStart"), 10)
+            self.assertEqual((opened["client"], opened["client_at"]), ("open", 10.0))
+            path = hook.record(Path(directory), opened)
+            # Runtime continuing the same session reports status but not presence.
+            with mock.patch.dict(os.environ, {hook.RUNTIME_RUN_ENV: "1"}):
+                hook.record(Path(directory), hook.normalize("claude", self.payload("Stop"), 20))
+            kept = json.loads(path.read_text())
+            self.assertEqual((kept["status"], kept["client"], kept["client_at"]), ("idle", "open", 10.0))
+            hook.record(Path(directory), hook.normalize("claude", self.payload("SessionEnd"), 30))
+            self.assertEqual(json.loads(path.read_text())["client"], "closed")
 
     def test_subagents_and_sidechains_are_ignored(self):
         for fields in ({"isSidechain": True}, {"is_sidechain": True},

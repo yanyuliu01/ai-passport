@@ -31,6 +31,31 @@ public class WorkRecordsTest {
         assertEquals("等待第一条进展", WorkRecords.status(working, true, NOW, zone));
     }
 
+    @Test public void desktopSessionsSayWhetherThePhoneCanContinue() {
+        Card idle = card("\"state\":\"turn_ended\",\"source\":\"desktop\"");
+        assertEquals("ready", WorkRecords.session(idle, true, NOW));
+        assertEquals("unavailable", WorkRecords.session(idle, false, NOW));
+        assertEquals("open", WorkRecords.session(card("\"state\":\"turn_ended\",\"source\":\"desktop\",\"client_open\":true"), true, NOW));
+        assertEquals("running", WorkRecords.session(card("\"state\":\"working\",\"source\":\"desktop\",\"observed_at\":" + (NOW - 2)), true, NOW));
+        assertEquals("unavailable", WorkRecords.session(card("\"state\":\"unknown\",\"source\":\"desktop\",\"stale\":true"), true, NOW));
+        assertEquals("unavailable", WorkRecords.session(card("\"state\":\"done\",\"agent\":\"codex\""), true, NOW));
+        // 从手机接着说的那一句是一张单独的卡，但不进在做的事。
+        Card resumed = card("\"state\":\"working\",\"agent\":\"cc\",\"desktop_card\":\"d1\"");
+        assertFalse(WorkRecords.listed(resumed));
+        assertEquals("", WorkRecords.relayLabel("session_bound"));
+    }
+
+    @Test public void everyScreenCountsTheSameWorkInProgress() {
+        Card desktop = Card.from(Json.parseObject("{\"id\":\"d1\",\"state\":\"working\",\"source\":\"desktop\",\"observed_at\":" + (NOW - 2) + "}"));
+        Card staleDesktop = Card.from(Json.parseObject("{\"id\":\"d2\",\"state\":\"working\",\"source\":\"desktop\",\"observed_at\":" + (NOW - 600) + "}"));
+        Card handed = Card.from(Json.parseObject("{\"id\":\"h1\",\"state\":\"working\",\"agent\":\"codex\"}"));
+        Card ended = Card.from(Json.parseObject("{\"id\":\"h2\",\"state\":\"done\",\"agent\":\"codex\"}"));
+        assertTrue(WorkRecords.desktopRunning(desktop, true, NOW));
+        assertFalse(WorkRecords.desktopRunning(staleDesktop, true, NOW));
+        assertFalse(WorkRecords.desktopRunning(handed, true, NOW));
+        assertEquals(2, WorkRecords.inProgress(java.util.Arrays.asList(desktop, staleDesktop, handed, ended), true, NOW));
+    }
+
     @Test public void queuedAdditionDoesNotInventProgressAndTerminalStatesKeepTheirMeaning() {
         Card queued = card("\"state\":\"working\",\"agent\":\"codex\",\"activity\":[{\"at\":" + NOW + ",\"kind\":\"relay_queued\",\"text\":\"extra\"}]");
         assertEquals("等待第一条进展", WorkRecords.status(queued, true, NOW, zone));

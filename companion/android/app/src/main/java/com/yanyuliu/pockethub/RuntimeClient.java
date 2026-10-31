@@ -1146,13 +1146,13 @@ final class RuntimeClient {
     /** Retries go back to the conversation the message was written in, not the main chat. */
     static void retryImages(Context context, String id, String text, List<Attachment> images, String conversation) {
         String client = HubStore.get().retryMessage(id);
-        if (client != null) submitScoped(context, text, null, null, false, null, null, client, images, conversation, true);
+        if (client != null) submitScoped(context, text, null, null, false, null, null, client, images, conversation, true, false);
     }
 
     static void retry(Context context, String id, String text, String card, String conversation) {
         if (HubStore.get().busy()) return;
         String client = HubStore.get().retryMessage(id);
-        if (client != null) submitScoped(context, text, null, card, card != null, null, null, client, null, conversation, card == null);
+        if (client != null) submitScoped(context, text, null, card, card != null, null, null, client, null, conversation, card == null, false);
     }
 
     private static void submit(Context context, String text, byte[] wav, String card,
@@ -1162,20 +1162,28 @@ final class RuntimeClient {
 
     private static void submit(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort, String agent, String retryId, List<Attachment> images) {
-        submitScoped(context, text, wav, card, pin, effort, agent, retryId, images, "default", false);
+        submitScoped(context, text, wav, card, pin, effort, agent, retryId, images, "default", false, false);
     }
 
     static void sendVoiceChat(Context context, byte[] wav, String conversation, String card) {
-        submitScoped(context, VOICE_PLACEHOLDER, wav, card, card != null, null, null, null, null, conversation, true);
+        submitScoped(context, VOICE_PLACEHOLDER, wav, card, card != null, null, null, null, null, conversation, true, false);
     }
 
     static void sendChat(Context context, String text, String conversation, String card, List<Attachment> images) {
-        submitScoped(context, text, null, card, card != null, null, null, null, images, conversation, true);
+        submitScoped(context, text, null, card, card != null, null, null, null, images, conversation, true, false);
+    }
+
+    /**
+     * 在帮手电脑上的原会话里接着说：走 Runtime 的 /v1/sessions/<card>/continue，回话照常回到这段聊天。
+     * 原会话正在跑或等确认时 Runtime 会拒绝（不开第二个写入者），拒绝的原因会写在这句话下面。
+     */
+    static void sendToSession(Context context, String text, String conversation, String card) {
+        submitScoped(context, text, null, card, true, null, null, null, null, conversation, true, true);
     }
 
     private static void submitScoped(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort, String agent, String retryId, List<Attachment> images,
-                               String conversation, boolean fromChat) {
+                               String conversation, boolean fromChat, boolean resume) {
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -1207,6 +1215,10 @@ final class RuntimeClient {
                                     + (BuddyProtocol.cardId(card) ? "&card=" + card + (pin ? "&pin=1" : "")
                                     : ""), token,
                             wav, "audio/wav", 30);
+                } else if (resume) {
+                    message = request("POST", url + "/v1/sessions/" + java.net.URLEncoder.encode(card, "UTF-8") + "/continue", token,
+                            ("{\"text\":" + quoted(text) + ",\"conversation\":" + quoted(conversation) + ",\"client_id\":" + quoted(clientId) + "}")
+                                    .getBytes(StandardCharsets.UTF_8), "application/json; charset=utf-8", 20);
                 } else {
                     message = request("POST", url + "/v1/messages", token,
                             scopedMessageJson(text, clientId, card, effort, agent, images, conversation, fromChat)

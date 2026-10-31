@@ -22,7 +22,7 @@ final class AnchoredMenu {
     private final LinearLayout rows;
     private final PopupWindow popup;
     private boolean divided;
-    private Runnable afterClose;
+    private final java.util.Map<String,Runnable> afterClose=new java.util.LinkedHashMap<>();
     AnchoredMenu(Activity activity) {
         this.activity=activity;rows=new LinearLayout(activity);rows.setOrientation(LinearLayout.VERTICAL);rows.setPadding(dp(6),dp(6),dp(6),dp(6));
         rows.setBackground(round(Color.WHITE));
@@ -50,14 +50,14 @@ final class AnchoredMenu {
         anchor.addOnAttachStateChangeListener(detached);
         popup.setOnDismissListener(()->{
             anchor.setForeground(null);anchor.removeOnAttachStateChangeListener(detached);if(open==this)open=null;
-            Runnable next=afterClose;afterClose=null;if(next!=null)next.run();
+            java.util.List<Runnable> next=new java.util.ArrayList<>(afterClose.values());afterClose.clear();for(Runnable action:next)action.run();
         });
         // Below the row, right-aligned; PopupWindow flips it above when the row is near the bottom.
         popup.showAsDropDown(anchor,-dp(8),dp(4),Gravity.END);
     }
     static boolean showing(){return open!=null&&open.popup.isShowing();}
-    /** Runs once after the open menu closes; used to defer list rebuilds that would pull the row out from under it. */
-    static void afterClose(Runnable action){if(open!=null)open.afterClose=action;}
+    /** Runs once after the open menu closes; used to defer list rebuilds that would pull the row out from under it. One per key. */
+    static void afterClose(String key,Runnable action){if(open!=null)open.afterClose.put(key,action);}
     static void dismissOpen(){if(open!=null)open.popup.dismiss();}
     private GradientDrawable round(int color){GradientDrawable shape=new GradientDrawable();shape.setColor(color);shape.setCornerRadius(dp(14));return shape;}
     private int dp(float value){return Math.round(value*activity.getResources().getDisplayMetrics().density);}

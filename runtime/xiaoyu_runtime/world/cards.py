@@ -258,6 +258,7 @@ class Cards:
             "session_id": text("session_id"), "desktop_cwd": text("desktop_cwd"),
             "monitoring_only": card.get("monitoring_only") is True,
             "desktop_status": text("desktop_status"),
+            "client_open": card.get("client_open") is True,
             "observed_at": number("observed_at"),
             "stale": card.get("stale") is True,
             "content_scope": text("content_scope"),
@@ -426,7 +427,7 @@ class Cards:
     def session_targets(self, conversation=None):
         """Gateway metadata only; searching must not copy every retained transcript."""
         fields = ('id', 'conversation', 'title', 'state', 'agent', 'seq', 'project', 'source',
-                  'monitoring_only', 'session_id', 'native_scope', 'desktop_cwd', 'desktop_status',
+                  'monitoring_only', 'session_id', 'native_scope', 'desktop_cwd', 'desktop_status', 'client_open',
                   'worker_cwd', 'worker_scope', 'worker_session', 'mesh_origin', 'mesh_id',
                   'origin_name', 'available', 'stale', 'updated_at', 'approval', 'relay_state',
                   'borrowed_session', 'borrowed_scope')

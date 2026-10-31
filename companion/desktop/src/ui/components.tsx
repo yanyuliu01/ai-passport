@@ -1,7 +1,7 @@
 import { quotaLeft } from '../core/presentation';
 import React from 'react';
 import type { HelperView, Json } from '../shared';
-import { activeTask, helperMatchesTask } from '../core/presentation';
+import { activeTask, helperMatchesTask, helperState } from '../core/presentation';
 import xiaoyu from './images/xiaoyu.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
@@ -18,7 +18,8 @@ const paths: Record<string, React.ReactNode> = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>, info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></>,
   refresh: <><path d="M20 7a9 9 0 1 0 1 9M20 2v6h-6" /></>, external: <><path d="M14 3h7v7M10 14 21 3M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" /></>,
   check: <path d="m5 12 4 4L19 6" />, stop: <rect x="5" y="5" width="14" height="14" rx="2" />,
-  quote: <><path d="M4 4v9a3 3 0 0 0 3 3h13M15 11l5 5-5 5" /></>, more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
+  quote: <><path d="M5 17c0-4 1-7 5-9M14 17c0-4 1-7 5-9" /><circle cx="7" cy="16" r="2" /><circle cx="16" cy="16" r="2" /></>,
+  copy: <><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 5V4H6a2 2 0 0 0-2 2v10h1" /></>, more: <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>,
 };
 export function Icon({ name }: { name: string }) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.info}</svg>; }
 export function Avatar({ type = 'xiaoyu', size = 32 }: { type?: string; size?: number }) {
@@ -36,10 +37,12 @@ export function QuotaAvatar({ helper, onClick }: { helper: HelperView; onClick()
   </button>;
 }
 export function HelperPill({ helper, tasks, onUsage, onTask }: { helper: HelperView; tasks: Json[]; onUsage(): void; onTask(task: Json): void }) {
-  const task = helperTask(helper, tasks), waiting = task?.state === 'waiting';
-  return <div className={'helper-pill ' + (waiting ? 'waiting' : task ? 'running' : '')}>
+  // 只算小鱼派给它的事；电脑上的会话在跑时写“电脑上在跑”，点了看帮手页（和侧边栏一个说法）。
+  const task = tasks.find(item => helperMatchesTask(helper, item) && !item.monitoring_only && activeTask(item)), waiting = task?.state === 'waiting';
+  const word = helperState(helper, tasks);
+  return <div className={'helper-pill ' + (waiting ? 'waiting' : word !== '空闲' && word !== '连不上' ? 'running' : '')}>
     <QuotaAvatar helper={helper} onClick={onUsage} />
-    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{waiting ? '等你确认' : task ? '在做' : helper.connected ? '空闲' : '连不上'}</small></button>
+    <button className="helper-label" onClick={() => task ? onTask(task) : onUsage()}><span>{helper.label}</span><small>{word}</small></button>
   </div>;
 }
 export function elapsed(value: unknown): string {

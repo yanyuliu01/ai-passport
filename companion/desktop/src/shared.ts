@@ -185,6 +185,7 @@ export interface DesktopAPI {
   importConfig(): Promise<void>;
   approve(input: { space: string; id: string; runtime: string; decision: 'allow' | 'deny' }): Promise<void>;
   cancel(input: { space: string; id: string; runtime: string }): Promise<void>;
+  continueSession(input: { space: string; id: string; runtime: string; text: string }): Promise<void>;
   effectReview(input: { space: string; runtime: string; record: string }): Promise<Json>;
   timerReviews(input: { space: string }): Promise<Json[]>;
   submitEffectReview(input: { space: string; runtime: string; record: string; revision: string; outcomes: Record<string, 'applied' | 'not_applied'> }): Promise<Json>;
@@ -194,5 +195,6 @@ export interface DesktopAPI {
   acceptJoin(id: string): Promise<void>;
   configureRelay(): Promise<void>;
   loginStart(enabled: boolean): Promise<void>;
+  loginStartState(): Promise<boolean>;
   subscribe(listener: (view: ClientView) => void): () => void;
 }

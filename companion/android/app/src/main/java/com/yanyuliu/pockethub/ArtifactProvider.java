@@ -15,6 +15,13 @@ import java.io.FileNotFoundException;
 public final class ArtifactProvider extends ContentProvider {
     /** App 自己的更新包放在这里，和任务附件分开，好整个清掉旧的。 */
     static final String UPDATES = "updates";
+    /** 拍照时相机应用把照片写到这里；只接受 App 自己起的文件名，用完即删。 */
+    static final String CAPTURES = "captures";
+    static Uri captureUri(Context context, File file) {
+        return new Uri.Builder().scheme("content").authority(context.getPackageName() + ".artifacts")
+                .appendPath(CAPTURES).appendPath(file.getName()).appendQueryParameter("name", file.getName())
+                .appendQueryParameter("mime", "image/jpeg").build();
+    }
     static Uri uri(Context context, File file, Attachment item) {
         return uri(context, file, item.label(), item.mime);
     }
@@ -28,6 +35,8 @@ public final class ArtifactProvider extends ContentProvider {
         String name = uri.getLastPathSegment();
         java.util.List<String> segments = uri.getPathSegments();
         boolean update = segments.size() == 2 && UPDATES.equals(segments.get(0));
+        if (segments.size() == 2 && CAPTURES.equals(segments.get(0)) && name != null && name.matches("capture-[0-9]+\\.jpg"))
+            return new File(new File(getContext().getFilesDir(), CAPTURES), name);
         if (name == null || (segments.size() != 1 && !update) || !name.matches("[0-9a-f]{64}\\.bin")) throw new FileNotFoundException("Invalid artifact");
         File file = new File(new File(getContext().getFilesDir(), update ? UPDATES : "artifacts"), name);
         if (!file.isFile()) throw new FileNotFoundException("Artifact not cached");
@@ -36,8 +45,13 @@ public final class ArtifactProvider extends ContentProvider {
     @Override public boolean onCreate() { return true; }
     @Override public String getType(Uri uri) { String mime = uri.getQueryParameter("mime"); return mime == null || mime.isEmpty() ? "application/octet-stream" : mime; }
     @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
-        if (!mode.equals("r")) throw new FileNotFoundException("Read only");
-        return ParcelFileDescriptor.open(file(uri), ParcelFileDescriptor.MODE_READ_ONLY);
+        java.util.List<String> segments = uri.getPathSegments();
+        boolean capture = segments.size() == 2 && CAPTURES.equals(segments.get(0));
+        if (!mode.equals("r") && !capture) throw new FileNotFoundException("Read only");
+        if (!mode.equals("r")) return ParcelFileDescriptor.open(file(uri), ParcelFileDescriptor.parseMode(mode) | ParcelFileDescriptor.MODE_CREATE);
+        File file = file(uri);
+        if (!file.isFile()) throw new FileNotFoundException("Not cached");
+        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
     }
     @Override public Cursor query(Uri uri, String[] projection, String selection, String[] args, String order) {
         try {

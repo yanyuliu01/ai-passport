@@ -154,7 +154,8 @@ final class AppPresentation {
         }
 
         boolean desktopRunning(boolean connected) {
-            for (Card card : desktop) if (XiaoyuState.state(card, connected).equals("working")) return true;
+            double now = System.currentTimeMillis() / 1000.0;
+            for (Card card : desktop) if (WorkRecords.desktopRunning(card, connected, now)) return true;
             return false;
         }
 
@@ -195,6 +196,7 @@ final class AppPresentation {
             String role = owner(card);
             if (role.equals("ds") || (!card.monitoringOnly && card.agent.isEmpty())) continue;
             Helper helper = byRole.computeIfAbsent(role, Helper::new);
+            if (!card.desktopCard.isEmpty()) continue;  // 接着电脑会话说的一句并进那个会话，不算一件派出去的事
             (card.monitoringOnly ? helper.desktop : helper.dispatched).add(card);
         }
         List<Helper> result = new ArrayList<>(byRole.values());
@@ -214,7 +216,7 @@ final class AppPresentation {
                 List<Helper> aliases=new ArrayList<>();for(Helper candidate:local.values())if(role(candidate.role).equals(owner(card)))aliases.add(candidate);
                 if(aliases.size()==1)helper=aliases.get(0);
             }
-            if(helper!=null)(card.monitoringOnly?helper.desktop:helper.dispatched).add(card);
+            if(helper!=null&&card.desktopCard.isEmpty())(card.monitoringOnly?helper.desktop:helper.dispatched).add(card);
         }
         List<Helper> result=new ArrayList<>(local.values());
         result.sort(Comparator.comparingInt((Helper helper)->role(helper.role).equals("codex")?0:role(helper.role).equals("claude")?1:2).thenComparing(helper->helper.role));
@@ -262,6 +264,80 @@ final class AppPresentation {
     }
 
     /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
+    /**
+     * 引用：Runtime 的消息没有单独的引用字段，所以引用写在你那句话的第一行「小鱼：……」，
+     * 小鱼和电脑上都看得懂；App 把它拆出来，在你的气泡下面画成灰色的引用块（像微信）。
+     * 返回 {引用, 正文}；没有引用时引用为 null。
+     */
+    static String[] splitQuote(String text) {
+        if (text == null || !text.startsWith("「")) return new String[] {null, text};
+        int end = text.indexOf("」\n");
+        if (end < 2 || text.substring(0, end).contains("\n")) return new String[] {null, text};
+        return new String[] {text.substring(1, end), text.substring(end + 2)};
+    }
+
+    static String withQuote(String quote, String text) {
+        return quote == null || quote.isEmpty() ? text : "「" + quote + "」\n" + text;
+    }
+
+    /** 引用时只带一行、最多 60 个字，长了加省略号。 */
+    static String quoteSnippet(String author, String text) {
+        String line = text == null ? "" : text.replaceAll("\\s+", " ").trim();
+        if (line.codePointCount(0, line.length()) > 60) line = line.substring(0, line.offsetByCodePoints(0, 60)) + "…";
+        return author + "：" + line.replace("」", "”");
+    }
+
+    /**
+     * 进展里的一行给人看：帮手跑的命令写成“运行命令：…”（去掉 /bin/zsh -lc 和引号），
+     * 开头的英文结果词换成中文，纯内部的标记（Native execution association）返回空串不显示。
+     */
+    /**
+     * 小鱼一次说几条时，第 2 条起每条等多久再出来：按这条的字数“打字”，大约每秒 12 个字
+     * （比人打字快一点），最少 0.6 秒、最多 2.5 秒。桌面客户端用同一个规则（presentation.ts bubbleDelay）。
+     */
+    static long bubbleDelay(String text) {
+        int chars = text == null ? 0 : text.replaceAll("\\s+", "").codePointCount(0, text.replaceAll("\\s+", "").length());
+        return Math.max(600L, Math.min(2500L, chars * 1000L / 12));
+    }
+
+    /** 列表里的时间：今天只写几点，昨天写“昨天”，今年写几月几日，更早写年份。 */
+    static String clock(double at, double now, ZoneId zone) {
+        if (!(at > 0)) return "";
+        java.time.ZonedDateTime stamp = Instant.ofEpochSecond((long) at).atZone(zone);
+        LocalDate day = stamp.toLocalDate(), today = Instant.ofEpochSecond((long) now).atZone(zone).toLocalDate();
+        if (day.equals(today)) return DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT).format(stamp);
+        if (day.equals(today.minusDays(1))) return "昨天 " + DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT).format(stamp);
+        if (day.getYear() == today.getYear()) return day.getMonthValue() + "月" + day.getDayOfMonth() + "日";
+        return day.getYear() + "/" + day.getMonthValue() + "/" + day.getDayOfMonth();
+    }
+
+    static String readableProgress(String line) {
+        if (line == null) return "";
+        String text = line.trim();
+        if (text.isEmpty() || text.equalsIgnoreCase("Native execution association")) return "";
+        String outcome = "";
+        java.util.regex.Matcher head = java.util.regex.Pattern.compile("^(declined|completed|failed|cancelled|denied|approved)\\s*[·:：-]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (head.find()) {
+            switch (head.group(1).toLowerCase(Locale.ROOT)) {
+                case "declined": case "denied": outcome = "被拒绝 · "; break;
+                case "completed": case "approved": outcome = "完成 · "; break;
+                case "failed": outcome = "失败 · "; break;
+                default: outcome = "已停止 · ";
+            }
+            text = text.substring(head.end());
+        }
+        java.util.regex.Matcher shell = java.util.regex.Pattern.compile("^(?:/bin/)?(?:ba|z)?sh\\s+-l?c\\s+(.*)$", java.util.regex.Pattern.DOTALL).matcher(text);
+        if (shell.find()) {
+            String command = shell.group(1).trim();
+            if (command.length() >= 2 && (command.charAt(0) == '\'' || command.charAt(0) == '"') && command.charAt(command.length() - 1) == command.charAt(0))
+                command = command.substring(1, command.length() - 1);
+            // 很长的绝对路径只留最后一段，手机上看得出在跑什么就够了。
+            command = command.replaceAll("(?:/[\\w.+-]+){2,}/([\\w.+-]+)", "$1");
+            text = "运行命令：" + command;
+        }
+        return outcome + text;
+    }
+
     static boolean listedSideChat(Map<String, Object> item, String open) {
         String id = Json.string(item, "id");
         if (!Json.string(item, "kind").equals("side") || Json.flag(item, "archived") || Json.flag(item,"deleted")) return false;
