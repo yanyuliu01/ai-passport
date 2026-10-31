@@ -51,6 +51,15 @@ export class HTTPRuntimeTransport implements RuntimeTransport {
         chunks.push(next.value);
       }
       const bytes = Buffer.concat(chunks);
+      if (method === 'GET' && /^\/v1\/firmware\/[a-f0-9]{12}\/image$/.test(new URL(path, origin).pathname) && response.ok) {
+        const query = new URL(path, origin).searchParams;
+        const offset = Number(query.get('offset')), length = Number(query.get('length'));
+        if (!query.has('offset') || !query.has('length') || !Number.isSafeInteger(offset) || offset < 0
+          || !Number.isSafeInteger(length) || length <= 0 || length > 1024 * 1024 || offset >= bytes.length)
+          throw new RuntimeError('固件分块范围无效', 416);
+        return { _relay_binary: bytes.subarray(offset, offset + length).toString('base64url'),
+          offset, total: bytes.length, content_type: 'application/octet-stream' };
+      }
       if (method === 'GET' && /^\/v1\/artifacts\/[A-Za-z0-9._:-]+\/(content|thumbnail)$/.test(new URL(path, origin).pathname) && response.ok) {
         if (bytes.length > 2_800_000) throw new RuntimeError('附件超过加密通道单次上限，请在原电脑打开', 413);
         return { _relay_binary: bytes.toString('base64url'), content_type: response.headers.get('content-type') || 'application/octet-stream' };

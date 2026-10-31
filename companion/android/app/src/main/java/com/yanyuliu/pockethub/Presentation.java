@@ -81,6 +81,12 @@ final class Presentation {
     static Map<String, String> snapshot(String json) {
         Map<String, String> fields = BuddyProtocol.parseFlatObject(json);
         Map<String, Object> object = Json.parseObject(json);
+        // The relay may serialize an integral revision as 1.0. Legacy polling
+        // requires an integer; preserve invalid or out-of-range values unchanged.
+        if (fields != null && fields.get("rev") != null) {
+            try { fields.put("rev", Long.toString(new java.math.BigDecimal(fields.get("rev")).longValueExact())); }
+            catch (NumberFormatException | ArithmeticException invalid) { /* Let the receiver reject it. */ }
+        }
         if (fields != null && object != null && object.get("presentation") instanceof Map)
             fields.put("presentation_json", UsageEvents.json(object.get("presentation")));
         return fields;

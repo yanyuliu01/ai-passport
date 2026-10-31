@@ -1010,6 +1010,12 @@ URL 获取、App 内置 PDF 阅读或通用蓝牙文件传输。只观察电脑�
 
 ### 能力：MCP 服务和 skill
 
+桌面打包版 Runtime 用 `permission-mcp` 启动标准输入输出网关；源码和嵌入式 Python
+仍使用 `python -m xiaoyu_runtime.helpers.permission_mcp`。网关入口不读取主人配置，
+沿用每轮任务的 Gate 环境变量。在目标系统上打包桌面端时，会对实际复制的 Runtime
+执行握手、列出 `approve`、无 Gate 时拒绝操作的验证；跨系统安装包仍需在目标系统
+执行这项冒烟测试。
+
 MCP 服务按电脑登记在 `capabilities` 里，不按帮手配。除非 `grants` 另有写明，这台电脑上的帮手都能用；帮手拿不到服务的 Key。每一轮 Runtime 给帮手注入一个 MCP 服务——能力网关：它列出这个帮手被授权的工具，调用经过 Runtime，每次都核对授权。Claude Code、Codex、dsh 会注入；pi 暂时不注入（它只有全局的 `pi mcp add`）。见[帮手的能力](../docs/development/helper-capabilities.zh_CN.md)。
 
 ```json

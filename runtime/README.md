@@ -1381,6 +1381,13 @@ observation by itself does not import desktop attachments.
 
 ### Capabilities: MCP servers and skills
 
+The frozen desktop Runtime starts its stdio gateway with `permission-mcp`;
+source and embedded-Python launches keep `python -m xiaoyu_runtime.helpers.permission_mcp`.
+The gateway entry point reads no owner configuration and uses the existing per-turn
+Gate environment. Native desktop packaging verifies initialization, the `approve`
+tool and denial without a Gate against the copied Runtime executable. Cross-OS
+packages still need this smoke test on their target OS.
+
 MCP servers are registered once per computer in `capabilities`, not per helper. Every helper on the
 computer can use them unless `grants` says otherwise; the helper never receives the server's keys.
 Each turn Runtime injects one MCP server, the capability gateway, which lists the tools the helper is granted

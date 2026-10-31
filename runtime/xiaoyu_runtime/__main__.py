@@ -125,6 +125,7 @@ def main(argv=None) -> int:
     parser.add_argument("--desktop-claude-dir", type=Path, metavar="PATH",
                         help="电脑端 Claude Code 配置目录（默认 ~/.claude）")
     commands = parser.add_subparsers(dest="command", metavar="子命令")
+    commands.add_parser("permission-mcp", help="通过标准输入输出运行帮手的 MCP 网关")
     firmware_cli.add_arguments(commands)
     app_release.add_arguments(commands)
     reports_module.add_arguments(commands)
@@ -141,6 +142,11 @@ def main(argv=None) -> int:
     usage_parser.add_argument("--json", action="store_true", help="打印原始数据（JSON）")
     arguments = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(arguments)
+
+    if args.command == "permission-mcp":
+        # No owner configuration, HTTP listener or startup text on MCP stdout.
+        from .helpers import permission_mcp
+        return permission_mcp.main()
 
     try:
         config = load(Path(args.config))

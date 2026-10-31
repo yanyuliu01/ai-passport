@@ -24,6 +24,13 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
   if (method === 'GET' && path === '/healthz') return true;
   if (typeof path !== 'string' || path.length > 1024 || !path.startsWith('/v1/')) return false;
   const url = new URL(path, 'http://localhost');
+  if (method === 'GET' && /^\/v1\/firmware\/[a-f0-9]{12}\/image$/.test(url.pathname)) {
+    const offset = url.searchParams.get('offset'), length = url.searchParams.get('length');
+    return [...url.searchParams.keys()].length === 2 && /^\d{1,7}$/.test(offset || '')
+      && Number(offset) < 8 * 1024 * 1024 && /^\d{1,7}$/.test(length || '')
+      && Number(length) > 0 && Number(length) <= 1024 * 1024;
+  }
+  if (method === 'GET' && ['/v1/firmware', '/v1/firmware/target'].includes(url.pathname)) return true;
   if (method === 'GET') return ['/v1/helpers/options', '/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory', '/v1/sessions'].includes(url.pathname)
     || /^\/v1\/directory\/(?:[A-Za-z0-9._:-]+(?:\/history)?|operations\/[A-Za-z0-9._:-]+)$/.test(url.pathname)
     || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
@@ -33,6 +40,18 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
     // Quick review status for the phone; reading never changes the mode.
     || url.pathname === '/v1/review' && /^[A-Za-z0-9._:-]{1,128}$/.test(url.searchParams.get('conversation') || 'default');
   if (method !== 'POST') return false;
+  if (url.pathname === '/v1/firmware/target') {
+    return Boolean(body && Object.keys(body).every(key => ['id', 'reason'].includes(key))
+      && (body.id === null || typeof body.id === 'string' && /^(?:latest|previous|[a-f0-9]{12}|\d{1,8})$/.test(body.id))
+      && (body.reason === undefined || ['push', 'restore'].includes(String(body.reason))));
+  }
+  if (url.pathname === '/v1/firmware/device') {
+    return Boolean(body && JSON.stringify(body).length <= 4096
+      && ['connected', 'installed', 'failed', 'unsupported', 'progress'].includes(String(body.event))
+      && Object.entries(body).every(([key, value]) => ['max', 'heap', 'low', 'sent', 'size'].includes(key)
+        ? Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0x7fffffff
+        : ['event', 'build', 'prev', 'state', 'ver', 'id', 'detail'].includes(key) && typeof value === 'string' && value.length <= 180));
+  }
   if (/^\/v1\/sessions\/[A-Za-z0-9._:-]+\/continue$/.test(url.pathname)) {
     return Boolean(body && typeof body.text === 'string' && body.text.trim().length > 0 && body.text.length <= 32_000
       && typeof body.client_id === 'string' && /^[a-f0-9]{32}$/.test(body.client_id)
@@ -406,6 +425,12 @@ export class PeerNetwork implements RuntimeTransport {
         ? this.reviewTarget(peerId, endpoint, path, payload!) : endpoint;
       const work = this.local.request(target, method, path, payload)
         .then(value => {
+          // Android's relay JSON hop stores numbers as Double. Firmware's flat
+          // parser needs integer strings for sizes, revisions and sequence ids.
+          const pathname = new URL(path, 'http://localhost').pathname;
+          if (pathname.startsWith('/v1/firmware') && !pathname.endsWith('/image'))
+            value = JSON.parse(JSON.stringify(value, (_key, item) =>
+              typeof item === 'number' && Number.isSafeInteger(item) ? String(item) : item));
           // Installed Android clients parse flat integers after a Double-based JSON relay hop.
           // Decimal strings keep app updates discoverable before those clients can upgrade.
           if (method === 'GET' && new URL(path, 'http://localhost').pathname === '/v1/app') {

@@ -17,6 +17,26 @@ export interface RuntimeLaunch {
   version?: string;
 }
 export interface StartOptions { dsh?: string; dshCommand?: string[]; helpers?: LocalAgent[]; availableHelpers?: LocalAgent[]; deepseekKey?: string; meshSecret?: string }
+
+// Finder and launchd can provide only system directories. Discovery and the
+// Runtime child must use the same path for the helpers found by the App.
+export function executablePaths(env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform, home: string = homedir()): string[] {
+  const pathKey = Object.keys(env).find(key => platform === 'win32' ? key.toLowerCase() === 'path' : key === 'PATH');
+  const paths = (env[pathKey || 'PATH'] || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
+  if (platform === 'win32') {
+    if (env.APPDATA) paths.push(join(env.APPDATA, 'npm'));
+  } else paths.push(join(home, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin');
+  return [...new Set(paths)];
+}
+
+export function runtimeEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...Object.fromEntries(Object.entries(env).filter(([key]) =>
+    !key.startsWith('XIAOYU_') && !key.startsWith('XIAOYOU_') &&
+    (process.platform === 'win32' ? key.toLowerCase() !== 'path' : key !== 'PATH'))),
+    PATH: executablePaths(env).join(process.platform === 'win32' ? ';' : ':') };
+}
+
 export function managedAgents(dsh: string, helpers: LocalAgent[], dshCommand = [dsh], configDir = process.cwd()): Record<string, Json> {
   const agents: Record<string, Json> = { deepseek: { type: 'dsh', command: dshCommand,
     model: 'deepseek-v4-pro', chat_model: 'deepseek-flash', stream: true,
@@ -200,7 +220,7 @@ export class RuntimeHost {
     this.desired = true;
     this.child = spawn(this.launch.command, [...this.launch.args, '--config', configFile], {
       cwd: this.launch.cwd, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
-      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('XIAOYU_') && !key.startsWith('XIAOYOU_'))),
+      env: { ...runtimeEnvironment(),
         ...(this.providerKey ? { DEEPSEEK_API_KEY: this.providerKey } : {}), PYTHONUNBUFFERED: '1', XIAOYU_CONFIG: configFile,
         XIAOYU_HOST: this.externalConfig ? String((config.server as Json).host || '127.0.0.1') : '127.0.0.1', XIAOYU_PORT: String((config.server as Json).port),
         XIAOYU_TOKEN: String((config.server as Json).token),
@@ -281,10 +301,7 @@ export class RuntimeHost {
 }
 
 export async function findExecutable(name: string): Promise<string | undefined> {
-  const paths = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
-  paths.push(join(homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin');
-  if (process.platform === 'win32') paths.push(join(process.env.APPDATA || '', 'npm'));
-  for (const folder of paths) {
+  for (const folder of executablePaths()) {
     for (const suffix of process.platform === 'win32' ? ['.exe', '.cmd', ''] : ['']) {
       const file = join(folder, name + suffix);
       try { await access(file, constants.X_OK); return file; } catch { /* Continue. */ }

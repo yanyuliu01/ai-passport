@@ -8,7 +8,7 @@ import { ClientDatabase } from '../core/database.js';
 import { PeerNetwork, type PeerEvents } from '../core/peers.js';
 import type { SecretStore } from '../core/client.js';
 import type { Endpoint, Json } from '../shared.js';
-import { RuntimeError, type RuntimeTransport } from '../core/runtime-client.js';
+import { HTTPRuntimeTransport, RuntimeError, type RuntimeTransport } from '../core/runtime-client.js';
 
 const space = 'a'.repeat(32), token = 'test-only-relay-token-for-loopback-0123456789';
 function memory(): SecretStore {
@@ -32,7 +32,11 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   const b: Endpoint = { ...a, runtimeId: '2'.repeat(32), name: 'Windows', token: 'private-b' };
   let posts = 0, release: (() => void) | undefined;
   const reviewPosts: { token: string; body: unknown }[] = [];
+  const firmware = Buffer.alloc(1024 * 1024 + 17, 197);
+  const firmwareHTTP = new HTTPRuntimeTransport(async () => new Response(firmware));
   const local: RuntimeTransport = { async request(endpoint, method, path, payload): Promise<Json> {
+    if (path.startsWith('/v1/firmware/0123456789ab/image')) return firmwareHTTP.request(endpoint, method, path);
+    if (path === '/v1/firmware') return { versions: [{ id: '0123456789ab', seq: 1, size: firmware.length }] };
     if (path.startsWith('/v1/app?')) return { available: true, version_code: 73, size: 63680000, sha256: 'e'.repeat(64), abi: 'arm64-v8a', download_url: 'https://example.com/app.apk' };
     if (method === 'POST' && path.endsWith('/effects')) {
       reviewPosts.push({ token: endpoint.token, body: structuredClone(payload) });
@@ -66,6 +70,15 @@ test('real relay: approved pairing, private RPC, concurrent reads and durable su
   const result = await networkB.request(remoteB[0], 'GET', '/v1/info');
   assert.equal(result.answer, 'private-result');
   assert.equal(result.runtime_id, a.runtimeId);
+  const manifest = await networkB.request(remoteB[0], 'GET', '/v1/firmware');
+  assert.equal((manifest.versions as Json[])[0].size, String(firmware.length));
+  const firmwareChunks: Buffer[] = [];
+  for (let offset = 0; offset < firmware.length; offset += 1024 * 1024) {
+    const part = await networkB.request(remoteB[0], 'GET', `/v1/firmware/0123456789ab/image?offset=${offset}&length=1048576`);
+    assert.equal(part.offset, offset); assert.equal(part.total, firmware.length);
+    firmwareChunks.push(Buffer.from(String(part._relay_binary), 'base64url'));
+  }
+  assert.deepEqual(Buffer.concat(firmwareChunks), firmware);
   const update = await networkB.request(remoteB[0], 'GET', '/v1/app?abi=arm64-v8a');
   assert.equal(update.available, true);assert.equal(update.version_code, '73');assert.equal(update.size, '63680000');
   assert.equal(Number.parseInt(String(update.version_code),10),73);assert.equal(update.sha256,'e'.repeat(64));

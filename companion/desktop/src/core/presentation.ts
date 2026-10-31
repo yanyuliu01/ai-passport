@@ -63,7 +63,7 @@ export function helperViews(runtime: string, device: string, agents: Json[], usa
       const window = (id: string) => {
         const raw = (Array.isArray(windows) ? windows.find(row => row && (row as Json).kind === id) : windows?.[id]) as Json | undefined, left = finite(raw?.left), reset = finite(raw?.resets_at);
         const expired = reset !== undefined && reset * 1000 <= Date.now();
-        return { left: expired || left === undefined ? null : Math.max(0, Math.min(100, left)), resetsAt: reset ? reset * 1000 : null };
+        return { left: expired || left === undefined ? null : Math.max(0, Math.min(100, left)), resetsAt: reset ? reset * 1000 : null, unavailable: raw?.unavailable === true };
       };
       return { id: runtime + '/' + String(agent.name), runtime, device: agent.type === 'mesh' && String(agent.name).includes('@') ? String(agent.name).split('@').slice(1).join('@') : device, name: String(agent.name), type, connected,
         label: typeof agent.display_name === 'string' && agent.display_name.trim() ? agent.display_name : type === 'codex' ? 'Codex' : type === 'claude_code' ? 'Claude Code' : String(agent.name),

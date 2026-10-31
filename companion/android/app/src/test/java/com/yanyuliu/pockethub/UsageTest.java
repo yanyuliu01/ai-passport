@@ -12,6 +12,16 @@ public class UsageTest {
         return Usage.from(Json.parseObject(body));
     }
 
+    @Test public void unavailableShortWindowIsDistinctFromUnknown() {
+        Usage value = usage("{\"accounts\":[{\"id\":\"a\",\"state\":\"ok\",\"windows\":["
+                + "{\"kind\":\"5h\",\"left\":null,\"unavailable\":true},"
+                + "{\"kind\":\"7d\",\"left\":88}]}],\"agents\":[{\"name\":\"codex\",\"account\":\"a\"}]}");
+        assertTrue(value.windowSummary("codex", 1000, zone).contains("5 小时：当前未提供此额度"));
+        assertTrue(value.energy("codex", 1000, zone).contains("5 小时 未提供"));
+        assertTrue(value.describe(1000, 0, zone).get(0).contains("本周 剩 88%"));
+        assertEquals(88, value.left("codex", 1000));
+    }
+
     @Test public void failedRefreshKeepsDetailButDoesNotShowCachedQuotaAsCurrent() {
         Usage value = usage("{\"at\":1000,\"accounts\":[{\"id\":\"old\",\"note\":\"401 Unauthorized\",\"windows\":[{\"kind\":\"7d\",\"left\":28}]}],\"agents\":[{\"name\":\"codex\",\"account\":\"old\"}]}");
         assertEquals(-1,value.left("codex",1000));

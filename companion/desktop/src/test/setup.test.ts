@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, realpath, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { agentDescriptors, agentInvocation, scanAgents, type AgentDescriptor } from '../core/agent-catalog.js';
 import { ClientDatabase } from '../core/database.js';
 import { DesktopClient, type SecretStore } from '../core/client.js';
-import { RuntimeHost, managedAgents, type StartOptions } from '../core/runtime-host.js';
+import { RuntimeHost, managedAgents, executablePaths, runtimeEnvironment, type StartOptions } from '../core/runtime-host.js';
 import { Setup } from '../core/setup.js';
 import { HTTPRuntimeTransport } from '../core/runtime-client.js';
 import type { Endpoint, LocalAgent } from '../shared.js';
@@ -15,6 +15,46 @@ const endpoint: Endpoint = { runtimeId: 'a'.repeat(32), spaceId: 'b'.repeat(32),
   url: 'http://127.0.0.1:8765', token: 'synthetic-runtime-token', capabilities: ['sync'] };
 const agents: LocalAgent[] = ['dsh', 'codex', 'claude'].map(id => ({ id: id as LocalAgent['id'], name: id,
   installed: true, auth: id === 'dsh' ? 'unknown' : 'signed-in', configured: true, version: '1.0.0', location: process.execPath }));
+test('helper search preserves priority, excludes empty entries and handles Windows Path casing', () => {
+  assert.deepEqual(executablePaths({ PATH: '/custom/bin::/usr/bin:/custom/bin' }, 'darwin', '/synthetic'),
+    ['/custom/bin', '/usr/bin', '/synthetic/.local/bin', '/opt/homebrew/bin', '/usr/local/bin']);
+  assert.deepEqual(executablePaths({ Path: 'C:\\Tools;C:\\Windows;;C:\\Tools', APPDATA: '/synthetic' }, 'win32'),
+    ['C:\\Tools', 'C:\\Windows', join('/synthetic', 'npm')]);
+  assert.deepEqual(executablePaths({}, 'win32'), []);
+  const env = runtimeEnvironment({ PATH: '/usr/bin', XIAOYU_TOKEN: 'new', XIAOYOU_TOKEN: 'legacy', KEEP: 'yes' });
+  assert.equal(env.XIAOYU_TOKEN, undefined);
+  assert.equal(env.XIAOYOU_TOKEN, undefined);
+  assert.equal(env.KEEP, 'yes');
+});
+test('owned Runtime inherits the same helper search path used by discovery', async t => {
+  if (process.platform === 'win32') return t.skip('Unix GUI PATH fixture');
+  const dir = await mkdtemp(join(tmpdir(), 'xiaoyu-runtime-path-'));
+  const captured = join(dir, 'child-env.json');
+  const oldPath = process.env.PATH, oldNew = process.env.XIAOYU_TEST_REMOVE, oldLegacy = process.env.XIAOYOU_TEST_REMOVE;
+  process.env.PATH = '/usr/bin:/bin';
+  process.env.XIAOYU_TEST_REMOVE = 'fixture-new'; process.env.XIAOYOU_TEST_REMOVE = 'fixture-legacy';
+  await mkdir(join(dir, 'runtime'));
+  await writeFile(join(dir, 'runtime/config.json'), JSON.stringify({ server: { port: 18765, token: 'synthetic-runtime-token' } }));
+  const transport = new HTTPRuntimeTransport(async () => {
+    await readFile(captured);
+    return new Response(JSON.stringify({ runtime_id: endpoint.runtimeId, subject_id: endpoint.spaceId, capabilities: ['sync'] }));
+  });
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(captured)}, JSON.stringify(process.env)); setInterval(() => {}, 1000);`;
+  const host = new RuntimeHost(dir, { command: process.execPath, args: ['-e', script, '--'], cwd: dir }, transport);
+  t.after(async () => {
+    host.stopOwned();
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+    if (oldNew === undefined) delete process.env.XIAOYU_TEST_REMOVE; else process.env.XIAOYU_TEST_REMOVE = oldNew;
+    if (oldLegacy === undefined) delete process.env.XIAOYOU_TEST_REMOVE; else process.env.XIAOYOU_TEST_REMOVE = oldLegacy;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await rm(dir, { recursive: true, force: true });
+  });
+  assert.equal((await host.start({})).runtimeId, endpoint.runtimeId);
+  const env = JSON.parse(await readFile(captured, 'utf8'));
+  assert.ok(env.PATH.split(':').includes(join(homedir(), '.local/bin')));
+  assert.equal(env.XIAOYU_TEST_REMOVE, undefined);
+  assert.equal(env.XIAOYOU_TEST_REMOVE, undefined);
+});
 async function fixture(t: { after(callback: () => void | Promise<void>): void }) {
   const dir = await mkdtemp(join(tmpdir(), 'xiaoyu-setup-')), db = new ClientDatabase(join(dir, 'cache.sqlite'));
   const values = new Map<string, unknown>();

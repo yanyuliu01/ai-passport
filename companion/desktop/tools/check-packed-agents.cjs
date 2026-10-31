@@ -15,6 +15,8 @@ module.exports = async function (context) {
     context.arch === 1 ? 'x64' : 'arm64');
   const resources = context.packager.getResourcesDir(context.appOutDir);
   const native = process.platform === context.electronPlatformName && process.arch === (context.arch === 1 ? 'x64' : 'arm64');
+  if (native) console.log('Packed Runtime MCP verification:', JSON.stringify(
+    require('./verify-runtime-mcp.cjs')(join(resources, 'runtime'), context.electronPlatformName)));
   const name = context.packager.appInfo.productFilename;
   const executable = native ? context.electronPlatformName === 'darwin'
     ? join(resources, '../MacOS', name) : join(context.appOutDir, name + '.exe') : undefined;

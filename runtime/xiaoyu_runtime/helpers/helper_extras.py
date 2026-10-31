@@ -42,7 +42,10 @@ def xiaoyu_server(gate: Dict[str, str], approve: bool = False) -> Dict[str, Any]
     env = dict(gate, PYTHONPATH=package_parent)
     if approve:
         env["XIAOYU_GATE_APPROVE"] = "1"  # 只有 Claude Code 用 approve 当权限询问工具
-    return {"command": sys.executable, "args": ["-m", "xiaoyu_runtime.helpers.permission_mcp"], "env": env}
+    # A frozen executable runs our CLI, not Python's -m module launcher.
+    args = ["permission-mcp"] if getattr(sys, "frozen", False) else [
+        "-m", "xiaoyu_runtime.helpers.permission_mcp"]
+    return {"command": sys.executable, "args": args, "env": env}
 
 
 def codex_overrides(gate: Optional[Dict[str, str]]) -> List[str]:

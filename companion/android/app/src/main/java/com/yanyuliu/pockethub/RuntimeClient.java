@@ -1196,7 +1196,11 @@ final class RuntimeClient {
         }
         final String clientId = retryId == null ? UUID.randomUUID().toString().replace("-", "") : retryId;
         TurnTiming.sent(clientId, android.os.SystemClock.uptimeMillis());
-        store.selectedRuntime(url, historyKey(app, target));
+        // A cold send can precede feed initialization; establish the same shelf
+        // before capturing its generation so the accepted reply is not discarded.
+        String history = historyKey(app, target);
+        store.showComputer(history);
+        store.selectedRuntime(url, history);
         final long epoch = store.cardsEpoch();
         store.chatAsked(text, clientId, pin ? card : null);
         store.messageScope(clientId, conversation, fromChat);
@@ -1371,7 +1375,6 @@ final class RuntimeClient {
         });
     }
 
-    private static final int FIRMWARE_MAX_BYTES = 8 * 1024 * 1024;
 
     /** 电脑上发布的 App 更新（一层的对象；没有时 available 是 false）。 */
     /** 电脑上发布的资源包（语音模型等）。 */
@@ -1429,31 +1432,12 @@ final class RuntimeClient {
 
     /** 一版固件的应用镜像。 */
     static byte[] firmwareImage(Target target, String id) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection)
-                new URL(target.url + "/v1/firmware/" + id + "/image").openConnection();
-        try {
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(60000);
-            connection.setRequestProperty("Authorization", "Bearer " + target.token);
-            int code = connection.getResponseCode();
-            if (code != 200) {
-                throw new IOException("Runtime 返回 " + code);
-            }
-            try (InputStream in = connection.getInputStream()) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream(2 * 1024 * 1024);
-                byte[] buffer = new byte[16384];
-                int count;
-                while ((count = in.read(buffer)) > 0) {
-                    out.write(buffer, 0, count);
-                    if (out.size() > FIRMWARE_MAX_BYTES) {
-                        throw new IOException("固件超过 8 MB");
-                    }
-                }
-                return out.toByteArray();
-            }
-        } finally {
-            connection.disconnect();
-        }
+        if (!id.matches("[a-f0-9]{12}"))
+            throw new IOException("固件连接或编号无效");
+        String address = target.url + "/v1/firmware/" + id + "/image";
+        if (!target.url.startsWith("relay://")) return FirmwareDownload.readDirect(address, target.token);
+        return FirmwareDownload.read(address, path ->
+                Json.parseObject(requestText("GET", path, target.token, null, null, 30)));
     }
 
     /** Usage events in the unified format (UsageEvents). An old runtime answers 404 and they stay queued. */

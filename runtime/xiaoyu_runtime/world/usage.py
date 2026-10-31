@@ -189,6 +189,13 @@ def codex_windows(payload: Any) -> Tuple[Windows, Optional[str]]:
         kind = fallback if minutes is None else ("5h" if minutes < 1440 else "7d")
         found[kind] = {"left": _left(_number(window.get("usedPercent"))),
                        "resets_at": _epoch(window.get("resetsAt"))}
+    # Only an explicit empty second slot alongside a measured weekly primary
+    # is evidence that this snapshot does not provide a short window.
+    if ("primary" in snapshot and "secondary" in snapshot
+            and snapshot["secondary"] is None and "7d" in found and "5h" not in found
+            and isinstance(snapshot["primary"], dict)
+            and (_number(snapshot["primary"].get("windowDurationMins")) or 0) >= 1440):
+        found["5h"] = {"left": None, "resets_at": None, "unavailable": True}
     if snapshot.get("rateLimitReachedType") and found:
         # 它说已经撞上限了：哪个窗口剩得最少就是哪个。
         tightest = min(found, key=lambda kind: found[kind]["left"] if found[kind]["left"] is not None else 101)
@@ -333,6 +340,8 @@ class Usage:
                         "resets_at": int(resets) if resets is not None else None}
                     if window.get("flag") == "warn":
                         account["windows"][kind]["flag"] = "warn"
+                    if window.get("unavailable") is True:
+                        account["windows"][kind]["unavailable"] = True
             updated = _number(saved.get("updated_at"))
             account["updated_at"] = updated or 0.0
             for key in ("source", "plan"):
@@ -378,7 +387,8 @@ class Usage:
                     new = dict(windows[kind])
                     old = account["windows"].get(kind)
                     # 这一次没带百分比（事件流里只说了状态）时，同一个窗口里原来的数还作数。
-                    if (new.get("left") is None and old is not None and old.get("left") is not None
+                    if (not new.get("unavailable") and new.get("left") is None
+                            and old is not None and old.get("left") is not None
                             and new.get("resets_at") in (None, old.get("resets_at"))):
                         new["left"] = old["left"]
                         new["resets_at"] = old.get("resets_at")

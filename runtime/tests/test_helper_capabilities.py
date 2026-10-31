@@ -7,6 +7,8 @@ import subprocess
 import sys
 import threading
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from test_runtime import TempDirCase
 
@@ -210,6 +212,41 @@ class HttpClientTests(unittest.TestCase):
 
 class HarnessTests(TempDirCase):
     gate = {"XIAOYU_GATE_URL": "http://127.0.0.1:1/approve", "XIAOYU_GATE_KEY": "k"}
+
+    def test_frozen_harnesses_use_the_runtime_mcp_entrypoint(self):
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
+                sys, "executable", "/bundle with spaces/xiaoyu-runtime"):
+            claude = agents_module.ClaudeCodeAgent.mcp_config(self.gate)["mcpServers"]["xiaoyu"]
+            self.assertEqual(claude["command"], sys.executable)
+            self.assertEqual(claude["args"], ["permission-mcp"])
+            self.assertEqual(claude["env"]["XIAOYU_GATE_KEY"], "k")
+            self.assertEqual(claude["env"]["XIAOYU_GATE_APPROVE"], "1")
+            self.assertIn('mcp_servers.xiaoyu.args=["permission-mcp"]',
+                          helper_extras.codex_overrides(self.gate))
+            acp = helper_extras.acp_servers(self.gate)[0]
+            self.assertEqual((acp["command"], acp["args"]), (sys.executable, ["permission-mcp"]))
+            self.assertNotIn("XIAOYU_GATE_APPROVE", [row["name"] for row in acp["env"]])
+
+    def test_mcp_entrypoint_needs_no_config_and_denies_without_a_gate(self):
+        lines = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                     "name": "approve", "arguments": {"tool_name": "Bash", "input": {}}}}]
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("XIAOYU_GATE", "XIAOYOU_GATE"))}
+        env.update(PYTHONPATH=str(Path(config_module.__file__).resolve().parents[1]),
+                   XIAOYU_GATE_APPROVE="1")
+        done = subprocess.run([sys.executable, "-m", "xiaoyu_runtime", "--config",
+                               str(self.folder / "missing.json"), "permission-mcp"],
+                              input="".join(json.dumps(line) + "\n" for line in lines),
+                              cwd=self.folder, env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        replies = [json.loads(line) for line in done.stdout.splitlines()]
+        self.assertEqual([reply["id"] for reply in replies], [1, 2, 3])
+        self.assertEqual([tool["name"] for tool in replies[1]["result"]["tools"]], ["approve"])
+        answer = json.loads(replies[2]["result"]["content"][0]["text"])
+        self.assertEqual(answer["behavior"], "deny")
 
     def test_each_harness_gets_the_same_xiaoyu_mcp(self):
         claude = agents_module.ClaudeCodeAgent.mcp_config(self.gate)["mcpServers"]["xiaoyu"]

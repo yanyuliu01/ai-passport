@@ -94,7 +94,7 @@ export interface HelperView {
   members?: HelperView[];
   id: string; runtime: string; device: string; name: string; label: string; type: string;
   model: string; effort: string; connected: boolean; updatedAt: number; quotaProblem?: string;
-  fiveHour: { left: number | null; resetsAt: number | null }; week: { left: number | null; resetsAt: number | null };
+  fiveHour: { left: number | null; resetsAt: number | null; unavailable?: boolean }; week: { left: number | null; resetsAt: number | null; unavailable?: boolean };
 }
 
 export interface LocalAgent {

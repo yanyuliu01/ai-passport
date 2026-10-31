@@ -25,6 +25,7 @@ final class Usage {
         /** 5 小时窗口和本周窗口各剩百分之几（不知道是 -1）、什么时候重置（Unix 秒，不知道是 0）。 */
         final int left5h;
         final long reset5h;
+        final boolean unavailable5h;
         final int left7d;
         final long reset7d;
         /** 这些数是什么时候取到的（Runtime 的钟，Unix 秒）；没取到过是 0。 */
@@ -33,11 +34,12 @@ final class Usage {
         final String note;
 
         Account(String id, String state, int left5h, long reset5h, int left7d, long reset7d,
-                double updatedAt, List<String> agents, String note) {
+                double updatedAt, List<String> agents, String note, boolean unavailable5h) {
             this.id = id;
             this.state = state;
             this.left5h = left5h;
             this.reset5h = reset5h;
+            this.unavailable5h = unavailable5h;
             this.left7d = left7d;
             this.reset7d = reset7d;
             this.updatedAt = updatedAt;
@@ -120,12 +122,14 @@ final class Usage {
             int left7d = -1;
             long reset5h = 0;
             long reset7d = 0;
+            boolean unavailable5h = false;
             for (Object each : Json.list(account, "windows")) {
                 Map<String, Object> window = Json.object(each);
                 long reset = Math.max(0L, (long) Json.number(window, "resets_at"));
                 if ("5h".equals(Json.string(window, "kind"))) {
                     left5h = percent(window);
                     reset5h = reset;
+                    unavailable5h = Boolean.TRUE.equals(window.get("unavailable"));
                 } else if ("7d".equals(Json.string(window, "kind"))) {
                     left7d = percent(window);
                     reset7d = reset;
@@ -134,7 +138,7 @@ final class Usage {
             String state = Json.string(account, "state");
             accounts.add(new Account(id, state.isEmpty() ? "unknown" : state, left5h, reset5h,
                     left7d, reset7d, Json.number(account, "updated_at"),
-                    strings(account, "agents"), Json.string(account, "note")));
+                    strings(account, "agents"), Json.string(account, "note"), unavailable5h));
         }
         List<Agent> agents = new ArrayList<>();
         for (Object item : Json.list(raw, "agents")) {
@@ -209,7 +213,7 @@ final class Usage {
                 ? "精力值：按量计费" : "精力值：未知";
         int shortLeft = account.reset5h > 0 && account.reset5h <= now ? -1 : account.left5h;
         int weekLeft = account.reset7d > 0 && account.reset7d <= now ? -1 : account.left7d;
-        String label = (account.note.isEmpty() ? "精力值" : "上次数据，刷新未成功") + " · 5 小时 " + (shortLeft < 0 ? "未知" : shortLeft + "%")
+        String label = (account.note.isEmpty() ? "精力值" : "上次数据，刷新未成功") + " · 5 小时 " + (account.unavailable5h ? "未提供" : shortLeft < 0 ? "未知" : shortLeft + "%")
                 + " · 本周 " + (weekLeft < 0 ? "未知" : weekLeft + "%");
         long reset = shortLeft >= 0 && (weekLeft < 0 || shortLeft <= weekLeft) ? account.reset5h : account.reset7d;
         String when = resetText(reset, now, zone);
@@ -227,8 +231,9 @@ final class Usage {
         Agent helper = helper(role);
         Account account = account(helper, role);
         if (account == null) return "还没有这个帮手的订阅额度数据。";
-        StringBuilder out = new StringBuilder(account.note.isEmpty() ? "头像外圈是下面两项里剩得少的那一项：多是绿色，快用完变橙、变红。" : "额度刷新未成功，头像圈暂不显示。以下为上次收到的数据。");
-        window(out, "5 小时", account.left5h, account.reset5h, now, zone);
+        StringBuilder out = new StringBuilder(account.note.isEmpty() ? "头像外圈显示已知额度中剩得少的那一项：多是绿色，快用完变橙、变红。" : "额度刷新未成功，头像圈暂不显示。以下为上次收到的数据。");
+        if (account.unavailable5h) out.append("\n5 小时：当前未提供此额度");
+        else window(out, "5 小时", account.left5h, account.reset5h, now, zone);
         window(out, "本周", account.left7d, account.reset7d, now, zone);
         if (accountAgents(account).size() > 1) out.append("\n这份额度由多个帮手共用。");
         return out.toString();
@@ -377,7 +382,8 @@ final class Usage {
                 text.append(account.id);
             }
             text.append(" — ").append(stateText(account.state));
-            window(text, "5 小时", account.left5h, account.reset5h, nowSeconds, zone);
+            if (account.unavailable5h) text.append("\n5 小时：当前未提供此额度");
+            else window(text, "5 小时", account.left5h, account.reset5h, nowSeconds, zone);
             window(text, "本周", account.left7d, account.reset7d, nowSeconds, zone);
             if (account.updatedAt > 0 && at >= account.updatedAt) {
                 long minutes = ((long) (at - account.updatedAt) + Math.max(0L, extraSeconds)) / 60L;

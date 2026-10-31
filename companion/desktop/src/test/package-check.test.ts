@@ -172,7 +172,9 @@ test('afterPack verifies the actual copy and rejects omitted dependencies', asyn
     writeFileSync(join(appSource, 'dist-main/core', name + '.js'), 'export {};');
   await require('@electron/asar').createPackage(appSource, join(f.desktop, 'app.asar'));
   if (process.platform === 'win32' && process.arch === 'x64') copyFileSync(process.execPath, join(f.desktop, 'fixture.exe'));
-  await packedCheck(context);
+  if (process.platform === 'win32' && process.arch === 'x64')
+    await assert.rejects(() => packedCheck(context), /Packed Runtime MCP startup failed/);
+  else await packedCheck(context);
   rmSync(join(f.desktop, 'agent-tools/pi.js'));
   await assert.rejects(() => packedCheck(context), /inventory is incomplete/);
 });
