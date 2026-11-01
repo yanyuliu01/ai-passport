@@ -2,7 +2,7 @@
 
 # Xiaoyou desktop client
 
-Implementation in progress, source version 0.1.16. Follow the
+Implementation in progress, source version 0.1.17. Follow the
 [development plan](../../docs/development/xiaoyou-desktop-plan.md) and
 [reliability contract](../../docs/development/cross-stack-reliability.md).
 Source/build availability does not establish installed-client acceptance.
@@ -11,6 +11,21 @@ The owner approved the v8 interaction reference on 2026-10-21. The onboarding
 increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
+
+## Local and relay recovery (0.1.17 source)
+
+The desktop periodically verifies the confirmed loopback Runtime's identity and
+sync response with a bounded, read-only probe. Repeated failures mark that route
+unavailable; after the same Runtime authenticates and sync responds again, its
+subscription is renewed using the retained cursor and request identities. A live
+but unresponsive Runtime is never killed or restarted by this probe. Authentication
+or identity failures require an explicit corrected connection.
+
+The relay sends a bounded ping and reconnects if its matching pong is missing.
+Transient network failures while restoring an account retry with backoff; invalid
+credentials or identity do not. These changes retain the existing protocol and
+stored data. Source and host-test results do not establish installed desktop,
+public-network, physical phone, multi-end timing, or real-model acceptance.
 
 ## Late local-service startup (0.1.10 source)
 

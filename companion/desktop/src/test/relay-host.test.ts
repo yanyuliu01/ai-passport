@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:https';
 import { once } from 'node:events';
+import dns from 'node:dns';
 import WebSocket from 'ws';
 import { RelayHost, publicRelayURL } from '../core/relay-host.js';
 import { pinnedAgent } from '../core/pinned-tls.js';
@@ -55,6 +56,14 @@ test('port collision is reported and does not change an existing node', async t 
 });
 
 test('failed address probes remain unverified and give an actionable message', async t => {
+  // Do not rely on the machine's DNS: some networks synthesize answers for .invalid.
+  const originalLookup = dns.lookup;
+  t.mock.method(dns, 'lookup', ((hostname: string, options: unknown, callback?: unknown) => {
+    if (hostname !== 'node.invalid') return (originalLookup as Function)(hostname, options, callback);
+    const done = (typeof options === 'function' ? options : callback) as (error: NodeJS.ErrnoException) => void;
+    const error = Object.assign(new Error('Synthetic DNS failure'), { code: 'ENOTFOUND' });
+    process.nextTick(() => done(error));
+  }) as typeof dns.lookup);
   const host = new RelayHost(vault(), () => {}); t.after(() => host.stop());
   await host.start({port:0, publicURL:'node.invalid'});
   await assert.rejects(host.checkPublic(), /公网地址无法解析/);

@@ -8,6 +8,43 @@ Snapshot: **2026-10-28, Asia/Shanghai**. This is a progress index, not a release
 or a claim of complete acceptance. The subsystem documents linked below remain
 authoritative for implementation and test evidence.
 
+## Update: desktop connection recovery and GitHub synchronization (2026-11-01)
+
+The Windows desktop source is now **0.1.17**. The client probes the confirmed
+loopback Runtime's authenticated identity and sync interface, marks repeated
+failures unavailable, and renews that Runtime's subscription after recovery.
+It also reconnects a relay that does not answer its ping and retries transient
+account restoration failures with backoff. Request IDs, sync cursors, pairing,
+and the existing wire and storage formats are retained. A live but unresponsive
+Runtime is not terminated by the new probe; identity or authentication errors
+require explicit correction. See the [desktop guide](../../companion/desktop/README.md#local-and-relay-recovery-0117-source).
+
+The Windows build and its 122 desktop tests passed, including local fault
+injection and two isolated Runtime fixtures with an echo provider. The owner
+included two previously uncommitted test-fixture fixes in this synchronization:
+they make DNS failure and process-start timing deterministic. A separate run
+with the old fixture versions produced 119 passes and three failures on this host.
+A Windows 0.1.17 installer was built locally with Runtime 0.24.0, and its packaged
+application started and exited using an isolated profile. The installer has not
+been published or installed over the running Windows 0.1.16 client; the retained
+0.1.16 installer is the rollback candidate. The exact installed Android 0.40.8
+source has not been identified. Physical-phone/public-network recovery, live
+multi-end convergence and first meaningful response within three seconds remain
+NOT RUN for this candidate. The complete repository gate failed on this Windows
+host because the actionlint installer does not support its Git Bash platform;
+ESP-IDF was not activated and firmware was not built.
+
+The owner requested a local Codex heartbeat every day at **18:00 Asia/Shanghai**
+to review and synchronize this project with GitHub. It should commit and push
+only clearly attributable, completed and validated work, preserve other dirty
+files, and stop for unclear ownership, concurrent edits, failed checks, secrets,
+or diverged remote history. Update the paired project documents only when the
+verified status changes. Source synchronization does not itself publish an
+installer or release, restart Runtime, change an installed client, or establish
+device acceptance. A scheduled check is not evidence that a later sync ran.
+
+The 2026-10-28 tables and reconciliation details below remain a historical snapshot.
+
 ## Current baseline
 
 | Part | Committed source included in this synchronization | Live or pending evidence |

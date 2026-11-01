@@ -11,7 +11,7 @@ import { Onboarding } from './onboarding';
 import './style.css';
 
 declare global { interface Window { xiaoyou: DesktopAPI } }
-const empty: ClientView = { version: '0.1.16', spaces: [], selectedSpace: '', background: true,
+const empty: ClientView = { version: '0.1.17', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
 type Page = 'chat' | 'work' | 'settings' | 'native';
 type TaskRef = { id: string; runtime: string };

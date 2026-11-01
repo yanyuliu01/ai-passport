@@ -9,6 +9,7 @@ import { ClientDatabase } from './core/database.js';
 import { DesktopClient, type SecretStore } from './core/client.js';
 import { HTTPRuntimeTransport } from './core/runtime-client.js';
 import { RuntimeHost, findExecutable } from './core/runtime-host.js';
+import { RuntimeMonitor, type RuntimeProblem } from './core/runtime-monitor.js';
 import { bundledRuntimeLaunch } from './core/runtime-layout.js';
 import { PeerNetwork } from './core/peers.js';
 import { inspectPhoneConnection } from './core/phone-connection.js';
@@ -23,6 +24,7 @@ let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopCl
 let db: ClientDatabase, network: PeerNetwork, host: RuntimeHost, setup: Setup;
 let relayHost: RelayHost;
 let account: AccountConnection;
+let localMonitor: RuntimeMonitor | undefined;
 let pairingPrompts: PairingPrompts | undefined;
 let accountFocused = false;
 let quitting = false, connecting = false, joining = false;
@@ -111,21 +113,28 @@ async function connectLocal(): Promise<void> {
   if (connecting) return;
   if (!setup.view().confirmed) throw new Error('请先完成首次启用或连接确认');
   connecting = true;
+  localMonitor?.retry();
   client.runtime = { state: 'connecting', message: '正在恢复已确认的本机服务' }; notify();
   try {
     const endpoint = await setup.resume();
-    if (endpoint) { client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' }; }
+    if (endpoint) {
+      client.add(endpoint);
+      if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
+      void localMonitor?.check();
+    }
   } catch (error) { client.runtime = { state: 'error', message: error instanceof Error ? error.message : '本机服务暂不可用' }; }
   finally { connecting = false; notify(); }
 }
 async function connectAccountLocal(): Promise<void> {
   if (connecting || !account.view().signedIn) return;
   connecting = true;
+  localMonitor?.retry();
   try {
     const endpoint = await setup.resumeAccount();
     if (endpoint) {
       client.add(endpoint); client.select(endpoint.spaceId);
-      client.runtime = { state: 'ready', message: '已复用这台电脑的 Runtime · 原配置和记录保留' };
+      if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '已复用这台电脑的 Runtime · 原配置和记录保留' };
+      void localMonitor?.check();
       void account.refresh();
     }
   } catch (error) {
@@ -141,7 +150,7 @@ async function quit(): Promise<void> {
       message: '退出会停止本机客户端管理的服务。', buttons: ['继续后台运行', '退出小幽'], defaultId: 0, cancelId: 0 });
     if (answer.response !== 1) return;
   }
-  quitting = true; client?.stop(); network?.stop(); await account?.stop(); await relayHost?.stop(false); host?.stopOwned(); tray?.destroy();
+  quitting = true; localMonitor?.stop(); client?.stop(); network?.stop(); await account?.stop(); await relayHost?.stop(false); host?.stopOwned(); tray?.destroy();
   db?.close(); app.exit(0);
 }
 
@@ -159,7 +168,8 @@ async function main(): Promise<void> {
     save(key, value) { db.set('vault:' + key, safeStorage.encryptString(JSON.stringify(value)).toString('base64')); },
   };
   const local = new HTTPRuntimeTransport();
-  const getLocal = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://'));
+  const localCandidate = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://'));
+  const getLocal = () => { const endpoint = localCandidate(); return endpoint && !client.runtimeUnavailable(endpoint) ? endpoint : undefined; };
   network = new PeerNetwork(db, secrets, local, getLocal, {
     changed(state) { client.pairing = state; notify(); },
     endpoint(endpoint) { setup.confirm(endpoint); client.add(endpoint); if (joining) { setup.confirmRelay(); client.select(endpoint.spaceId); joining = false; } },
@@ -177,13 +187,32 @@ async function main(): Promise<void> {
       args: ['-m', 'xiaoyou_runtime'], cwd: resolve(app.getAppPath(), '../../runtime') };
   host = new RuntimeHost(dataDir, launch, local);
   setup = new Setup(db, secrets, host, localCandidates(), hostname(), join(dataDir, 'runtime/config.json'));
+  localMonitor = new RuntimeMonitor(local, localCandidate,
+    endpoint => db.cursor(endpoint.runtimeId, endpoint.capabilities.includes('all_conversations') ? '*' : 'default'),
+    (endpoint, problem) => {
+      const messages: Record<RuntimeProblem, string> = {
+        connection: '本机 Runtime 暂不可达，正在等待恢复；运行中的任务保留',
+        sync: '本机 Runtime 同步暂不可用，正在等待恢复；运行中的任务保留',
+        authentication: '本机 Runtime 认证未通过，请检查连接设置；原任务保留',
+        identity: '本机 Runtime 身份发生变化，请检查连接设置；原任务保留',
+        unsupported: '本机 Runtime 的连接或同步协议不可用，请检查连接设置；原任务保留',
+      };
+      client.setRuntimeProblem(endpoint, messages[problem]);
+      client.runtime = { state: 'error', message: messages[problem] };
+      void account?.refresh(); notify();
+    }, endpoint => {
+      client.setRuntimeProblem(endpoint);
+      client.refreshRuntime(endpoint.runtimeId);
+      client.runtime = { state: 'ready', message: '本机服务已恢复 · 模型响应待验证' };
+      void account?.refresh(); notify();
+    });
   relayHost = new RelayHost(secrets, notify);
   account = new AccountConnection(dataDir, secrets, local, getLocal, notify, endpoint => {
     setup.confirm(endpoint); setup.confirmRelay();
     const current = client.endpoints.get(endpoint.runtimeId);
     if (!current || current.url.startsWith('peer://')) client.add(endpoint);
     if (!accountFocused) { client.select(endpoint.spaceId); accountFocused = true; }
-  }, (space, values) => client.mergeConversations(space, values), hostname());
+  }, (space, values) => client.mergeConversations(space, values), hostname(), undefined, () => { void connectAccountLocal(); });
   pairingPrompts = new PairingPrompts(() => snapshot().pairing.requests, async request => {
     showWindow();
     const result = await dialog.showMessageBox(window!, { type: 'question', title: request.computer ? '电脑请求连接' : '手机请求连接',
@@ -228,12 +257,14 @@ async function main(): Promise<void> {
     if (connecting) throw new Error('本机服务正在连接，请稍候');
     const input = object(value);
     if (!Array.isArray(input.agents) || input.agents.length > 2 || input.agents.some(id => typeof id !== 'string')) throw new Error('帮手选择无效');
-    connecting = true; client.runtime = { state: 'connecting', message: '正在启用本机服务并核对身份' }; notify();
+    connecting = true; localMonitor?.retry(); client.runtime = { state: 'connecting', message: '正在启用本机服务并核对身份' }; notify();
     try {
       const endpoint = await setup.enable({ agents: input.agents as string[],
         service: input.service === undefined ? undefined : requiredString(input.service, 100),
         deepseekKey: input.deepseekKey === undefined ? undefined : requiredString(input.deepseekKey, 4096) });
-      client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
+      client.add(endpoint);
+      if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
+      void localMonitor?.check();
       void account.refresh();
     } catch (error) { client.runtime = { state: 'error', message: error instanceof Error ? error.message : '服务未能启用' }; throw error; }
     finally { connecting = false; notify(); }
@@ -351,9 +382,14 @@ async function main(): Promise<void> {
   if (setup.view().confirmed && setup.choice() && !account.view().signedIn) void connectLocal();
   const supervisor = setInterval(() => {
     if (quitting) return;
+    void localMonitor?.check();
     void host.recover().then(endpoint => {
       if (endpoint && !setup.allowed(endpoint)) throw new Error('服务身份变化，需要重新确认');
-      if (endpoint) { client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已恢复' }; notify(); }
+      if (endpoint) {
+        client.add(endpoint);
+        if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '本机服务已恢复 · 模型响应待验证' };
+        void localMonitor?.check(); notify();
+      }
     }).catch(() => { client.runtime = { state: 'error', message: '本机服务连续退出，自动恢复已暂停，请检查连接设置' }; notify(); });
   }, 5000);
   supervisor.unref();

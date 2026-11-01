@@ -36,12 +36,18 @@ function openIdentity(vault: MeshVault, key: string, account: string, space: str
     return secret;
   } catch { throw new AccountError('账号互通身份恢复失败，原配置保留，请重新登录'); }
 }
-export class AccountError extends Error { constructor(message: string, readonly status = 0) { super(message); } }
+export class AccountError extends Error {
+  constructor(message: string, readonly status = 0, private readonly transient = false) { super(message); }
+  get retryable(): boolean { return this.transient || [408, 429, 500, 502, 503, 504].includes(this.status); }
+}
 export class AccountConnection {
   private session?: Login;
   private network?: PeerNetwork;
   private peerDB?: ClientDatabase;
   private timer?: ReturnType<typeof setInterval>;
+  private restoreTimer?: ReturnType<typeof setTimeout>;
+  private restoreFailures = 0;
+  private restoring = false;
   private identity?: DeviceIdentity;
   private pairing: ClientView['pairing'] = { joined: 0, relayState: '未登录', requests: [] };
   private message = '登录小幽账号，连接自己的其他电脑';
@@ -53,7 +59,8 @@ export class AccountConnection {
   constructor(private dataDir: string, private secrets: SecretStore, private local: RuntimeTransport,
     private getLocal: () => Endpoint | undefined, private changed: () => void,
     private endpoint: (endpoint: Endpoint) => void, private conversations: (space: string, values: import('../shared.js').Conversation[]) => void,
-    private name: string, private server = DEFAULT_ACCOUNT_SERVER) {}
+    private name: string, private server = DEFAULT_ACCOUNT_SERVER,
+    private readonly onRestored?: () => void, private readonly restoreRetryMs = 1000) {}
   view(): AccountView {
     return { signedIn: Boolean(this.session), username: this.session?.username || '', busy: this.busy,
       message: this.message, pairing: this.pairing, canInvite: Boolean(this.session && this.getLocal()?.meshToken
@@ -86,7 +93,12 @@ export class AccountConnection {
             } catch { reject(new AccountError('账号服务响应无效')); }
           });
         });
-      function fail() { agent.destroy(); reject(new AccountError('账号服务暂不可达，已有记录保留，请重试')); }
+      function fail(error: Error) {
+        agent.destroy();
+        const certificate = /节点证书/.test(error.message);
+        reject(new AccountError(certificate ? '账号服务证书验证失败，请检查连接设置；原身份保留'
+          : '账号服务暂不可达，已有记录保留，请重试', 0, !certificate));
+      }
       req.on('error', fail); req.on('timeout', () => req.destroy(new Error('timeout'))); req.end(data);
     });
   }
@@ -123,14 +135,46 @@ export class AccountConnection {
     } finally { if (generation === this.generation) { this.busy = false; this.changed(); } }
   }
   async restore(): Promise<void> {
-    if (this.network || this.busy) return;
+    if (this.network || this.busy || this.restoring) return;
     this.stopped = false;
     const saved = this.secrets.load<Login>('account-session');
     if (!saved) return;
-    if (saved.expires <= Date.now()) { this.message = '账号登录已过期，请重新登录；原记录保留'; this.changed(); return; }
-    this.session = saved;
-    try { await this.device(); await this.recoverIdentity(); if (!this.stopped) await this.connect(); }
-    catch { this.message = '正在等待账号连接恢复'; this.changed(); }
+    if (saved.expires <= Date.now()) { this.session = undefined; this.message = '账号登录已过期，请重新登录；原记录保留'; this.changed(); return; }
+    clearTimeout(this.restoreTimer); this.restoreTimer = undefined;
+    this.session = saved; this.restoring = true; const generation = this.generation;
+    try {
+      await this.device();
+      if (this.stopped || generation !== this.generation) return;
+      await this.recoverIdentity();
+      if (this.stopped || generation !== this.generation) return;
+      await this.connect();
+      if (this.stopped || generation !== this.generation) return;
+      this.restoreFailures = 0;
+    } catch (error) {
+      if (this.stopped || generation !== this.generation) return;
+      await this.disposeNetwork();
+      if (this.stopped || generation !== this.generation) return;
+      if (error instanceof AccountError && error.retryable) {
+        this.message = '账号服务暂不可达，正在等待恢复';
+        this.scheduleRestore();
+      } else if (error instanceof AccountError && [401, 403].includes(error.status)) {
+        this.session = undefined; this.message = '账号登录已失效，请重新登录；原记录保留';
+      } else {
+        this.session = undefined;
+        this.message = error instanceof AccountError ? error.message : '账号连接未能恢复，请检查连接设置';
+      }
+      this.changed();
+    } finally { this.restoring = false; }
+  }
+  private scheduleRestore(): void {
+    if (this.stopped || this.restoreTimer) return;
+    const delay = Math.min(30_000, this.restoreRetryMs * 2 ** Math.min(this.restoreFailures++, 5));
+    this.restoreTimer = setTimeout(() => {
+      this.restoreTimer = undefined;
+      if (this.stopped) return;
+      void this.restore().then(() => { if (!this.stopped && this.network) this.onRestored?.(); });
+    }, delay);
+    this.restoreTimer.unref();
   }
   private async recoverIdentity(): Promise<void> {
     const session = this.session!, generation = this.generation;
@@ -153,8 +197,9 @@ export class AccountConnection {
     this.secrets.save('account-session', session); this.secrets.save('account-mesh-secret', secret); this.secrets.save('account-space', session.space);
   }
   private async connect(): Promise<void> {
-    const session = this.session!;
-    const generation = this.generation;
+    const session = this.session!, generation = this.generation;
+    await this.closing;
+    if (this.stopped || generation !== this.generation || session !== this.session) return;
     const prefix = 'account-peer:' + session.id + ':';
     const scoped: SecretStore = { load: <T>(key: string) => this.secrets.load<T>(key === 'device-seed' ? 'account-device-seed' : prefix + key),
       save: (key, value) => this.secrets.save(key === 'device-seed' ? 'account-device-seed' : prefix + key, value) };
@@ -211,7 +256,13 @@ export class AccountConnection {
   async invite(): Promise<string> { if (!this.view().canInvite || !this.network) throw new Error('请先配置同空间的本机 Runtime'); return this.network.invite(true); }
   async accept(id: string): Promise<void> { if (!this.network) throw new Error('请先登录'); await this.network.accept(id); await this.refresh(); }
   async reject(id: string): Promise<void> { await this.network?.reject(id); }
-  reconnect(): void { this.network?.reconnect(); void this.refresh(); }
+  reconnect(): void {
+    this.network?.reconnect(); void this.refresh();
+    if (this.restoreTimer) {
+      clearTimeout(this.restoreTimer); this.restoreTimer = undefined;
+      void this.restore().then(() => { if (!this.stopped && this.network) this.onRestored?.(); });
+    }
+  }
   async logout(): Promise<void> {
     const session = this.session; if (!session) return;
     // Revoke the login on the server before saying this device is signed out.
@@ -219,10 +270,15 @@ export class AccountConnection {
     this.secrets.save('account-session', null); this.secrets.save('account-recovery-key', null); this.secrets.save('account-mesh-secret', null); this.secrets.save('account-space', null);
     this.pairing = { joined: 0, relayState: '未登录', requests: [] }; this.message = '已退出，原记录和配对资料保留'; this.changed();
   }
-  stop(): Promise<void> { this.stopped = true; this.generation++; clearInterval(this.timer);
+  private disposeNetwork(): Promise<void> {
+    clearInterval(this.timer); this.timer = undefined;
     const network = this.network, db = this.peerDB;
     network?.stop(); this.network = undefined; this.peerDB = undefined;
     if (network && db) this.closing = Promise.all([this.closing, network.drained().then(() => db.close())]).then(() => {});
     return this.closing;
+  }
+  stop(): Promise<void> {
+    this.stopped = true; this.generation++; clearInterval(this.timer); clearTimeout(this.restoreTimer); this.restoreTimer = undefined;
+    return this.disposeNetwork();
   }
 }

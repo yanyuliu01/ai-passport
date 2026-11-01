@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { randomBytes } from 'node:crypto';
 import { pinnedAgent, validFingerprint } from './pinned-tls.js';
 import type { Agent } from 'node:https';
 import type { Packet } from './crypto.js';
@@ -27,13 +28,34 @@ export function invitationRelay(config: RelayConfig): RelayConfig {
 export class RelayLink {
   private socket?: WebSocket;
   private timer?: ReturnType<typeof setTimeout>;
+  private heartbeat?: ReturnType<typeof setTimeout>;
+  private heartbeatDeadline?: ReturnType<typeof setTimeout>;
+  private outstandingPing?: Buffer;
   private stopped = false;
   private generation = 0;
   private failures = 0;
   private agent?: Agent;
   constructor(readonly config: RelayConfig, private device: string,
-    private onPacket: (packet: Packet) => void, private onState: (state: string) => void) {
+    private onPacket: (packet: Packet) => void, private onState: (state: string) => void,
+    private readonly heartbeatTiming = { intervalMs: 20_000, timeoutMs: 10_000 }) {
     validateRelay(config);
+  }
+  private clearHeartbeat(): void {
+    clearTimeout(this.heartbeat); clearTimeout(this.heartbeatDeadline);
+    this.heartbeat = undefined; this.heartbeatDeadline = undefined; this.outstandingPing = undefined;
+  }
+  private scheduleHeartbeat(socket: WebSocket, current: () => boolean): void {
+    this.clearHeartbeat();
+    this.heartbeat = setTimeout(() => {
+      if (!current() || socket.readyState !== WebSocket.OPEN) return;
+      const nonce = this.outstandingPing = randomBytes(8);
+      this.heartbeatDeadline = setTimeout(() => {
+        if (current() && this.outstandingPing === nonce) socket.terminate();
+      }, this.heartbeatTiming.timeoutMs);
+      this.heartbeatDeadline.unref();
+      try { socket.ping(nonce); } catch { socket.terminate(); }
+    }, this.heartbeatTiming.intervalMs);
+    this.heartbeat.unref();
   }
   start(): void {
     if (this.stopped) return;
@@ -47,7 +69,13 @@ export class RelayLink {
     const socket = this.socket = new WebSocket(url, { headers: { Authorization: 'Bearer ' + this.config.token },
       agent: this.agent, maxPayload: 8 * 1024 * 1024, handshakeTimeout: 10_000, followRedirects: false });
     const current = () => !this.stopped && generation === this.generation;
-    socket.on('open', () => { if (current()) { this.failures = 0; this.onState('加密通信入口已连接'); } });
+    socket.on('open', () => {
+      if (current()) { this.failures = 0; this.onState('加密通信入口已连接'); this.scheduleHeartbeat(socket, current); }
+    });
+    socket.on('pong', data => {
+      if (!current() || !this.outstandingPing || !data.equals(this.outstandingPing)) return;
+      this.scheduleHeartbeat(socket, current);
+    });
     socket.on('message', data => {
       if (!current()) return;
       try { const value = JSON.parse(data.toString()); if (value?.type === 'packet') this.onPacket(value.packet as Packet); }
@@ -56,11 +84,12 @@ export class RelayLink {
     socket.on('error', () => { if (current()) this.onState('通信入口暂不可达，等待恢复'); });
     socket.on('close', () => {
       if (!current()) return;
+      this.clearHeartbeat();
       this.onState('通信入口已断开，自动重连中');
       this.timer = setTimeout(() => this.start(), Math.min(15_000, 500 * 2 ** Math.min(this.failures++, 5)));
     });
     socket.on('unexpected-response', (_request, response) => {
-      if ([401, 403].includes(response.statusCode || 0)) {
+      if (current() && [401, 403].includes(response.statusCode || 0)) {
         this.stop(); this.onState('通信入口凭据失效，请重新配置');
       }
       response.resume(); socket.terminate();
@@ -71,5 +100,5 @@ export class RelayLink {
     this.socket.send(JSON.stringify({ type: 'packet', packet }));
     return true;
   }
-  stop(): void { this.stopped = true; this.generation++; clearTimeout(this.timer); this.socket?.close(); this.agent?.destroy(); }
+  stop(): void { this.stopped = true; this.generation++; clearTimeout(this.timer); this.clearHeartbeat(); this.socket?.close(); this.agent?.destroy(); }
 }

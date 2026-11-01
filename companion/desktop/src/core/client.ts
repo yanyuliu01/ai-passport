@@ -22,6 +22,7 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
 export class DesktopClient {
   readonly endpoints = new Map<string, Endpoint>();
   private links = new Map<string, Link>();
+  private runtimeProblems = new Map<string, { url: string; space: string; message: string }>();
   private loops = new Map<string, AbortController>();
   private syncPolls = new Map<string, AbortController>();
   // Sync loops that stopped on a non-retryable error; adding the same endpoint again restarts them.
@@ -648,6 +649,9 @@ export class DesktopClient {
     throw new Error('原任务所在连接暂不可用，请等待恢复');
   }
   private link(endpoint: Endpoint): Link | undefined {
+    const problem = this.runtimeProblems.get(endpoint.runtimeId);
+    if (problem?.url === endpoint.url && problem.space === endpoint.spaceId)
+      return { connected: false, catchingUp: false, error: problem.message };
     const link = this.links.get(endpoint.runtimeId + '/' + (endpoint.capabilities.includes('all_conversations') ? 'default' : this.selectedConversation(endpoint.spaceId)));
     const state = this.peerState?.(endpoint) ?? this.pairing.relayState;
     if (link && endpoint.url.startsWith('peer://') && state !== '加密通信入口已连接')
@@ -683,15 +687,27 @@ export class DesktopClient {
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);
-    return { version: '0.1.16', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
+    return { version: '0.1.17', spaces: [...spaces.values()], selectedSpace: this.db.get('selectedSpace', ''),
       background: true, runtime: this.runtime, pairing: this.pairing };
   }
+  runtimeUnavailable(endpoint: Endpoint): boolean {
+    const problem = this.runtimeProblems.get(endpoint.runtimeId);
+    return Boolean(problem && problem.url === endpoint.url && problem.space === endpoint.spaceId);
+  }
+  setRuntimeProblem(endpoint: Endpoint, message?: string): void {
+    if (message) this.runtimeProblems.set(endpoint.runtimeId, { url: endpoint.url, space: endpoint.spaceId, message });
+    else if (this.runtimeUnavailable(endpoint)) this.runtimeProblems.delete(endpoint.runtimeId);
+    this.changed();
+  }
+  refreshRuntime(runtimeId: string): void {
+    const endpoint = this.endpoints.get(runtimeId);
+    if (!endpoint || this.stopped) return;
+    for (const [key, controller] of this.loops) if (key.startsWith(endpoint.runtimeId + '/')) controller.abort();
+    this.endpoints.delete(endpoint.runtimeId);
+    this.add(endpoint);
+  }
   refresh(): void {
-    for (const endpoint of [...this.endpoints.values()]) {
-      for (const [key, controller] of this.loops) if (key.startsWith(endpoint.runtimeId + '/')) controller.abort();
-      this.endpoints.delete(endpoint.runtimeId);
-      this.add(endpoint);
-    }
+    for (const runtimeId of [...this.endpoints.keys()]) this.refreshRuntime(runtimeId);
   }
   stop(): void {
     this.stopped = true;
