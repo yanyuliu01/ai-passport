@@ -34,14 +34,15 @@ NOT RUN for this candidate. The complete repository gate failed on this Windows
 host because the actionlint installer does not support its Git Bash platform;
 ESP-IDF was not activated and firmware was not built.
 
-The owner requested a local Codex heartbeat every day at **18:00 Asia/Shanghai**
-to review and synchronize this project with GitHub. It should commit and push
-only clearly attributable, completed and validated work, preserve other dirty
-files, and stop for unclear ownership, concurrent edits, failed checks, secrets,
-or diverged remote history. Update the paired project documents only when the
-verified status changes. Source synchronization does not itself publish an
-installer or release, restart Runtime, change an installed client, or establish
-device acceptance. A scheduled check is not evidence that a later sync ran.
+The owner requested a local Codex heartbeat at **18:00 Asia/Shanghai on Sunday,
+Wednesday and Saturday** to review and synchronize this project with GitHub. It
+should commit and push only clearly attributable, completed and validated work,
+preserve other dirty files, and stop for unclear ownership, concurrent edits,
+failed checks, secrets, or diverged remote history. Update the paired project
+documents only when the verified status changes. Source synchronization does not
+itself publish an installer or release, restart Runtime, change an installed
+client, or establish device acceptance. A scheduled check is not evidence that a
+later sync ran.
 
 The 2026-10-28 tables and reconciliation details below remain a historical snapshot.
 
