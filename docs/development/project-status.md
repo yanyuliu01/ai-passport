@@ -10,6 +10,10 @@ authoritative for implementation and test evidence.
 
 ## Update: desktop connection recovery and GitHub synchronization (2026-11-01)
 
+Next: continue investigating and repairing Mac-side connection recovery on
+2026-11-02. Recheck the Mac checkout, installed version, and running work before
+making changes; this is a handoff note, not a scheduled reminder.
+
 The Windows desktop source is now **0.1.17**. The client probes the confirmed
 loopback Runtime's authenticated identity and sync interface, marks repeated
 failures unavailable, and renews that Runtime's subscription after recovery.
@@ -25,9 +29,10 @@ included two previously uncommitted test-fixture fixes in this synchronization:
 they make DNS failure and process-start timing deterministic. A separate run
 with the old fixture versions produced 119 passes and three failures on this host.
 A Windows 0.1.17 installer was built locally with Runtime 0.24.0, and its packaged
-application started and exited using an isolated profile. The installer has not
-been published or installed over the running Windows 0.1.16 client; the retained
-0.1.16 installer is the rollback candidate. The exact installed Android 0.40.8
+application started and exited using an isolated profile. Windows 0.1.17 was
+installed locally and Runtime 0.24.0 responded to the health check; phone
+acceptance remains open. The installer was not published, and the retained 0.1.16
+installer is the rollback candidate. The exact installed Android 0.40.8
 source has not been identified. Physical-phone/public-network recovery, live
 multi-end convergence and first meaningful response within three seconds remain
 NOT RUN for this candidate. The complete repository gate failed on this Windows
