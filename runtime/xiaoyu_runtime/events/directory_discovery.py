@@ -70,7 +70,9 @@ class Discovery:
         # Metadata-only native renames and stale transitions also propagate.
         # Rotate bounded unchanged sources so a large history cannot monopolize sync.
         selected = candidates[:32] + sorted(unchanged)[:max(0, 32-len(candidates[:32]))]
-        owned, titles = self.owned(), self.bound_titles()
+        # Building the complete directory is expensive and is only needed for
+        # selected sources, not for a no-change filesystem scan.
+        owned, titles = (self.owned(), self.bound_titles()) if selected else (set(), {})
         for _, agent, home, path, signature in selected:
             if self.stop.is_set():
                 return

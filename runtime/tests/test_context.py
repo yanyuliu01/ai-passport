@@ -91,6 +91,77 @@ class ContextTests(TempDirCase):
         self.assertEqual(["old", "a"], [turn["id"] for turn in self.context.turns("side")])
         self.assertEqual(0, self.context.offer("side", [{"id": "old", "text": "older question", "reply": "older answer", "at": 1}]))
 
+    def test_archived_remote_dialog_is_recalled_on_demand_without_crossing_conversations(self):
+        archive = self.cards._log._path.with_suffix(".history")
+        archive.mkdir()
+        records = [
+            {"id": "bbbbbbbbbbbb.old:reply", "conversation": "side", "scope": "main", "seq": 1,
+             "created_at": 10, "status": "final", "text": "remote blue-orchid answer",
+             "author": {"kind": "xiaoyou"}, "source": {"type": "runtime"}, "mesh_origin": "b" * 32,
+             "task": self.card["id"]},
+            {"id": "cccccccccccc.other:reply", "conversation": "other", "scope": "main", "seq": 2,
+             "created_at": 11, "status": "final", "text": "private blue-orchid answer",
+             "author": {"kind": "xiaoyou"}, "source": {"type": "runtime"}, "mesh_origin": "c" * 32},
+            {"id": "external:reply", "conversation": "side", "scope": "main", "seq": 3,
+             "created_at": 12, "status": "final", "text": "external blue-orchid answer",
+             "author": {"kind": "xiaoyou"}, "source": {"type": "external"}},
+            {"id": "relay:you", "conversation": "side", "scope": "main", "seq": 4,
+             "created_at": 13, "status": "final", "text": "relayed blue-orchid placeholder",
+             "author": {"kind": "owner"}, "relay_to": "other-runtime"},
+            {"id": "worker:reply", "conversation": "side", "scope": "main", "seq": 5,
+             "created_at": 14, "status": "final", "text": "delegated blue-orchid answer",
+             "author": {"kind": "xiaoyou"}, "delegated_from": {"runtime": "local"}},
+        ]
+        (archive / "segment.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        from xiaoyu_runtime.events import message_history
+        with mock.patch.object(message_history, "page", wraps=message_history.page) as read:
+            self.context.window("side", "reader", query="blue-orchid")
+            read.assert_not_called()
+            found = self.context.recall("side", "blue-orchid")
+            read.assert_called_once()
+        self.assertIn("remote blue-orchid answer", found)
+        self.assertNotIn("private blue-orchid answer", found)
+        self.assertNotIn("external blue-orchid answer", found)
+        self.assertNotIn("relayed blue-orchid placeholder", found)
+        self.assertNotIn("delegated blue-orchid answer", found)
+        self.assertNotIn("remote blue-orchid answer", self.context.recall("other", "blue-orchid"))
+        self.cards._cards[self.card["id"]].update(origin_name="Windows", mesh_origin="b" * 32)
+        self.assertIn("remote blue-orchid answer", self.context.recall("side", "Windows"))
+
+    def test_archived_history_is_not_revived_after_context_reset(self):
+        self.exchange("before-reset")
+        archive = self.cards._log._path.with_suffix(".history")
+        archive.mkdir()
+        (archive / "segment.jsonl").write_text(json.dumps({"id": "archived:reply", "conversation": "side",
+            "scope": "main", "seq": 1, "created_at": 1, "status": "final", "text": "old hidden orchid",
+            "author": {"kind": "xiaoyou"}, "source": {"type": "runtime"}}) + "\n")
+        self.assertIn("old hidden orchid", self.context.recall("side", "orchid"))
+        self.assertTrue(self.context.clear("side"))
+        self.assertNotIn("old hidden orchid", self.context.recall("side", "orchid"))
+
+    def test_archive_recall_reports_partial_or_unavailable_coverage(self):
+        archive = self.cards._log._path.with_suffix(".history")
+        archive.mkdir()
+        records = [{"id": "turn-%d:reply" % index, "conversation": "side", "scope": "main",
+                    "seq": index + 1, "created_at": index + 1, "status": "final",
+                    "text": "ancient orchid" if index == 0 else "unrelated filler " * 10,
+                    "author": {"kind": "xiaoyou"}, "source": {"type": "runtime"}}
+                   for index in range(20)]
+        (archive / "segment.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        from xiaoyu_runtime.events import message_history
+        with mock.patch.object(message_history, "SCAN_BYTES", 256), mock.patch.object(message_history, "LINE_BYTES", 128):
+            self.assertIn("部分较近归档", self.context.recall("side", "orchid"))
+        with mock.patch.object(message_history, "page", side_effect=OSError("unavailable")):
+            self.assertIn("暂时不可用", self.context.recall("side", "orchid"))
+
+    def test_empty_recall_terms_do_not_scan_archive_or_network(self):
+        from xiaoyu_runtime.events import message_history
+        self.context._replica_recall = mock.Mock()
+        with mock.patch.object(message_history, "page") as page:
+            self.context.recall("side", "！？")
+        page.assert_not_called()
+        self.context._replica_recall.assert_not_called()
+
     def test_reset_is_persistent_without_deleting_messages_and_hides_later_old_revisions(self):
         self.context.offer("side", [{"id": "old", "text": "older", "reply": "reply", "at": 1}])
         self.exchange()

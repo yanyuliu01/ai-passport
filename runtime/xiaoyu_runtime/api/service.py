@@ -51,6 +51,7 @@ from ..world.quick_review import QuickReview
 from ..iterate.events import EventStore
 from ..loop.xiaoyu import Xiaoyu
 from ..delivery import presentation
+from .. import timing
 
 MAX_TEXT_CHARS = 8000
 MAX_AUDIO_BYTES = 4 * 1024 * 1024
@@ -154,6 +155,7 @@ class Service:
         self._system_writer = xiaoyu.intake.writer("system", actor="runtime")
         self._reply_writer = xiaoyu.intake.writer("xiaoyou", actor="xiaoyou")
         self._store = store
+        self._timing = timing.TurnTiming(store.state_dir)
         self._stt = stt if stt is not None else Stt()
         self._audio: Dict[str, Any] = {}  # 消息编号 → 还没识别的录音文件
         self._changed = threading.Condition()
@@ -197,6 +199,10 @@ class Service:
         # 序号接着上次往上走：卡和消息两边见过的最大值之后。
         if seq > xiaoyu.cards.seq:
             self._system_writer.sequence(at_least=seq)
+        # The request ledger commits before message projection. If a process
+        # stopped in between, restore the saved route before Mesh can export.
+        for saved in self._messages.values():
+            xiaoyu.cards.reconcile_request_route(saved)
         self.events = EventStore(store.state_dir, origin=self.runtime_id)
         self._review_startup_events: List[Dict[str, Any]] = []
         self._review_loading = True
@@ -211,10 +217,12 @@ class Service:
         if source_seq > xiaoyu.cards.seq:
             self._system_writer.sequence(at_least=source_seq)
         xiaoyu.cards.conversation_erased = self._erase_conversation_state
-        for item in xiaoyu.cards.conversations.list(include_deleted=True):
-            if item.get('deleted'):
-                xiaoyu.cards.erase_conversation(item['id'])
-                self._erase_conversation_state(item['id'])
+        deleted = [item['id'] for item in xiaoyu.cards.conversations.list(include_deleted=True)
+                   if item.get('deleted')]
+        if deleted:
+            xiaoyu.cards.erase_conversations(deleted)
+            for name in deleted:
+                self._erase_conversation_state(name)
         self._recover()
         from ..events.directory_discovery import Discovery
         self.discovery = Discovery(xiaoyu._config, xiaoyu.intake.writer("desktop", actor="discovery"), self.runtime_id, owned=store.session_ids,
@@ -294,9 +302,18 @@ class Service:
                 # 回复已经记在卡上，只是消息记录没来得及写完：这句话其实接住了。
                 message = self._messages[message_id]
                 card_id, reply = answered[message_id]
+                # An interruption can fall between recording the owner entry
+                # and attaching its input image. The request ledger is the
+                # durable source for restoring that association.
+                self._attach_input_images(message, cards.get(card_id), self._system_writer)
                 # 结果已经提交、只是投递中断：用存下的结果，不重做。
-                message.update(status="done", operation_state="succeeded", reply=reply, card=card_id,
-                               stage=None, helper=None, partial="", finished_at=time.time())
+                recovered_card = cards.get(card_id) or {}
+                if recovered_card.get("state") == "failed":
+                    message.update(status="failed", operation_state="failed", error=reply,
+                                   card=card_id, stage=None, helper=None, partial="", finished_at=time.time())
+                else:
+                    message.update(status="done", operation_state="succeeded", reply=reply, card=card_id,
+                                   stage=None, helper=None, partial="", finished_at=time.time())
                 if any(item.get("state") in ("running", "unknown") for item in message.get("_effects", [])):
                     message["operation_state"] = "unknown"
                 self._system_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
@@ -347,6 +364,7 @@ class Service:
                 writer.exchange(card["id"], said=said, say=note, brief=note, mood="oops",
                              turn_id=message_id, scope="main", kind="note")
                 card_id = card["id"]
+            self._attach_input_images(message, cards.get(card_id), writer)
             # 已经开始处理的：模型或工具可能已经动了，不知道到哪一步，记 unknown，核对后才能重做。
             started = message["operation_state"] == "running"
             message.update(status="failed", operation_state="unknown" if started else "failed",
@@ -549,7 +567,8 @@ class Service:
     def submit(self, text: Any, conversation: Any = "default", client_id: Any = None,
                agent: Any = None, hop: Any = 0, card: Any = None,
                pin: Any = False, effort: Any = None, model: Any = None,
-               mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None, reply_scope: Any = None) -> Dict[str, Any]:
+               mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None, reply_scope: Any = None,
+               _trusted_mesh_images: bool = False) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
         pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
@@ -565,10 +584,20 @@ class Service:
         if attachments:
             if text is None:
                 text = ""
-            if pin or card is not None or mesh:
+            if pin or card is not None or (mesh and not _trusted_mesh_images):
                 raise RequestError("带图消息请从主对话发送；任务续聊和跨电脑转发暂不支持图片")
-            if not self._xiaoyu.image_agent(agent):
-                raise RequestError("这台 Runtime 没有可看图的 Codex 代理，请先配置后再发送")
+            if not self._xiaoyu.image_agent(agent) and not _trusted_mesh_images:
+                # A different Runtime may own the conversation and have the
+                # vision agent. Do not reject that route based on local agents.
+                # Explicit agent selection is still validated against this
+                # Runtime by _enqueue unless routed through an existing task.
+                remote_owner = None
+                if agent is None and self.mesh is not None and isinstance(conversation, str):
+                    view = self.mesh.owner_of(conversation)
+                    if not view.get("unresolved") and view.get("owner") not in (None, self.runtime_id):
+                        remote_owner = view["owner"]
+                if remote_owner is None:
+                    raise RequestError("这台 Runtime 没有可看图的代理，请先配置后再发送")
         if not isinstance(text, str) or (not text.strip() and not attachments):
             raise RequestError("text 不能为空")
         text = text if text.strip() else "请看看这些图片"
@@ -618,6 +647,7 @@ class Service:
             # 这一轮还在跑）由小鱼那边判断并回答（xiaoyu.py _continue_desktop）。
         if client_id is not None:
             client_id = _name(client_id, "client_id")
+            self._timing.mark(client_id, None, "runtime_received")
         if agent is not None:
             agent = _name(agent, "agent")
             if relay is None and not self._xiaoyu.has(agent):
@@ -714,6 +744,17 @@ class Service:
                     # 转交给别的 Runtime：那台的哪件事。这句话的记录以那台为准（同一个编号）。
                     message.update(relay_to=relay["mesh_origin"], relay_card=relay.get("mesh_id"),
                                    relay_name=relay.get("origin_name") or "")
+                elif self.mesh is not None and hop == 0 and not message["pin"] and not mesh.get("message_id"):
+                    # Mark a known remote owner before the first log record can
+                    # be exported. The handler still rechecks ownership before
+                    # execution; this does not send a command or start work.
+                    view = self.mesh.owner_of(conversation)
+                    require = getattr(self.mesh._config, "mesh_require_owner", False)
+                    owner = view.get("owner")
+                    if (owner and owner != self.runtime_id and not view.get("unresolved")
+                            and not (require and view.get("conflict"))):
+                        message.update(relay_to=owner, routed=True, owner_generation=view["generation"],
+                                       relay_name=view.get("name") or "")
                 if mesh.get("delegated_from"):
                     message["delegated_from"] = dict(mesh["delegated_from"])
                 routed = mesh.get("routed_generation")
@@ -750,6 +791,7 @@ class Service:
                     self._changed.notify_all()
                 raise UnavailableError("消息记录写不下去，这句话没收下，稍后用同一个 client_id 再试：%s"
                                        % error)
+            self._timing.mark(client_id, message_id, "runtime_accepted")
             with self._changed:
                 if message_id in self._messages:
                     self._owner_writer.by(cause=message["id"]).request_changed(message, revise=False)  # 序号、日志一起变
@@ -952,7 +994,7 @@ class Service:
             ('codex', config.desktop_codex_dir, '.codex'), ('claude', config.desktop_claude_dir, '.claude'))}
         cards = self.card_store.recent(None, 10 ** 6)
         if include_retained:
-            cards += self.card_store.retained()
+            cards += self.card_store.retained_metadata()
         for card in cards:
             if not card.get('monitoring_only') and not card.get('worker_session') and card.get('agent'):
                 session = self._store.session('%s/%s' % (card.get('conversation', 'default'), card['id']), card['agent'])
@@ -1208,7 +1250,7 @@ class Service:
         nonce：客户端带来的随机数；key_hash 是它用的凭据的哈希（server.py 按请求算）。带了就
         回 host_proof，客户端在任何线路上都能核对连到的是持有它凭据的 Runtime（设计第 6 节）。"""
         capabilities = list(CAPABILITIES) + ["quick_review", "devices", "host_proof", "execution_reconciliation", "request_effect_review", "timer_effect_review"] \
-            + (["mesh"] if self.mesh is not None else [])
+            + (["mesh", "mesh_image_relay_v1"] if self.mesh is not None else [])
         result = {"subject_id": self.subject_id, "runtime_id": self.runtime_id, "epoch": self._xiaoyu.cards.epoch,
                   "protocol": PROTOCOL, "capabilities": capabilities,
                   "presentation_policy": presentation.policy(),
@@ -1854,7 +1896,7 @@ class Service:
                     and not (message.get("routed") and message["status"] == "queued")]
 
     def relay_done(self, message_id: str, ok: bool, text: str, card: Optional[str] = None,
-                   unknown: bool = False) -> None:
+                   unknown: bool = False, strict: bool = False) -> None:
         """转交给别的 Runtime 的话有了结果（mesh.py 调用）：ok 时 text 是那台的回答，否则是原因。
         unknown：交过去了但那台没了音讯，做没做不知道。"""
         with self._changed:
@@ -1865,9 +1907,9 @@ class Service:
         if card:
             fields["card"] = card
         if ok:
-            self._update(message_id, status="done", reply=text, brief=text[:120], mood="idle", **fields)
+            self._update(message_id, strict=strict, status="done", reply=text, brief=text[:120], mood="idle", **fields)
         else:
-            self._update(message_id, status="failed", error=text or "那台没说明原因", mood="oops",
+            self._update(message_id, strict=strict, status="failed", error=text or "那台没说明原因", mood="oops",
                          **(dict(fields, operation_state="unknown") if unknown else fields))
 
     def _snapshot(self, message: Dict[str, Any]) -> Dict[str, Any]:
@@ -2039,7 +2081,8 @@ class Service:
 
     def _effect_owner(self, conversation):
         view = self.owner(conversation)
-        if view.get("unresolved") or view.get("conflict"):
+        require_owner = self.mesh is not None and getattr(self.mesh._config, "mesh_require_owner", False)
+        if view.get("unresolved") or view.get("conflict") or (require_owner and not view.get("owner")):
             raise EffectFenceError("对话负责人尚未确认。")
         return {"owner": view.get("owner") or self.runtime_id, "generation": view.get("generation", 0)}
 
@@ -2075,6 +2118,8 @@ class Service:
                 # 回复还在生成：到目前为止的那段，整段替换（不是追加），空串是收回。
                 if message["status"] == "running" and message["partial"] != text:
                     message["partial"] = text
+                    if text:
+                        timing.phase("runtime_partial", once=True)
                     self._reply_writer.by(cause=message["id"]).request_changed(message)  # 修订号、序号、日志一起变
                     self._changed.notify_all()
                 return
@@ -2113,7 +2158,8 @@ class Service:
                 or (message.get("relay_to") and not message.get("routed")):
             return True
         view = self.mesh.owner_of(message["conversation"])
-        if view.get('unresolved'):
+        require_owner = getattr(self.mesh._config, 'mesh_require_owner', False)
+        if view.get('unresolved') or (require_owner and (view.get('conflict') or not view.get('owner'))):
             self._parked[message['id']] = message['conversation']
             return False
         owner = view["owner"]
@@ -2219,6 +2265,7 @@ class Service:
                     or message_id in self._claimed):
                 return
             self._parked.pop(message_id, None)
+            client_id = message.get("client_id")
             routed = self._route(message)
             if routed:
                 self._claimed.add(message_id)
@@ -2226,11 +2273,14 @@ class Service:
             # 写“在等负责人”的说明时不占着 _changed；已经开始的并发重试不会被改回排队。
             self._update(message_id, status='queued', stage='排队中：等待对话负责人同步', mood='busy')
             return
-        try:
-            self._process(message_id)
-        finally:
-            with self._changed:
-                self._claimed.discard(message_id)
+        with timing.turn(self._timing, client_id, message_id):
+            timing.phase("runtime_started")
+            try:
+                self._process(message_id)
+            finally:
+                timing.phase("runtime_processing_end")
+                with self._changed:
+                    self._claimed.discard(message_id)
 
     def _process(self, message_id: str) -> None:
         with self._changed:
@@ -2300,7 +2350,8 @@ class Service:
             else:
                 with self._changed:
                     name = self._messages.get(message_id, {}).get("relay_name") or "别的电脑"
-                self._update(message_id, stage="交给 %s 了" % name, mood="busy")
+                stage = ("图片等待安全传输至 %s；请确认两边在线且已升级" % name if message.get("attachments") else "交给 %s 了" % name)
+                self._update(message_id, stage=stage, mood="busy")
             return
         try:
             scope = self._effects_for(message_id)
@@ -2310,7 +2361,8 @@ class Service:
                         lambda kind, agent, detail: self._report(message_id, kind, agent, detail))
                 elif message.get("attachments"):
                     turn = self._xiaoyu.hear_images(text, conversation, message_id,
-                        message["attachments"], asked=asked, hop=hop)
+                        message["attachments"], asked=asked, hop=hop,
+                        report=lambda kind, agent, detail: self._report(message_id, kind, agent, detail))
                 else:
                     turn = self._xiaoyu.hear(
                         text, conversation, message_id, asked=asked, card=card, hop=hop, pin=pin,
@@ -2354,13 +2406,28 @@ class Service:
             **({"interrupted": True} if said.get("interrupted") else {}),
         )
 
+    @staticmethod
+    def _attach_input_images(message, card, writer):
+        attachments = message.get("attachments") or []
+        if not attachments or not card:
+            return
+        owner_id = message["id"] + ":you"
+        index = next((i for i, entry in enumerate(card.get("entries", []))
+                      if entry.get("id") == owner_id), None)
+        if index is not None:
+            writer.by(cause=message["id"]).attach(card["id"], attachments, index)
+
     def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False,
               unknown: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
+        with self._changed:
+            message = dict(self._messages.get(message_id) or {"id": message_id})
+
         if unknown:
             original = self.card_store.message(message_id + ":you")
             existing = self.card_store.get(original.get("task")) if original else None
             if existing and existing["conversation"] == conversation and not existing.get("monitoring_only"):
+                self._attach_input_images(message, existing, self._reply_writer)
                 if self.card_store.message(message_id + ":reply") is None:
                     self._reply_writer.by(cause=message_id).reply(existing["id"], error,
                         turn_id=message_id, scope="task" if pin else "main", kind="note")
@@ -2368,8 +2435,10 @@ class Service:
                     mood="oops", stage=None, helper=None, card=existing["id"], partial="", finished_at=time.time())
                 return
         card = self._reply_writer.by(cause=message_id).task_open(conversation, text, "failed")
-        self._reply_writer.by(cause=message_id).exchange(card["id"], said=text, say=error, brief=error, mood="oops",
+        card = self._reply_writer.by(cause=message_id).exchange(card["id"], said=text, say=error, brief=error, mood="oops",
                                   turn_id=message_id, scope="task" if pin else "main")
+        if card is not None:
+            self._attach_input_images(message, card, self._reply_writer)
         self._update(
             message_id, status="failed", error=error, mood="oops", stage=None, helper=None,
             card=card["id"], partial="", finished_at=time.time(),

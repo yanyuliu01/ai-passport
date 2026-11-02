@@ -87,6 +87,182 @@ class ReplySoFarTests(unittest.TestCase):
 
 
 class DshStreamTests(TempDirCase):
+    def test_provider_timing_is_correlated_without_prompt_or_key(self):
+        from xiaoyu_runtime import timing as turn_timing
+        sink = turn_timing.TurnTiming(self.folder)
+        client, request = "a" * 32, "b" * 32
+        opener = FakeOpener(sse("private-reply"))
+        with turn_timing.turn(sink, client, request):
+            dsh_stream.run(dsh_spec(self.folder), Job(text="private-prompt"),
+                           {"DEEPSEEK_API_KEY": "private-key"}, "deepseek-flash", lambda text: None, opener)
+        turn_timing._QUEUE.join()
+        data = sink.path.read_text()
+        records = [json.loads(line) for line in data.splitlines()]
+        self.assertEqual([r["phase"] for r in records], ["model_start", "model_headers",
+            "model_first_event", "model_first_text", "model_end"])
+        self.assertTrue(all(r["client_id"] == client and r["request_id"] == request for r in records))
+        self.assertTrue(all(r["attempt"] == 1 for r in records))
+        for secret in ("private-prompt", "private-reply", "private-key"):
+            self.assertNotIn(secret, data)
+
+    def test_current_image_uses_authorized_resolver_and_rejects_changed_bytes(self):
+        import base64, hashlib
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        bad_path = self.folder / "untrusted.png"; bad_path.write_bytes(b"not an image")
+        spec = dsh_spec(self.folder)
+        meta = {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}
+        def resolve(identity):
+            self.assertEqual(identity, "owner-id")
+            return io.BytesIO(png), meta, "image/png", len(png)
+        opener = FakeOpener(sse("ok"))
+        job = Job(text="look", images=(str(bad_path),), image_refs=("owner-id",), image_resolver=resolve)
+        dsh_stream.run(spec, job, {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertEqual(base64.b64decode(opener.requests[0][1]["messages"][-1]["content"][1]["source"]["data"]), png)
+        meta["sha256"] = "0" * 64
+        opener = FakeOpener(sse("must not run"))
+        with self.assertRaises(dsh_stream.PermanentRequestError):
+            dsh_stream.run(spec, job, {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertEqual(opener.requests, [])
+
+    def test_image_reference_requires_resolver(self):
+        opener = FakeOpener(sse("must not run"))
+        with self.assertRaises(dsh_stream.PermanentRequestError):
+            dsh_stream.run(dsh_spec(self.folder), Job(text="look", images=("path",), image_refs=("id",)),
+                           {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertEqual(opener.requests, [])
+
+    def test_http_status_classification_keeps_retryable_failures_distinct(self):
+        for code, error_type in ((401, dsh_stream.PermanentRequestError),
+                                 (400, dsh_stream.PermanentRequestError), (429, AgentError), (503, AgentError)):
+            with self.subTest(code=code):
+                failure = urllib.error.HTTPError("https://fixture.invalid", code, "error", {}, io.BytesIO(b"error"))
+                with self.assertRaises(error_type) as caught:
+                    dsh_stream.run(dsh_spec(self.folder), Job(text="look"), {"DEEPSEEK_API_KEY": "k"},
+                                   "deepseek-flash", lambda text: None, FakeOpener(failure))
+                self.assertEqual(isinstance(caught.exception, dsh_stream.PermanentRequestError), code in (400, 401))
+
+    def test_tool_results_do_not_hide_image_from_immediate_followup(self):
+        import base64, hashlib
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        spec = dsh_spec(self.folder)
+        session = "api-" + "a" * 32
+        dsh_stream._save(dsh_stream.sessions_dir(spec), session, [
+            {"role": "user", "content": "看看", "_image_refs": ["owner-id"]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "task_detail", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+            {"role": "assistant", "content": "看到了"}])
+        def resolve(identity):
+            return io.BytesIO(png), {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}, "image/png", len(png)
+        opener = FakeOpener(sse("answer"))
+        dsh_stream.run(spec, Job(text="右上角写什么？", session_id=session, image_resolver=resolve),
+                       {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        blocks = opener.requests[0][1]["messages"][0]["content"]
+        self.assertEqual(base64.b64decode(blocks[1]["source"]["data"]), png)
+
+    def test_two_followups_keep_image_and_later_omissions_are_explicit(self):
+        import base64, hashlib
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        image = self.folder / "picture.png"; image.write_bytes(png)
+        spec = dsh_spec(self.folder)
+        opener = FakeOpener(sse("image"), sse("left"), sse("right"), sse("unrelated"))
+        def resolve(identity):
+            return io.BytesIO(png), {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}, "image/png", len(png)
+        first = dsh_stream.run(spec, Job(text="看看", images=(str(image),), image_refs=("owner-id",), image_resolver=resolve),
+                               {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        session = first.session_id
+        for text in ("左边呢", "右边呢", "天气怎么样"):
+            outcome = dsh_stream.run(spec, Job(text=text, session_id=session, image_resolver=resolve),
+                                     {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+            session = outcome.session_id
+        self.assertIsInstance(opener.requests[1][1]["messages"][0]["content"], list)
+        self.assertIsInstance(opener.requests[2][1]["messages"][0]["content"], list)
+        self.assertIn("历史图片未随本次请求提供", opener.requests[3][1]["messages"][0]["content"])
+        self.assertNotIn("历史图片未随本次请求提供", str(dsh_stream._load(dsh_stream.sessions_dir(spec), session)))
+
+    def test_image_is_sent_as_native_content_without_persisting_binary(self):
+        import base64
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        image = self.folder / "picture.png"
+        image.write_bytes(png)
+        opener = FakeOpener(sse("A white pixel"))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="What is this?", images=(str(image),)),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        blocks = opener.requests[0][1]["messages"][-1]["content"]
+        self.assertEqual(blocks[0], {"type": "text", "text": "What is this?"})
+        self.assertEqual(base64.b64decode(blocks[1]["source"]["data"]), png)
+        self.assertEqual(blocks[1]["source"]["media_type"], "image/png")
+        saved = (dsh_stream.sessions_dir(dsh_spec(self.folder)) / (outcome.session_id + ".json")).read_text()
+        self.assertNotIn(base64.b64encode(png).decode(), saved)
+        self.assertNotIn(str(image), saved)
+        self.assertIn("图片未保留", saved)
+
+    def test_followup_restores_previous_image_by_reference_not_path(self):
+        import base64
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        image = self.folder / "picture.png"; image.write_bytes(png)
+        opener = FakeOpener(sse("A pixel"), sse("White"))
+        spec = dsh_spec(self.folder)
+        def resolve(identity):
+            self.assertEqual(identity, "owner-id")
+            import hashlib
+            return io.BytesIO(png), {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}, "image/png", len(png)
+        first = dsh_stream.run(spec, Job(text="describe", images=(str(image),), image_refs=("owner-id",), image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        second = dsh_stream.run(spec, Job(text="what color?", session_id=first.session_id, image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        earlier = opener.requests[1][1]["messages"][0]["content"]
+        self.assertEqual(base64.b64decode(earlier[1]["source"]["data"]), png)
+        saved = (dsh_stream.sessions_dir(spec) / (second.session_id + ".json")).read_text()
+        self.assertIn("owner-id", saved)
+        self.assertNotIn(base64.b64encode(png).decode(), saved)
+        self.assertNotIn(str(image), saved)
+
+    def test_later_unrelated_chat_does_not_reupload_previous_image(self):
+        import base64
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        image = self.folder / "picture.png"
+        image.write_bytes(png)
+        opener = FakeOpener(sse("A pixel"), sse("White"), sse("Hello"), sse("White"))
+        spec = dsh_spec(self.folder)
+        def resolve(identity):
+            import hashlib
+            return io.BytesIO(png), {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}, "image/png", len(png)
+        first = dsh_stream.run(spec, Job(text="describe", images=(str(image),), image_refs=("owner-id",), image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        second = dsh_stream.run(spec, Job(text="what color?", session_id=first.session_id, image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        third = dsh_stream.run(spec, Job(text="hello", session_id=second.session_id, image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertTrue(all(isinstance(m["content"], str) for m in opener.requests[2][1]["messages"]))
+        dsh_stream.run(spec, Job(text="那张图片是什么颜色？", session_id=third.session_id, image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertTrue(any(isinstance(m["content"], list) for m in opener.requests[3][1]["messages"]))
+
+    def test_tool_result_does_not_hide_image_from_immediate_followup(self):
+        import base64, hashlib
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
+        spec = dsh_spec(self.folder)
+        session = "api-" + "a" * 32
+        dsh_stream._save(dsh_stream.sessions_dir(spec), session, [
+            {"role": "user", "content": "看看", "_image_refs": ["owner-id"]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "task_detail", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+            {"role": "assistant", "content": "看到了"}])
+        def resolve(identity):
+            return io.BytesIO(png), {"source": "owner", "kind": "image", "sha256": hashlib.sha256(png).hexdigest()}, "image/png", len(png)
+        opener = FakeOpener(sse("白色"))
+        dsh_stream.run(spec, Job(text="右上角是什么？", session_id=session, image_resolver=resolve),
+            {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertTrue(any(isinstance(m["content"], list) and any(x.get("type") == "image" for x in m["content"])
+                            for m in opener.requests[0][1]["messages"]))
+
+    def test_missing_image_fails_without_calling_provider(self):
+        opener = FakeOpener(sse("should not happen"))
+        with self.assertRaisesRegex(AgentError, "图片不可读取"):
+            dsh_stream.run(dsh_spec(self.folder), Job(text="look", images=(str(self.folder / "missing"),)),
+                {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        self.assertEqual(opener.requests, [])
+
     def test_preparation_can_expire_the_budget_before_opening_the_provider(self):
         now = [0.0]
         def load(*args):
@@ -313,6 +489,49 @@ class ToolTalkTests(TempDirCase):
                                  "deepseek-v4-pro", lambda text: None, opener)
         self.assertEqual(outcome.text, "我看一眼。\n\n---\n\n还在做。")
 
+    def test_read_only_tool_releases_first_bubble_before_reading(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def lookup(card):
+            self.assertEqual(seen[-1], "我看一眼。" + JOIN)
+            return "c3 · 正在做"
+        tools = Toolbox(["codex"], [], [], lambda fields: None, lookup)
+        opener = FakeOpener(tool_sse("我看一眼。", "task_detail", {"card": "c3"}), sse("还在做。"))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="c3", system="S", plain=True,
+                                 on_text=seen.append, tools=tools), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", seen.append, opener)
+        self.assertEqual(outcome.text, "我看一眼。" + JOIN + "还在做。")
+
+    def test_four_tool_rounds_do_not_make_a_fifth_request(self):
+        answer = tool_sse("", "task_detail", {"card": "c3"})
+        opener = FakeOpener(*([answer] * 4))
+        seen = []
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text="c3", system="S", plain=True,
+                                 on_text=seen.append, tools=self.toolbox()), {"DEEPSEEK_API_KEY": "k"},
+                                 "deepseek-v4-pro", seen.append, opener)
+        self.assertEqual(len(opener.requests), 4)
+        self.assertIn("上限", outcome.text)
+        self.assertEqual(seen[-1], outcome.text)
+
+    def test_batch_reads_are_bounded_and_repeat_session_query_once(self):
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        seen = []
+        def sessions(query):
+            seen.append(query)
+            return "session result"
+        tools = Toolbox(["codex"], [], [], lambda fields: None, lambda card: "task " + card,
+                        recall=lambda query: "memory " + query, session_search=sessions)
+        body = {"queries": [{"name": "find_sessions", "args": {"query": "project"}},
+                            {"name": "task_detail", "args": {"card": "c3"}},
+                            {"name": "find_sessions", "args": {"query": "project"}},
+                            {"name": "recall", "args": {"query": "x"}}]}
+        result, failed = tools.call("read_context", body)
+        self.assertFalse(failed)
+        self.assertEqual(len(json.loads(result)), 4)
+        self.assertEqual(seen, ["project"])
+        _, failed = tools.call("read_context", {"queries": [{"name": "start_task", "args": {}}]})
+        self.assertTrue(failed)
+
     def test_a_refused_action_comes_back_in_the_same_turn(self):
         opener = FakeOpener(tool_sse("", "start_task", {"agent": "codex", "title": "x", "task": "y"}),
                             sse("这件事我办不了。"))
@@ -486,6 +705,27 @@ class DshAgentStreamTests(TempDirCase):
         # dsh never saw the stream's own session id.
         self.assertNotIn("--session-id", self.commands[0])
 
+    def test_old_image_does_not_block_fallback_for_unrelated_text(self):
+        spec = dsh_spec(self.folder)
+        session = "api-" + "a" * 32
+        dsh_stream._save(dsh_stream.sessions_dir(spec), session, [
+            {"role": "user", "content": "看图", "_image_refs": ["owner-id"]},
+            {"role": "assistant", "content": "看到了"},
+            {"role": "user", "content": "左边呢"}, {"role": "assistant", "content": "有字"},
+            {"role": "user", "content": "右边呢"}, {"role": "assistant", "content": "也有字"}])
+        agent = DshAgent(spec, opener=FakeOpener(urllib.error.URLError("offline")))
+        with patch.object(agent, "_headless", return_value=Outcome("fallback", None)) as fallback:
+            out = agent.run(Job(text="今天天气怎样", plain=True, session_id=session,
+                                image_resolver=lambda _: None, on_text=lambda _: None))
+        self.assertEqual(out.text, "fallback")
+        fallback.assert_called_once()
+        agent = DshAgent(spec, opener=FakeOpener(urllib.error.URLError("offline")))
+        with patch.object(agent, "_headless") as fallback:
+            with self.assertRaises(AgentError):
+                agent.run(Job(text="图片里有什么", plain=True, session_id=session,
+                              image_resolver=lambda _: None, on_text=lambda _: None))
+        fallback.assert_not_called()
+
     def test_without_a_listener_or_with_stream_off_it_uses_dsh(self):
         for spec, listener in ((dsh_spec(self.folder), None),
                                (dsh_spec(self.folder, stream=False), print)):
@@ -600,6 +840,39 @@ class Streaming(Scripted):
 
 
 class ServiceStreamTests(TempDirCase):
+    def test_durable_timing_tracks_the_same_client_and_server_ids(self):
+        from xiaoyu_runtime import timing as turn_timing
+        agent = Streaming("ds")
+        agent.pieces = ['{"reply": "private-answer"}']
+        agent.script = [{"reply": "private-answer", "brief": "b", "mood": "idle"}]
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
+        self.addCleanup(service.close)
+        self.addCleanup(agent.finish.set)
+        client = "c" * 32
+        message = service.submit("private-question", client_id=client)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not service.get(message["id"])["partial"]:
+            time.sleep(.01)
+        agent.finish.set()
+        while time.monotonic() < deadline and service.get(message["id"])["status"] != "done":
+            time.sleep(.01)
+        self.assertEqual(service.get(message["id"])["status"], "done")
+        # _handle emits its end marker immediately after committing the result.
+        while time.monotonic() < deadline:
+            turn_timing._QUEUE.join()
+            if service._timing.path.exists() and 'runtime_processing_end' in service._timing.path.read_text():
+                break
+            time.sleep(.01)
+        data = service._timing.path.read_text()
+        records = [json.loads(line) for line in data.splitlines()]
+        self.assertEqual([r["phase"] for r in records], ["runtime_received", "runtime_accepted",
+            "runtime_started", "runtime_partial", "runtime_processing_end"])
+        self.assertTrue(all(r["client_id"] == client for r in records))
+        self.assertTrue(all(r.get("request_id") == message["id"] for r in records[1:]))
+        self.assertNotIn("private-question", data)
+        self.assertNotIn("private-answer", data)
+
     def test_the_message_carries_the_reply_while_it_is_written(self):
         agent = Streaming("ds")
         agent.pieces = ['{"reply": "我', '在想', '这件事"', ', "brief": "b"}']

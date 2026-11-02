@@ -209,6 +209,13 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_conversation_directory.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_handoff.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_streaming.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_http_pool.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_turn_timing.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_startup_checks.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_projection_recovery.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_runtime_conversation_sync.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_replica_failure.py
+    PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_owner_fencing_fault.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_project_brief.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_sync.py
@@ -219,6 +226,7 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_app_release.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_app_packs.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_image_inputs.py
+    PYTHONPATH=runtime:runtime/tests PYTHONDONTWRITEBYTECODE=1 python3 -m unittest test_image_relay
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifacts.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_artifact_delivery.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_desktop_content.py

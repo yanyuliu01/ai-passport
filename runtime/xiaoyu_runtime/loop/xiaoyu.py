@@ -298,11 +298,18 @@ def segments(text: str) -> List[str]:
 _BREAK_LINE = re.compile(r"^\s*-{3,}\s*$", re.M)
 
 
-def chat_text(text: str) -> str:
+def chat_text(text: str, partial: bool = False) -> str:
     """给手机看的回复：整理好格式，不按长度切。她单独写一行 --- 的地方另起一条消息
     （统一成 voice_tools.JOIN，手机按它画成几个气泡）；几条、多长都由她定。"""
-    parts = [clean_chat(part) for part in _BREAK_LINE.split(text or "")]
-    return JOIN.join(part for part in parts if part)
+    from ..delivery.presentation import _parts
+    blocks = _parts(text or "", True)
+    parts = [clean_chat(part) for part, _ in blocks]
+    shown = JOIN.join(part for part in parts if part)
+    # Keep a completed boundary even before the next block has any text.
+    # A marker still being streamed (no line ending) is not yet standalone.
+    if partial and shown and blocks and blocks[-1][1] and (text or "").endswith("\n"):
+        shown += JOIN
+    return shown
 
 
 def reply_text(outcome: Outcome) -> str:
@@ -1113,11 +1120,22 @@ class Xiaoyu:
     def image_agent(self, asked=None):
         if asked:
             candidate = self._agents.get(asked)
-            return candidate if candidate and candidate.type == "codex" else None
+            if candidate and candidate.type == "codex":
+                return candidate
+            if candidate and candidate.type == "dsh" and candidate.speaks and candidate.talks_with_tools() and (
+                    candidate.spec.chat_model or candidate.spec.model) in (
+                        "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"):
+                return candidate
+            return None
+        voice = self._voice(self._available(0))
+        if voice is not None and self.image_agent(voice.name) is voice:
+            return voice
         return next((item for item in self._agents.values() if item.type == "codex"), None)
 
-    def hear_images(self, text, conversation, turn_id, attachments, asked=None, hop=0):
-        agent = self.image_agent(asked)
+    def hear_images(self, text, conversation, turn_id, attachments, asked=None, hop=0, report=None):
+        route = routing.decide(text, asked, self._available(hop), self._config.default_agent, self._router)
+        explicit = route.agent if route.reason in ("asked", "mention") else None
+        agent = self.image_agent(explicit)
         if agent is None:
             raise AgentError("当前代理不能看图，请选择 Codex")
         paths = []
@@ -1125,6 +1143,20 @@ class Xiaoyu:
             stream, meta, mime, size = self.artifacts.open_content(item["id"])
             stream.close()
             paths.append(str(self.artifacts._blobs / meta["sha256"]))
+        if agent.type == "dsh":
+            if self._config.decide_first:
+                raise AgentError("当前先决定再说话模式暂不支持图片，请选择 Codex")
+            say = report if report is not None else (lambda kind, agent, detail: None)
+            turn = self._converse(agent, text, conversation, turn_id, None, self._available(hop), hop,
+                                  say, images=tuple(paths), image_refs=tuple(item["id"] for item in attachments), attachments=attachments)
+            current = self._cards.get(turn.card)
+            owner_index = next((i for i, entry in enumerate(current["entries"])
+                                if entry.get("id") == turn_id + ":you"), None)
+            if owner_index is None:
+                raise AgentError("图片消息未能保存，请重试")
+            if not all(item in current["entries"][owner_index].get("attachments", []) for item in attachments):
+                self._writer.attach(turn.card, attachments, owner_index)
+            return turn
         card = self._writer.task_open(conversation, text, "working", agent.name)
         reply = "图片收到了，交给 %s 看图。" % agent.name
         self._writer.exchange(card["id"], said=text, say=reply, turn_id=turn_id,
@@ -1200,8 +1232,19 @@ class Xiaoyu:
             task = named_note(agent.name, route.text) if route.reason == "mention" and agent.speaks else route.text
             recent = self.context.turns(conversation, exclude=(turn_id,))[-BACKGROUND_TURNS:]
             return background(recent, task) if recent else task
+        # An explicitly named helper bypasses the speech model. Recognize clear
+        # references to an earlier owner image instead of silently sending only text.
+        image_reference = bool(re.search(r"(?:刚才|刚刚|之前|前面|上一|上面|那张|这张).{0,12}(?:图片|照片|截图|图)|(?:图片|照片|截图).{0,12}(?:刚才|刚刚|之前|前面|上一|上面|那张|这张)", said))
+        images, attachments = (), ()
+        if image_reference:
+            if agent.type != "codex":
+                raise AgentError("这个帮手暂不能接收图片，请选择 Codex 或重新发送图片")
+            voice = self._voice(self._available(hop))
+            if voice is None:
+                raise AgentError("当前对话的图片不可用，请重新发送")
+            images, attachments = self._recent_image_inputs(voice, conversation)
         return self._executor.assign(agent, route.text, said, conversation, turn_id, hop, say,
-                                     prepare, effort, model)
+                                     prepare, effort, model, images=images, attachments=attachments)
 
     def _resume(self, card: Dict[str, Any], agent: Agent, route: routing.Route, said: str,
                 conversation: str, turn_id: str, hop: int, say: Report,
@@ -1274,7 +1317,7 @@ class Xiaoyu:
     def _converse(self, lead: Agent, text: str, conversation: str, turn_id: str,
                   focus: Optional[Dict[str, Any]], available: List[Agent], hop: int,
                   say: Report, pinned: bool = False, effort: Optional[str] = None,
-                  model: Optional[str] = None) -> Turn:
+                  model: Optional[str] = None, images=(), image_refs=(), attachments=()) -> Turn:
         # 太久没问过额度的账号，放到后台问一次；这句话用手头的数，不等它。
         self._usage.poke()
         def prompt(tools):
@@ -1284,13 +1327,13 @@ class Xiaoyu:
                 frame["cards"], current["id"] if current is not None else None, frame["at"], pinned,
                 self._usage.notes(), any(self._usage.account(agent.name) for agent in available),
                 current if current is not None and current.get("monitoring_only") else None, tools,
-                frame["memory"], frame["promises"])
+                frame["memory"], frame["promises"]) + ("\n本轮包含图片：直接回答，或者需要执行时交给能处理图片的 Codex。" if images else "")
         schema = lane_schema(available)
         toolbox = self._toolbox(conversation, focus, available, pinned) if lead.talks_with_tools() else None
         # 她这一轮说话途中主人又说了一句：service 调 interrupt()，正在出的那段马上停下（见 dsh_stream）。
         with self.speaking_turn(conversation) as cut:
             return self._converse_with(lead, text, conversation, turn_id, focus, available, hop, say,
-                                       pinned, effort, model, prompt, schema, toolbox, cut)
+                                       pinned, effort, model, prompt, schema, toolbox, cut, images=images, image_refs=image_refs, attachments=attachments)
 
     @contextmanager
     def speaking_turn(self, conversation):
@@ -1322,10 +1365,49 @@ class Xiaoyu:
         finally:
             self._effect_scope.current = previous
 
+    def _resolve_conversation_image(self, conversation, identity):
+        # A saved session is not itself authority to read an arbitrary owner
+        # artifact: it must also occur on an owner message in this conversation.
+        found = any(item.get("id") == identity
+                    for card in self._cards.recent(conversation, limit=0)
+                    for entry in card.get("entries", []) if entry.get("role") == "you"
+                    for item in entry.get("attachments", []))
+        if not found:
+            raise AgentError("图片不属于当前对话或已不可用")
+        return self.artifacts.open_content(identity)
+
+    def _recent_image_inputs(self, lead, conversation):
+        if lead.type != "dsh":
+            raise AgentError("当前对话没有可用的图片上下文，请重新发送图片")
+        from ..helpers import dsh_stream
+        import hashlib
+        session = self._store.session(conversation, lead.name)
+        history = dsh_stream._load(dsh_stream.sessions_dir(lead.spec), session)
+        refs = next((item.get("_image_refs") for item in reversed(history)
+                     if item.get("role") == "user" and item.get("_image_refs")), None)
+        if not isinstance(refs, list) or not 1 <= len(refs) <= 4:
+            raise AgentError("当前对话没有可用的图片上下文，请重新发送图片")
+        paths, attachments = [], []
+        for identity in refs:
+            try:
+                stream, meta, mime, size = self._resolve_conversation_image(conversation, identity)
+                with stream:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: stream.read(65536), b""):
+                        digest.update(chunk)
+                if (meta.get("source") != "owner" or meta.get("kind") != "image" or
+                        size > 8 * 1024 * 1024 or digest.hexdigest() != meta.get("sha256")):
+                    raise ValueError("image integrity")
+            except Exception:
+                raise AgentError("原图片不可用，请重新发送图片") from None
+            attachments.append(meta)
+            paths.append(str(self.artifacts._blobs / meta["sha256"]))
+        return tuple(paths), attachments
+
     def _converse_with(self, lead: Agent, text: str, conversation: str, turn_id: str,
                        focus: Optional[Dict[str, Any]], available: List[Agent], hop: int, say: Report,
                        pinned: bool, effort: Optional[str], model: Optional[str], prompt: Any,
-                       schema: Dict[str, Any], toolbox: Optional[Toolbox], cut: threading.Event) -> Turn:
+                       schema: Dict[str, Any], toolbox: Optional[Toolbox], cut: threading.Event, images=(), image_refs=(), attachments=()) -> Turn:
         if self._config.decide_first and toolbox is not None:
             return self._converse_decided(lead, text, conversation, turn_id, focus, available, hop,
                                           say, pinned, effort, model, prompt, toolbox, cut)
@@ -1342,7 +1424,7 @@ class Xiaoyu:
             try:
                 outcome = self._speak(lead, text, conversation, prompt(True), None, hop, catch_up=True,
                                       on_text=self._streamer(lead.name, say, plain=True), tools=toolbox,
-                                      interrupt=cut, budget=budget)
+                                      interrupt=cut, budget=budget, images=images, image_refs=image_refs)
             except AgentError as error:
                 scope = getattr(self._effect_scope, "current", None)
                 if scope is not None and scope.selected:
@@ -1353,7 +1435,16 @@ class Xiaoyu:
                     reply = "这次回复中断了。\n" + scope.facts()
                     return self._apply_conversation(lead, text, conversation, turn_id,
                         {"type": "none", "card": None}, reply, None, "oops", hop, say,
-                        pinned, effort, model, seen=[])
+                        pinned, effort, model, seen=[], images=images, attachments=attachments)
+                if lead.type == "dsh":
+                    from ..helpers import dsh_stream
+                    if isinstance(error, dsh_stream.NoProviderFallback) or (
+                            images and isinstance(error, dsh_stream.PermanentRequestError)):
+                        raise
+                if not images and lead.type == "dsh":
+                    from ..helpers import dsh_stream
+                    if dsh_stream.uses_image_history(lead.spec, self._store.session(conversation, lead.name), text):
+                        raise AgentError("本轮图片上下文暂不可用，请重试或重新发送图片") from error
                 before_retry()
                 sys.stderr.write("带工具的回话没成，改回写 JSON：%s\n" % error)
                 say("partial", lead.name, "")
@@ -1361,8 +1452,14 @@ class Xiaoyu:
         if outcome is None:
             before_retry()
             outcome = self._speak(lead, text, conversation, prompt(False), schema, hop, catch_up=True,
-                                  on_text=self._streamer(lead.name, say), interrupt=cut, budget=budget)
+                                  on_text=self._streamer(lead.name, say), interrupt=cut, budget=budget, images=images, image_refs=image_refs)
         plan, problem = self._plan(outcome, conversation, focus, available, pinned)
+        if images and plan is not None and plan.get("type") != "none":
+            target = self._agents.get(plan.get("agent")) if plan.get("type") == "start" else None
+            if target is None or target.type != "codex":
+                say("partial", lead.name, "")
+                plan, problem = {"type": "none", "card": None}, None
+                outcome = Outcome("这张图暂时只能交给 Codex 执行；请明确点名 Codex 并重新发送图片。")
         self._trace(outcome, problem)
         if problem is not None and cut.is_set():
             plan, problem = {"type": "none", "card": None}, None  # 被打断了：不重问，先听主人的
@@ -1371,7 +1468,8 @@ class Xiaoyu:
             # A plan retry must not repeat already applied memory/commitments.
             reply = "这轮任务没有交办：%s\n%s" % (problem, scope.facts())
             return self._apply_conversation(lead, text, conversation, turn_id,
-                {"type": "none", "card": None}, reply, None, "oops", hop, say, pinned, effort, model)
+                {"type": "none", "card": None}, reply, None, "oops", hop, say, pinned, effort, model,
+                images=images, attachments=attachments)
         if problem is not None:
             before_retry()
             # 刚才边说边给主人看的那段不算数了：收回来，重说的那一次从头再显示。
@@ -1384,9 +1482,15 @@ class Xiaoyu:
             outcome = self._speak(lead, note, conversation, prompt(toolbox is not None),
                                   None if toolbox is not None else schema, hop, catch_up=False,
                                   on_text=self._streamer(lead.name, say, plain=toolbox is not None),
-                                  tools=toolbox, interrupt=cut, budget=budget)
+                                  tools=toolbox, interrupt=cut, budget=budget, images=images, image_refs=image_refs)
             plan, problem = self._plan(outcome, conversation, focus, available, pinned)
             self._trace(outcome, problem)
+            if images and plan is not None and plan.get("type") != "none":
+                target = self._agents.get(plan.get("agent")) if plan.get("type") == "start" else None
+                if target is None or target.type != "codex":
+                    say("partial", lead.name, "")
+                    plan, problem = {"type": "none", "card": None}, None
+                    outcome = Outcome("这张图暂时只能交给 Codex 执行，请明确点名 Codex 并重新发送图片。")
         fields = outcome.fields or {}
         reply = reply_text(outcome)
         mood, brief = fields.get("mood"), fields.get("brief")
@@ -1395,31 +1499,47 @@ class Xiaoyu:
             plan = {"type": "none", "card": None}
             reply = "这件事我没办成：%s" % problem
             mood, brief = "oops", None
+        handoff_images, handoff_attachments = images, attachments
+        if plan.get("include_images") and not images:
+            target = self._agents.get(plan.get("agent")) if plan.get("type") == "start" else None
+            try:
+                if target is None or target.type != "codex":
+                    raise AgentError("当前只能将图片交给 Codex，请重新选择")
+                handoff_images, handoff_attachments = self._recent_image_inputs(lead, conversation)
+            except AgentError as error:
+                say("partial", lead.name, "")
+                plan, reply, mood = {"type": "none", "card": None}, str(error), "oops"
         return self._apply_conversation(lead, text, conversation, turn_id, plan, reply, brief, mood,
                                         hop, say, pinned, effort, model,
-                                        interrupted=getattr(cut, "took_effect", False))
+                                        interrupted=getattr(cut, "took_effect", False),
+                                        images=handoff_images, attachments=handoff_attachments,
+                                        attach_to_message=bool(images))
 
     def _apply_conversation(self, lead: Agent, text: str, conversation: str, turn_id: str,
                             plan: Dict[str, Any], reply: str, brief: Any, mood: Any, hop: int,
                             say: Report, pinned: bool, effort: Optional[str], model: Optional[str],
-                            defer_reply: bool = False, seen=None, interrupted: bool = False) -> Turn:
+                            defer_reply: bool = False, seen=None, interrupted: bool = False,
+                            images=(), attachments=(), attach_to_message=True) -> Turn:
         scope = getattr(self._effect_scope, "current", None)
         if scope is not None:
             scope.guard()
         if scope is None or plan["type"] == "none":
             return self._apply_conversation_now(lead, text, conversation, turn_id, plan, reply,
-                brief, mood, hop, say, pinned, effort, model, defer_reply, seen, interrupted)
+                brief, mood, hop, say, pinned, effort, model, defer_reply, seen, interrupted,
+                images=images, attachments=attachments, attach_to_message=attach_to_message)
         result = self._executor.apply(scope, lead, plan, say, interrupted=interrupted,
             text=text, conversation=conversation, turn_id=turn_id, reply=reply, brief=brief,
-            mood=mood, hop=hop, pinned=pinned, effort=effort, model=model, defer_reply=defer_reply)
+            mood=mood, hop=hop, pinned=pinned, effort=effort, model=model, defer_reply=defer_reply,
+            images=list(images), attachments=list(attachments), attach_to_message=attach_to_message)
         return Turn(**{key: value for key, value in result.items() if key != "_facts"})
 
     def _apply_conversation_now(self, lead, text, conversation, turn_id, plan, reply, brief, mood,
                                 hop, say, pinned, effort, model, defer_reply=False, seen=None,
-                                interrupted=False):
+                                interrupted=False, images=(), attachments=(), attach_to_message=True):
         # Retained for existing internal callers while task adapters migrate.
         return self._executor.execute(lead, text, conversation, turn_id, plan, reply, brief, mood,
-                                      hop, say, pinned, effort, model, defer_reply, seen, interrupted)
+                                      hop, say, pinned, effort, model, defer_reply, seen, interrupted,
+                                      images=images, attachments=attachments, attach_to_message=attach_to_message)
 
     def resume_effects(self, scope, message, say):
         """Apply saved pending inputs; never ask a model to choose again."""
@@ -1625,6 +1745,8 @@ class Xiaoyu:
             if target is None:
                 return None, "%s 要在 card 里写明是哪件事的编号" % kind
         plan: Dict[str, Any] = {"type": kind, "card": target}
+        if kind == "start" and action.get("include_images") is True:
+            plan["include_images"] = True
         # 她给这一次选的努力程度和模型。那个帮手不认的，交出去时当作没选（见 _tier）。
         for key in ("effort", "model"):
             if isinstance(action.get(key), str) and action[key].strip():
@@ -1686,21 +1808,35 @@ class Xiaoyu:
     @staticmethod
     def _streamer(agent: str, say: Report, plain: bool = False) -> Callable[[str], None]:
         return Speaker.streamer(agent, say,
-            lambda raw: chat_text(raw if plain else reply_so_far(raw)), lambda: PARTIAL_SECONDS)
+            lambda raw: chat_text(raw if plain else reply_so_far(raw), partial=True), lambda: PARTIAL_SECONDS)
 
     def _speak(self, agent: Agent, text: str, conversation: str, system: str,
                schema: Optional[Dict[str, Any]], hop: int, catch_up: bool,
                on_text: Optional[Callable[[str], None]] = None, tools: Any = None,
                interrupt: Optional[threading.Event] = None, decision_only: bool = False,
                decision_messages: Any = None, timeout_seconds: Optional[float] = None,
-               ephemeral: bool = False, guard: Optional[Callable[[], None]] = None, budget=None) -> Outcome:
+               ephemeral: bool = False, guard: Optional[Callable[[], None]] = None, budget=None,
+               images=(), image_refs=()) -> Outcome:
+        # Current input IDs were validated and durably accepted by Service.
+        # Their owner entry may not exist until this response is recorded, so
+        # authorize only these IDs directly; older inputs must still be found
+        # on an owner entry in this same conversation.
+        current_image_refs = frozenset(image_refs)
+
+        def resolve_image(identity):
+            if identity in current_image_refs:
+                return self.artifacts.open_content(identity)
+            return self._resolve_conversation_image(conversation, identity)
+
         return self._speaker.speak(agent, text, conversation, system, schema, hop, catch_up,
             on_text=on_text, tools=tools, interrupt=interrupt, decision_only=decision_only,
             decision_messages=decision_messages, timeout_seconds=timeout_seconds,
             ephemeral=ephemeral, guard=guard, scope=getattr(self._effect_scope, "current", None),
             budget=budget,
             default_timeout=self._config.voice_timeout_seconds, seed_turns=SEED_TURNS,
-            max_chars=RECAP_TOTAL_CHARS, text_chars=RECAP_TEXT_CHARS, reply_chars=RECAP_REPLY_CHARS)
+            max_chars=RECAP_TOTAL_CHARS, text_chars=RECAP_TEXT_CHARS, reply_chars=RECAP_REPLY_CHARS,
+            images=images, image_refs=image_refs,
+            image_resolver=resolve_image)
 
     # ---- 后台的事 ----
 
@@ -1801,6 +1937,19 @@ class Xiaoyu:
                           if str(self.artifacts._blobs / item.get("sha256", "")) == str(path)), None)
             if found is None:
                 raise AgentError("图片输入尚未保存，未派发给帮手")
+            try:
+                import hashlib
+                stream, meta, _, size = self.artifacts.open_content(found["id"])
+                with stream:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: stream.read(65536), b""):
+                        digest.update(chunk)
+                if (size > 8 * 1024 * 1024 or meta.get("source") != "owner" or
+                        meta.get("kind") != "image" or meta.get("sha256") != found["sha256"] or
+                        digest.hexdigest() != found["sha256"]):
+                    raise ValueError("image changed")
+            except Exception:
+                raise AgentError("图片输入已丢失或改变，未派发给帮手") from None
             image_refs.append({"id": found["id"], "sha256": found["sha256"]})
         intent = task_run.intent(image_refs)
         def retain() -> None:

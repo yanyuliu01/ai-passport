@@ -9,6 +9,10 @@
 
 ## 集成候选（2026-11-02）
 
+Mac 已安装的 Runtime 0.27.7、后续尚未安装的同步候选及 Windows 升级步骤见
+[Windows Runtime 同步恢复交接](windows-runtime-recovery-handoff.zh_CN.md)。这份交接不代表
+较新的 Runtime 候选或下述桌面候选已经安装。
+
 此源码候选汇合 `b9a2f22` 与 `1e26551`：保留 0.1.32 仅账号连接的桌面界面
 和首次启用流程，接入 Windows 0.1.17 的 Runtime 监控、中继存活检查和账号恢复。
 候选尚未安装。Mac 另有更晚的 0.1.35 工作区，包含未提交的图片中继、Android 和

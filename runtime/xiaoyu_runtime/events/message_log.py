@@ -90,6 +90,7 @@ class MessageLog:
         self._bump = bump
         self._messages: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._lines = 0
+        self._repair_pending = False
         self.floor = 0
         # 这台 Runtime 的编号：本机产生的记录都写上它（产地），日志搬家或和别处合并时不会认错。
         self.origin = ""
@@ -139,7 +140,7 @@ class MessageLog:
                 self._messages.pop(item["id"], None)
                 self._messages[item["id"]] = item
 
-    def _repair_tail(self) -> None:
+    def _repair_tail(self, strict: bool = False) -> None:
         """断电时最后一行可能只写了一半：截掉它，免得下一次追加接在这半行后面一起坏掉。"""
         try:
             with self._path.open("rb+") as handle:
@@ -164,12 +165,15 @@ class MessageLog:
         except FileNotFoundError:
             return
         except OSError as error:
+            self._repair_pending = True
+            if strict:
+                raise
             sys.stderr.write("消息日志末尾修不了：%s\n" % error)
 
     def max_seq(self) -> int:
         return max([record["seq"] for record in self._messages.values()] + [self.floor, 0])
 
-    def _append(self, records: Iterable[Dict[str, Any]]) -> None:
+    def _append(self, records: Iterable[Dict[str, Any]], strict: bool = False) -> None:
         lines = []
         for record in records:
             stored = dict(record)
@@ -178,15 +182,21 @@ class MessageLog:
         if not lines:
             return
         try:
+            if self._repair_pending:
+                self._repair_tail(strict=True)
+                self._repair_pending = False
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as handle:
                 handle.write("\n".join(lines) + "\n")
                 handle.flush()
             self._lines += len(lines)
         except OSError as error:
+            self._repair_pending = True
+            if strict:
+                raise
             sys.stderr.write("消息日志写不下去：%s\n" % error)
             return
-        if self._lines > MAX_MESSAGES * COMPACT_FACTOR:
+        if not strict and self._lines > MAX_MESSAGES * COMPACT_FACTOR:
             self.compact()
 
     def compact(self) -> None:
@@ -243,16 +253,20 @@ class MessageLog:
 
     # ---- 写 ----
 
-    def _put(self, record: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
+    def _put(self, record: Dict[str, Any], persist: bool = True, strict: bool = False) -> Dict[str, Any]:
         self._stamp(record)
         # 修订号就用序号：序号跨重启只增不减（Cards 预留号段），没落盘的生成中修订也不会
         # 让重启后的修订号比客户端手里的小。
         record["seq"] = self._bump()
         record["rev"] = record["seq"]
+        if persist and strict:
+            self._append([record], strict=True)
         self._messages.pop(record["id"], None)
         self._messages[record["id"]] = record
-        if persist:
+        if persist and not strict:
             self._append([record])
+        elif persist and self._lines > MAX_MESSAGES * COMPACT_FACTOR:
+            self.compact()
         return record
 
     def observe(self, card: Dict[str, Any]) -> None:
@@ -324,6 +338,8 @@ class MessageLog:
         text = message.get("text") or ""
         status = message["status"]
         you = self._messages.get(base + ":you")
+        if status not in ("done", "failed", "cancelled"):
+            you = self._route_placeholder(you, message.get("relay_to"))
         if you is not None and you.get("mesh_origin"):
             you = dict(you, status="final")  # 转交给别的 Runtime 的话：那台的记录为准
         if you is None:
@@ -338,6 +354,8 @@ class MessageLog:
             elif status == "failed" and you["status"] != "failed":
                 self._put(dict(you, status="failed"))
         reply = self._messages.get(base + ":reply")
+        if status not in ("done", "failed", "cancelled"):
+            reply = self._route_placeholder(reply, message.get("relay_to"))
         if reply is not None and reply.get("mesh_origin"):
             return  # 那台的回复已经到了，这里的占位不再改它
         partial = message.get("partial") or ""
@@ -367,6 +385,23 @@ class MessageLog:
         # 生成中的那段不落盘；状态变了才写。
         self._put(record, persist=reply is None or reply["status"] != wanted)
 
+    def _route_placeholder(self, record: Optional[Dict[str, Any]], target: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Keep an uncommitted local placeholder aligned when ownership changes."""
+        if record is None or record.get("mesh_origin") or record.get("relay_to") == target:
+            return record
+        updated = dict(record)
+        if target:
+            updated["relay_to"] = target
+        else:
+            updated.pop("relay_to", None)
+        self._put(updated, strict=True)
+        return updated
+
+    def reconcile_request_route(self, message: Dict[str, Any]) -> None:
+        """Recover routing intent saved in the request ledger before a crash."""
+        for suffix in (":you", ":reply"):
+            self._route_placeholder(self._messages.get(message["id"] + suffix), message.get("relay_to"))
+
     def replicate(self, record: Dict[str, Any]) -> bool:
         """别的 Runtime 的一条消息（小鱼网络，mesh.py）：编号、所属的事已经换成这里的，
         mesh_origin 记着它是哪台的。原样记下，序号、修订号用这里的；没变就不记。
@@ -387,7 +422,7 @@ class MessageLog:
         persist = current is None or any(current.get(key) != wanted.get(key)
                                          for key in wanted if key != "partial")
         wanted["rev"] = 0
-        self._put(wanted, persist=persist)
+        self._put(wanted, persist=persist, strict=True)
         return True
 
     @staticmethod

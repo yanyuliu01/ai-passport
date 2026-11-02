@@ -21,6 +21,7 @@ This directory contains AI Passport engineering rules and reusable workflows, gr
 - [helper-capabilities.md](helper-capabilities.md): which MCP servers and skills helpers can use, managed by Xiaoyu per computer (after Raft's managed MCP): library, connections, grants, the injected proxy and phases.
 - [runtime-refactor-review.md](runtime-refactor-review.md): CC handoff correcting coordination, replay and connectivity prerequisites in the Raft/Xiaoyu-Bot-App lessons.
 - [windows-public-node-handoff.md](windows-public-node-handoff.md): Windows Codex handoff for the home public node, source snapshot, network-permission findings, native build and external acceptance.
+- [windows-runtime-recovery-handoff.md](windows-runtime-recovery-handoff.md): Windows native Runtime upgrade, conversation ownership, synchronization recovery and acceptance handoff.
 - [xiaoyu-desktop-plan.md](xiaoyu-desktop-plan.md): Mac/Windows client proposal, shared conversations, encrypted self-hosted transport, Thursday candidate milestones and acceptance dependencies.
 - [decide-then-speak.md](decide-then-speak.md): design draft that replaces the Runtime's promise reminder with a decide step before Xiaoyu speaks; also records the chat fixes of App 0.25.2 / Runtime 0.18.2 and how to hand the work over.
 - [dialogue-naturalness-design.md](dialogue-naturalness-design.md): deferred post-refactor proposal for companion/work context profiles, interaction preferences, truthful task replies and expression habits, with logical diagrams.

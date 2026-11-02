@@ -388,7 +388,8 @@ class Scripted(agents_module.Agent):
             raise AgentError("boom")
         if job.text.endswith("explode"):
             raise ValueError("unexpected")
-        session = "s%d" % (int(job.session_id[1:]) + 1 if job.session_id else 1)
+        session = (job.session_id if job.session_id and not job.session_id[1:].isdigit()
+                   else "s%d" % (int(job.session_id[1:]) + 1 if job.session_id else 1))
         if self.script:
             fields = self.script.pop(0)
             return Outcome(fields.get("reply", ""), session, fields)

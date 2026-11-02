@@ -21,7 +21,9 @@ Runtime 上的帮手（名字是“帮手@那台”），那台替这件事开�
 
 import hashlib
 import hmac
+import itertools
 import json
+import math
 import re
 import sys
 import threading
@@ -46,6 +48,7 @@ EXPORT_BUDGET = 256 * 1024
 MAX_BODY_BYTES = 8 * 1024 * 1024
 # 去别人那里等变化最多等多久（长轮询）。
 POLL_SECONDS = 20
+FIRST_SHARE_DELAY_SECONDS = 3
 # 这么久没联系上的 Runtime 算离线：它的帮手不再给小鱼选，在它那里还在做的事显示看不到。
 OFFLINE_SECONDS = 300
 # 指令这么久没被执行就作废：主人不会想让一句很久以前的话突然被做。
@@ -122,28 +125,41 @@ class Replicas:
 
     def _load(self, origin: str, path: Path) -> None:
         entry = {"epoch": "", "upto": 0, "records": {}, "lines": 0}
+        records = []
         try:
-            with path.open("r", encoding="utf-8") as handle:
+            with path.open("rb") as handle:
                 for line in handle:
                     entry["lines"] += 1
+                    if not line.endswith(b"\n"):
+                        entry["repair"] = True
+                        continue
                     try:
-                        item = json.loads(line)
-                    except ValueError:
+                        item = json.loads(line.decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError):
                         continue
                     if not isinstance(item, dict):
                         continue
                     if isinstance(item.get("epoch"), str):
                         entry.update(epoch=item["epoch"], records={}, upto=0)
+                        entry.pop("applied", None)
+                        records = []
                         continue
                     if isinstance(item.get("upto"), int):
                         entry["upto"] = max(entry["upto"], item["upto"])
+                        if isinstance(item.get("applied"), int):
+                            entry["applied"] = max(0, min(item["applied"], entry["upto"]))
                         continue
                     if isinstance(item.get("k"), str) and isinstance(item.get("id"), str) \
                             and isinstance(item.get("oseq"), int):
-                        entry["records"][(item["k"], item["id"])] = item
+                        records.append(item)
         except OSError as error:
             sys.stderr.write("读不了网络记录 %s：%s\n" % (path, error))
-        self._trim(entry)
+        for item in records:
+            if item["oseq"] <= entry["upto"]:
+                entry["records"][(item["k"], item["id"])] = item
+            else:
+                entry["repair"] = True
+        self._trim(entry, protect_after=entry.get("applied", entry["upto"]))
         self._origins[origin] = entry
 
     def _path(self, origin: str) -> Path:
@@ -158,11 +174,40 @@ class Replicas:
             entry = self._origins.get(origin)
             return (entry["epoch"], entry["upto"]) if entry else ("", 0)
 
+    def applied_position(self, origin: str) -> Tuple[str, int]:
+        with self._lock:
+            entry = self._origins.get(origin)
+            return (entry["epoch"], entry.get("applied", entry["upto"])) if entry else ("", 0)
+
+    def mark_applied(self, origin: str, epoch: str, upto: int) -> None:
+        with self._lock:
+            entry = self._origins.get(origin)
+            if entry is not None and entry["epoch"] == epoch:
+                entry["applied"] = max(entry.get("applied", 0), min(upto, entry["upto"]))
+                fresh = entry.get("fresh_commands")
+                if fresh:
+                    fresh.difference_update(command for command in fresh.copy()
+                                            if (entry["records"].get(("command", command)) or {}).get("oseq", 0)
+                                            <= entry["applied"])
+                if entry.pop("trim_pending", False):
+                    self._trim(entry, protect_after=entry["applied"])
+
+    def fresh_commands(self, origin: str, epoch: str) -> set:
+        with self._lock:
+            entry = self._origins.get(origin)
+            return set(entry.get("fresh_commands", ())) if entry and entry["epoch"] == epoch else set()
+
     def get(self, origin: str, kind: str, item_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             entry = self._origins.get(origin)
             record = entry["records"].get((kind, item_id)) if entry else None
             return dict(record["data"]) if record else None
+
+    def record_seq(self, origin: str, kind: str, item_id: str) -> int:
+        with self._lock:
+            entry = self._origins.get(origin)
+            record = entry["records"].get((kind, item_id)) if entry else None
+            return record["oseq"] if record else 0
 
     def find(self, origin: str, kind: str, test: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
         with self._lock:
@@ -180,45 +225,85 @@ class Replicas:
             return sorted((dict(record) for record in entry["records"].values() if record["oseq"] > after),
                           key=lambda record: record["oseq"])
 
-    def store(self, origin: str, epoch: str, records: List[Dict[str, Any]], upto: int) -> List[Dict[str, Any]]:
+    def recall_batch(self, origin: str, limit: int) -> Tuple[List[Dict[str, Any]], int, bool]:
+        """Copy a bounded recent slice; matching happens outside the storage lock."""
+        with self._lock:
+            entry = self._origins.get(origin)
+            if entry is None:
+                return [], 0, False
+            records = list(itertools.islice(reversed(entry["records"].values()), limit + 1))
+            return records[:limit], entry.get("applied", entry["upto"]), len(records) > limit
+
+    def store(self, origin: str, epoch: str, records: List[Dict[str, Any]], upto: int,
+              track: bool = False, progress: Optional[List[int]] = None,
+              fresh_commands: Optional[set] = None) -> List[Dict[str, Any]]:
         """记下一批产地记录；epoch 和存着的不一样时先全部丢掉（那台换了一份记录）。返回真正变了的。"""
         changed: List[Dict[str, Any]] = []
         lines: List[str] = []
         with self._lock:
-            entry = self._origins.get(origin)
-            if entry is None or entry["epoch"] != epoch:
+            previous = self._origins.get(origin)
+            if previous is None or previous["epoch"] != epoch:
                 entry = {"epoch": epoch, "upto": 0, "records": {}, "lines": 0}
-                self._origins[origin] = entry
                 lines.append(json.dumps({"epoch": epoch}))
                 rewrite = True
             else:
-                rewrite = False
+                entry = previous
+                rewrite = bool(entry.get("repair"))
+            old_upto = entry["upto"]
+            old_applied = entry.get("applied", old_upto)
+            if track:
+                entry["applied"] = old_applied
+            if progress is not None:
+                progress.extend((old_upto, old_applied))
+            undo: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
             for record in records:
                 key = (record["k"], record["id"])
                 current = entry["records"].get(key)
                 if current is not None and current["oseq"] >= record["oseq"]:
                     continue
+                if fresh_commands is not None and record["k"] == "command" and current is None:
+                    fresh_commands.add(record["id"])
+                if key not in undo:
+                    undo[key] = current
                 kept = {"k": record["k"], "id": record["id"], "oseq": record["oseq"], "data": record["data"]}
                 entry["records"][key] = kept
                 lines.append(json.dumps(kept, ensure_ascii=False))
                 changed.append(kept)
+            if track and changed:
+                earliest = min(record["oseq"] for record in changed)
+                entry["applied"] = min(old_applied, max(0, earliest - 1))
             if upto > entry["upto"]:
                 entry["upto"] = upto
-                lines.append(json.dumps({"upto": upto}))
-            self._trim(entry)
-            entry["lines"] += len(lines)
-            compact = entry["lines"] > 3 * max(len(entry["records"]), 100)
+            if entry["upto"] > old_upto or (track and entry["applied"] != old_applied):
+                lines.append(json.dumps(dict(upto=entry["upto"], **({"applied": entry["applied"]} if track else {}))))
+            compact = entry["lines"] + len(lines) > 3 * max(len(entry["records"]), 100)
             try:
                 if rewrite or compact:
                     self._rewrite(origin, entry)
                 elif lines:
                     with self._path(origin).open("a", encoding="utf-8") as handle:
                         handle.write("\n".join(lines) + "\n")
-            except OSError as error:
-                sys.stderr.write("网络记录写不下去：%s\n" % error)
+                    entry["lines"] += len(lines)
+            except OSError:
+                entry["upto"] = old_upto
+                if track:
+                    entry["applied"] = old_applied
+                for key, old in undo.items():
+                    if old is None:
+                        entry["records"].pop(key, None)
+                    else:
+                        entry["records"][key] = old
+                if previous is entry:
+                    entry["repair"] = True
+                raise
+            entry.pop("repair", None)
+            if fresh_commands:
+                entry.setdefault("fresh_commands", set()).update(fresh_commands)
+            self._trim(entry, protect_after=entry["applied"] if track else None)
+            self._origins[origin] = entry
         return changed
 
-    def _trim(self, entry: Dict[str, Any]) -> None:
+    def _trim(self, entry: Dict[str, Any], protect_after: Optional[int] = None) -> None:
         for kind, limit in LIMITS.items():
             keys = [key for key in entry["records"] if key[0] == kind]
             groups = [(keys, limit)]
@@ -230,7 +315,11 @@ class Replicas:
             for members, maximum in groups:
                 if len(members) > maximum:
                     members.sort(key=lambda key: entry["records"][key]["oseq"])
-                    for key in members[:len(members) - maximum]:
+                    excess = len(members) - maximum
+                    for key in members[:excess]:
+                        if protect_after is not None and entry["records"][key]["oseq"] > protect_after:
+                            entry["trim_pending"] = True
+                            break
                         del entry["records"][key]
 
     def _rewrite(self, origin: str, entry: Dict[str, Any]) -> None:
@@ -238,7 +327,8 @@ class Replicas:
         temporary = path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as handle:
             handle.write(json.dumps({"epoch": entry["epoch"]}) + "\n")
-            handle.write(json.dumps({"upto": entry["upto"]}) + "\n")
+            handle.write(json.dumps(dict(upto=entry["upto"], **(
+                {"applied": entry["applied"]} if "applied" in entry else {}))) + "\n")
             for record in sorted(entry["records"].values(), key=lambda record: record["oseq"]):
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         temporary.replace(path)
@@ -274,6 +364,8 @@ class Mesh:
         self._secret = config.mesh_secret
         self.subject_id = subject_for(self._secret)
         self.runtime_id = service.runtime_id
+        from .image_relay import ImageRelay
+        self.image_relay = ImageRelay(self)
         self.name = config.name
         self._writer = xiaoyu.intake.writer("mesh", actor="mesh")
         self._cards = xiaoyu.cards
@@ -282,11 +374,17 @@ class Mesh:
         self._state_path = folder / "state.json"
         self._lock = threading.RLock()
         self._apply_lock = threading.RLock()
+        self._started_commands: Dict[Tuple[str, str], float] = {}
+        self._pending_results: Dict[str, Dict[str, Any]] = {}
+        self._result_retry_lock = threading.Lock()
+        self._pending_origins = {origin for origin in self._replicas.origins()
+                                 if self._replicas.applied_position(origin)[1] < self._replicas.position(origin)[1]}
         self._changed = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._peers: Dict[str, Peer] = {}
         self._threads: Dict[str, List[threading.Thread]] = {}
         self._aliases: Dict[str, str] = {}  # 产地|epoch|产地卡号 → 本地卡号
+        self._aliases_dirty: set = set()
         # 这台自己的指令和指令结果（产地是这台）：{(k, id): {"k","id","oseq","data"}}
         self._outbox: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._watching: Dict[str, threading.Thread] = {}  # 正在看着结果的指令
@@ -307,6 +405,7 @@ class Mesh:
         service.mesh = self
         service.publish_review_startup()
         xiaoyu.mesh = self
+        xiaoyu.context._replica_recall = self.recall_messages
         xiaoyu.approvals.forward = self._forward_approval
 
     # ---- 落盘 ----
@@ -335,11 +434,45 @@ class Mesh:
                     and isinstance(item.get("id"), str) and isinstance(item.get("oseq"), int):
                 self._outbox[(item["k"], item["id"])] = item
 
-    def _save(self) -> None:
+    def _save(self, strict: bool = False) -> None:
         """调用时拿着锁。停下以后不再写（关掉时后台线程可能还在收尾）。"""
         if self._stop.is_set():
+            if strict:
+                raise OSError("网络正在关闭")
             return
-        outbox = sorted(self._outbox.values(), key=lambda item: item["oseq"])[-LIMITS["result"]:]
+        ordered = sorted(self._outbox.values(), key=lambda item: item["oseq"])
+        cutoff = max(0, len(ordered) - LIMITS["result"])
+        if cutoff:
+            now = self._clock()
+            def still_needed(item: Dict[str, Any]) -> bool:
+                data = item.get("data") or {}
+                if item.get("k") == "command":
+                    expires = data.get("expires_at")
+                    if isinstance(expires, (int, float)) and expires > now:
+                        return True
+                    target, command_id = data.get("target"), data.get("id")
+                    if not isinstance(target, str) or not isinstance(command_id, str):
+                        return False
+                    accepted = self._replicas.get(target, "result", command_id + ":accepted")
+                    if not accepted or not accepted.get("ok"):
+                        return False
+                    done_seq = self._replicas.record_seq(target, "result", command_id + ":done")
+                    return not done_seq or self._replicas.applied_position(target)[1] < done_seq
+                if item.get("k") != "result":
+                    return False
+                if (item.get("id", "").endswith(":accepted") and data.get("ok") and data.get("message")
+                        and ("result", str(data.get("id")) + ":done") not in self._outbox):
+                    return True
+                target = data.get("to")
+                if not target and isinstance(data.get("id"), str):
+                    target = (self._outbox.get(("result", data["id"] + ":accepted")) or {}).get("data", {}).get("to")
+                peer = self._peers.get(target) if isinstance(target, str) else None
+                cursor = (peer.cursors or {}).get(self.runtime_id) if peer is not None else None
+                epoch, seq = self._cursor(cursor)
+                return epoch != self._cards.epoch or seq < item["oseq"]
+            outbox = [item for item in ordered[:cutoff] if still_needed(item)] + ordered[cutoff:]
+        else:
+            outbox = ordered
         data = {"aliases": self._aliases, "outbox": outbox,
                 "peers": [peer.view() for peer in self._peers.values() if ID.match(peer.runtime_id)]}
         temporary = self._state_path.with_suffix(".tmp")
@@ -347,6 +480,8 @@ class Mesh:
             temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             temporary.replace(self._state_path)
         except OSError as error:
+            if strict:
+                raise
             sys.stderr.write("网络状态写不下去：%s\n" % error)
 
     # ---- 这台是谁 ----
@@ -389,6 +524,8 @@ class Mesh:
         回给它：这台是谁、这台的游标、它还没有的记录、这台知道的别的 Runtime。"""
         if not isinstance(body, dict):
             raise MeshError("请求体应该是一个对象")
+        if self._pending_results:
+            self._retry_pending_results()
         raw = body.get("from")
         if isinstance(raw, dict) and isinstance(raw.get("runtime_id"), str) \
                 and self._service.devices.removed(raw["runtime_id"]):
@@ -422,7 +559,7 @@ class Mesh:
         for origin in self._replicas.origins():
             if origin == self.runtime_id:
                 continue  # 这台自己共享的设置也存在那里，但游标以这台的序号为准
-            epoch, upto = self._replicas.position(origin)
+            epoch, upto = self._replicas.applied_position(origin)
             found[origin] = {"epoch": epoch, "seq": upto}
         return found
 
@@ -581,7 +718,7 @@ class Mesh:
                        and record.get("k") in LIMITS and isinstance(record.get("id"), str)
                        and isinstance(record.get("oseq"), int) and isinstance(record.get("data"), dict)]
             upto = block.get("upto") if isinstance(block.get("upto"), int) else 0
-            stored, _ = self._replicas.position(origin)
+            stored, received = self._replicas.position(origin)
             if stored and stored != block["epoch"] and via != origin:
                 # 别人转来的是那台的另一份记录：只信那台自己说的，免得被旧的那份换回去。
                 continue
@@ -592,26 +729,67 @@ class Mesh:
                         peer = self._peers[origin] = Peer(origin)
                     if not peer.name:
                         peer.name = block["origin_name"][:40]
-            changed = self._replicas.store(origin, block["epoch"], records, upto)
-            if changed:
-                self._apply(origin, block["epoch"], changed)
+            # A source reset must not erase an unprojected previous epoch.
+            # The ordinary same-epoch path keeps the existing concurrency.
+            if stored and stored != block["epoch"]:
+                with self._apply_lock:
+                    self._recover_origin(origin)
+                    self._receive_batch(origin, block["epoch"], records, upto, received)
+            else:
+                self._receive_batch(origin, block["epoch"], records, upto, received)
             with self._lock:
+                if (origin in self._pending_origins
+                        and self._replicas.applied_position(origin)[1] >= self._replicas.position(origin)[1]):
+                    self._pending_origins.discard(origin)
                 peer = self._peers.get(origin)
                 if peer is not None:
                     peer.heard = max(peer.heard, self._clock() if via == origin else peer.heard)
                 self._changed.notify_all()
 
-    def _apply(self, origin: str, epoch: str, records: List[Dict[str, Any]]) -> None:
+    def _receive_batch(self, origin: str, epoch: str, records: List[Dict[str, Any]],
+                       upto: int, received: int) -> None:
+        if self._pending_origins:
+            with self._lock:
+                has_pending = origin in self._pending_origins
+            if has_pending and upto > received:
+                self._recover_origin(origin)
+        progress: List[int] = []
+        fresh_commands: set = set()
+        changed = self._replicas.store(origin, epoch, records, upto, track=True,
+                                       progress=progress, fresh_commands=fresh_commands)
+        try:
+            with self._apply_lock:
+                stored_epoch, applied = self._replicas.applied_position(origin)
+                if stored_epoch != epoch:
+                    return
+                if applied < upto:
+                    # Only scan after an interrupted or overlapping batch.
+                    retry = applied < progress[0]
+                    pending = ([record for record in self._replicas.since(origin, applied)
+                                if record["oseq"] <= upto] if retry else changed)
+                    if retry:
+                        fresh_commands.update(self._replicas.fresh_commands(origin, epoch))
+                    self._apply_current(origin, epoch, pending, progress[0] if retry else 0, fresh_commands)
+                    self._replicas.mark_applied(origin, epoch, upto)
+        except Exception:
+            with self._lock:
+                self._pending_origins.add(origin)
+            raise
+
+    def _apply(self, origin: str, epoch: str, records: List[Dict[str, Any]], uncertain_before: int = 0,
+               fresh_commands: Optional[set] = None) -> None:
         # Push and pull may deliver concurrently. Durable records already reject
         # old revisions; serialize their projections too, using the newest
         # stored value so a delayed batch cannot undo a terminal task state.
         with self._apply_lock:
             if self._replicas.position(origin)[0] != epoch:
                 return
-            self._apply_current(origin, epoch, records)
+            self._apply_current(origin, epoch, records, uncertain_before, fresh_commands)
 
-    def _apply_current(self, origin: str, epoch: str, records: List[Dict[str, Any]]) -> None:
+    def _apply_current(self, origin: str, epoch: str, records: List[Dict[str, Any]], uncertain_before: int = 0,
+                       fresh_commands: Optional[set] = None) -> None:
         touched: Dict[str, None] = {}
+        failures = []
         owners = any(record["k"] == "owner" for record in records)
         if owners:
             with self._lock:
@@ -644,7 +822,8 @@ class Mesh:
                 elif kind == "approval":
                     self._approval(origin, epoch, data)
                 elif kind == "command":
-                    self._command(origin, data)
+                    self._command(origin, data, uncertain=record["oseq"] <= uncertain_before
+                                  and record["id"] not in (fresh_commands or ()))
                 elif kind == "result":
                     self._result(origin, data)
                 elif kind == "share":
@@ -653,6 +832,7 @@ class Mesh:
                     self._event_store().ingest(data.get("events") or [], origin)
             except Exception as error:  # 一条坏记录不能挡住后面的
                 sys.stderr.write("网络记录 %s/%s 没落成：%s: %s\n" % (kind, record["id"], type(error).__name__, error))
+                failures.append(error)
         for task_id in touched:
             stored = self._replicas.get(origin, "task", task_id)
             if stored is not None:
@@ -661,11 +841,69 @@ class Mesh:
             self._service.retry_parked()  # 负责人变了：在等它的话再看一次
             # 交回这台的对话：没启动的帮手任务照原输入接着做（恢复就绪前不会启动）。
             self._xiaoyu.recover_tasks()
+        if failures:
+            raise OSError("同步记录尚未应用，等待重试") from failures[0]
 
     def _peer_name(self, origin: str) -> str:
         with self._lock:
             peer = self._peers.get(origin)
             return (peer.name if peer and peer.name else origin[:6])
+
+    def recall_messages(self, conversation: str, terms: List[str], covered: set) -> Tuple[List[Any], bool]:
+        """Search already received, applied peer records only on explicit recall."""
+        hits, remaining, partial = [], 5000, False
+        origins = [origin for origin in self._replicas.origins() if origin != self.runtime_id]
+        for origin in origins:
+            if remaining <= 0 or len(hits) >= 50:
+                partial = True
+                break
+            records, applied, more = self._replicas.recall_batch(origin, remaining)
+            remaining -= len(records)
+            partial = partial or more
+            label = self._peer_name(origin)
+            for record in records:
+                data = record.get("data")
+                if record.get("k") != "message" or record.get("oseq", 0) > applied or not isinstance(data, dict):
+                    continue
+                author = data.get("author") if isinstance(data.get("author"), dict) else {}
+                source = data.get("source") if isinstance(data.get("source"), dict) else {}
+                text = data.get("text")
+                if (data.get("conversation") != conversation or data.get("status") != "final"
+                        or author.get("kind") not in ("owner", "xiaoyou") or source.get("type") not in (None, "", "runtime")
+                        or not isinstance(text, str) or data.get("relay_to") or self._hidden(data)):
+                    continue
+                body = (text + "\n" + label).lower()
+                if not any(term in body for term in terms):
+                    continue
+                task = self._replicas.get(origin, "task", data.get("task")) if isinstance(data.get("task"), str) else None
+                if (task is not None and self._hidden(task)) or self._fenced(origin, "message", data, record["oseq"]):
+                    continue
+                mid = data.get("id")
+                if not isinstance(mid, str) or mid != record.get("id"):
+                    continue
+                if ("legacy", mid) in covered:
+                    matches = sum(self._replicas.record_seq(peer, "message", mid) > 0 for peer in origins)
+                    if matches == 1:
+                        continue
+                qualified = local_id(origin, mid)
+                if qualified in covered or self._cards.message(qualified) is not None:
+                    continue
+                local = self._cards.message(mid)
+                if local is not None and origin in (local.get("mesh_origin"), local.get("relay_to")):
+                    continue
+                at = data.get("created_at")
+                try:
+                    stamp = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0.0
+                except OverflowError:
+                    stamp = 0.0
+                if not math.isfinite(stamp):
+                    stamp = 0.0
+                role = "主人" if author.get("kind") == "owner" else "小鱼"
+                hits.append(("网络对话", label, stamp, "来源：" + label + "\n" + role + "：" + text))
+                if len(hits) >= 50:
+                    partial = True
+                    break
+        return hits, partial
 
     def _hidden(self, data: Dict[str, Any]) -> bool:
         """这件事是那台替这台做的：这台交出去的那张卡已经代表它了，不另外显示。"""
@@ -711,31 +949,7 @@ class Mesh:
         for key in ("seq", "rev"):
             record.pop(key, None)
         self._writer.by(actor="mesh:" + origin, cause=data["id"]).replica_message(record)
-        self._remember_turn(origin, data)
-        if (data.get("author") or {}).get("kind") == "owner":
-            for item in self._replicas.since(origin, 0):
-                reply = item.get("data") or {}
-                if item.get("k") == "message" and reply.get("reply_to") == data["id"]:
-                    self._remember_turn(origin, reply)
         return task
-
-    def _remember_turn(self, origin: str, data: Dict[str, Any]) -> None:
-        """那台小鱼答完的一句：记进这台的对话记录，这台的小鱼下次接话时就知道。"""
-        author = data.get("author") or {}
-        if (data.get("status") != "final" or author.get("kind") != "xiaoyou"
-                or data.get("conversation") == DESKTOP_CONVERSATION or data.get("delegated_from")
-                or not data.get("text")):
-            return
-        asked = self._replicas.get(origin, "message", data["reply_to"]) if data.get("reply_to") else None
-        if not asked or (asked.get("author") or {}).get("kind") != "owner":
-            return  # The result remains attributed in the record hub until its parent arrives.
-        said = asked.get("text") or ""
-        try:
-            self._xiaoyu.share(data.get("conversation") or "default", [{
-                "id": _base(data["id"]), "text": said, "reply": data["text"],
-                "at": data.get("created_at") or 0}])
-        except Exception as error:
-            sys.stderr.write("对话记录没记上：%s\n" % error)
 
     def _entry(self, origin: str, message: Dict[str, Any]) -> Dict[str, Any]:
         author = message.get("author") or {}
@@ -753,6 +967,18 @@ class Mesh:
         key = "%s|%s|%s" % (origin, epoch, data["id"])
         with self._lock:
             alias = self._aliases.get(key)
+            recovering = origin in self._pending_origins
+        if alias is None and recovering:
+            # Only on recovery: the task journal may have committed just before
+            # its alias write failed. Reuse it instead of creating a duplicate.
+            matches = [item for item in self._cards.recent(None, 10 ** 6, include_desktop=True)
+                       if item.get("mesh_origin") == origin and item.get("mesh_epoch") == epoch
+                       and item.get("mesh_id") == data["id"]]
+            if matches:
+                alias = matches[0]["id"]
+                with self._lock:
+                    self._aliases[key] = alias
+                    self._aliases_dirty.add(key)
         entries = []
         for member in data.get("members", []):
             message = self._replicas.get(origin, "message", member)
@@ -772,7 +998,12 @@ class Mesh:
         if alias is None:
             with self._lock:
                 self._aliases[key] = card["id"]
-                self._save()
+                self._aliases_dirty.add(key)
+        with self._lock:
+            if key in self._aliases_dirty:
+                self._save(strict=True)
+                self._aliases_dirty.discard(key)
+        if alias is None:
             # 一件事只发最新的样子，它的授权可能比它先到：卡有了，补上它们。
             for item in self._replicas.find(origin, "approval", lambda item: item.get("card") == data["id"]):
                 self._approval(origin, epoch, item)
@@ -788,11 +1019,20 @@ class Mesh:
 
     # ---- 指令：在这里对别的 Runtime 的事做的操作，交给那台去做 ----
 
-    def _post(self, kind: str, item_id: str, data: Dict[str, Any]) -> None:
+    def _post(self, kind: str, item_id: str, data: Dict[str, Any], strict: bool = False) -> None:
         with self._lock:
             oseq = self._writer.sequence()
-            self._outbox[(kind, item_id)] = {"k": kind, "id": item_id, "oseq": oseq, "data": data}
-            self._save()
+            key = (kind, item_id)
+            old = self._outbox.get(key)
+            self._outbox[key] = {"k": kind, "id": item_id, "oseq": oseq, "data": data}
+            try:
+                self._save(strict=strict)
+            except OSError:
+                if old is None:
+                    self._outbox.pop(key, None)
+                else:
+                    self._outbox[key] = old
+                raise
             self._changed.notify_all()
 
     def command(self, target: str, kind: str, args: Dict[str, Any]) -> str:
@@ -800,7 +1040,7 @@ class Mesh:
         now = self._clock()
         self._post("command", command_id, {"id": command_id, "target": target, "kind": kind, "args": args,
                                            "from": self.runtime_id, "created_at": now,
-                                           "expires_at": now + COMMAND_SECONDS})
+                                           "expires_at": now + COMMAND_SECONDS}, strict=True)
         return command_id
 
     def _reachable(self, target: str) -> Optional[str]:
@@ -823,12 +1063,21 @@ class Mesh:
             return problem
         with self._lock:
             self._relays[message["id"]] = target
-        self.command(target, "message", {
-            "conversation": message["conversation"], "text": message["text"], "card": message.get("relay_card"),
-            # 按负责人转的是对话里的一句，不是在某件事里面说的
-            "pin": not message.get("routed"), "agent": message.get("asked"), "effort": message.get("effort"), "reply_scope": message.get("reply_scope"),
-            "model": message.get("model"), "message_id": message["id"],
-            **({"routed_generation": message.get("owner_generation", 0)} if message.get("routed") else {})})
+        if message.get("attachments"):
+            # Images are delivered only by the authenticated desktop bridge,
+            # never as replicated mesh records or on the plaintext mesh route.
+            return None
+        try:
+            self.command(target, "message", {
+                "conversation": message["conversation"], "text": message["text"], "card": message.get("relay_card"),
+                # 按负责人转的是对话里的一句，不是在某件事里面说的
+                "pin": not message.get("routed"), "agent": message.get("asked"), "effort": message.get("effort"), "reply_scope": message.get("reply_scope"),
+                "model": message.get("model"), "message_id": message["id"],
+                **({"routed_generation": message.get("owner_generation", 0)} if message.get("routed") else {})})
+        except OSError:
+            with self._lock:
+                self._relays.pop(message["id"], None)
+            return "远程指令暂时保存不了，这句话没发出去，请稍后重试"
         return None
 
     def amend(self, card: Dict[str, Any], text: str, continue_desktop: bool = False) -> bool:
@@ -859,19 +1108,41 @@ class Mesh:
         self.command(target, "approve", {"approval": item.get("mesh_id"), "decision": decision})
         return True
 
-    def _command(self, origin: str, data: Dict[str, Any]) -> None:
+    def _command(self, origin: str, data: Dict[str, Any], uncertain: bool = False) -> None:
         """一条指令到了：是给这台的就照做一次，结果报回去。"""
         if data.get("target") != self.runtime_id or not isinstance(data.get("id"), str):
             return
         command_id = data["id"]
+        raw_expiry = data.get("expires_at")
+        try:
+            valid_expiry = (isinstance(raw_expiry, (int, float)) and not isinstance(raw_expiry, bool)
+                            and math.isfinite(raw_expiry))
+        except OverflowError:
+            valid_expiry = False
+        expiry = float(raw_expiry) if valid_expiry else self._clock() + COMMAND_SECONDS
         with self._lock:
             if ("result", command_id + ":accepted") in self._outbox:
                 return
+            command_key = (origin, command_id)
+            uncertain = uncertain or command_key in self._started_commands
+            if not uncertain:
+                if len(self._started_commands) >= 2000:
+                    now = self._clock()
+                    self._started_commands = {key: expiry for key, expiry in self._started_commands.items()
+                                              if expiry >= now}
+                self._started_commands[command_key] = expiry
+        if uncertain:
+            self._post("result", command_id + ":accepted", {"id": command_id, "phase": "accepted",
+                "from": self.runtime_id, "to": data.get("from"), "ok": False, "unknown": True,
+                "error": "指令执行结果不明，请先核对目标状态；没有重复执行", "expires_at": expiry}, strict=True)
+            return
         args = data.get("args") if isinstance(data.get("args"), dict) else {}
         kind = data.get("kind")
         ok, error, extra = True, "", {}
         try:
             expires = data.get("expires_at")
+            if not valid_expiry:
+                raise MeshError("指令缺少有效期限，未执行")
             if isinstance(expires, (int, float)) and self._clock() > expires:
                 raise MeshError("指令过期了（%d 分钟内没送到）" % (COMMAND_SECONDS // 60))
             if kind == "message":
@@ -908,7 +1179,7 @@ class Mesh:
             ok, error = False, str(failure) or type(failure).__name__
         self._post("result", command_id + ":accepted", {"id": command_id, "phase": "accepted",
                                                          "from": self.runtime_id, "to": data.get("from"),
-                                                         "ok": ok, "error": error, **extra})
+                                                         "ok": ok, "error": error, "expires_at": expiry, **extra}, strict=True)
         if ok and kind == "message":
             self._watch(command_id, extra["message"])
 
@@ -960,14 +1231,24 @@ class Mesh:
                 if current["status"] in ("done", "failed"):
                     outcome = {"ok": current["status"] == "done", "reply": current.get("reply") or "",
                                "error": current.get("error") or "", "card": current.get("card"),
-                               "brief": current.get("brief"), "mood": current.get("mood")}
+                               "brief": current.get("brief"), "mood": current.get("mood"),
+                               "unknown": current.get("operation_state") == "unknown"}
                     break
             else:
                 return
-            self._post("result", command_id + ":done", dict(outcome, id=command_id, phase="done",
-                                                             **{"from": self.runtime_id}))
             with self._lock:
-                self._watching.pop(command_id, None)
+                accepted = self._outbox.get(("result", command_id + ":accepted"), {}).get("data", {})
+                target = accepted.get("to")
+            payload = dict(outcome, id=command_id, phase="done", to=target,
+                           **{"from": self.runtime_id})
+            try:
+                self._post("result", command_id + ":done", payload, strict=True)
+            except OSError:
+                with self._lock:
+                    self._pending_results[command_id] = payload
+            finally:
+                with self._lock:
+                    self._watching.pop(command_id, None)
 
         with self._lock:
             if command_id in self._watching:
@@ -975,6 +1256,23 @@ class Mesh:
             thread = threading.Thread(target=run, daemon=True, name="mesh-watch-%s" % command_id[:6])
             self._watching[command_id] = thread
         thread.start()
+
+    def _retry_pending_results(self) -> None:
+        if not self._result_retry_lock.acquire(blocking=False):
+            return
+        try:
+            with self._lock:
+                pending = list(self._pending_results.items())
+            for command_id, payload in pending:
+                try:
+                    self._post("result", command_id + ":done", payload, strict=True)
+                except OSError:
+                    return
+                with self._lock:
+                    if self._pending_results.get(command_id) is payload:
+                        self._pending_results.pop(command_id, None)
+        finally:
+            self._result_retry_lock.release()
 
     def _result(self, origin: str, data: Dict[str, Any]) -> None:
         """这台发出去的指令有了结果。"""
@@ -990,15 +1288,20 @@ class Mesh:
         if not relayed or mine["data"].get("kind") != "message":
             return
         if data.get("phase") == "accepted" and not data.get("ok"):
-            self._finish_relay(message_id, False, data.get("error") or "那台没接这句话")
+            self._finish_relay(message_id, False, data.get("error") or "那台没接这句话",
+                               unknown=data.get("unknown") is True)
         elif data.get("phase") == "done":
             self._finish_relay(message_id, data.get("ok") is True,
-                               data.get("reply") if data.get("ok") else data.get("error") or "")
+                               data.get("reply") if data.get("ok") else data.get("error") or "",
+                               unknown=data.get("unknown") is True)
 
-    def _finish_relay(self, message_id: str, ok: bool, text: str) -> None:
+    def _finish_relay(self, message_id: str, ok: bool, text: str, unknown: bool = False) -> None:
+        if unknown:
+            self._service.relay_done(message_id, ok, text, unknown=True, strict=True)
+        else:
+            self._service.relay_done(message_id, ok, text, strict=True)
         with self._lock:
             self._relays.pop(message_id, None)
-        self._service.relay_done(message_id, ok, text)
 
     def outcome(self, command_id: str, target: str, phase: str) -> Optional[Dict[str, Any]]:
         """一条指令在 target 那里的结果（没有时 None）。"""
@@ -1227,10 +1530,6 @@ class Mesh:
         for command_id, message_id in pending:
             self._watch(command_id, message_id)
         self._ensure_threads()
-        try:
-            self.shares.scan()
-        except Exception as error:
-            sys.stderr.write("共享设置第一次扫描出错：%s: %s\n" % (type(error).__name__, error))
         threading.Thread(target=self._sweep_loop, daemon=True, name="mesh-sweep").start()
 
     def close(self) -> None:
@@ -1284,6 +1583,8 @@ class Mesh:
 
     def _round(self, key: str, wait: float) -> bool:
         """和一台交换一次。返回有没有拿到或推出东西。"""
+        if self._pending_results:
+            self._retry_pending_results()
         with self._lock:
             peer = self._peers.get(key)
             if peer is None or self._stop.is_set():
@@ -1352,6 +1653,19 @@ class Mesh:
                 self._stop.wait(RETRY_SECONDS[-1])
 
     def _sweep_loop(self) -> None:
+        self._retry_unapplied()
+        # Publish existing shared state promptly without holding the HTTP listener.
+        try:
+            self.shares.scan(export_history=False)
+        except Exception as error:
+            sys.stderr.write("共享设置第一次扫描出错：%s: %s\n" % (type(error).__name__, error))
+        # Parsing large native transcripts is background work, not startup work.
+        if self._stop.wait(FIRST_SHARE_DELAY_SECONDS):
+            return
+        try:
+            self.shares.scan()
+        except Exception as error:
+            sys.stderr.write("会话记录第一次扫描出错：%s: %s\n" % (type(error).__name__, error))
         while not self._stop.wait(30):
             try:
                 self.sweep()
@@ -1360,6 +1674,10 @@ class Mesh:
 
     def sweep(self) -> None:
         """离线太久的 Runtime：它那里还在做的事显示看不到，它的帮手不再给小鱼选；转给它的话作废。"""
+        self._retry_unapplied()
+        if self._pending_results:
+            self._retry_pending_results()
+        self.image_relay.expire_unstarted()
         now = self._clock()
         with self._lock:
             offline = {key for key, peer in self._peers.items()
@@ -1379,6 +1697,27 @@ class Mesh:
         self._refresh_agents()
         self.shares.scan(now)
         self._service.retry_parked()
+
+    def _retry_unapplied(self) -> None:
+        # Reuse the existing maintenance wakeup. Healthy origins never scan.
+        with self._lock:
+            origins = list(self._pending_origins)
+        for origin in origins:
+            try:
+                self._recover_origin(origin)
+            except Exception as error:
+                sys.stderr.write("同步记录恢复失败：%s: %s\n" % (type(error).__name__, error))
+
+    def _recover_origin(self, origin: str) -> None:
+        with self._apply_lock:
+            epoch, upto = self._replicas.position(origin)
+            applied_epoch, applied = self._replicas.applied_position(origin)
+            if epoch and epoch == applied_epoch and applied < upto:
+                self._apply(origin, epoch, self._replicas.since(origin, applied), upto)
+                self._replicas.mark_applied(origin, epoch, upto)
+        with self._lock:
+            if self._replicas.applied_position(origin)[1] >= self._replicas.position(origin)[1]:
+                self._pending_origins.discard(origin)
 
 
 class MeshAgent(Agent):

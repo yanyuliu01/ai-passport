@@ -10,6 +10,11 @@ authoritative for implementation and test evidence.
 
 ## Integration candidate (2026-11-02)
 
+For the installed Mac Runtime 0.27.7, the later uninstalled synchronization
+candidate, and Windows upgrade instructions, see the
+[Windows Runtime recovery handoff](windows-runtime-recovery-handoff.md). Neither
+the later Runtime candidate nor the desktop candidate below is installed by this handoff.
+
 This source candidate joins `b9a2f22` and `1e26551`: it retains the 0.1.32
 account-only desktop and first-use flow while integrating the Windows 0.1.17
 Runtime monitor, relay liveness and account recovery. It has not been installed.

@@ -41,20 +41,24 @@ class Speaker:
     def streamer(agent: str, say: Callable, decode: Callable, interval: Callable) -> Callable[[str], None]:
         """把代理边生成边交出的原始全文，换成主人能看的 reply 片段报出去：有变化才报，
         而且不报得太勤。原始全文是空串表示这一次重来，已经报过的收回。"""
-        state: Dict[str, Any] = {"shown": "", "at": None}
+        state: Dict[str, Any] = {"shown": "", "at": None, "closed": ()}
 
         def on_text(raw: str) -> None:
             if not raw:
                 if state["shown"]:
                     state["shown"] = ""
+                    state["closed"] = ()
                     say("partial", agent, "")
                 return
             now = time.monotonic()
-            if state["at"] is not None and now - state["at"] < interval():
-                return
             shown = decode(raw)
+            from ..delivery.presentation import _parts
+            closed = tuple(part for part, complete in _parts(shown, True) if complete)
+            if state["at"] is not None and now - state["at"] < interval() and closed == state["closed"]:
+                return
             if shown and shown != state["shown"]:
                 state["shown"], state["at"] = shown, now
+                state["closed"] = closed
                 say("partial", agent, shown)
 
         return on_text
@@ -65,7 +69,8 @@ class Speaker:
                interrupt: Optional[threading.Event] = None, decision_only: bool = False,
                decision_messages: Any = None, timeout_seconds: Optional[float] = None,
                ephemeral: bool = False, guard: Optional[Callable[[], None]] = None, *, scope=None, budget=None, default_timeout=60,
-               seed_turns=8, max_chars=8000, text_chars=500, reply_chars=1000) -> Outcome:
+               seed_turns=8, max_chars=8000, text_chars=500, reply_chars=1000, images=(), image_refs=(),
+               image_resolver=None) -> Outcome:
         """Run one provider phase with the original guard and delivery receipts."""
         active = True
 
@@ -117,7 +122,8 @@ class Speaker:
                 conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
                 timeout=timeout if budget is None else min(timeout, budget.remaining()),
                 on_text=on_text, tools=tools, interrupt=interrupt,
-                decision_only=decision_only, decision_messages=decision_messages,
+                decision_only=decision_only, decision_messages=decision_messages, images=images,
+                image_refs=image_refs, image_resolver=image_resolver,
             ))
             check()
             if outcome.session_id and not ephemeral:

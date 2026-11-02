@@ -239,6 +239,8 @@ class Transcript:
             unique: Dict[str, Dict[str, Any]] = {}
             for turn in fresh:
                 unique.setdefault(turn["id"], turn)
+            before_turns = list(entry["turns"]) if unique else None
+            before_known = list(entry["known"]) if unique else None
             for turn in unique.values():
                 entry["turns"].append({
                     "id": turn["id"], "text": turn["text"], "reply": turn["reply"],
@@ -252,7 +254,12 @@ class Transcript:
                 for stale in unseen[:-MAX_UNSEEN_TURNS]:
                     entry["turns"].remove(stale)
                 del entry["turns"][:-MAX_TURNS]
-                self._save()
+                try:
+                    self._save()
+                except OSError:
+                    entry["turns"] = before_turns
+                    entry["known"] = before_known
+                    raise
             return len(unique)
 
     def _view(self, turn: Dict[str, Any]) -> Optional[Dict[str, Any]]:

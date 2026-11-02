@@ -12,10 +12,13 @@ dsh 自己的两条路（headless --json、ACP）都只在一步结束时交出�
 出了问题抛 AgentError，调用方退回 dsh 的老路。
 """
 
+import base64
+import hashlib
 import json
 import os
 import re
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -31,6 +34,9 @@ from .base import (
 )
 from ..config import AgentSpec
 from ..loop.voice_tools import JOIN, TOOL_SESSION_PREFIX
+from ..world.artifacts import ArtifactError, _image_header
+from .. import timing as turn_timing
+from .http_pool import AmbiguousSendError, direct_official, open_direct
 
 BASE_URL = "https://api.deepseek.com/anthropic"
 MAX_TOKENS = 8192
@@ -42,6 +48,15 @@ SESSION_PREFIX = "api-"
 _SESSION_ID = re.compile(r"^ap[it]-[0-9a-f]{32}$")
 
 Opener = Callable[..., Any]
+_STDLIB_OPENER = urllib.request.urlopen
+
+
+class PermanentRequestError(AgentError):
+    """The same request cannot succeed by retrying the provider immediately."""
+
+
+class NoProviderFallback(AgentError):
+    """A submitted provider request must not be repeated through another path."""
 
 
 def schema_note(schema: Optional[Dict[str, Any]]) -> str:
@@ -71,6 +86,31 @@ def _load(folder: Path, session_id: Optional[str]) -> List[Dict[str, str]]:
     return [item for item in data if isinstance(item, dict)
             and item.get("role") in ("user", "assistant")
             and isinstance(item.get("content"), (str, list))]
+
+
+def has_image_history(spec: AgentSpec, session_id: Optional[str]) -> bool:
+    return any(item.get("_image_refs") for item in _load(sessions_dir(spec), session_id))
+
+
+def _image_history_index(history: List[Dict[str, Any]], text: str) -> Optional[int]:
+    """Select a recent image for this turn; tool results are not owner turns."""
+    intervening_users = 0
+    for index in range(len(history) - 1, -1, -1):
+        item = history[index]
+        refs = item.get("_image_refs")
+        if refs and item.get("role") == "user" and isinstance(refs, list) and len(refs) <= 4:
+            explicit = re.search(r"图片|照片|截图|图像|那张图|这张图|image|picture|photo|screenshot", text, re.I)
+            greeting = re.fullmatch(r"\s*(?:你好|嗨|哈喽|hello|hi)[！!。.!？?\s]*", text, re.I)
+            if not explicit and (intervening_users >= 2 or (intervening_users and greeting)):
+                return None
+            return index
+        if item.get("role") == "user" and isinstance(item.get("content"), str):
+            intervening_users += 1
+    return None
+
+
+def uses_image_history(spec: AgentSpec, session_id: Optional[str], text: str) -> bool:
+    return _image_history_index(_load(sessions_dir(spec), session_id), text) is not None
 
 
 def _size(item: Dict[str, Any]) -> int:
@@ -146,9 +186,9 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     timeout = job.timeout or spec.timeout_seconds or 60
     key = env.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
-        raise AgentError("没有 DEEPSEEK_API_KEY，走不了流式")
+        raise PermanentRequestError("没有 DEEPSEEK_API_KEY，走不了流式")
     if not model:
-        raise AgentError("没有配置模型，走不了流式")
+        raise PermanentRequestError("没有配置模型，走不了流式")
     tools = job.tools
     folder = sessions_dir(spec)
     prefix = TOOL_SESSION_PREFIX if tools is not None else SESSION_PREFIX
@@ -159,7 +199,83 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
     if tools is not None or job.schema is None:
         history = plain_history(history)
     system = "\n\n".join(part for part in (job.system or "", "" if tools is not None else schema_note(job.schema)) if part)
-    messages: List[Dict[str, Any]] = history + [{"role": "user", "content": job.text}]
+    # Image inputs are trusted Runtime snapshots; bound their size before loading.
+    # The binary image is never persisted into the text session or model logs.
+    content: Any = job.text
+    if job.images:
+        if len(job.images) > 4:
+            raise PermanentRequestError("每条消息最多支持四张图片")
+        blocks = [{"type": "text", "text": job.text}]
+        if job.image_refs and (len(job.image_refs) != len(job.images) or job.image_resolver is None):
+            raise PermanentRequestError("图片引用不可验证，请重新上传")
+        for index, image in enumerate(job.images):
+            try:
+                if job.image_refs:
+                    stream, meta, mime, size = job.image_resolver(job.image_refs[index])
+                    with stream:
+                        data = stream.read(8 * 1024 * 1024 + 1)
+                    actual, _, _ = _image_header(data[:128 * 1024])
+                    if (not isinstance(meta, dict) or meta.get("source") != "owner" or meta.get("kind") != "image" or
+                            not isinstance(size, int) or not 0 < size <= 8 * 1024 * 1024 or len(data) != size or actual != mime or
+                            hashlib.sha256(data).hexdigest() != meta.get("sha256")):
+                        raise ValueError("image integrity")
+                else:
+                    # Legacy internal path callers have no attachment reference.
+                    # Refuse symlinks and non-regular files, and read a bounded handle.
+                    if os.name == "nt":
+                        from ..windows_files import open_regular
+                        stream = open_regular(image, 8 * 1024 * 1024)
+                    else:
+                        fd = os.open(image, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        if not stat.S_ISREG(os.fstat(fd).st_mode):
+                            os.close(fd)
+                            raise OSError("not a regular file")
+                        stream = os.fdopen(fd, "rb")
+                    with stream:
+                        data = stream.read(8 * 1024 * 1024 + 1)
+                    mime, _, _ = _image_header(data[:128 * 1024])
+            except (OSError, ValueError, AgentError, ArtifactError):
+                raise PermanentRequestError("图片不可读取，请重新上传") from None
+            if len(data) > 8 * 1024 * 1024 or mime not in (
+                    "image/png", "image/jpeg", "image/gif", "image/webp"):
+                raise PermanentRequestError("图片无效或超过 8 MB，请重新上传")
+            blocks.append({"type": "image", "source": {"type": "base64",
+                "media_type": mime, "data": base64.b64encode(data).decode("ascii")}})
+        content = blocks
+    # Restore the most recent image-bearing turn by opaque attachment ID. The
+    # resolver enforces the Runtime artifact store boundary and ownership.
+    # A current image supersedes old image material for this request.
+    prior = [dict(item) for item in history]
+    # Keep a bounded active picture for the next two owner turns. Earlier
+    # pictures are restored for explicit references, without saving base64.
+    selected = None
+    if not job.images and job.image_resolver is not None:
+        selected = _image_history_index(prior, job.text)
+        if selected is not None:
+            item = prior[selected]
+            refs = item["_image_refs"]
+            blocks = [{"type": "text", "text": item["content"]}]
+            try:
+                for identity in refs:
+                    stream, meta, mime, size = job.image_resolver(identity)
+                    with stream:
+                        data = stream.read(8 * 1024 * 1024 + 1)
+                    actual, _, _ = _image_header(data[:128 * 1024])
+                    if meta.get("source") != "owner" or meta.get("kind") != "image" or (
+                            size > 8 * 1024 * 1024 or len(data) != size or actual != mime or
+                            hashlib.sha256(data).hexdigest() != meta.get("sha256")):
+                        raise ValueError("invalid image")
+                    blocks.append({"type": "image", "source": {"type": "base64", "media_type": mime,
+                        "data": base64.b64encode(data).decode("ascii")}})
+                item["content"] = blocks
+            except Exception:
+                item["content"] += "\n[此前的图片暂时不可用，不能假装仍能看到，请让主人重新发送。]"
+    for index, item in enumerate(prior):
+        if (item.get("_image_refs") and index != selected and item.get("role") == "user"
+                and isinstance(item.get("content"), str)):
+            item["content"] += "\n[历史图片未随本次请求提供；不能假装看见。]"
+        item.pop("_image_refs", None)
+    messages: List[Dict[str, Any]] = prior + [{"role": "user", "content": content}]
     if job.decision_messages:
         messages.extend(job.decision_messages)
     base = (env.get("DEEPSEEK_BASE_URL") or BASE_URL).rstrip("/")
@@ -175,6 +291,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         nonlocal request_round
         request_round += 1
         request_began = time.monotonic()
+        turn_timing.phase("model_start", attempt=request_round)
         timing: Dict[str, Any] = {
             "trace_id": trace_id, "round": request_round,
             "headers_s": None, "first_event_s": None, "first_text_s": None,
@@ -204,6 +321,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
         stopped = False
         expired = threading.Event()
         timer: Optional[threading.Timer] = None
+        selected_opener = opener
 
         def check_deadline() -> None:
             if expired.is_set() or time.monotonic() - began >= timeout:
@@ -214,12 +332,20 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             remaining = timeout - (time.monotonic() - began)
             if remaining <= 0:
                 check_deadline()
-            with opener(request, timeout=remaining) as response:
+            # Only the official direct endpoint uses keep-alive. Injected
+            # openers, custom endpoints and proxy routes keep urllib semantics.
+            selected_opener = open_direct if opener is _STDLIB_OPENER and direct_official(request) else opener
+            with selected_opener(request, timeout=remaining) as response:
                 timing["headers_s"] = round(time.monotonic() - request_began, 6)
+                turn_timing.phase("model_headers", attempt=request_round)
                 check_deadline()
 
                 def stop_reading() -> None:
                     expired.set()
+                    cancel = getattr(response, "cancel", None)
+                    if callable(cancel):
+                        cancel()
+                        return
                     # Shutdown wakes a blocked SSL read without waiting on BufferedReader's lock.
                     raw = getattr(getattr(response, "fp", None), "raw", None)
                     sock = getattr(raw, "_sock", None)
@@ -237,6 +363,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 for event in events(response, check_deadline):
                     if timing["first_event_s"] is None:
                         timing["first_event_s"] = round(time.monotonic() - request_began, 6)
+                        turn_timing.phase("model_first_event", attempt=request_round)
                     # Both Messages-compatible and native DeepSeek counters are
                     # optional. Missing cache data stays absent, never a zero hit.
                     message = event.get("message")
@@ -274,6 +401,7 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                             said += delta["text"]
                             if timing["first_text_s"] is None:
                                 timing["first_text_s"] = round(time.monotonic() - request_began, 6)
+                                turn_timing.phase("model_first_text", attempt=request_round)
                             if first_text[0] is None:
                                 first_text[0] = time.monotonic() - began
                             on_text((prefix + JOIN + said) if prefix else said)
@@ -297,24 +425,40 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
                 detail = error.read().decode("utf-8", "replace")
             except OSError:
                 pass
-            raise AgentError("DeepSeek 流式接口返回 %d：%s" % (error.code, clip(detail, 200)))
+            message = "DeepSeek 流式接口返回 %d：%s" % (error.code, clip(detail, 200))
+            if selected_opener is open_direct:
+                raise NoProviderFallback(message) from error
+            if 400 <= error.code < 500 and error.code not in (408, 429):
+                raise PermanentRequestError(message) from error
+            raise AgentError(message) from error
+        except AmbiguousSendError as error:
+            check_deadline()
+            raise NoProviderFallback("DeepSeek 请求结果未确认，已停止自动重试") from error
         except (urllib.error.URLError, OSError, ValueError) as error:
             check_deadline()
             raise AgentError("连不上 DeepSeek 流式接口：%s" % error)
+        except AgentError as error:
+            if selected_opener is open_direct:
+                raise NoProviderFallback(str(error)) from error
+            raise
         finally:
             if timer is not None:
                 timer.cancel()
             timing["total_s"] = round(time.monotonic() - request_began, 6)
+            turn_timing.phase("model_end", attempt=request_round)
             # Only generated identity, durations and allowlisted counters. No
             # owner text, system prompt, tool payload, endpoint or credentials.
             sys.stderr.write("DeepSeek request timing=" + json.dumps(timing, sort_keys=True) + "\n")
         if cut[0]:
             return said.strip(), [], False
         if not stopped:
+            if selected_opener is open_direct:
+                raise NoProviderFallback("DeepSeek 流式接口没有说完就断了，已停止自动重试")
             raise AgentError("DeepSeek 流式接口没有说完就断了")
         return said.strip(), calls, wants_tools and bool(calls)
 
     spoken: List[str] = []
+    exhausted = False
     rounds = MAX_TOOL_ROUNDS if tools is not None else 1
     for round_index in range(rounds):
         said, calls, wants_tools = ask(JOIN.join(spoken))
@@ -328,6 +472,12 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             if tools is not None:
                 messages.append({"role": "assistant", "content": said or "（没有再说话）"})
             break
+        # Read-only tools cannot finish the turn by handing work away. Release
+        # the completed first bubble before waiting for those reads.
+        early_boundary = bool(said and round_index < MAX_TOOL_ROUNDS - 1 and all(
+            call["name"] in ("task_detail", "recall", "find_sessions", "read_context") for call in calls))
+        if early_boundary:
+            on_text(JOIN.join(spoken) + JOIN)
         content: List[Dict[str, Any]] = ([{"type": "text", "text": said}] if said else [])
         results: List[Dict[str, Any]] = []
         acted = tools.action
@@ -353,10 +503,21 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             # 一遍（“好，我让 X 去…”后面又跟一条“好嘞，已经让 X 去…”）。还没开口的才再问一轮。
             break
         if round_index == MAX_TOOL_ROUNDS - 1:
+            exhausted = True
             break
+        if said and not early_boundary:
+            # Mark the bubble complete before the next model request, only
+            # after the tool outcome confirms this turn will continue.
+            on_text(JOIN.join(spoken) + JOIN)
     said = JOIN.join(spoken).strip()
     if not said and cut[0]:
         said = "……"
+    if not said and exhausted and tools.action is None:
+        # A completed tool loop is not a transport failure. Throwing here made
+        # the caller submit the same request again through the JSON fallback.
+        said = "这轮工具调用已到上限，暂时没有可回复的结果。"
+        messages.append({"role": "assistant", "content": said})
+        on_text(said)
     if not said and (tools is None or tools.action is None):
         raise AgentError("DeepSeek 流式接口没有说完就断了")
     sys.stderr.write("DeepSeek stream model=%s first_text=%.3fs total=%.3fs tools=%s\n" % (
@@ -367,9 +528,36 @@ def run(spec: AgentSpec, job: Job, env: Dict[str, str], model: Optional[str],
             # 带工具的会话把工具调用和结果也记下：只记说过的话，她会学成“说了就算做了”。
             if messages[-1]["role"] != "assistant":
                 messages.append({"role": "assistant", "content": "（这一轮到此为止）"})
-            _save(folder, session_id, trim(messages))
+            # Replace temporary binary blocks with text and opaque owner IDs.
+            persisted = []
+            for index, item in enumerate(messages):
+                clean = dict(item)
+                blocks = clean.get("content")
+                if clean.get("role") == "user" and isinstance(blocks, list) and any(
+                        isinstance(block, dict) and block.get("type") == "image" for block in blocks):
+                    clean["content"] = "\n".join(block.get("text", "") for block in blocks
+                        if isinstance(block, dict) and block.get("type") == "text")
+                    if index < len(history):
+                        refs = history[index].get("_image_refs", [])
+                    else:
+                        refs = list(job.image_refs)
+                    if refs:
+                        clean["_image_refs"] = refs
+                    else:
+                        clean["content"] += "\n[图片未保留，请主人重新发送。]"
+                elif index < len(history) and history[index].get("_image_refs"):
+                    # Omission warnings describe only the current request.
+                    clean["content"] = history[index]["content"]
+                    clean["_image_refs"] = history[index]["_image_refs"]
+                persisted.append(clean)
+            _save(folder, session_id, trim(persisted))
         else:
-            _save(folder, session_id, trim(history + [{"role": "user", "content": job.text},
+            entry = {"role": "user", "content": job.text}
+            if job.image_refs:
+                entry["_image_refs"] = list(job.image_refs)
+            elif job.images:
+                entry["content"] += "\n[图片未保留，请主人重新发送。]"
+            _save(folder, session_id, trim(history + [entry,
                                                       {"role": "assistant", "content": said or "……"}]))
     except OSError:
         session_id = None  # 记不下来：下一次当新会话开，这一次的回复照样用

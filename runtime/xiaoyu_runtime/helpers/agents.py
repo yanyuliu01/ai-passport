@@ -542,10 +542,23 @@ class DshAgent(Agent):
             budget = Deadline(job.timeout or self.spec.timeout_seconds or 60)
             from . import dsh_stream
             try:
-                env = self._env()
+                try:
+                    env = self._env()
+                except AgentError as error:
+                    if job.images:
+                        raise dsh_stream.PermanentRequestError(str(error)) from error
+                    raise
                 return dsh_stream.run(self.spec, replace(job, timeout=budget.remaining()), env, self.tier(job)[0],
                                       job.on_text, self._open)
             except AgentError as error:
+                if isinstance(error, dsh_stream.NoProviderFallback):
+                    # A pooled request may already have reached the provider.
+                    # Falling back to the CLI would submit the turn again.
+                    raise
+                if job.images or (job.image_resolver is not None and
+                                  dsh_stream.uses_image_history(self.spec, job.session_id, job.text)):
+                    # The headless fallback cannot carry this conversation's images.
+                    raise
                 if job.tools is not None:
                     # 带工具的这一次退回 dsh 老路就没有工具了（要做的事会丢）：交给调用方改走 JSON。
                     raise

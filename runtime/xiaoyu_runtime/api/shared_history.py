@@ -197,6 +197,8 @@ def snapshot(config_path, project, *, home=None, codex_dirs=(), claude_dirs=(),
                 "content_scope": scope,
                 "content_truncated": bool(card.get("content_truncated")),
                 "record_path": str(state / "cards.json")}
+        if not desktop and card.get("mesh_origin") and isinstance(card.get("origin_name"), str):
+            task["origin_name"] = visible_text(card["origin_name"])[:80]
         tasks[key] = task
         covered.update((entry["role"], entry["at"], entry["text"]) for entry in entries
                        if not desktop)
@@ -335,6 +337,8 @@ def markdown(data):
                   (task["source"], task["agent"], task["state"]),
                   "Last message: " + _when(task["updated_at"]),
                   "Original record: " + task["record_path"]]
+        if task.get("origin_name"):
+            lines.append("Origin computer: " + task["origin_name"])
         if task["content_truncated"]:
             lines.append("Content: recent fragment, older or longer messages omitted.")
         for entry in task["entries"]:
@@ -364,8 +368,9 @@ def context(data, previous=None):
                             if entry["role"] == "user"), "")
         latest_reply = next((entry["text"] for entry in reversed(task["entries"])
                              if entry["role"] == "assistant"), "")
+        source = task["source"] + ("@" + task["origin_name"] if task.get("origin_name") else "")
         part = "\n%s [%s / %s / %s] %s\nRequest: %s\nReported result: %s\n" % (
-            task["id"], task["source"], task["agent"], task["state"], task["title"],
+            task["id"], source, task["agent"], task["state"], task["title"],
             latest_user[:250], latest_reply[:800] or task["brief"][:800])
         if sum(map(len, lines)) + len(part) > MAX_CONTEXT_CHARS - 1400:
             # Do not acknowledge omitted tasks; a later hook can deliver them.

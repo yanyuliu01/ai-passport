@@ -8,7 +8,7 @@ Runtime 自己起的帮手的会话不导出：它们已经在卡上了。
 
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from .desktop_sync import Cursor, DesktopSync
 
@@ -22,6 +22,17 @@ RECENT_SECONDS = 7 * 86400
 class _NoCards:
     def recent(self, *_: Any) -> List[Any]:
         return []
+
+
+def _signature(path: Path) -> Tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+class ExportCache:
+    """Process-local optimization; missing or changed files are always re-read."""
+    def __init__(self) -> None:
+        self.files: Dict[Path, Tuple[tuple, Path, tuple, str]] = {}
 
 
 def _when(at: float) -> str:
@@ -43,7 +54,8 @@ def render(agent: str, session: Any, title: str, project: str) -> str:
 
 def export(state_dir: Path, out_dir: Path, *, codex_dir: Optional[Path] = None,
            claude_dir: Optional[Path] = None, projects: Iterable[Path] = (),
-           owned: Callable[[], Set[str]] = lambda: set(), now: Optional[float] = None) -> List[Path]:
+           owned: Callable[[], Set[str]] = lambda: set(), now: Optional[float] = None,
+           cache: Optional[ExportCache] = None) -> List[Path]:
     """把最近的会话写进 out_dir（内容没变的不重写）；返回写了的文件。"""
     now = time.time() if now is None else now
     observer = DesktopSync(_NoCards(), state_dir, codex_dir=codex_dir, claude_dir=claude_dir,
@@ -62,7 +74,21 @@ def export(state_dir: Path, out_dir: Path, *, codex_dir: Optional[Path] = None,
     found.sort(key=lambda item: item[0], reverse=True)
     written = []
     out_dir.mkdir(parents=True, exist_ok=True)
+    if cache is not None:
+        selected = {path for _, _, path in found[:MAX_SESSIONS]}
+        cache.files = {path: value for path, value in cache.files.items() if path in selected}
     for _, agent, path in found[:MAX_SESSIONS]:
+        try:
+            signature = _signature(path)
+        except OSError:
+            continue
+        cached = cache.files.get(path) if cache is not None else None
+        if cached and cached[0] == signature and cached[1].parent == out_dir and cached[3] not in mine:
+            try:
+                if _signature(cached[1]) == cached[2]:
+                    continue
+            except OSError:
+                pass  # Deleted export must be reconstructed.
         cursor = Cursor(path, agent)
         try:
             observer._read(cursor)
@@ -79,12 +105,13 @@ def export(state_dir: Path, out_dir: Path, *, codex_dir: Optional[Path] = None,
         text = render(agent, session, title, project)
         target = out_dir / ("%s-%s.md" % (agent, session.session_id))
         try:
-            if target.is_file() and target.read_text(encoding="utf-8") == text:
-                continue
-            temporary = target.with_suffix(".tmp")
-            temporary.write_text(text, encoding="utf-8")
-            temporary.replace(target)
-            written.append(target)
+            if not target.is_file() or target.read_text(encoding="utf-8") != text:
+                temporary = target.with_suffix(".tmp")
+                temporary.write_text(text, encoding="utf-8")
+                temporary.replace(target)
+                written.append(target)
+            if cache is not None and _signature(path) == signature:
+                cache.files[path] = (signature, target, _signature(target), session.session_id)
         except OSError:
             continue
     return written

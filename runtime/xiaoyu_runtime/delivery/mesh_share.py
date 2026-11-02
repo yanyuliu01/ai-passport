@@ -75,6 +75,8 @@ class Shares:
         # 键 → [时间, 产地, 内容指纹, 删了没有]：每个键现在以谁的哪一版为准。
         self._latest: Dict[str, List[Any]] = {}
         self._history_at = 0.0
+        self._history_cache = desktop_history.ExportCache()
+        self._history_fingerprints: Dict[Path, Tuple[tuple, str]] = {}
         try:
             raw = json.loads(self._state.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
@@ -83,15 +85,17 @@ class Shares:
         except (OSError, ValueError):
             pass
 
-    def _save(self) -> None:
+    def _save(self, strict: bool = False) -> None:
         try:
             _write(self._state, json.dumps(self._latest))
         except OSError as error:
+            if strict:
+                raise
             sys.stderr.write("共享设置的记录写不下去：%s\n" % error)
 
     # ---- 这台的：看看有什么变了，变了的报出去 ----
 
-    def scan(self, now: Optional[float] = None) -> int:
+    def scan(self, now: Optional[float] = None, *, export_history: bool = True) -> int:
         """返回这次报出去的条数。由 Mesh 每半分钟调一次。"""
         now = time.time() if now is None else now
         items: List[Tuple[str, Dict[str, Any]]] = []
@@ -124,21 +128,32 @@ class Shares:
                 if key.startswith("folder:%s/" % name) and key not in present and not latest[3]:
                     items.append((key, {"kind": "folder", "name": name, "path": key.split("/", 1)[1],
                                         "deleted": True}))
-        if self._config.desktop_sync and now - self._history_at >= HISTORY_SECONDS:
+        if export_history and self._config.desktop_sync and now - self._history_at >= HISTORY_SECONDS:
             self._history_at = now
             try:
                 desktop_history.export(self._config.state_dir, self.history,
                                        codex_dir=self._config.desktop_codex_dir,
                                        claude_dir=self._config.desktop_claude_dir,
                                        projects=self._config.desktop_projects,
-                                       owned=self._mesh.owned_sessions, now=now)
+                                       owned=self._mesh.owned_sessions, now=now, cache=self._history_cache)
             except Exception as error:
                 sys.stderr.write("会话记录导出出错：%s: %s\n" % (type(error).__name__, error))
+        history_checked = {}
         if self.history.is_dir():
             for path in sorted(self.history.glob("*.md")):
+                key = "history:" + path.name
+                try:
+                    signature = desktop_history._signature(path)
+                except OSError:
+                    continue
+                cached = self._history_fingerprints.get(path)
+                latest = self._latest.get(key)
+                if cached and cached[0] == signature and latest and latest[2] == cached[1] and not latest[3]:
+                    continue
                 text = self._read(path)
                 if text is not None:
-                    items.append(("history:" + path.name, {"kind": "history", "path": path.name, "text": text}))
+                    items.append((key, {"kind": "history", "path": path.name, "text": text}))
+                    history_checked[path] = (signature, key)
         for item in self._mesh._xiaoyu.cards.conversations.list(include_deleted=True):
             if item.get("kind") == "side" and item.get("origin") == self._mesh.runtime_id:
                 items.append(("conversation:" + item["id"], {"kind": "conversation", "text": json.dumps(item, ensure_ascii=False)}))
@@ -163,6 +178,15 @@ class Shares:
             sent += 1
         if sent:
             self._save()
+        for path, (signature, key) in history_checked.items():
+            try:
+                latest = self._latest.get(key)
+                if latest and not latest[3] and desktop_history._signature(path) == signature:
+                    self._history_fingerprints[path] = (signature, latest[2])
+            except OSError:
+                self._history_fingerprints.pop(path, None)
+        self._history_fingerprints = {path: value for path, value in self._history_fingerprints.items()
+                                      if path.is_file()}
         return sent
 
     @staticmethod
@@ -188,26 +212,26 @@ class Shares:
                 item = json.loads(text)
                 if isinstance(item, dict):
                     self._mesh._xiaoyu.intake.writer("mesh", actor="mesh:" + origin, cause=key).conversation_replica(origin, item)
-            except (ValueError, OSError):
+            except ValueError:
                 pass
             return
         if kind == 'directory':
             try:
                 self._mesh._xiaoyu.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_replica(origin, json.loads(text))
-            except (ValueError, OSError):
+            except ValueError:
                 pass
             return
         if kind == 'directory_generated':
             try:
                 item = json.loads(text)
                 self._mesh._xiaoyu.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_generated_replica(origin, item.get('uid'), item.get('metadata'))
-            except (ValueError, OSError, TypeError, AttributeError):
+            except (ValueError, TypeError, AttributeError):
                 pass
             return
         if kind == 'directory_source':
             try:
                 self._mesh._xiaoyu.intake.writer("mesh", actor="mesh:" + origin, cause=key).directory_sources([json.loads(text)], origin)
-            except (ValueError, OSError, TypeError, KeyError):
+            except (ValueError, TypeError, KeyError):
                 pass
             return
         if kind == "history":
@@ -224,6 +248,7 @@ class Shares:
                     _write(target, text)
             except OSError as error:
                 sys.stderr.write("别处的会话记录写不下去：%s\n" % error)
+                raise
             return
         latest = self._latest.get(key)
         if latest is not None and (latest[0], latest[1]) >= (at, origin):
@@ -248,6 +273,13 @@ class Shares:
                 _write(target, text, private=kind == "env")
         except OSError as error:
             sys.stderr.write("共享的 %s 写不下去：%s\n" % (key, error))
-            return
+            raise
         self._latest[key] = [at, origin, "" if deleted else _sha(text), deleted]
-        self._save()
+        try:
+            self._save(strict=True)
+        except OSError:
+            if latest is None:
+                self._latest.pop(key, None)
+            else:
+                self._latest[key] = latest
+            raise

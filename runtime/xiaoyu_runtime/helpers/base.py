@@ -335,6 +335,8 @@ class Job:
     # 这是哪件事（卡的编号）；交给网络里别的 Runtime 时，那台替这件事开的卡记着它
     card: Optional[str] = None
     images: tuple = ()  # trusted local immutable snapshots, supplied by Runtime only
+    image_refs: tuple = ()  # stable Runtime attachment IDs, never public local paths
+    image_resolver: Any = None  # Runtime-owned authenticated artifact resolver
     title: str = ""  # Runtime-owned display name, never an owner prompt
     require_session: bool = False  # Borrowed native session: never create a replacement
 

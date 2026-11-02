@@ -80,6 +80,8 @@ class Executor:
     def _invoke(self, args, lead, plan, say, interrupted=False):
         # Older adapters ignored additional saved metadata; keep that contract.
         turn = {key: args[key] for key in _TURN_FIELDS}
+        turn.update(images=args.get("images", ()), attachments=args.get("attachments", ()),
+                    attach_to_message=args.get("attach_to_message", True))
         result = self.execute(lead=lead, plan=plan, say=say, interrupted=interrupted, **turn)
         target = plan.get("card") or {}
         if target.get("mesh_origin"):
@@ -93,14 +95,23 @@ class Executor:
         return dict(asdict(result), _facts=facts)
 
     def execute(self, lead, text, conversation, turn_id, plan, reply, brief, mood,
-                hop, say, pinned, effort, model, defer_reply=False, seen=None, interrupted=False):
+                hop, say, pinned, effort, model, defer_reply=False, seen=None, interrupted=False,
+                images=(), attachments=(), attach_to_message=True):
         """Apply the selected action through the existing bounded task ports."""
         def exchange(*args: Any, **kwargs: Any) -> Any:
             if defer_reply:
                 kwargs["say"] = None
             elif interrupted:
                 kwargs["interrupted"] = True  # 主人插话，这句只说了一半
-            return self._ports.writer.exchange(*args, **kwargs)
+            result = self._ports.writer.exchange(*args, **kwargs)
+            if attachments and result is not None:
+                entries = result.get("entries", [])
+                index = next((i for i, entry in enumerate(entries)
+                              if entry.get("id") == turn_id + ":you"), None)
+                if index is None:
+                    raise AgentError("图片消息未能保存，未执行任务")
+                self._ports.writer.attach(args[0], list(attachments), index if attach_to_message else -1)
+            return result
 
         kind = plan["type"]
         target: Optional[Dict[str, Any]] = plan["card"]
@@ -179,8 +190,12 @@ class Executor:
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._ports.brief_limit()))
             say("handoff", helper.name, reply)
-            self._ports.launch(target["id"], helper, plan["task"], conversation, hop,
-                         plan.get("effort") or effort, plan.get("model") or model)
+            if images:
+                self._ports.launch(target["id"], helper, plan["task"], conversation, hop,
+                             plan.get("effort") or effort, plan.get("model") or model, images=tuple(images))
+            else:
+                self._ports.launch(target["id"], helper, plan["task"], conversation, hop,
+                             plan.get("effort") or effort, plan.get("model") or model)
             started = True
             turn = self._ports.shape(reply, brief, "busy", self._ports.brief_limit(), helper.name,
                          target["id"], True)
@@ -189,13 +204,18 @@ class Executor:
         return turn
 
     def assign(self, agent, title, said, conversation, turn_id, hop, say, prepare,
-               effort=None, model=None):
+               effort=None, model=None, images=(), attachments=()):
         reply = "交给 %s 了" % agent.name
         card = self._ports.writer.task_open(conversation, title, "working", agent.name)
         self._ports.writer.exchange(card["id"], said=said, say=reply, turn_id=turn_id, kind="handoff", brief=reply, mood="busy")
         task = prepare()
+        if attachments:
+            self._ports.writer.attach(card["id"], list(attachments), -1)
         say("handoff", agent.name, reply)
-        self._ports.launch(card["id"], agent, task, conversation, hop, effort, model)
+        if images:
+            self._ports.launch(card["id"], agent, task, conversation, hop, effort, model, images=images)
+        else:
+            self._ports.launch(card["id"], agent, task, conversation, hop, effort, model)
         return self._ports.turn(reply, reply, "busy", agent.name, card["id"], True)
 
     def resume_named(self, card, agent, task, said, conversation, turn_id, hop, say,

@@ -349,6 +349,10 @@ class ArtifactStore:
         manifest = []
         try:
             roots = self._roots(card_id, agent, True)
+            # Most tasks only return text. No files and no explicit declaration
+            # means there is nothing to parse, validate or register.
+            if not (fields or {}).get("artifacts") and next(roots[0].iterdir(), None) is None:
+                return []
         except (ArtifactError, OSError):
             return self._task_error(card_id, agent, "任务产物目录不可用")
         path = roots[0] / "manifest.json"
@@ -372,6 +376,8 @@ class ArtifactStore:
                     manifest.append({"path": value})
                     if len(manifest) >= MAX_ARTIFACTS:
                         break
+        if manifest == []:
+            return []
         try:
             return self.register(card_id, manifest, agent=agent, automatic=True)
         except (ArtifactError, OSError):

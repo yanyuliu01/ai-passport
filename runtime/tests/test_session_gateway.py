@@ -21,14 +21,29 @@ class SessionGatewayTests(TempDirCase):
         super().setUp()
         self.voice = Scripted('voice')
         self.codex = Scripted('codex', speaks=False, kind='codex')
+        self.native_home = self.folder / 'codex-home'
+        self.codex.spec = dataclasses.replace(self.codex.spec, config_dir=self.native_home)
         self.codex.native_resume = True
         self.x, self.store = make_xiaoyu(self.folder, [self.voice, self.codex])
+        self.x.sessions.config = dataclasses.replace(self.x.config, desktop_codex_dir=self.native_home)
         self.service = Service(self.x, self.store)
         self.addCleanup(self.service.close)
         self.project = self.folder / 'ai-passport'
         self.project.mkdir()
 
     def desktop(self, kind='codex', **extra):
+        if kind == 'codex':
+            source = self.native_home / 'sessions' / 'rollout-original-thread.jsonl'
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(json.dumps({'type': 'session_meta', 'payload': {
+                'id': 'original-thread', 'cwd': str(self.project)}}) + '\n')
+        elif kind == 'claude':
+            home = self.folder / 'claude-home'
+            self.x._agents['claude_code'].spec = dataclasses.replace(self.x._agents['claude_code'].spec, config_dir=home)
+            source = home / 'projects' / 'project' / 'original-thread.jsonl'
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(json.dumps({'type': 'user', 'sessionId': 'original-thread',
+                'cwd': str(self.project), 'message': {'role': 'user', 'content': 'original work'}}) + '\n')
         card = self.x.cards.open('__desktop__', '冷启动排查', 'done', kind)
         self.x.cards.update(card['id'], monitoring_only=True, source='desktop',
             session_id='original-thread', desktop_cwd=str(self.project), desktop_status='idle',
@@ -126,6 +141,27 @@ class SessionGatewayTests(TempDirCase):
         self.assertIn('正开在电脑上', problem)
         self.assertEqual([], self.codex.jobs)
 
+    def test_missing_native_source_is_reported_before_dispatch(self):
+        key = self.desktop()
+        (self.native_home / 'sessions' / 'rollout-original-thread.jsonl').unlink()
+        for _ in range(2):
+            result = self.x.sessions.search('default', '冷启动')
+            row = next(row for row in result['matches'] if row['target'] == key)
+            self.assertFalse(row['resumable'])
+            self.assertIn('尚未投递', row['reason'])
+            plan, problem = self.plan(key)
+            self.assertIsNone(plan)
+            self.assertIn('尚未投递', problem)
+        self.assertEqual([], self.codex.jobs)
+
+    def test_empty_directory_skips_adapter_validation(self):
+        with mock.patch.object(self.x.sessions, 'targets', return_value={}), \
+             mock.patch.object(self.x.sessions, 'validate') as validate:
+            result = self.x.sessions.search('default', 'nothing')
+        self.assertEqual([], result['matches'])
+        self.assertFalse(result['more'])
+        validate.assert_not_called()
+
     def test_wrong_environment_fails_without_changing_original_agent(self):
         key = self.desktop(native_scope=home_scope(self.folder / 'unregistered-home'))
         original = self.codex.spec
@@ -148,7 +184,11 @@ class SessionGatewayTests(TempDirCase):
 
     def test_catalog_only_native_source_is_readable_and_selectable_without_new_card(self):
         origin = self.service.runtime_id
-        scope = home_scope(Path.home()/'.codex')
+        scope = home_scope(self.native_home)
+        source = self.native_home / 'sessions' / 'rollout-catalog-thread.jsonl'
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(json.dumps({'type': 'session_meta', 'payload': {
+            'id': 'catalog-thread', 'cwd': str(self.project)}}) + '\n')
         key = uid('native', origin, 'codex', scope, 'catalog-thread')
         row = dict(uid=key, kind='native', authority=origin, agent='codex', native_scope=scope,
             native_session_id='catalog-thread', title='目录中的冷启动任务', cwd=str(self.project),

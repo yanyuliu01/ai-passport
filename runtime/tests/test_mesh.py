@@ -202,6 +202,20 @@ class MeshTests(TempDirCase):
         self.assertTrue(b.done(relayed["id"]))
         self.assertIn("离线", b.service.get(relayed["id"])["error"])
 
+    def test_relay_never_silently_drops_image_attachments(self):
+        a = self.node("Mac")
+        b = self.node("Windows", peers=[a.url])
+        self.assertTrue(until(lambda: b.mesh._reachable(a.service.runtime_id) is None))
+        before = dict(b.mesh._relays)
+        problem = b.mesh.relay({"id": "picture-turn", "relay_to": a.service.runtime_id,
+                                "conversation": "default", "text": "看看",
+                                "attachments": [{"id": "image-1"}]})
+        self.assertIsNone(problem)
+        self.assertEqual(b.mesh._relays.get("picture-turn"), a.service.runtime_id)
+        self.assertNotIn("picture-turn", before)
+        self.assertFalse(any(item.get("data", {}).get("args", {}).get("message_id") == "picture-turn"
+                             for item in b.mesh._outbox.values()))
+
     def test_cancel_and_approval_answers_go_to_the_task_owner(self):
         worker = Scripted("claude")
         a = self.node("Mac", agents=[worker])
@@ -239,6 +253,12 @@ class MeshTests(TempDirCase):
 
     def test_continuing_another_runtimes_desktop_session_happens_on_that_runtime(self):
         heir = Scripted("cc", kind="claude_code")
+        home = self.folder / 'mesh-native-home'
+        heir.spec = dataclasses.replace(heir.spec, config_dir=home)
+        native = home / 'projects' / 'fixture' / 's-mac.jsonl'
+        native.parent.mkdir(parents=True)
+        native.write_text(json.dumps({'sessionId': 's-mac', 'cwd': str(self.folder),
+                                      'type': 'user', 'message': {'content': 'fixture'}}) + '\n')
         a = self.node("Mac", agents=[Scripted("claude"), heir])
         b = self.node("Windows", peers=[a.url])
         desktop = a.xiaoyu.record.observed_open("__desktop__", "改同步方案", "done", "claude")

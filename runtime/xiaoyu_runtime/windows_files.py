@@ -8,6 +8,15 @@ import os
 from ctypes import wintypes
 
 def open_regular(path, limit):
+    return _open_regular(path, limit, False)
+
+
+def open_rw_regular(path, limit):
+    """Open/create a checked regular file for bounded resumable writes."""
+    return _open_regular(path, limit, True)
+
+
+def _open_regular(path, limit, writable):
     import msvcrt
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     create = kernel.CreateFileW
@@ -22,7 +31,9 @@ def open_regular(path, limit):
     info = kernel.GetFileInformationByHandleEx
     info.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
     expected = os.path.abspath(path)
-    handle = create(expected, 0x80000000, 1, None, 3, 0x00200000 | 0x08000000, None)
+    access = 0x80000000 | (0x40000000 if writable else 0)
+    disposition = 4 if writable else 3  # OPEN_ALWAYS or OPEN_EXISTING
+    handle = create(expected, access, 0 if writable else 1, None, disposition, 0x00200000 | 0x08000000, None)
     if handle == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_last_error(), "Cannot open regular file")
     transferred = False
@@ -39,9 +50,9 @@ def open_regular(path, limit):
             actual = actual[4:]
         if attributes[0] & (0x400 | 0x10) or os.path.normcase(actual) != os.path.normcase(expected):
             raise OSError("Reparse paths and directories are not allowed")
-        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        descriptor = msvcrt.open_osfhandle(handle, (os.O_RDWR if writable else os.O_RDONLY) | os.O_BINARY)
         transferred = True
-        stream = os.fdopen(descriptor, "rb")
+        stream = os.fdopen(descriptor, "r+b" if writable else "rb")
         if os.fstat(descriptor).st_size > limit:
             stream.close()
             raise OSError("File exceeds size limit")

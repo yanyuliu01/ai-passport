@@ -37,6 +37,33 @@ from .world.usage import EFFORT_NAMES
 from .helpers.usage import create_usage
 from .loop.xiaoyu import Turn, Xiaoyu
 
+STARTUP_CHECK_GRACE_SECONDS = 3.0
+
+
+def _startup_checks(recognizer, agents, stopping):
+    """Report optional dependency problems without holding up the HTTP listener.
+
+    These checks are diagnostic only: actual calls still perform their normal
+    validation. The explicit --check command remains synchronous and strict.
+    """
+    # Avoid launching several CLI processes while a freshly opened chat is
+    # preparing its first response. Shutdown cancels the grace period.
+    if stopping.wait(STARTUP_CHECK_GRACE_SECONDS):
+        return
+    checks = [("语音识别", lambda: stt.check(recognizer))]
+    checks.extend(("代理 %s" % agent.name, agent.check) for agent in agents)
+    for name, check in checks:
+        if stopping.is_set():
+            return
+        try:
+            problem = check()
+        except Exception as error:
+            # A diagnostic must not terminate the service or expose arbitrary
+            # exception contents, which can include provider configuration.
+            problem = "检查出错（%s）" % type(error).__name__
+        if problem and not stopping.is_set():
+            print("注意：%s还用不了：%s" % (name, problem), file=sys.stderr)
+
 
 def _once_turn(config, args, xiaoyu, store):
     """CLI input uses the same durable request/effect path as connected clients."""
@@ -308,14 +335,6 @@ def main(argv=None) -> int:
         return 0
 
     recognizer = stt.create(config)
-    problem = stt.check(recognizer)
-    if problem:
-        print("注意：语音识别还用不了，语音消息会失败：%s" % problem, file=sys.stderr)
-    for agent in agents:
-        problem = agent.check()
-        if problem:
-            print("注意：代理 %s 还用不了，交给它的事会失败：%s" % (agent.name, problem),
-                  file=sys.stderr)
     try:
         service = Service(xiaoyu, store, recognizer)
     except IdentityError as error:
@@ -329,6 +348,9 @@ def main(argv=None) -> int:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         service.close()
         return 1
+    stopping = threading.Event()
+    threading.Thread(target=_startup_checks, args=(recognizer, agents, stopping),
+                     name="startup-checks", daemon=True).start()
     if mesh is not None:
         mesh.start()
         print("已加入小鱼网络：先去找 %s；告诉别人从 %s 连这台" % (
@@ -379,6 +401,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        stopping.set()
         server.server_close()
         if loopback is not None:
             loopback.shutdown()

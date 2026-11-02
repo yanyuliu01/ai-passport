@@ -91,6 +91,14 @@ class SharedHistoryTests(unittest.TestCase):
     def test_import_timestamp_is_not_used_as_activity_time(self):
         self.assertEqual(self.collect()["tasks"][0]["updated_at"], 20)
 
+    def test_remote_runtime_conversation_keeps_its_computer_attribution(self):
+        self.card.update(mesh_origin="b" * 32, origin_name="Windows")
+        self.write(self.state / "cards.json", {"cards": [self.card]})
+        data = self.collect()
+        task = next(task for task in data["tasks"] if task["source"] == "runtime")
+        self.assertEqual(task["origin_name"], "Windows")
+        self.assertIn("Windows", history.context(data)[0])
+
     def test_configured_isolated_cc_directory_is_included(self):
         root = self.root / "isolated cc"
         self.claude(root=root)
@@ -165,6 +173,33 @@ class SharedHistoryTests(unittest.TestCase):
         self.assertEqual([], desktop_history.export(self.state, out, claude_dir=self.home / ".claude",
                                                     codex_dir=self.home / ".codex",
                                                     owned=lambda: {"owned-by-runtime"}, now=1000))
+
+    def test_export_cache_rechecks_changed_sources_and_missing_or_modified_output(self):
+        from xiaoyu_runtime.events import desktop_history
+        source = self.codex("cache-test", text="original")
+        out = self.root / "cache-history"
+        cache = desktop_history.ExportCache()
+        options = dict(codex_dir=self.home / ".codex", claude_dir=self.home / ".claude", cache=cache)
+        desktop_history.export(self.state, out, **options)
+        target = out / "codex-cache-test.md"
+        self.assertIn("original", target.read_text())
+        with mock.patch.object(desktop_history.DesktopSync, "_read", side_effect=AssertionError("unchanged source reread")):
+            self.assertEqual([], desktop_history.export(self.state, out, **options))
+        self.codex("cache-test", text="updated")
+        desktop_history.export(self.state, out, **options)
+        self.assertIn("updated", target.read_text())
+        target.unlink()
+        desktop_history.export(self.state, out, **options)
+        self.assertIn("updated", target.read_text())
+        target.write_text("external replacement")
+        desktop_history.export(self.state, out, **options)
+        self.assertIn("updated", target.read_text())
+        other = self.root / 'other-history'
+        desktop_history.export(self.state, other, **options)
+        self.assertIn('updated', (other / target.name).read_text())
+        source.unlink()
+        desktop_history.export(self.state, out, **options)
+        self.assertFalse(cache.files)
 
     def test_credentials_and_injected_history_are_removed(self):
         self.card["entries"].append({"role": "xiaoyou", "text": "token=private-token-value", "at": 40})

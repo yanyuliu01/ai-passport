@@ -48,10 +48,10 @@ def _token(value):
     return base64.urlsafe_b64encode(json.dumps(value, separators=(',', ':')).encode()).decode().rstrip('=')
 
 
-def page(path, predicate, scope, cursor=None, limit=50):
+def page(path, predicate, scope, cursor=None, limit=50, *, archived_only=False):
     path = Path(path)
     files = sorted(path.with_suffix('.history').glob('*.jsonl'))
-    if path.exists():
+    if not archived_only and path.exists():
         files.append(path)
     # Ignore duplicate filesystem identities during concurrent retention changes.
     distinct, inodes = [], set()

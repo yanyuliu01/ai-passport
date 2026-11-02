@@ -30,6 +30,7 @@
 - [helper-capabilities.zh_CN.md](helper-capabilities.zh_CN.md)：帮手能用哪些 MCP 和 skill，由小鱼按电脑统一管（参考 Raft 的托管 MCP）：能力库、连接、授权、注入的代理和分阶段。
 - [runtime-refactor-review.zh_CN.md](runtime-refactor-review.zh_CN.md)：给 CC 的评审交接，修正 Raft/Xiaoyu-Bot-App 借鉴中的协调、重放与连接前提。
 - [windows-public-node-handoff.zh_CN.md](windows-public-node-handoff.zh_CN.md)：家用公网节点的 Windows Codex 交接、源码快照、网络权限问题、原生构建与异网验收。
+- [windows-runtime-recovery-handoff.zh_CN.md](windows-runtime-recovery-handoff.zh_CN.md)：Windows 原生 Runtime 升级、对话负责人、同步恢复和验收交接。
 - [xiaoyu-desktop-plan.zh_CN.md](xiaoyu-desktop-plan.zh_CN.md)：Mac/Windows 客户端方案，包含统一会话、可自建加密通信、周四候选版里程碑与验收依赖。
 - [decide-then-speak.zh_CN.md](decide-then-speak.zh_CN.md)：设计稿——小鱼说话前先定下做不做，替代 Runtime 的承诺提醒；也记录了 App 0.25.2 / Runtime 0.18.2 的聊天修复和交接方式。
 - [dialogue-naturalness-design.zh_CN.md](dialogue-naturalness-design.zh_CN.md)：重构后再实施的陪伴／办事上下文提议，含相处偏好、真实任务回复和表达习惯的逻辑框架图。

@@ -320,6 +320,14 @@ hits before ordering them by time for display, prefers newer timestamps on equal
 relevance, and locates excerpt matches without case sensitivity. It adds no
 model call, persistent index or automatic summary.
 
+Explicit `recall` also searches bounded sealed message archives and already
+received, applied peer Runtime records for the same conversation. It labels
+their source, excludes hidden and delegated worker records, and reports when
+coverage is partial or unavailable. After a context reset it fails closed on
+these additional sources until their reset boundaries can be established.
+Records never received or no longer retained are outside this search. Normal
+context preparation does not scan these archives or peer replicas.
+
 `loop/context_window.py` selects and renders recent quotes and relevant older
 conversation evidence from one retained-history snapshot. Speaker passes the
 current question to this local lookup. Up to two related turns can use at most
@@ -2088,6 +2096,12 @@ and at least one address of another member:
   belongs to the runtime that created it. Inspect or hand off with `GET` /
   `POST /v1/conversations/<name>/owner` (`{"to": "<runtime name>"}`; only while
   both runtimes are online and the conversation is idle).
+- `require_owner` (`true` / `false`, default `false`): when enabled, a Mesh
+  member queues an ordinary conversation turn while its owner is unknown or
+  conflicting. Configure exactly one `home`, and enable this only after every
+  participating Runtime supports and enables this setting; older or unconfigured
+  members can still answer locally. Without Mesh, local conversations continue
+  normally. Unknown ownership is a pending state, not a successful reply.
 
 Devices and permissions: the runtime with `home` is also the permission
 authority. Each device can have its own credential: `POST /v1/devices`
@@ -2104,6 +2118,15 @@ The exchange endpoint `POST /v1/mesh/exchange` takes the mesh secret, not the
 phone token; `GET /v1/mesh` (phone token) lists the members and when each was
 last reached. Members long-poll each other, so a change usually arrives within
 a second.
+
+Receipt and local application have separate progress: if a projection fails,
+the member retries it before acknowledging that progress to its peers. Pending
+records and unacknowledged command receipts are retained for recovery. If an
+interruption makes it impossible to tell whether a command ran, its result is
+marked unknown rather than executing the command again; check the target state.
+This recovery covers process restarts and does not promise power-loss durability.
+Before rolling back to a version without separate application progress, resolve
+pending projections and verify that the affected peers have caught up.
 
 What each member sees: another runtime's task is a local card (`cN`, with
 `mesh_origin`, `mesh_id` and `origin_name`), its messages keep their ids with the

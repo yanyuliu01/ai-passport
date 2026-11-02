@@ -18,9 +18,11 @@ only 可以只给一部分工具（后台整理记忆、主动说话那几轮用
 Xiaoyu 负责把记下的事真的办掉。哪家模型的工具调用格式都能从 definitions() 改写过去。
 """
 
+import json
 import re
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from ..errors import AgentError
 
 # 她要另起一条消息时，单独写一行 ---。Runtime 和手机都按它分开，几条、多长都由她定。
 MESSAGE_BREAK = "---"
@@ -78,6 +80,7 @@ class Toolbox:
         self._check = check
         self._lookup = lookup
         self._session_search = session_search
+        self._session_reads = {}
         self.action: Optional[Dict[str, Any]] = None
         self.card: Optional[str] = None
         self._looked: Optional[str] = None
@@ -100,6 +103,7 @@ class Toolbox:
                 "title": {"type": "string", "description": "这件事的短标题，不超过 24 个字"},
                 "task": {"type": "string", "description": "交代给帮手的话。它看不到你和主人的对话，把背景和想要的结果写清楚"},
                 "card": dict(card, description="要接着一件已有的事做时写它的编号；新的事不写"),
+                "include_images": {"type": "boolean", "description": "任务明确需要当前对话最近一轮图片原图时设为 true；无关任务不要传图片"},
             }
             if self._efforts:
                 start["effort"] = {"type": "string", "enum": list(self._efforts)}
@@ -191,6 +195,15 @@ class Toolbox:
             })
         if self._only is not None:
             tools = [tool for tool in tools if tool["name"] in self._only]
+        readers = [tool["name"] for tool in tools if tool["name"] in ("task_detail", "recall", "find_sessions")]
+        if readers and (self._only is None or "read_context" in self._only):
+            tools.append({"name": "read_context",
+                "description": "一次读取所有互不依赖的任务详情、历史记录和会话查询。已知多个查询时优先用此工具，不要分多轮询问模型。只读，不能投递或修改。",
+                "input_schema": {"type": "object", "properties": {"queries": {
+                    "type": "array", "minItems": 1, "maxItems": 8, "items": {
+                        "type": "object", "properties": {"name": {"type": "string", "enum": readers},
+                        "args": {"type": "object", "properties": {"card": card, "query": {"type": "string"}}}},
+                        "required": ["name", "args"]}}}, "required": ["queries"]}})
         return tools
 
     def call(self, name: str, args: Any) -> Tuple[str, bool]:
@@ -206,6 +219,18 @@ class Toolbox:
         self.calls.append((name, args))
         if self._only is not None and name not in self._only:
             return "这一轮没有 %s 这个工具" % name, True
+        if name == "read_context":
+            queries = args.get("queries")
+            allowed = {tool["name"] for tool in self.definitions()} & {"task_detail", "recall", "find_sessions"}
+            if (not isinstance(queries, list) or not 1 <= len(queries) <= 8 or any(
+                    not isinstance(item, dict) or item.get("name") not in allowed
+                    or not isinstance(item.get("args"), dict) for item in queries)):
+                return "queries 要包含 1 到 8 个可用的只读查询，没有执行", True
+            results = []
+            for item in queries:
+                value, failed = self.guarded_call(item["name"], item["args"], guard)
+                results.append({"name": item["name"], "content": value, "is_error": failed})
+            return json.dumps(results, ensure_ascii=False), any(item["is_error"] for item in results)
         if name in ("remember", "replace") and self._memory is not None:
             from ..world.memory import _checked
             _, problem = _checked(str(args.get("note") or ""), str(args.get("quote") or ""))
@@ -230,10 +255,17 @@ class Toolbox:
 
     def _call(self, name: str, args: Any) -> Tuple[str, bool]:
         if name == "find_sessions" and self._session_search is not None:
+            query = args.get("query", "")
+            if not isinstance(query, str):
+                return "会话查询格式无效", True
+            if query in self._session_reads:
+                return self._session_reads[query]
             try:
-                return self._session_search(args.get("query", "")), False
-            except (ValueError, RuntimeError) as error:
-                return str(error), True
+                result = self._session_search(query), False
+            except (AgentError, OSError, ValueError, RuntimeError) as error:
+                result = "会话查询未完成：%s" % error, True
+            self._session_reads[query] = result
+            return result
         if name == "recall" and self._recall is not None:
             query = str(args.get("query") or "").strip()
             return (self._recall(query), False) if query else ("要写想找什么", True)
@@ -289,6 +321,8 @@ class Toolbox:
         for key in ("agent", "title", "task", "mode", "effort", "model"):
             if isinstance(args.get(key), str) and args[key].strip():
                 action[key] = args[key].strip()
+        if name == "start_task" and args.get("include_images") is True:
+            action["include_images"] = True
         card = str(args.get("card") or "").strip() or None
         fields = {"card": card or "new", "action": action}
         problem = self._check(fields)
@@ -337,7 +371,7 @@ class SpeakingTools:
         self.parent = parent
         self.calls: List[Tuple[str, Dict[str, Any]]] = []
         self.action = None
-        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall", "find_sessions"}
+        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall", "find_sessions", "read_context"}
 
     def definitions(self) -> List[Dict[str, Any]]:
         return [tool for tool in self.parent.definitions() if tool["name"] in self.allowed]

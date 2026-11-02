@@ -7,6 +7,7 @@ The old transcript is a read/import compatibility source during migration.
 
 import hashlib
 import json
+import math
 import sys
 import threading
 import time
@@ -38,6 +39,7 @@ class ContextBuilder:
     def __init__(self, cards, legacy, path, memory=None, promises=None):
         self._cards, self._legacy, self._path = cards, legacy, path
         self._memory, self._promises = memory, promises
+        self._replica_recall = None
         self._lock = threading.RLock()
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
@@ -87,6 +89,7 @@ class ContextBuilder:
         records = {message["id"]: message for message in messages
                    if message["conversation"] == conversation and not message.get("relay_to")}
         canonical = {}
+        remote_ids = {}
         for message in records.values():
             author = message.get("author") or {}
             if message.get("status") != "final" or not message.get("text") \
@@ -110,9 +113,24 @@ class ContextBuilder:
                               "at": message.get("created_at") or 0,
                               "by": author.get("name") or "xiaoyou", "seen": [],
                               "_key": mid, "_version": _version(text, message["text"], author)}
+            origin = message.get("mesh_origin")
+            prefix = origin[:12] + "." if isinstance(origin, str) else ""
+            if prefix and mid.startswith(prefix):
+                original = mid[len(prefix):]
+                remote_ids[original] = mid if original not in remote_ids else None
+        # The older transcript API exposed the original turn ID. Preserve it
+        # only when exactly one peer owns it and no local canonical record
+        # conflicts; the receipt key remains source-qualified.
+        for original, qualified in remote_ids.items():
+            if qualified and original not in canonical:
+                canonical[qualified]["id"] = original[:-6] if original.endswith(":reply") else original
         turns = []
         for turn in self._legacy.context_turns(conversation):
             mid = turn.get("reply_ref") or turn["id"] + ":reply"
+            if mid not in canonical and turn.get("by") == "elsewhere" and not turn.get("reply_ref"):
+                # Older mesh versions imported an unqualified turn ID into the
+                # legacy transcript. Match only one unambiguous remote source.
+                mid = remote_ids.get(mid) or mid
             if mid in canonical:
                 # Preserve old native-session delivery knowledge without
                 # preserving a second copy of the message body.
@@ -219,8 +237,20 @@ class ContextBuilder:
         if query.startswith("source:"):
             return source_page(query, self.segments(conversation))
         records = []
+        covered = set()
+        query_terms = [term.lower() for term in recall_search._terms(query)]
         for segment in self.segments(conversation):
             for turn in segment["turns"]:
+                key = turn.get("_key")
+                if isinstance(key, str):
+                    covered.add(key)
+                    if key.endswith(":reply"):
+                        covered.add(key[:-6] + ":you")
+                    if turn.get("by") == "elsewhere" and any(
+                            term in (turn["text"] + "\n" + turn["reply"]).lower() for term in query_terms):
+                        covered.add(("legacy", key))
+                        if key.endswith(":reply"):
+                            covered.add(("legacy", key[:-6] + ":you"))
                 records.append(("聊天", "段 %s / %s" % (segment["id"], turn["id"]), float(turn.get("at") or 0),
                                 "主人：%s\n小鱼：%s" % (turn["text"], turn["reply"])))
         for path in self._memory.log_files() if self._memory is not None else []:
@@ -232,7 +262,73 @@ class ContextBuilder:
             records.extend(("记忆", path.stem, stamp, line) for line in lines if line.strip())
         with self._lock:
             hidden = set(self._entry(conversation).get("hidden", []))
-        for card in self._cards.recent(conversation, limit=120):
+        cards = self._cards.recent(conversation, limit=120)
+        task_sources = {card["id"]: card["origin_name"] for card in cards
+                        if isinstance(card.get("origin_name"), str) and card["origin_name"]}
+        runtime_sources = {card["mesh_origin"]: card["origin_name"] for card in cards
+                           if isinstance(card.get("mesh_origin"), str)
+                           and isinstance(card.get("origin_name"), str) and card["origin_name"]}
+        archive_note = ""
+        if query_terms and not (self._cards.conversations.get(conversation) or {}).get("deleted"):
+            # Sealed history is searched only when recall is explicitly
+            # called, with the same bounded scan used by paged history.
+            # A reset has no archive-wide watermark yet: fail closed rather
+            # than revive records hidden before the reset.
+            archive = self._cards._log._path.with_suffix(".history")
+            if hidden:
+                if archive.is_dir() or self._replica_recall is not None:
+                    archive_note = "这段对话已重置，较早归档和网络副本没有参与检索。"
+            else:
+                from ..events import message_history
+                terms = query_terms
+                def source_label(message):
+                    source = message.get("source") if isinstance(message.get("source"), dict) else {}
+                    origin = message.get("mesh_origin") or source.get("runtime_id") or ""
+                    origin = origin if isinstance(origin, str) else ""
+                    task = message.get("task") if isinstance(message.get("task"), str) else ""
+                    return task_sources.get(task) or runtime_sources.get(origin) or origin[:12]
+                def matches(message):
+                    text = message.get("text")
+                    author = message.get("author") if isinstance(message.get("author"), dict) else {}
+                    source = message.get("source") if isinstance(message.get("source"), dict) else {}
+                    if not (message.get("conversation") == conversation and message.get("status") == "final"
+                            and author.get("kind") in ("owner", "xiaoyou") and source.get("type") in (None, "", "runtime")
+                            and not message.get("relay_to") and not message.get("delegated_from")
+                            and isinstance(text, str)):
+                        return False
+                    body = (text + "\n" + source_label(message)).lower()
+                    return any(term in body for term in terms)
+                try:
+                    page = message_history.page(self._cards._log._path, matches,
+                                                "recall:" + conversation, limit=50, archived_only=True)
+                    for message in page["messages"]:
+                        covered.add(message["id"])
+                        label = source_label(message)
+                        role = "主人" if (message.get("author") or {}).get("kind") == "owner" else "小鱼"
+                        at = message.get("created_at")
+                        try:
+                            stamp = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0.0
+                        except OverflowError:
+                            stamp = 0.0
+                        if not math.isfinite(stamp):
+                            stamp = 0.0
+                        records.append(("聊天归档", label, stamp,
+                                        ("来源：" + label + "\n" if label else "") + role + "：" + message["text"]))
+                    if page.get("more"):
+                        archive_note = "本次只检索了部分较近归档，不能据此断定更早记录不存在。"
+                except (OSError, ValueError):
+                    archive_note = "历史归档暂时不可用，不能据此断定记录不存在。"
+                if self._replica_recall is not None and terms:
+                    try:
+                        more_records, partial = self._replica_recall(conversation, terms, covered)
+                        records.extend(more_records)
+                        if partial:
+                            archive_note += ("\n" if archive_note else "") + "网络副本只检索了有限范围，可能还有更早记录。"
+                        else:
+                            archive_note += ("\n" if archive_note else "") + "网络检索仅覆盖已收到的留存记录，离线或更早记录可能尚未同步。"
+                    except (OSError, ValueError, TypeError, KeyError):
+                        archive_note += ("\n" if archive_note else "") + "网络副本暂时不可用，不能据此断定记录不存在。"
+        for card in cards:
             # Task entries duplicate canonical messages. A model-context reset
             # must not reintroduce those same hidden messages through recall.
             # The task's current title/state remains available independently.
@@ -241,7 +337,8 @@ class ContextBuilder:
             records.append(("事", "%s %s" % (card["id"], clip(card.get("title") or "", 24)),
                             float(card.get("updated_at") or card.get("created_at") or 0),
                             (card.get("title") or "") + "\n" + said[-6000:]))
-        return recall_search.render(query, recall_search.search(query, records))
+        result = recall_search.render(query, recall_search.search(query, records))
+        return result + ("\n" + archive_note if archive_note else "")
 
     def unseen(self, conversation, agent):
         return [turn for turn in self.turns(conversation) if agent not in turn["seen"]]

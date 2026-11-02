@@ -8,6 +8,8 @@ the Runtime does not record it as its own, so desktop observation keeps showing 
 owner can go back to the computer. A turn still running on the computer is never joined.
 """
 
+import dataclasses
+import json
 import unittest
 
 from test_runtime import Scripted, TempDirCase, make_xiaoyu, until  # noqa: F401
@@ -26,6 +28,17 @@ class DesktopContinueTests(TempDirCase):
         self.addCleanup(self.service.close)
         self.project = self.folder / "project"
         self.project.mkdir()
+        self.claude_home, self.codex_home = self.folder / 'claude-home', self.folder / 'codex-home'
+        self.cc.spec = dataclasses.replace(self.cc.spec, config_dir=self.claude_home)
+        self.codex.spec = dataclasses.replace(self.codex.spec, config_dir=self.codex_home)
+        claude = self.claude_home / 'projects' / 'fixture' / 'desk-1.jsonl'
+        claude.parent.mkdir(parents=True)
+        claude.write_text(json.dumps({'sessionId': 'desk-1', 'cwd': str(self.project),
+                                      'type': 'user', 'message': {'content': 'fixture'}}) + '\n')
+        codex = self.codex_home / 'sessions' / 'rollout-desk-1.jsonl'
+        codex.parent.mkdir(parents=True)
+        codex.write_text(json.dumps({'type': 'session_meta', 'payload': {
+            'id': 'desk-1', 'cwd': str(self.project), 'source': 'cli'}}) + '\n')
 
     def desktop(self, agent="claude", status="idle", **extra):
         cards = self.xiaoyu.cards
@@ -90,8 +103,10 @@ class DesktopContinueTests(TempDirCase):
         self.xiaoyu.settle(task["id"], 5)
         # Not recorded as the Runtime's own, so desktop observation keeps it.
         self.assertNotIn("desk-1", self.store.session_ids())
-        self.assertNotIn("s1", self.store.session_ids())
-        self.assertEqual([], self.voice.jobs)
+        self.assertIsNone(self.store.session('default/' + task['id'], 'cc'))
+        # The speaker may later summarize the completed background task; it
+        # must not receive the owner's request as its own foreground job.
+        self.assertTrue(all(job.text != '再补一段测试' for job in self.voice.jobs))
 
     def test_naming_another_helper_starts_a_new_task_instead(self):
         desk = self.desktop()

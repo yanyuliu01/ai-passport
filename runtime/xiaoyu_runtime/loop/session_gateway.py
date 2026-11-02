@@ -62,9 +62,11 @@ class SessionGateway:
         if not scope:
             # Compatibility for old explicitly selected work cards. They cannot
             # be rebound to another home without an observed scope.
+            self._verify_source(target, agent_home(candidates[0].spec))
             return candidates[0]
         for agent in candidates:
             if home_scope(agent_home(agent.spec)) == scope:
+                self._verify_source(target, agent_home(agent.spec))
                 return agent
         # Source adapters, not arbitrary model text, establish allowed homes.
         # Existing discovery currently supports these two native protocols.
@@ -77,16 +79,27 @@ class SessionGateway:
                    'OPENAI_BASE_URL', 'OPENAI_API_KEY'}
         if routing & (set(candidates[0].spec.env) | set(candidates[0].spec.env_files)):
             raise AgentError('配置的执行端使用独立提供方，不能替代原运行环境；尚未投递')
+        self._verify_source(target, home)
         if not bind:
             return candidates[0]
-        from ..events.native_history import recent
-        row = dict(agent=wanted, native_scope=scope, native_session_id=target.get('session_id'))
-        if recent(self.config, row).get('coverage') == 'native-source-unavailable':
-            raise AgentError('无法核实原运行环境中的会话记录，尚未投递')
         # Use the source's login/configuration, retaining the configured tool
         # policy. Never copy a transcript or edit global user configuration.
         spec = replace(candidates[0].spec, config_dir=Path(home), app_server_socket=None)
         return create(spec)
+
+    def _verify_source(self, target, home):
+        # Probe the selected home even when an adapter already matches. Keep
+        # this check at binding time too: lookup is not a dispatch guarantee.
+        wanted = native_agent(target.get('agent'))
+        if wanted not in ('codex', 'claude'):
+            return  # Other protocols retain their own resume handshake checks.
+        from ..events.native_history import recent
+        config = replace(self.config, **{('desktop_codex_dir' if wanted == 'codex'
+                                         else 'desktop_claude_dir'): Path(home)})
+        row = dict(agent=wanted, native_scope=home_scope(home),
+                   native_session_id=target.get('session_id'))
+        if recent(config, row).get('coverage') == 'native-source-unavailable':
+            raise AgentError('原会话记录已不存在或无法读取，尚未投递；不会新开会话代替')
 
     def validate(self, target):
         if target is None:

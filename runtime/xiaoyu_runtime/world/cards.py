@@ -115,13 +115,8 @@ class Cards:
         for card in self._cards.values():
             card['record_epoch'] = card.get('record_epoch') or self._epoch
         retained_folder = self._path.with_suffix('.retained')
-        for path in retained_folder.glob('*.json'):
-            try:
-                item = json.loads(path.read_text('utf-8'))
-                if isinstance(item, dict) and isinstance(item.get('id'), str) and isinstance(item.get('record_epoch'), str):
-                    self._retained[path.stem] = item
-            except (OSError, ValueError):
-                continue
+        from . import retained_index
+        self._retained = retained_index.load(retained_folder, self._path.with_suffix('.retained-index.json'))
         # 消息日志是每句话的权威记录（见 message_log.py）；卡上的 entries 是副本。
         self._log = MessageLog(self._path.with_name(self._path.stem + ".log.jsonl"), self._issue)
         self._log.hidden_conversation = lambda name: bool((self.conversations.get(name) or {}).get('deleted'))
@@ -456,22 +451,31 @@ class Cards:
             self._changed.notify_all()
 
     def erase_conversation(self, conversation):
+        self.erase_conversations([conversation])
+
+    def erase_conversations(self, conversations):
+        """Reconcile deleted conversations in one pass, preserving their tombstones."""
+        conversations = set(conversations)
+        if not conversations:
+            return
         with self._changed:
             from .conversation_directory import uid
-            keys = {uid('chat',conversation)}
-            for card in [*self._cards.values(),*self._retained.values()]:
-                if card.get('conversation') == conversation:
+            keys = {uid('chat', conversation) for conversation in conversations}
+            active, retained = [], []
+            for collection, matching in ((self._cards, active), (self._retained, retained)):
+                for key, card in collection.items():
+                    if card.get('conversation') not in conversations:
+                        continue
                     keys.add(uid('task',card.get('mesh_origin') or self.conversations.origin,
                                  card.get('mesh_epoch') or card.get('record_epoch') or self._epoch,
                                  card.get('mesh_id') or card['id']))
+                    matching.append(key)
             self.directory.erase(keys)
-            for key, card in list(self._cards.items()):
-                if card.get('conversation') == conversation:
-                    del self._cards[key]
-            for key, card in list(self._retained.items()):
-                if card.get('conversation') == conversation:
-                    self._path.with_suffix('.retained').joinpath(key + '.json').unlink(missing_ok=True)
-                    del self._retained[key]
+            for key in active:
+                del self._cards[key]
+            for key in retained:
+                self._path.with_suffix('.retained').joinpath(key + '.json').unlink(missing_ok=True)
+                del self._retained[key]
             self.catalog_seq = self._issue()
             self._save()
             self._changed.notify_all()
@@ -497,6 +501,11 @@ class Cards:
             message["seq"] = self._issue()
             self._log.request(message)
             self._changed.notify_all()
+
+    def reconcile_request_route(self, message: Dict[str, Any]) -> None:
+        """Restore request-to-placeholder routing before recovery workers start."""
+        with self._changed:
+            self._log.reconcile_request_route(message)
 
     def activity(self, card_id: str, author: str, phase: str, text: str, event_id: str,
                  run_id: Optional[str] = None) -> None:
@@ -672,7 +681,20 @@ class Cards:
     def retained(self):
         """Immutable canonical snapshots evicted from the live sync window."""
         with self._changed:
-            return [self._copy(card) for card in self._retained.values()]
+            folder = self._path.with_suffix('.retained')
+            result = []
+            for key in self._retained:
+                try:
+                    card = json.loads((folder / (key + '.json')).read_text(encoding='utf-8'))
+                    result.append(self._copy(card))
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    raise RuntimeError('Retained snapshot unavailable: %s' % key) from error
+            return result
+
+    def retained_metadata(self):
+        """Directory fields only; full content stays in the original snapshots."""
+        with self._changed:
+            return deepcopy(list(self._retained.values()))
 
     def _seal_card(self, card):
         if not card.get('agent') and not card.get('worker_agent') and not card.get('monitoring_only'):
@@ -690,7 +712,8 @@ class Cards:
         folder = self._path.with_suffix('.retained')
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         _write(folder / (key+'.json'), snapshot, 2)
-        self._retained[key] = snapshot
+        from .retained_index import summary
+        self._retained[key] = summary(snapshot)
 
     def _prune(self) -> None:
         """调用时已经拿着锁：只丢已经结束的旧卡，还在做的不能丢；最近做完的

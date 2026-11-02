@@ -178,6 +178,20 @@ def make_server(config: Config, service: Service,
             self._fail(401, "令牌不对或者没带令牌")
             return False
 
+        def _local_image_bridge(self) -> bool:
+            # This API trusts the local desktop to bind an encrypted, paired
+            # peer to its Runtime ID. It is never exposed to remote clients.
+            import ipaddress
+            try:
+                local = ipaddress.ip_address(self.client_address[0]).is_loopback
+            except ValueError:
+                local = False
+            mesh = getattr(service, "mesh", None)
+            if not local or mesh is None or not mesh.authorized(self.headers.get("Authorization", "")):
+                self._fail(403, "图片传输仅供本机已授权的电脑桥使用")
+                return False
+            return True
+
         def _body(self, limit: int = MAX_BODY_BYTES) -> Tuple[bool, Any]:
             try:
                 length = int(self.headers.get("Content-Length", ""))
@@ -405,6 +419,15 @@ def make_server(config: Config, service: Service,
                     "ok": True, "version": __version__, "backend": default_type,
                     "name": config.name,
                 })
+                return
+            if parts == ["v1", "mesh", "image-relays"]:
+                if not self._local_image_bridge():
+                    return
+                from ..delivery.image_relay import ImageRelayError
+                try:
+                    self._send(200, service.mesh.image_relay.pending(parse_qs(url.query).get("target", [""])[0]))
+                except ImageRelayError as error:
+                    self._fail(400, str(error))
                 return
             if not self._authorized():
                 return
@@ -640,15 +663,34 @@ def make_server(config: Config, service: Service,
             if not ok:
                 return
             try:
-                self._send(200, mesh.exchange(body))
+                result = mesh.exchange(body)
             except MeshError as error:
                 self._fail(400, str(error))
+                return
+            except OSError:
+                self._fail(503, "同步记录暂时无法保存，请稍后重试")
+                return
+            self._send(200, result)
 
         def do_POST(self) -> None:
             url = urlsplit(self.path)
             parts = [part for part in url.path.split("/") if part]
             if parts == ["v1", "mesh", "exchange"]:
                 self._mesh_exchange()
+                return
+            if len(parts) == 4 and parts[:3] == ["v1", "mesh", "image-relays"] and parts[3] in ("read", "receive", "finish", "progress", "unavailable", "ack"):
+                if not self._local_image_bridge():
+                    return
+                ok, body = self._body(512 * 1024)
+                if not ok:
+                    return
+                from ..delivery.image_relay import ImageRelayError
+                try:
+                    self._send(200, getattr(service.mesh.image_relay, parts[3])(body))
+                except (ImageRelayError, ArtifactError, RequestError, ValueError) as error:
+                    self._fail(400, str(error))
+                except OSError:
+                    self._fail(503, "图片传输存储暂不可用")
                 return
             if not self._authorized():
                 return
