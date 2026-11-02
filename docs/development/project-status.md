@@ -8,6 +8,46 @@ Snapshot: **2026-10-28, Asia/Shanghai**. This is a progress index, not a release
 or a claim of complete acceptance. The subsystem documents linked below remain
 authoritative for implementation and test evidence.
 
+## Windows / Mac integration handoff (2026-11-02)
+
+This handoff compares GitHub refs fetched on 2026-11-02 and a retained Windows
+conversation, not a live inspection of Windows. Do not install or publish from
+this document alone.
+
+- `feature/usage-history` at `d5ac93b` includes Windows desktop 0.1.17
+  connection recovery (`b025def`). `codex/consolidate-20261031` at `b9a2f22`
+  contains newer Mac-side desktop, Android and Runtime work, including Mac
+  experiment commit `7943e39`, but does not contain `b025def`.
+- The Windows conversation reports that desktop 0.1.20 was installed after the
+  0.1.17 recovery work, with 124 desktop tests passing. It reports the 0.1.20
+  UI changes were uncommitted and not pushed. Recheck the actual Windows worktree,
+  running version, task state and test evidence before treating that as current.
+- Before integrating, preserve and review the Windows 0.1.20 work and compare it
+  with both branch tips. Do not replace the Windows checkout with either branch,
+  or copy the Mac's older dirty primary checkout wholesale. Its changes include
+  old Android version settings, persona, usage and channel drafts; some were
+  already incorporated elsewhere and their remaining status is unverified.
+- A trial merge of the two GitHub tips produced conflicts in desktop startup,
+  UI, package versions, tests, READMEs and this status document. In particular,
+  reconcile account-only routing and first-run/controlled shutdown with the
+  Runtime monitor, identity checks, retry and subscription recovery. Preserve
+  the newer UI and Windows recovery behavior, verify the actual Runtime module
+  name and package contents, and choose versions from the integrated source;
+  do not mechanically select either side. Test account restore, login/logout,
+  startup and shutdown, authenticated sync failure and recovery, relay timeout,
+  and preservation of profiles, tasks and message cursors.
+- Run the applicable desktop build and tests plus the repository gate. Record
+  exact candidate versions and verify real phone/public-network recovery,
+  multi-client convergence and rendered first-response timing separately.
+  Retain a compatible rollback artifact. A source push or passing mock tests does
+  not establish installation or live acceptance. Do not restart an active
+  Runtime without the authorization required by the reliability rules.
+- The 0.1.20 record limits remote helper management and native session
+  continuation because its backend did not support them. Recheck those behaviors
+  on the candidate rather than presenting them as supported. The record also
+  reports one task as running both before and after restart; that alone does not
+  prove the task was uninterrupted.
+
 ## Update: desktop connection recovery and GitHub synchronization (2026-11-01)
 
 Next: continue investigating and repairing Mac-side connection recovery on
