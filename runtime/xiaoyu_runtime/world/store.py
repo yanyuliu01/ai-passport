@@ -49,6 +49,7 @@ class Store:
             except OSError:
                 pass
         self._lock = threading.Lock()
+        self._session_revision = 0
         self._sessions: Dict[str, Dict[str, str]] = {}
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -98,6 +99,11 @@ class Store:
         with self._lock:
             return {session for agents in self._sessions.values() for session in agents.values()}
 
+    @property
+    def session_revision(self):
+        with self._lock:
+            return self._session_revision
+
     def remember(self, conversation: str, agent: str, session_id: Optional[str]) -> None:
         with self._lock:
             sessions = self._sessions.setdefault(conversation, {})
@@ -107,6 +113,7 @@ class Store:
                 sessions[agent] = session_id
             elif sessions.pop(agent, None) is None:
                 return
+            self._session_revision += 1
             self._save()
 
     def forget(self, conversation: str) -> bool:
@@ -117,6 +124,7 @@ class Store:
                      if name == conversation or name.startswith(conversation + "/")]
             existed = any([self._sessions.pop(name, None) for name in names])
             if existed:
+                self._session_revision += 1
                 self._save()
             return existed
 

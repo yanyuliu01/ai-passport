@@ -11,23 +11,23 @@ uncommitted Windows work and keep a compatible rollback package and user data.
 ## Source and current boundary
 
 The `codex/runtime-sync-recovery-20261102` GitHub branch is based on the
-Mac/Windows integration branch. The Mac previously installed Runtime **0.27.7**
-with Python source-tree SHA-256
-`a448049b53c91dc44e019bd4762cbba49deead9322ab88d2d42fda67b26d68c3`.
-This branch adds conversation identity and on-demand history fixes; that newer
-candidate has not been installed on either computer. Its Python source-tree
-SHA-256 is `b767ae56f7cb7c462dad611b916aa03d3a5b543cbfdd05a9ec9768126cab35b2`.
-Both use the same version string, which does not identify the build. The digest uses
+Mac/Windows integration branch. It includes synchronization recovery, shared
+Runtime history and the directory performance fix installed on the Mac as
+Runtime **0.27.7**, with Python source-tree SHA-256
+`9b428a6960574b6e76e1350f06ad35cd7f6d473933ee02bdd15c269392683e72`.
+Earlier builds with the same version string had different source digests, so
+the version alone does not identify the build. The digest uses
 the packager's ordered file names and bytes, so Windows line-ending conversion
 can change it; compare the Git revision and build manifest as well.
 
 At the last Mac check the main conversation was owned by the Mac; Windows
 reported Runtime **0.24.0** and was online. Recheck both facts before acting.
 The Mac has `mesh.home=true` and `mesh.require_owner` was not enabled. This
-branch includes the complete tested Runtime source needed by the repair, not
-the later uncommitted Android and desktop work or the separately developed
-Runtime 0.27.8 performance candidate. Do not replace the Windows desktop client
-or its uncommitted work with this older integration snapshot.
+branch includes the tested Runtime source needed by the repair, including the
+directory optimization adapted from the separately developed performance
+candidate. It does not include later uncommitted Android and desktop work. Do
+not replace the Windows desktop client or its uncommitted work with this older
+integration snapshot.
 
 To inspect the handoff without switching or resetting an existing checkout,
 fetch the branch and create a separate worktree from the repository. If the
@@ -58,7 +58,7 @@ upgrade appear successful.
    generated manifest and bundled dependency closure. Run the Runtime suite,
    including `test_projection_recovery.py`, `test_replica_failure.py`,
    `test_owner_fencing_fault.py`, `test_runtime_conversation_sync.py`,
-   `test_mesh.py` and `test_ownership.py`, and
+   `test_mesh.py`, `test_ownership.py` and `test_conversation_directory.py`, and
    the applicable repository gate. Report platform-specific failures and skips;
    do not treat Mac results as a Windows pass.
 3. Preserve the Windows Runtime's identity, existing mesh secret, peer addresses,
@@ -88,6 +88,13 @@ reports partial coverage and cannot recover history never received or retained.
 Reset-hidden, delegated-worker, fenced and other-conversation records must stay
 excluded. Existing automatic local context selection is unchanged; its triggers
 and budgets require separate design.
+
+The Mac installation passed 1,392 Runtime host tests and the complete repository
+gate. A live Runtime recall returned one retained Windows Runtime conversation;
+client-rendered first-response timing, live Windows convergence and network
+fault recovery remain unverified.
+The installed package reports the same pre-existing missing `sherpa-onnx`
+dependency as the previous package; voice was not verified.
 
 Test a temporary projection write failure, retry and process restart; a lost
 command acknowledgement and final result; duplicate delivery; unavailable owner

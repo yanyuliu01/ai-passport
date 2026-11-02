@@ -78,6 +78,9 @@ class Cards:
         self._provenance = threading.local()
         self.audit = TaskAudit(self._path.with_name("audit"))
         self.catalog_seq = 0
+        # Directory inputs do not change for message-only updates.
+        self._directory_seq = 0
+        self._retained_revision = 0
         self._retained = {}
         self.conversations = ConversationCatalog(self._path.with_name("conversations.json"))
         from .conversation_directory import DirectoryMetadata
@@ -476,6 +479,8 @@ class Cards:
             for key in retained:
                 self._path.with_suffix('.retained').joinpath(key + '.json').unlink(missing_ok=True)
                 del self._retained[key]
+            if retained:
+                self._retained_revision += 1
             self.catalog_seq = self._issue()
             self._save()
             self._changed.notify_all()
@@ -618,6 +623,7 @@ class Cards:
             card["record_epoch"] = card.get("record_epoch") or self._epoch
             self._log.observe(card)
         self._seq += 1
+        self._directory_seq = self._seq
         card["seq"] = self._seq
         card["updated_at"] = time.time()
         self._journal.record(card)  # 记进任务日志就算落盘了；快照攒够了才重写
@@ -694,7 +700,19 @@ class Cards:
     def retained_metadata(self):
         """Directory fields only; full content stays in the original snapshots."""
         with self._changed:
-            return deepcopy(list(self._retained.values()))
+            # Summaries are replaced or removed, never mutated in place.
+            summaries = list(self._retained.values())
+        return deepcopy(summaries)
+
+    @property
+    def directory_revision(self):
+        with self._changed:
+            return self._directory_seq, self.catalog_seq
+
+    @property
+    def retained_revision(self):
+        with self._changed:
+            return self._retained_revision
 
     def _seal_card(self, card):
         if not card.get('agent') and not card.get('worker_agent') and not card.get('monitoring_only'):
@@ -714,6 +732,7 @@ class Cards:
         _write(folder / (key+'.json'), snapshot, 2)
         from .retained_index import summary
         self._retained[key] = summary(snapshot)
+        self._retained_revision += 1
 
     def _prune(self) -> None:
         """调用时已经拿着锁：只丢已经结束的旧卡，还在做的不能丢；最近做完的

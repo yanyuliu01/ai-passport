@@ -2662,6 +2662,12 @@ unfiltered directory to avoid listing the same work twice. Search includes the
 original title, project classification and source computer. It never merges
 records because names or directory basenames match.
 
+The directory cache tracks task, catalog and session changes separately from
+message-only sequence updates. It reuses unchanged retained-task metadata and
+copies those summaries outside the lock shared with chat. Directory-affecting
+changes still refresh the projection, and the response carries the latest
+message sequence. This does not alter history retention or automatic recall.
+
 The authenticated Gateway exposes paged `GET /v1/directory?q=&cursor=`,
 `POST /v1/directory/<uid>` with `fields` and `revision`, paged
 `GET /v1/directory/<uid>/history`, and explicit `POST .../metadata` and

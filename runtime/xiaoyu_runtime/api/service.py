@@ -984,30 +984,40 @@ class Service:
 
     def directory(self, include_retained=True):
         seq = self.card_store.seq
+        revision = (self.card_store.directory_revision, self._store.session_revision)
         cache = getattr(self, '_directory_cache', {})
         cached = cache.get(include_retained)
-        if cached and cached[0] == seq:
-            return dict(cached[1], discovery=dict(getattr(getattr(self, 'discovery', None), 'status', {})))
+        if cached and cached[0] == revision:
+            return dict(cached[1], seq=seq, discovery=dict(getattr(getattr(self, 'discovery', None), 'status', {})))
         from ..world.conversation_directory import project, home_scope
         config = self._xiaoyu._config
         homes = {kind: home_scope(path or Path.home() / default) for kind, path, default in (
             ('codex', config.desktop_codex_dir, '.codex'), ('claude', config.desktop_claude_dir, '.claude'))}
         cards = self.card_store.recent(None, 10 ** 6)
         if include_retained:
-            cards += self.card_store.retained_metadata()
-        for card in cards:
+            retained_revision = self.card_store.retained_revision
+            retained_cache = getattr(self, '_directory_retained_cache', None)
+            if retained_cache is None or retained_cache[0] != retained_revision:
+                retained_cache = (retained_revision, self.card_store.retained_metadata())
+                self._directory_retained_cache = retained_cache
+            cards += retained_cache[1]
+        for index, card in enumerate(cards):
             if not card.get('monitoring_only') and not card.get('worker_session') and card.get('agent'):
                 session = self._store.session('%s/%s' % (card.get('conversation', 'default'), card['id']), card['agent'])
                 if session:
+                    # Retained summaries are shared across directory rebuilds.
+                    card = cards[index] = dict(card)
                     card.update(worker_session=session, worker_agent=card['agent'])
         rows = project(cards, self.card_store.conversations.list(),
                        self.card_store.directory.snapshot(), self.runtime_id,
                        getattr(config, 'name', ''), config.agents, self.card_store.epoch, homes,
                        self.card_store.directory.source_snapshot())
         owned = self._store.session_ids()
+        borrowed = {card.get('borrowed_session') for card in cards
+                    if card.get('state') in ('working', 'talking', 'waiting')}
         for row in rows:
             if row['kind'] == 'native':
-                row['native_open'] = self._native_open_capability(row, owned, cards)
+                row['native_open'] = self._native_open_capability(row, owned, cards, borrowed)
                 row['native_presentation'] = dict(presentation.policy()['native_surfaces'].get(row.get('agent'),
                     {'status': 'incomplete', 'reason': 'native-rendering-not-verified'}),
                     label='原生窗口显示尚未统一；共享记录视图不代表原生端已完成')
@@ -1019,11 +1029,11 @@ class Service:
                 row['generated'] = value
         result = {"entries": rows, "policy": "shared-directory-v1", "seq": seq, "storage_errors": sorted(self.card_store.directory.errors),
                   'discovery': dict(getattr(getattr(self, 'discovery', None), 'status', {}))}
-        cache[include_retained] = (seq, result)
+        cache[include_retained] = (revision, result)
         self._directory_cache = cache
         return result
 
-    def _native_open_capability(self, row, owned, cards):
+    def _native_open_capability(self, row, owned, cards, borrowed=None):
         import sys
         from ..world.conversation_directory import home_scope
         reason = ''
@@ -1037,7 +1047,8 @@ class Service:
             reason = '此会话使用隔离配置目录，原生应用无法保证接入同一份记录'
         elif row.get('available') is False or row.get('state') not in ('turn_ended','done','failed','cancelled'):
             reason = '来源正在执行、离线或状态未知；暂不切换控制入口'
-        elif any(c.get('borrowed_session') == row.get('native_session_id') and c.get('state') in ('working','talking','waiting') for c in cards):
+        elif (row.get('native_session_id') in borrowed if borrowed is not None else
+              any(c.get('borrowed_session') == row.get('native_session_id') and c.get('state') in ('working','talking','waiting') for c in cards)):
             reason = 'Runtime 正在使用此原生会话，请等待本轮结束'
         return {'supported': not bool(reason), 'reason': reason, 'effect': 'navigate-existing-session'}
 

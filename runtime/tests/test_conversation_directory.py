@@ -182,6 +182,70 @@ class DirectoryTests(DirectoryCase):
         self.assertTrue(first['native_inputs_are_not_new_owner_requests'])
 
 class DirectoryBoundaryTests(DirectoryCase):
+    def test_message_only_sequence_reuses_directory_but_returns_latest_sequence(self):
+        from xiaoyu_runtime.world import conversation_directory
+        self.x.record.task_open('default', 'task', 'done', 'codex')
+        with mock.patch.object(conversation_directory, 'project', wraps=conversation_directory.project) as build:
+            first = self.service.directory()
+            self.x.cards.bump()
+            second = self.service.directory()
+            self.assertEqual(1, build.call_count)
+            self.assertEqual(first['entries'], second['entries'])
+            self.assertEqual(self.x.cards.seq, second['seq'])
+            self.assertGreater(second['seq'], first['seq'])
+
+    def test_directory_cache_tracks_card_metadata_and_session_changes(self):
+        from xiaoyu_runtime.world import conversation_directory
+        card = self.x.record.task_open('default', 'original', 'done', 'codex')
+        with mock.patch.object(conversation_directory, 'project', wraps=conversation_directory.project) as build:
+            self.assertEqual('original', self.row(card)['title'])
+            self.x.record.task(card['id'], title='renamed')
+            self.assertEqual('renamed', self.row(card)['title'])
+            self.store.remember('default/' + card['id'], 'codex', 'session-new')
+            self.assertTrue(any(row.get('native_session_id') == 'session-new'
+                                for row in self.service.directory()['entries']))
+            key = self.row(card)['uid']
+            self.x.record.directory_edit(key, {'title': 'alias'}, self.service.runtime_id, 0)
+            self.assertEqual('alias', self.row(card)['title'])
+            self.assertEqual(4, build.call_count)
+
+    def test_unchanged_retained_metadata_is_reused_after_live_card_update(self):
+        card = self.x.record.task_open('default', 'task', 'done', 'codex')
+        with mock.patch.object(self.x.cards, 'retained_metadata', wraps=self.x.cards.retained_metadata) as read:
+            self.service.directory()
+            self.x.record.task(card['id'], title='changed')
+            self.service.directory()
+            self.assertEqual(1, read.call_count)
+            with self.x.cards._changed:
+                self.x.cards._retained_revision += 1
+            self.x.record.task(card['id'], title='changed again')
+            self.service.directory()
+            self.assertEqual(2, read.call_count)
+
+    def test_copying_retained_metadata_does_not_hold_cards_lock(self):
+        import threading
+        from xiaoyu_runtime.world import cards as cards_module
+        started, release, copied = threading.Event(), threading.Event(), threading.Event()
+        original = cards_module.deepcopy
+        def slow_copy(value):
+            started.set()
+            release.wait(3)
+            return original(value)
+        self.addCleanup(release.set)
+        with mock.patch.object(cards_module, 'deepcopy', side_effect=slow_copy):
+            thread = threading.Thread(target=lambda: (self.x.cards.retained_metadata(), copied.set()))
+            thread.start()
+            self.assertTrue(started.wait(1))
+            acquired = self.x.cards._changed.acquire(timeout=1)
+            try:
+                self.assertTrue(acquired)
+            finally:
+                if acquired:
+                    self.x.cards._changed.release()
+                release.set()
+                thread.join(3)
+            self.assertTrue(copied.is_set())
+
     def test_short_turns_stay_in_one_logical_chat_instead_of_becoming_directory_tasks(self):
         for i in range(5):
             card = self.x.record.task_open('default','short message')
