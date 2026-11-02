@@ -12,6 +12,22 @@ increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
 
+## Local and relay recovery (0.1.17 source)
+
+The desktop periodically verifies the confirmed loopback Runtime's identity and
+sync response with a bounded, read-only probe. Repeated failures mark that route
+unavailable; after the same Runtime authenticates and sync responds again, its
+subscription is renewed using the retained cursor and request identities. A live
+but unresponsive Runtime is never killed or restarted by this probe. Authentication
+or identity failures require an explicit corrected connection.
+
+The relay sends a bounded ping and reconnects if its matching pong is missing.
+Transient network failures while restoring an account retry with backoff; invalid
+credentials or identity do not. These changes retain the existing protocol and
+stored data. Source and host-test results do not establish installed desktop,
+public-network, physical phone, multi-end timing, or real-model acceptance.
+
+
 ## Xiaoyu identity and character packaging (0.1.27 source)
 
 The product, IPC and new internal names use Xiaoyu. Existing encrypted profiles retain their storage/keychain identity. New managed Runtime profiles read the complete shared character file; packaging verifies its hash as well as Runtime code. Version 0.1.27 incorporates the bundled-helper and Runtime shutdown baseline before installation; installed-client acceptance is recorded separately.

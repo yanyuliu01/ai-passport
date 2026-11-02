@@ -58,6 +58,14 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   }
 }
 
+async function launchesReached(f: Awaited<ReturnType<typeof fixture>>, count: number): Promise<boolean> {
+  try { return (await f.launches()).length === count; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 test('supervision and a second start cannot race an in-flight initial start', async t => {
   const f = await fixture(t), starting = f.host.start();
   await until(() => f.host.ownedRunning());
@@ -66,7 +74,7 @@ test('supervision and a second start cannot race an in-flight initial start', as
   f.ready();
   assert.equal((await starting).runtimeId, 'a'.repeat(32));
   assert.equal(await f.host.recover(), undefined);
-  await until(async () => (await f.launches()).length === 1);
+  await until(() => launchesReached(f, 1));
 });
 
 test('late recovery is single flight and cannot reconnect after shutdown', async t => {
@@ -91,14 +99,14 @@ test('late recovery is single flight and cannot reconnect after shutdown', async
 test('a signal-exited owned service can restart, retaining the original configuration', async t => {
   const f = await fixture(t), starting = f.host.start();
   await until(() => f.host.ownedRunning()); f.ready(); await starting;
-  await until(async () => (await f.launches()).length === 1);
+  await until(() => launchesReached(f, 1));
   const pid = Number((await f.launches())[0]);
   process.kill(pid, 'SIGTERM');
   await until(() => !f.host.ownedRunning()); f.ready(false);
   const recovering = f.host.recover();
   await until(() => f.host.ownedRunning()); f.ready();
   assert.equal((await recovering)?.runtimeId, 'a'.repeat(32));
-  await until(async () => (await f.launches()).length === 2);
+  await until(() => launchesReached(f, 2));
   assert.equal(await f.host.recover(), undefined);
 });
 
@@ -133,7 +141,7 @@ test('new Runtime profiles get the complete supplied character and existing prof
 test('final shutdown waits for the owned process and forbids late startup or recovery', async t => {
   const f = await fixture(t, 300), starting = f.host.start();
   await until(() => f.host.ownedRunning()); f.ready(); await starting;
-  await until(async () => (await f.launches()).length === 1);
+  await until(() => launchesReached(f, 1));
   const pid = Number((await f.launches())[0]);
   await f.host.shutdownOwned();
   assert.equal(f.host.ownedRunning(), false);

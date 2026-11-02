@@ -97,10 +97,10 @@ export function proofMatches(token: string, host: unknown, nonce: string, answer
   return timingSafeEqual(Buffer.from(hostProof(token, host, nonce)), Buffer.from(answer));
 }
 
-export async function identify(transport: RuntimeTransport, url: string, token: string, name = '这台电脑'): Promise<Endpoint> {
+export async function identify(transport: RuntimeTransport, url: string, token: string, name = '这台电脑', signal?: AbortSignal): Promise<Endpoint> {
   const candidate: Endpoint = { runtimeId: '', spaceId: '', name, url: validateRuntimeURL(url), token, capabilities: [] };
   const nonce = randomBytes(16).toString('hex');
-  const info = await transport.request(candidate, 'GET', '/v1/info?nonce=' + nonce);
+  const info = await transport.request(candidate, 'GET', '/v1/info?nonce=' + nonce, undefined, signal);
   if (typeof info.runtime_id !== 'string' || typeof info.subject_id !== 'string'
     || !Array.isArray(info.capabilities) || !info.capabilities.includes('sync'))
     throw new RuntimeError('此 Runtime 尚不支持所需同步协议', 426);

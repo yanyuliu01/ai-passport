@@ -7,6 +7,7 @@ import { ClientDatabase } from './core/database.js';
 import { DesktopClient, type SecretStore } from './core/client.js';
 import { HTTPRuntimeTransport } from './core/runtime-client.js';
 import { RuntimeHost, findExecutable } from './core/runtime-host.js';
+import { RuntimeMonitor, type RuntimeProblem } from './core/runtime-monitor.js';
 import { bundledRuntimeLaunch } from './core/runtime-layout.js';
 import { bundledAgents } from './core/bundled-agents.js';
 import { agentDescriptors, scanAgents } from './core/agent-catalog.js';
@@ -23,6 +24,7 @@ let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopCl
 let db: ClientDatabase, host: RuntimeHost, setup: Setup;
 let firstRun: FirstRun;
 let account: AccountConnection;
+let localMonitor: RuntimeMonitor | undefined;
 let pairingPrompts: PairingPrompts | undefined;
 let accountFocused = false;
 let currentAccountSpace: () => string | undefined = () => undefined;
@@ -128,13 +130,14 @@ async function connectAccountLocal(): Promise<void> {
   if (quitting || connecting || !account.view().signedIn) return;
   if (firstRun?.view().required) { await firstRun.advance(); return; }
   connecting = true;
+  localMonitor?.retry();
   try {
     const endpoint = await setup.resumeAccount();
     if (quitting) return;
     if (endpoint) {
       client.add(endpoint); client.select(endpoint.spaceId);
-      client.runtime = { state: 'ready', message: '已复用这台电脑的 Runtime · 原配置和记录保留' };
-      void account.refresh();
+      if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '已复用这台电脑的 Runtime · 原配置和记录保留' };
+      void localMonitor?.check(); void account.refresh();
     }
   } catch (error) {
     client.runtime = { state: 'error', message: error instanceof Error ? error.message : '本机服务尚未连接，原记录保留' };
@@ -154,7 +157,7 @@ async function quit(): Promise<void> {
   firstRun?.suspend(); client?.stop();
   try { await host?.shutdownOwned(); }
   catch { quitting = false; dialog.showErrorBox('小鱼尚未退出', '本机服务尚未停止，请再次退出。配置和记录已保留。'); return; }
-  await account?.stop(); tray?.destroy();
+  localMonitor?.stop(); await account?.stop(); tray?.destroy();
   db?.close(); app.exit(0);
 }
 
@@ -185,8 +188,9 @@ async function main(): Promise<void> {
   const local = new HTTPRuntimeTransport();
   currentAccountSpace = () => secrets.load<string>('account-space');
   bindLegacyModelKey(secrets);
-  const getLocal = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://')
+  const localCandidate = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://')
     && endpoint.spaceId === secrets.load<string>('account-space'));
+  const getLocal = () => { const endpoint = localCandidate(); return endpoint && !client.runtimeUnavailable(endpoint) ? endpoint : undefined; };
   client = new DesktopClient(db, { request(endpoint, method, path, body, signal) {
     try {
       return accountRoute(Boolean(account?.view().signedIn), Boolean(account?.owns(endpoint)), endpoint, secrets.load<string>('account-space')) === 'account'
@@ -207,6 +211,24 @@ async function main(): Promise<void> {
     return scanAgents(findExecutable, undefined, agentDescriptors(homedir(), process.platform, tools)
       .filter(item => includeHelpers || item.id === 'dsh' || item.id === 'pi'));
   });
+  localMonitor = new RuntimeMonitor(local, localCandidate,
+    endpoint => db.cursor(endpoint.runtimeId, endpoint.capabilities.includes('all_conversations') ? '*' : 'default'),
+    (endpoint, problem) => {
+      const messages: Record<RuntimeProblem, string> = {
+        connection: '本机 Runtime 暂不可达，正在等待恢复；运行中的任务保留',
+        sync: '本机 Runtime 同步暂不可用，正在等待恢复；运行中的任务保留',
+        authentication: '本机 Runtime 认证未通过，请检查连接设置；原任务保留',
+        identity: '本机 Runtime 身份发生变化，请检查连接设置；原任务保留',
+        unsupported: '本机 Runtime 的连接或同步协议不可用，请检查连接设置；原任务保留',
+      };
+      client.setRuntimeProblem(endpoint, messages[problem]);
+      client.runtime = { state: 'error', message: messages[problem] };
+      void account?.refresh(); notify();
+    }, endpoint => {
+      client.setRuntimeProblem(endpoint); client.refreshRuntime(endpoint.runtimeId);
+      client.runtime = { state: 'ready', message: '本机服务已恢复 · 模型响应待验证' };
+      void account?.refresh(); notify();
+    });
   firstRun = new FirstRun(db, secrets, setup, host, local,
     () => Boolean(!quitting && account?.view().signedIn && account.view().provisioned && !account.view().busy), endpoint => {
       client.add(endpoint); client.select(endpoint.spaceId);
@@ -220,7 +242,7 @@ async function main(): Promise<void> {
     const current = client.endpoints.get(endpoint.runtimeId);
     if (!current || current.url.startsWith('peer://')) client.add(endpoint);
     if (!accountFocused) { client.select(endpoint.spaceId); accountFocused = true; }
-  }, (space, values) => client.mergeConversations(space, values), hostname(), testServer);
+  }, (space, values) => client.mergeConversations(space, values), hostname(), testServer, () => { void connectAccountLocal(); });
   pairingPrompts = new PairingPrompts(() => snapshot().pairing.requests, async request => {
     showWindow();
     const result = await dialog.showMessageBox(window!, { type: 'question', title: request.computer ? '电脑请求连接' : '手机请求连接',
@@ -252,13 +274,13 @@ async function main(): Promise<void> {
     if (connecting) throw new Error('本机服务正在连接，请稍候');
     const input = object(value);
     if (!Array.isArray(input.agents) || input.agents.length > 3 || input.agents.some(id => typeof id !== 'string')) throw new Error('帮手选择无效');
-    connecting = true; client.runtime = { state: 'connecting', message: '正在启用本机服务并核对身份' }; notify();
+    connecting = true; localMonitor?.retry(); client.runtime = { state: 'connecting', message: '正在启用本机服务并核对身份' }; notify();
     try {
       const endpoint = await setup.enable({ agents: input.agents as string[],
         service: input.service === undefined ? undefined : requiredString(input.service, 100),
         deepseekKey: input.deepseekKey === undefined ? undefined : requiredString(input.deepseekKey, 4096) });
-      client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
-      void account.refresh();
+      client.add(endpoint); if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '本机服务已连接 · 模型响应待验证' };
+      void localMonitor?.check(); void account.refresh();
     } catch (error) { client.runtime = { state: 'error', message: error instanceof Error ? error.message : '服务未能启用' }; throw error; }
     finally { connecting = false; notify(); }
   });
@@ -329,7 +351,7 @@ async function main(): Promise<void> {
     { type: 'separator' }, { label: '退出小鱼', click: () => { void quit(); } }]));
   tray.on('click', showWindow);
   app.on('activate', showWindow);
-  powerMonitor.on('resume', () => { account.reconnect(); client.refresh(); });
+  powerMonitor.on('resume', () => { account.reconnect(); client.refresh(); void localMonitor?.check(); });
   app.on('before-quit', event => { event.preventDefault(); if (!quitting) void quit(); });
   app.on('window-all-closed', () => {});
   if (!process.argv.includes('--background')) showWindow();
@@ -338,10 +360,11 @@ async function main(): Promise<void> {
   const supervisor = setInterval(() => {
     if (quitting || !account.view().signedIn) return;
     if (firstRun.view().required) { void firstRun.advance(); return; }
+    void localMonitor?.check();
     void host.recover().then(endpoint => {
       if (quitting) return;
       if (endpoint && (!setup.allowed(endpoint) || endpoint.spaceId !== secrets.load<string>('account-space'))) throw new Error('服务身份变化，需要重新确认');
-      if (endpoint) { client.add(endpoint); client.runtime = { state: 'ready', message: '本机服务已恢复' }; notify(); }
+      if (endpoint) { client.add(endpoint); if (!client.runtimeUnavailable(endpoint)) client.runtime = { state: 'ready', message: '本机服务已恢复 · 模型响应待验证' }; void localMonitor?.check(); notify(); }
     }).catch(() => { client.runtime = { state: 'error', message: '本机服务连续退出，自动恢复已暂停，请检查连接设置' }; notify(); });
   }, 5000);
   supervisor.unref();
