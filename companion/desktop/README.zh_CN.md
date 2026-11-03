@@ -9,6 +9,34 @@
 主人已于 2026-10-21 确认 v8 交互参考稿。首次启用增量沿用现有形象、灰蓝底和蓝色
 操作按钮。0.1.2 已实现下述聊天与工作记录主体，源码可用不代表完整的跨平台验收通过。
 
+## macOS 休眠与崩溃恢复
+
+Mac 客户端运行期间（包括隐藏窗口时）会阻止系统因空闲自动休眠，但允许屏幕熄灭。
+退出客户端后释放该请求。手动休眠、笔记本合盖、网络连接和公网可达性是独立条件。
+
+可选的用户级崩溃守护程序在已安装的 `/Applications/小鱼.app` 非零退出或被信号
+终止后尝试重启。它不会重启正常退出的客户端、在登录时启动客户端、检测进程卡死，
+也不会直接重启 Runtime。守护程序使用系统事件而非轮询，重试有退避，10 分钟内最多
+尝试三次；恢复期间会短暂阻止空闲休眠。无法核实退出状态时不会猜测。守护程序独立于
+桌面安装包，后台启动失败写入日志，不弹系统错误提示；安装或更新客户端不会自动启用它。
+
+在目标 Mac 用户账号登录后，安装 Apple Command Line Tools，并在本仓库执行：
+
+```bash
+python3 companion/desktop/tools/macos/install-crash-guard.py
+```
+
+安装器创建用户级 LaunchAgent，将可执行文件、源码和事件日志保存在
+`~/Library/Application Support/xiaoyu-crash-guard`。如果已存在守护程序或
+LaunchAgent，安装器会拒绝覆盖；如需替换应先核对现有文件。它不会修改 Runtime 或
+重启客户端。独立 macOS 集成测试只启动一次性测试程序：
+
+```bash
+swiftc -O -swift-version 5 companion/desktop/tools/macos/crash-guard.swift -o /tmp/xiaoyu-crash-guard-test
+python3 companion/desktop/tools/macos/test-crash-guard.py /tmp/xiaoyu-crash-guard-test
+python3 companion/desktop/tools/macos/test_install_crash_guard.py
+```
+
 ## 本机与中继连接恢复（0.1.17 源码）
 
 桌面端定期以有时限的只读请求检查已确认的本机 Runtime 身份和同步接口。连续失败时将该

@@ -12,6 +12,42 @@ increment uses its existing portraits, gray-blue background and blue actions.
 The 0.1.2 increment implements the conversation/work-record shell below;
 source availability does not establish complete multi-platform acceptance.
 
+## macOS sleep and crash recovery
+
+While the Mac client is running, including when its window is hidden, it prevents
+automatic idle system sleep while allowing the display to turn off. Quitting the
+client releases that request. Explicit sleep, closing a laptop lid, network
+connectivity and public reachability are separate conditions.
+
+An optional per-user crash guard can restart the installed Xiaoyu app in the
+system Applications folder after a nonzero exit or termination by a signal. It
+does not restart a normal quit, start the client at login, detect a hung process,
+or restart the Runtime directly. It uses system events rather than a polling
+loop, applies bounded backoff with at most three restart attempts in ten minutes,
+and holds idle sleep briefly during recovery. If an exit status cannot be
+verified, it does not guess. Failed background launches are logged without
+showing system error dialogs. The guard is separate from the desktop installer;
+installing or updating the client does not automatically enable it.
+
+With Apple Command Line Tools installed, install the optional guard from this
+checkout while logged into the target Mac user account:
+
+```bash
+python3 companion/desktop/tools/macos/install-crash-guard.py
+```
+
+The installer creates a user LaunchAgent and keeps its executable, source and
+event log under `~/Library/Application Support/xiaoyu-crash-guard`. It refuses
+to replace an existing guard or LaunchAgent; inspect those files before an
+intentional replacement. It does not alter the Runtime or restart the client.
+The separate macOS integration test launches only a disposable fixture:
+
+```bash
+swiftc -O -swift-version 5 companion/desktop/tools/macos/crash-guard.swift -o /tmp/xiaoyu-crash-guard-test
+python3 companion/desktop/tools/macos/test-crash-guard.py /tmp/xiaoyu-crash-guard-test
+python3 companion/desktop/tools/macos/test_install_crash_guard.py
+```
+
 ## Local and relay recovery (0.1.17 source)
 
 The desktop periodically verifies the confirmed loopback Runtime's identity and
