@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, safeStorage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, shell, Tray } from 'electron';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
@@ -18,6 +18,7 @@ import { bindLegacyModelKey } from './core/model-key.js';
 import { PairingPrompts } from './core/pairing-prompts.js';
 import { accountRoute } from './core/connection-policy.js';
 import { AccountConnection } from './core/account.js';
+import { keepAwakeWhileRunning } from './core/keep-awake.js';
 import type { Json } from './shared.js';
 
 let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopClient;
@@ -29,6 +30,7 @@ let pairingPrompts: PairingPrompts | undefined;
 let accountFocused = false;
 let currentAccountSpace: () => string | undefined = () => undefined;
 let quitting = false, connecting = false;
+let releaseSleepProtection = () => {};
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const ui = resolve(directory, '../dist-ui/index.html');
 const rendererURL = pathToFileURL(ui).href;
@@ -158,11 +160,12 @@ async function quit(): Promise<void> {
   try { await host?.shutdownOwned(); }
   catch { quitting = false; dialog.showErrorBox('小鱼尚未退出', '本机服务尚未停止，请再次退出。配置和记录已保留。'); return; }
   localMonitor?.stop(); await account?.stop(); tray?.destroy();
-  db?.close(); app.exit(0);
+  db?.close(); releaseSleepProtection(); app.exit(0);
 }
 
 async function main(): Promise<void> {
   await app.whenReady();
+  releaseSleepProtection = keepAwakeWhileRunning(process.platform, powerSaveBlocker);
   app.setAboutPanelOptions({ applicationName: '小鱼', applicationVersion: app.getVersion() });
   // Explicit labels keep OS menus on the new name even with a legacy vault identity.
   if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([
