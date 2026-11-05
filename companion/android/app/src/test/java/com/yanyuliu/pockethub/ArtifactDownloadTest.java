@@ -45,6 +45,33 @@ public class ArtifactDownloadTest {
         assertNotEquals(ArtifactDownload.key("http://one\n" + ID), ArtifactDownload.key("http://two\n" + ID));
         assertNotEquals(ArtifactDownload.key("http://one\n" + ID + "\nold"), ArtifactDownload.key("http://one\n" + ID + "\nnew"));
     }
+
+    @Test public void relayDownloadsLargeArtifactInVerifiedChunksAndRejectsCorruption() throws Exception {
+        byte[] payload = new byte[3_200_000];
+        new java.util.Random(7).nextBytes(payload);
+        String sha = hex(java.security.MessageDigest.getInstance("SHA-256").digest(payload));
+        File directory = Files.createTempDirectory("artifact-relay-test").toFile();
+        File output = new File(directory, "content.bin");
+        final int[] count = {0};
+        try {
+            ArtifactDownload.relayBytes = address -> {
+                java.net.URI uri = java.net.URI.create(address.replace("relay://", "https://"));
+                String[] fields = uri.getQuery().split("&");
+                int offset = Integer.parseInt(fields[0].substring("offset=".length()));
+                int length = Integer.parseInt(fields[1].substring("length=".length()));
+                count[0]++;
+                return java.util.Arrays.copyOfRange(payload, offset, offset + length);
+            };
+            ArtifactDownload.download("relay://test", "token", item(sha, payload.length), false, output);
+            assertArrayEquals(payload, Files.readAllBytes(output.toPath()));
+            assertEquals(4, count[0]);
+            output.delete();
+            ArtifactDownload.relayBytes = address -> new byte[1];
+            try { ArtifactDownload.download("relay://test", "token", item(sha, payload.length), false, output); fail("invalid chunk accepted"); }
+            catch (java.io.IOException expected) { assertTrue(expected.getMessage().contains("大文件")); }
+            assertFalse(output.exists());
+        } finally { ArtifactDownload.relayBytes = null; output.delete(); directory.delete(); }
+    }
     private String hex(byte[] bytes) { StringBuilder value = new StringBuilder(); for (byte b : bytes) value.append(String.format("%02x", b & 255)); return value.toString(); }
     private static final class LocalServer implements AutoCloseable {
         final java.net.ServerSocket socket;

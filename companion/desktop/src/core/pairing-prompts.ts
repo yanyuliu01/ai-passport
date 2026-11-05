@@ -1,4 +1,4 @@
-export interface PairingRequest { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }
+export interface PairingRequest { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean; imageRuntimeId?: string }
 /** Serialize native prompts; bind the answer to the still-current invitation, never a replacement. */
 export class PairingPrompts {
   private shown = new Set<string>();

@@ -19,12 +19,12 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS.parent))
 sys.path.insert(0, str(TESTS))
 
-from test_runtime import Scripted, TempDirCase, make_xiaoyu, write_config  # noqa: E402
+from test_runtime import Scripted, TempDirCase, ToolTalker, make_xiaoyu, write_config  # noqa: E402
 from xiaoyu_runtime import config as config_module  # noqa: E402
 from xiaoyu_runtime.helpers import dsh_stream  # noqa: E402
 from xiaoyu_runtime.loop import xiaoyu as xiaoyu_module  # noqa: E402
 from xiaoyu_runtime.helpers.agents import AgentError, Cut, DshAgent, Job, Outcome  # noqa: E402
-from xiaoyu_runtime.api.service import Service  # noqa: E402
+from xiaoyu_runtime.api.service import Service, PROVIDER_BUSY_REPLIES, _provider_busy_reply  # noqa: E402
 from xiaoyu_runtime.api.server import make_server  # noqa: E402
 from xiaoyu_runtime.loop.xiaoyu import reply_so_far  # noqa: E402
 
@@ -87,6 +87,194 @@ class ReplySoFarTests(unittest.TestCase):
 
 
 class DshStreamTests(TempDirCase):
+    def test_legacy_recap_is_projected_once_without_overwriting_original_session(self):
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        spec = dsh_spec(self.folder)
+        old = 'apt-' + 'a' * 32
+        folder = dsh_stream.sessions_dir(spec)
+        original = [{'role': 'user', 'content': dsh_stream._RECAP_PREFIX +
+                     '相关留存原文：旧的时间测试' + dsh_stream._RECAP_INPUT + '查主对话'},
+                    {'role': 'assistant', 'content': '我看看'},
+                    {'role': 'user', 'content': '再看看？'},
+                    {'role': 'assistant', 'content': '这次回错了'}]
+        dsh_stream._save(folder, old, original)
+        tools = Toolbox([], [], [], lambda _: None, lambda _: None)
+        opener = FakeOpener(sse('接着查。'))
+        transient = dsh_stream._RECAP_PREFIX + '本次临时背景' + dsh_stream._RECAP_INPUT + '怎么说？'
+        out = dsh_stream.run(spec, Job(text=transient, session_text='怎么说？', session_id=old,
+                                       system='S', plain=True, tools=tools),
+                             {'DEEPSEEK_API_KEY': 'k'}, 'm', lambda _: None, opener)
+        sent = opener.requests[0][1]['messages']
+        self.assertEqual(sent[0]['content'], '查主对话')
+        self.assertNotIn('旧的时间测试', str(sent))
+        self.assertIn('本次临时背景', str(sent))
+        self.assertNotEqual(out.session_id, old)
+        self.assertEqual(dsh_stream._load(folder, old), original)
+        saved = dsh_stream._load(folder, out.session_id)
+        self.assertEqual(saved[-2]['content'], '怎么说？')
+        self.assertNotIn('本次临时背景', str(saved))
+        self.assertIn('再看看？', str(saved))
+
+    def test_ambiguous_recap_marker_preserves_input(self):
+        value = dsh_stream._RECAP_PREFIX + '背景' + dsh_stream._RECAP_INPUT + '原话' + dsh_stream._RECAP_INPUT + '尾部'
+        original = [{'role': 'user', 'content': value}]
+        projected, changed = dsh_stream.project_session_history(original)
+        self.assertFalse(changed)
+        self.assertEqual(projected, original)
+
+    def test_active_window_excludes_old_turns_without_deleting_saved_history(self):
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        spec = dsh_spec(self.folder)
+        folder = dsh_stream.sessions_dir(spec)
+        session = 'apt-' + 'c' * 32
+        original = []
+        for i in range(9):
+            original.extend([{'role': 'user', 'content': '旧问题%d' % i},
+                             {'role': 'assistant', 'content': '旧回答%d' % i}])
+        dsh_stream._save(folder, session, original)
+        opener = FakeOpener(sse('继续。'))
+        out = dsh_stream.run(spec, Job(text='接着说', session_id=session, system='S', plain=True,
+                                       tools=Toolbox([], [], [], lambda _: None, lambda _: None)),
+                             {'DEEPSEEK_API_KEY': 'k'}, 'm', lambda _: None, opener)
+        sent = opener.requests[0][1]['messages']
+        self.assertNotIn('旧问题2', str(sent))
+        self.assertIn('旧问题3', str(sent))
+        self.assertEqual(dsh_stream._load(folder, out.session_id)[:len(original)], original)
+
+    def test_active_window_keeps_explicitly_requested_older_image(self):
+        history = []
+        for i in range(9):
+            user = {'role': 'user', 'content': '问题%d' % i}
+            if i == 0:
+                user['_image_refs'] = ['a' + '1' * 32]
+            history.extend([user, {'role': 'assistant', 'content': '回答'}])
+        prefix, recent = dsh_stream.working_history(history, '看看那张图片')
+        self.assertEqual(prefix, [])
+        self.assertEqual(recent, history)
+
+    def test_active_window_retains_nearby_completed_tool_and_its_owner_request(self):
+        history = [{'role': 'user', 'content': '查主对话最早消息'},
+                   {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'call1',
+                                                       'name': 'read_recent_chat', 'input': {'channel': 'main'}}]},
+                   {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'call1', 'content': '最近一页'}]},
+                   {'role': 'assistant', 'content': '还可以往前查'}]
+        for i in range(7):
+            history.extend([{'role': 'user', 'content': '追问%d' % i},
+                            {'role': 'assistant', 'content': '回复%d' % i}])
+        prefix, recent = dsh_stream.working_history(history, '接着看看')
+        self.assertEqual(prefix, [])
+        self.assertIn('read_recent_chat', str(recent))
+        self.assertIn('查主对话最早消息', str(recent))
+        hint = dsh_stream.previous_tool_hint(recent)
+        self.assertIn('查主对话最早消息', hint)
+        self.assertIn('"channel":"main"', hint)
+        sent = dsh_stream.request_messages([{'role': 'user', 'content': '继续'}], hint, 0)
+        self.assertIn('最近工具线索', sent[0]['content'])
+        self.assertIn('不表示事情已完成', sent[0]['content'])
+
+    def test_working_receipt_is_current_context_and_not_saved_as_user_text(self):
+        system = '## 最近实际读取回执\n这是实际读取的事实。\n[{"工具":"read_recent_chat"}]'
+        messages = [{'role': 'user', 'content': '怎么说'}]
+        outgoing = dsh_stream.request_messages(messages, system, 0)
+        self.assertIn('read_recent_chat', outgoing[0]['content'])
+        self.assertIn('不能证明结果已送达', outgoing[0]['content'])
+        self.assertEqual(messages[0]['content'], '怎么说')
+
+    def test_quote_evidence_is_repeated_next_to_current_input_only(self):
+        system = ('## 本轮微信引用\n这是本轮引用。\n'
+                  '[{"类型":"text","内容":"19:33，周三","当时回复的主人消息":"刚刚修了一下"}]')
+        messages = [{'role': 'user', 'content': '这条回复的是哪句'}]
+        outgoing = dsh_stream.request_messages(messages, system, 0)
+        self.assertIn('19:33，周三', outgoing[0]['content'])
+        self.assertIn('刚刚修了一下', outgoing[0]['content'])
+        self.assertEqual(messages[0]['content'], '这条回复的是哪句')
+
+    def test_explicit_other_chat_evidence_reaches_current_input(self):
+        system = '## 本轮跨渠道记录\n以下是另一渠道。\n{"渠道":"微信","记录":[{"内容":"今天聊了画画"}]}'
+        messages = [{'role': 'user', 'content': '微信刚聊了什么'}]
+        outgoing = dsh_stream.request_messages(messages, system, 0)
+        self.assertIn('今天聊了画画', outgoing[0]['content'])
+        self.assertEqual(messages[0]['content'], '微信刚聊了什么')
+
+    def test_opt_in_clock_diagnostic_records_only_metadata_for_weixin(self):
+        spec = dsh_spec(self.folder)
+        spec.config_dir.mkdir(parents=True)
+        (spec.config_dir / 'xiaoyu-clock-diagnostic.enabled').touch()
+        system = '## 本轮上下文\n现在是 2026-11-04 16:06（周三）。'
+        opener = FakeOpener(sse('ok'))
+        dsh_stream.run(spec, Job(text='private-message-test', system=system, conversation='weixin'),
+                       {'DEEPSEEK_API_KEY': 'private-key-test'}, 'deepseek-flash', lambda text: None, opener)
+        raw = (spec.config_dir / 'xiaoyu-clock-diagnostic.jsonl').read_text()
+        record = json.loads(raw)
+        self.assertTrue(record['system_time_complete'])
+        self.assertTrue(record['input_time_complete'])
+        self.assertTrue(record['time_values_match'])
+        self.assertNotIn('private-message-test', raw)
+        self.assertNotIn('private-key-test', raw)
+        self.assertNotIn('2026-11-04', raw)
+        self.assertEqual((spec.config_dir / 'xiaoyu-clock-diagnostic.jsonl').stat().st_mode & 0o777, 0o600)
+
+    def test_current_time_is_sent_beside_input_but_not_saved_in_history(self):
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        spec = dsh_spec(self.folder)
+        system = '## 本轮上下文\n现在是 2026-11-04 16:06（周三）。\n其他信息'
+        opener = FakeOpener(sse('16:06'))
+        tools = Toolbox([], [], [], lambda fields: None, lambda card: None)
+        outcome = dsh_stream.run(spec, Job(text='现在几点？', system=system, tools=tools),
+                                 {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, opener)
+        sent = opener.requests[0][1]['messages'][-1]['content']
+        self.assertIn('当前本地时间 2026-11-04 16:06（周三）', sent)
+        saved = dsh_stream._load(dsh_stream.sessions_dir(spec), outcome.session_id)
+        self.assertEqual(saved[0]['content'], '现在几点？')
+
+    def test_clock_metadata_does_not_mutate_multimodal_or_other_messages(self):
+        image = {'type': 'image', 'source': {'type': 'base64', 'data': 'example'}}
+        original = [{'role': 'user', 'content': [{'type': 'text', 'text': '这是什么'}, image]}]
+        system = '## 本轮上下文\n现在是 2026-11-04 16:06（周三）。'
+        sent = dsh_stream.request_messages(original, system, 0)
+        self.assertEqual(len(original[0]['content']), 2)
+        self.assertIn('16:06', sent[0]['content'][-1]['text'])
+        self.assertIs(dsh_stream.request_messages(original, '没有当前时间', 0), original)
+
+    def test_ephemeral_background_call_does_not_persist_session(self):
+        spec = dsh_spec(self.folder)
+        with patch.object(dsh_stream, '_save') as save, patch.object(dsh_stream, '_load', return_value=[]) as load:
+            outcome = dsh_stream.run(spec, Job(text='background', ephemeral=True, session_id='api-old'),
+                                     {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash',
+                                     lambda text: None, FakeOpener(sse('result')))
+        self.assertEqual('result', outcome.text)
+        save.assert_not_called()
+        self.assertIsNone(load.call_args.args[1])
+
+    def test_interrupted_image_turn_keeps_owner_input_for_the_next_message(self):
+        import base64, hashlib
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=')
+        image = self.folder / 'picture.png'
+        image.write_bytes(png)
+        def resolve(identity):
+            self.assertEqual(identity, 'owner-id')
+            return io.BytesIO(png), {'source': 'owner', 'kind': 'image',
+                                    'sha256': hashlib.sha256(png).hexdigest()}, 'image/png', len(png)
+        cut = Cut()
+        opener = FakeOpener(sse('unseen'), sse('answer'))
+        def interrupted_open(request, timeout=None):
+            result = opener(request, timeout=timeout)
+            cut.set()
+            return result
+        spec = dsh_spec(self.folder)
+        first = dsh_stream.run(spec, Job(text='请看这张', images=(str(image),), image_refs=('owner-id',),
+                                        image_resolver=resolve, interrupt=cut),
+                               {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, interrupted_open)
+        saved = dsh_stream._load(dsh_stream.sessions_dir(spec), first.session_id)
+        self.assertEqual(saved[0]['_image_refs'], ['owner-id'])
+        self.assertEqual(saved[1]['content'], '（主人发来了新消息，这一轮尚未回复。）')
+        dsh_stream.run(spec, Job(text='看看阿尼亚', session_id=first.session_id, image_resolver=resolve),
+                       {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, opener)
+        messages = opener.requests[1][1]['messages']
+        self.assertEqual(base64.b64decode(messages[0]['content'][1]['source']['data']), png)
+        self.assertEqual(messages[1]['content'], '（主人发来了新消息，这一轮尚未回复。）')
+        self.assertEqual(messages[-1]['content'], '看看阿尼亚')
+
     def test_provider_timing_is_correlated_without_prompt_or_key(self):
         from xiaoyu_runtime import timing as turn_timing
         sink = turn_timing.TurnTiming(self.folder)
@@ -141,6 +329,19 @@ class DshStreamTests(TempDirCase):
                                    "deepseek-flash", lambda text: None, FakeOpener(failure))
                 self.assertEqual(isinstance(caught.exception, dsh_stream.PermanentRequestError), code in (400, 401))
 
+    def test_503_is_safe_and_never_resubmitted_through_headless(self):
+        failure = urllib.error.HTTPError("https://fixture.invalid", 503, "busy", {},
+                                         io.BytesIO(b'{"request_id":"private-id","message":"secret"}'))
+        opener = FakeOpener(failure)
+        agent = DshAgent(dsh_spec(self.folder), opener=opener)
+        with patch.object(agent, "_headless") as headless:
+            with self.assertRaises(dsh_stream.ProviderBusy) as caught:
+                agent.run(Job(text="hello", plain=True, on_text=lambda text: None))
+        self.assertEqual(len(opener.requests), 1)
+        headless.assert_not_called()
+        self.assertNotIn("private-id", str(caught.exception))
+        self.assertNotIn("secret", str(caught.exception))
+
     def test_tool_results_do_not_hide_image_from_immediate_followup(self):
         import base64, hashlib
         png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aS8AAAAASUVORK5CYII=")
@@ -158,6 +359,25 @@ class DshStreamTests(TempDirCase):
                        {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
         blocks = opener.requests[0][1]["messages"][0]["content"]
         self.assertEqual(base64.b64decode(blocks[1]["source"]["data"]), png)
+        opener = FakeOpener(sse("answer"))
+        dsh_stream.run(spec, Job(text="换这个咋样", session_id=session, image_resolver=resolve),
+                       {"DEEPSEEK_API_KEY": "k"}, "deepseek-flash", lambda text: None, opener)
+        blocks = opener.requests[0][1]["messages"][0]["content"]
+        self.assertEqual(base64.b64decode(blocks[1]["source"]["data"]), png)
+
+    def test_followup_never_guesses_when_selected_image_cannot_be_restored(self):
+        spec = dsh_spec(self.folder)
+        session = 'api-' + 'a' * 32
+        dsh_stream._save(dsh_stream.sessions_dir(spec), session, [
+            {'role': 'user', 'content': '看看', '_image_refs': ['owner-id']},
+            {'role': 'assistant', 'content': '看到了'}])
+        opener = FakeOpener(sse('must not be sent'))
+        def missing(identity):
+            raise AgentError('missing')
+        with self.assertRaisesRegex(dsh_stream.PermanentRequestError, '重新发送图片'):
+            dsh_stream.run(spec, Job(text='换这个咋样', session_id=session, image_resolver=missing),
+                           {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, opener)
+        self.assertEqual(opener.requests, [])
 
     def test_two_followups_keep_image_and_later_omissions_are_explicit(self):
         import base64, hashlib
@@ -444,6 +664,37 @@ class ToolTalkTests(TempDirCase):
         return Toolbox(["codex"], [], [], lambda fields: problem,
                        lambda card: "c3 · 正在做" if card == "c3" else None)
 
+    def test_clock_context_survives_tool_round_without_entering_saved_history(self):
+        spec = dsh_spec(self.folder)
+        opener = FakeOpener(tool_sse('', 'task_detail', {'card': 'c3'}), sse('还在做'))
+        system = '## 本轮上下文\n现在是 2026-11-04 16:06（周三）。'
+        outcome = dsh_stream.run(spec, Job(text='进度呢', system=system, tools=self.toolbox()),
+                                 {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, opener)
+        for _, request in opener.requests:
+            self.assertIn('当前本地时间 2026-11-04 16:06', request['messages'][0]['content'])
+        history = dsh_stream._load(dsh_stream.sessions_dir(spec), outcome.session_id)
+        self.assertEqual(history[0]['content'], '进度呢')
+
+    def test_cut_before_first_word_keeps_input_without_fabricated_speech(self):
+        cut = Cut()
+        opener = FakeOpener(sse('unseen'), sse('answer'))
+        def cut_open(request, timeout=None):
+            response = opener(request, timeout=timeout)
+            cut.set()
+            return response
+        spec = dsh_spec(self.folder)
+        first = dsh_stream.run(spec, Job(text='等我补充', system='S', plain=True,
+                                        tools=self.toolbox(), interrupt=cut),
+                               {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, cut_open)
+        history = dsh_stream._load(dsh_stream.sessions_dir(spec), first.session_id)
+        self.assertEqual(history[-2]['content'], '等我补充')
+        self.assertEqual(history[-1]['content'], '（主人发来了新消息，这一轮尚未回复。）')
+        dsh_stream.run(spec, Job(text='后半句', system='S', plain=True, tools=self.toolbox(),
+                                 session_id=first.session_id),
+                       {'DEEPSEEK_API_KEY': 'k'}, 'deepseek-flash', lambda text: None, opener)
+        contents = [item['content'] for item in opener.requests[1][1]['messages']]
+        self.assertEqual(contents[-3:], ['等我补充', '（主人发来了新消息，这一轮尚未回复。）', '后半句'])
+
     def test_she_talks_calls_a_tool_and_goes_on(self):
         # 先交出去、还没开口：看了工具结果再说一句，那句话就是这一轮的回复。
         opener = FakeOpener(tool_sse("", "start_task",
@@ -501,6 +752,97 @@ class ToolTalkTests(TempDirCase):
                                  on_text=seen.append, tools=tools), {"DEEPSEEK_API_KEY": "k"},
                                  "deepseek-v4-pro", seen.append, opener)
         self.assertEqual(outcome.text, "我看一眼。" + JOIN + "还在做。")
+
+    def test_recent_chat_read_announces_before_tool_even_if_model_is_silent(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def recent(channel, limit):
+            self.assertEqual(seen[-1], '我看看' + JOIN)
+            return {'渠道': channel, '记录': [{'内容': '真实记录'}]}
+        tools = Toolbox([], [], [], lambda fields: None, lambda card: None,
+                        recent_chat=recent, announce_reads=True)
+        opener = FakeOpener(tool_sse('', 'read_recent_chat', {'channel': 'weixin'}), sse('查到了。'))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text='看看微信', system='S', plain=True,
+                                 on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                                 'deepseek-v4-pro', seen.append, opener)
+        self.assertEqual(outcome.text, '我看看' + JOIN + '查到了。')
+
+    def test_background_handoff_announces_attempt_before_selecting_task(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def check(fields):
+            self.assertEqual(seen[-1], '我处理一下' + JOIN)
+            return None
+        tools = Toolbox(['codex'], [], [], check, lambda card: None, announce_reads=True)
+        opener = FakeOpener(tool_sse('', 'start_task', {'agent': 'codex', 'title': '查', 'task': '查一下'}))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text='帮我查', system='S', plain=True,
+                                 on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                                 'deepseek-v4-pro', seen.append, opener)
+        self.assertEqual(outcome.text, '我处理一下')
+        self.assertEqual(tools.action['type'], 'start')
+
+    def test_model_handoff_notice_is_closed_before_selecting_task(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def check(fields):
+            self.assertEqual(seen[-1], '我来安排。' + JOIN)
+            return None
+        tools = Toolbox(['codex'], [], [], check, lambda card: None, announce_reads=True)
+        opener = FakeOpener(tool_sse('我来安排。', 'start_task', {'agent': 'codex', 'title': '查', 'task': '查一下'}))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text='帮我查', system='S', plain=True,
+                                 on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                                 'deepseek-v4-pro', seen.append, opener)
+        self.assertEqual(outcome.text, '我来安排。')
+
+    def test_handoff_success_claim_is_not_closed_before_selection(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def check(fields):
+            self.assertFalse(seen[-1].endswith(JOIN))
+            return None
+        tools = Toolbox(['codex'], [], [], check, lambda card: None, announce_reads=True)
+        opener = FakeOpener(tool_sse('已经安排好了。', 'start_task', {'agent': 'codex', 'title': '查', 'task': '查一下'}))
+        dsh_stream.run(dsh_spec(self.folder), Job(text='帮我查', system='S', plain=True,
+                       on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                       'deepseek-v4-pro', seen.append, opener)
+
+    def test_handoff_notice_does_not_claim_rejected_task_was_started(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        tools = Toolbox(['codex'], [], [], lambda fields: '执行端不可用', lambda card: None, announce_reads=True)
+        opener = FakeOpener(tool_sse('', 'start_task', {'agent': 'codex', 'title': '查', 'task': '查一下'}),
+                            sse('这次执行端不可用。'))
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text='帮我查', system='S', plain=True,
+                                 on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                                 'deepseek-v4-pro', seen.append, opener)
+        self.assertEqual(outcome.text, '我处理一下' + JOIN + '这次执行端不可用。')
+        self.assertIsNone(tools.action)
+        self.assertIn('我处理一下' + JOIN, seen)
+
+    def test_mixed_read_and_handoff_announces_before_either_tool(self):
+        from xiaoyu_runtime.loop.voice_tools import JOIN, Toolbox
+        seen = []
+        def observed(value):
+            self.assertEqual(seen[-1], '我处理一下' + JOIN)
+            return None
+        def read(channel, limit):
+            observed(channel)
+            return {'渠道': channel, '记录': []}
+        tools = Toolbox(['codex'], [], [], observed, lambda card: None, recent_chat=read, announce_reads=True)
+        events = []
+        for index, name, args in [(1, 'read_recent_chat', {'channel': 'weixin'}),
+                                  (2, 'start_task', {'agent': 'codex', 'title': '查', 'task': '查一下'})]:
+            events.append({'type': 'content_block_start', 'index': index,
+                           'content_block': {'type': 'tool_use', 'id': 'tool-%d' % index, 'name': name, 'input': {}}})
+            events.append({'type': 'content_block_delta', 'index': index,
+                           'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(args)}})
+        events.extend([{'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}}, {'type': 'message_stop'}])
+        body = ('\n'.join('data: ' + json.dumps(event) for event in events) + '\n').encode()
+        outcome = dsh_stream.run(dsh_spec(self.folder), Job(text='查一下', system='S', plain=True,
+                                 on_text=seen.append, tools=tools), {'DEEPSEEK_API_KEY': 'k'},
+                                 'deepseek-v4-pro', seen.append, FakeOpener(body))
+        self.assertEqual(outcome.text, '我处理一下')
+        self.assertEqual(tools.action['type'], 'start')
 
     def test_four_tool_rounds_do_not_make_a_fifth_request(self):
         answer = tool_sse("", "task_detail", {"card": "c3"})
@@ -840,6 +1182,106 @@ class Streaming(Scripted):
 
 
 class ServiceStreamTests(TempDirCase):
+    def test_notice_is_visible_while_recent_chat_tool_is_still_running(self):
+        started, release = threading.Event(), threading.Event()
+        def slow_read(channel, limit):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError('test read did not resume')
+            return {'渠道': channel, '记录': [{'内容': '最近记录'}]}
+        opener = FakeOpener(tool_sse('', 'read_recent_chat', {'channel': 'weixin'}), sse('读完了。'))
+        agent = DshAgent(dsh_spec(self.folder), opener=opener)
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        self.addCleanup(xiaoyu.close)
+        service = Service(xiaoyu, store)
+        self.addCleanup(service.close)
+        self.addCleanup(release.set)
+        with patch.object(xiaoyu.context, 'recent_chat', side_effect=slow_read):
+            item = service.submit('请读取另一边最近消息')
+            self.assertTrue(started.wait(5))
+            running = service.get(item['id'])
+            self.assertEqual(running['status'], 'running')
+            self.assertIn('我看看', running['partial'])
+            release.set()
+            done = service.get(item['id'], wait=5)
+            self.assertEqual(done['status'], 'done')
+            self.assertIn('读完了', done['reply'])
+    def test_busy_fallback_is_varied_stable_and_reaches_failed_conversation(self):
+        self.assertGreaterEqual(len(set(PROVIDER_BUSY_REPLIES)), 8)
+        self.assertEqual(_provider_busy_reply("turn"), _provider_busy_reply("turn"))
+        failure = urllib.error.HTTPError("https://fixture.invalid", 503, "busy", {},
+                                         io.BytesIO(b'{"request_id":"private-id"}'))
+        opener = FakeOpener(failure)
+        agent = DshAgent(dsh_spec(self.folder), opener=opener)
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
+        self.addCleanup(service.close)
+        with patch.object(agent, "_headless") as headless:
+            item = service.submit("你好")
+            result = service.get(item["id"], wait=5)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn(result["error"], PROVIDER_BUSY_REPLIES)
+        self.assertEqual(len(opener.requests), 1)
+        headless.assert_not_called()
+        self.assertNotIn("private-id", result["error"])
+        card = xiaoyu.cards.get(result["card"])
+        self.assertEqual(card["entries"][-1]["text"], result["error"])
+
+    def test_busy_after_partial_keeps_existing_bubble_and_adds_fallback(self):
+        from xiaoyu_runtime.events.message_parts import parts
+        class PartialBusy(ToolTalker):
+            def run(self, job):
+                job.on_text("先说一句。\n\n---\n\n")
+                raise dsh_stream.ProviderBusy("private provider detail")
+        agent = PartialBusy()
+        agent.type = "dsh"
+        xiaoyu, store = make_xiaoyu(self.folder, [agent])
+        service = Service(xiaoyu, store)
+        self.addCleanup(service.close)
+        item = service.submit("你好")
+        result = service.get(item["id"], wait=5)
+        self.assertEqual(result["status"], "failed")
+        blocks = parts(result["error"], True)
+        self.assertEqual(blocks[0][0], "先说一句。")
+        self.assertIn(blocks[1][0], PROVIDER_BUSY_REPLIES)
+        self.assertNotIn("private provider detail", result["error"])
+
+    def test_busy_fallback_is_delivered_once_to_the_originating_weixin_turn(self):
+        from xiaoyu_runtime.channels.gateway import Gateway
+        from xiaoyu_runtime.channels.store import ChannelStore
+        failure = urllib.error.HTTPError("https://fixture.invalid", 503, "busy", {}, io.BytesIO(b"secret"))
+        opener = FakeOpener(failure)
+        xiaoyu, store = make_xiaoyu(self.folder, [DshAgent(dsh_spec(self.folder), opener=opener)])
+        service = Service(xiaoyu, store)
+        self.addCleanup(service.close)
+        service._owner_writer.conversation_create_weixin()
+        channel = ChannelStore(self.folder / "channel.sqlite")
+        self.addCleanup(channel.close)
+        gateway = Gateway(channel, service, "wx", "bot", "owner")
+        gateway.bootstrap_sync("owner", service.sync("weixin", states=["weixin"]))
+        gateway.ingest([{"id": "in-1", "sender": "owner", "payload": "你好", "context_token": "token"}], "1")
+        self.assertEqual(gateway.submit_pending(), 1)
+        request = channel.db.execute("SELECT runtime_id FROM inbox").fetchone()[0]
+        result = service.get(request, wait=5)
+        self.assertEqual(result["status"], "failed")
+        _, epoch, seq = json.loads(channel.cursor("sync:owner"))
+        gateway.apply_sync("owner", service.sync("weixin", after=seq, epoch=epoch, states=["weixin"]))
+        class Transport:
+            def __init__(self): self.sent = []
+            def send_text(self, *args):
+                self.sent.append(args[-1])
+                return {"ret": 0}
+        transport = Transport()
+        with channel.db:
+            channel.db.execute("UPDATE inbox SET received_at=? WHERE message_id='in-1'", (time.time(),))
+        self.assertEqual(gateway.send_next(transport, "owner"), "paced")
+        with channel.db:
+            channel.db.execute("UPDATE inbox SET received_at=0 WHERE message_id='in-1'")
+        self.assertEqual(gateway.send_next(transport, "owner"), "sent")
+        self.assertEqual(transport.sent, [result["error"]])
+        self.assertEqual(gateway.send_next(transport, "owner"), "idle")
+        self.assertEqual(len(opener.requests), 1)
+
     def test_durable_timing_tracks_the_same_client_and_server_ids(self):
         from xiaoyu_runtime import timing as turn_timing
         agent = Streaming("ds")

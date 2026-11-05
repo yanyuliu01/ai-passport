@@ -1,6 +1,7 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { AeadId, CipherSuite, KdfId, KemId } from 'hpke-js';
 import type { Json } from '../shared.js';
+import { proofContext } from '../relay/device-proof.js';
 
 const encoder = new TextEncoder();
 const suite = new CipherSuite({ kem: KemId.DhkemX25519HkdfSha256,
@@ -42,6 +43,25 @@ export class EndpointCrypto {
     const keys = await suite.kem.deriveKeyPair(decode(seed, 32));
     const publicKey = encode(await suite.kem.serializePublicKey(keys.publicKey));
     return new EndpointCrypto({ id: deviceId(publicKey), publicKey, name: name.slice(0, 80) }, seed, keys);
+  }
+  /** Answer a relay's one-use device possession challenge without revealing the seed. */
+  async answerRelayChallenge(encoded: string, room: string): Promise<string> {
+    if (!/^[a-f0-9]{32}$/.test(room) || typeof encoded !== 'string' || encoded.length > 1024) throw new Error('中继身份挑战无效');
+    const bytes = decode(encoded);
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+    catch { throw new Error('中继身份挑战无效'); }
+    const item = value as Record<string, unknown>;
+    if (!item || Array.isArray(item) || Object.keys(item).sort().join(',') !== 'ct,enc,expires,id,v'
+        || item.v !== 1 || typeof item.id !== 'string' || !/^[a-f0-9]{32}$/.test(item.id)
+        || !Number.isSafeInteger(item.expires) || Number(item.expires) <= 0
+        || typeof item.enc !== 'string' || typeof item.ct !== 'string') throw new Error('中继身份挑战无效');
+    const aad = proofContext(room, this.identity.id, item.id, Number(item.expires));
+    const recipient = await suite.createRecipientContext({ recipientKey: this.keys.privateKey,
+      enc: decode(item.enc, 32), info: encoder.encode('xiaoyou/relay-device-proof/v1') });
+    const secret = await recipient.open(decode(item.ct, 48), aad);
+    if (secret.byteLength !== 32) throw new Error('中继身份挑战无效');
+    return item.id + '.' + createHmac('sha256', Buffer.from(secret)).update(aad).digest('base64url');
   }
   async seal(recipient: DeviceIdentity, space: string, kind: string, body: Json,
     lifetime = 120_000): Promise<Packet> {

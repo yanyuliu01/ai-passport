@@ -328,6 +328,54 @@ these additional sources until their reset boundaries can be established.
 Records never received or no longer retained are outside this search. Normal
 context preparation does not scan these archives or peer replicas.
 
+Optional owner-maintained files in `state/standing-context/` provide layered
+background without changing the persona or existing memory. `IDENTITY.md`,
+`SOUL.md`, `USER.md` and `TOOLS.md` are re-read for ordinary chat and helper
+result narration; they are background, not new requests or authorization.
+`topics/*.md` is a bounded topic index: a filename or comma-separated alias
+mentioned in the current message selects up to two notes automatically, and
+`read_standing` can read another indexed name on demand. Files are local to the
+Runtime, optional, and not created or synchronized automatically. Each must be
+UTF-8 and at most 4,096 bytes; symlinks, oversized and unreadable files are
+ignored. At most 64 topic entries are scanned, with 8,000 characters of file
+content and 2,048 characters of topic names at most.
+Memory and conversation records remain authoritative in their existing stores;
+this adds no background model calls and never imports external profiles.
+
+The `default` and `weixin` conversations on the same Runtime share `owner.md`,
+but retain separate transcripts, task routing, upkeep cursors and delivery.
+After a quiet interval, either can contribute durable preferences through the
+same memory tools. The new WeChat cursor initially considers at most its latest
+20 turns; the existing default cursor is unchanged. Background memory edits
+are fenced by the revision they read, so stale upkeep cannot overwrite a
+concurrent correction. When both conversations exist, upkeep admission
+alternates between them without waiting on the shared-memory lock in a chat
+lane. Other Runtime hosts do not automatically acquire this local memory.
+
+`loop/relationship.py` separately maintains a disposable per-conversation
+relationship summary. After ten quiet minutes, Pulse may use one isolated,
+tool-free voice-model call of at most ten seconds, no more than once per 24
+hours per conversation. Current shared memory and the 20 latest retained turns
+in that conversation are candidates; secret-like content is excluded. Each
+accepted point cites memory entries or source turn IDs and
+is shown as uncertain background, never as an instruction or authorization.
+The cache is local, private and separate from memory and messages. It is
+discarded from context after three days, when memory changes, or when referenced
+turns change or disappear (including reset). Conversation boundaries apply;
+no messages or reminders are sent by this job. Validation checks citations and
+shape, not whether a model's interpretation is semantically correct. If the
+provider, cache, or source is unavailable, original history remains available.
+
+Explicit `replace` or `forget` records a correction boundary atomically in the
+memory file. Older derived summaries stop being injected or regenerated from
+pre-boundary turns; automatic related history matches are also excluded. Each
+conversation renews its provider session and seeds it with post-boundary
+context. Older user and topic files remain on disk but are withheld until
+reviewed and updated. Original chat, memory change logs and explicit `recall`
+remain available: this prevents automatic reintroduction, not permanent erasure
+of all historical copies. An already in-flight response on another channel may
+still have seen the old context.
+
 `loop/context_window.py` selects and renders recent quotes and relevant older
 conversation evidence from one retained-history snapshot. Speaker passes the
 current question to this local lookup. Up to two related turns can use at most
@@ -2651,6 +2699,13 @@ Image uploads require `python -m pip install -r requirements-images.txt` in the
 Runtime environment. The authenticated upload/message contract, supported vision
 route and compatibility limits are specified in [Image messages](../docs/development/multimodal-images.md).
 
+WeChat image and file transport additionally requires installing
+`requirements-weixin.txt` in the Runtime environment. Text messaging remains
+available without it. The channel accepts files up to 25 MiB; incoming images
+also follow the existing owner-image validation limit of 8 MiB. File processing
+requires a local file-capable helper. The desktop Runtime bundle includes the
+media encryption dependency.
+
 ## Unified directory increment (2026-10-22)
 
 Android 0.30.0 / code 55, Runtime 0.22.0 and desktop 0.1.4 add a shared
@@ -2774,3 +2829,57 @@ retains the full visible history and is reversible. This is cache deletion,
 not secure erasure of provider records or log files.
 `POST /v1/helpers/<name>/rename` accepts `{"title":"display name"}` and persists
 a display alias without changing agent IDs, credentials, or task routing.
+
+## Experimental Bilibili exploration
+
+The disabled `entertainment.browser_enabled` option in `config.example.json`
+gives Xiaoyu a `browse_content` tool. Its first supported adapter uses read-only
+Bilibili community endpoints via the local desktop's isolated browser session.
+The tool is part of Xiaoyu's conversation flow, not a separately listed helper.
+Sign in to Xiaoyu's
+own Bilibili account using Settings → Xiaoyu's browser, and verify the displayed
+account. The browser profile is scoped to the Xiaoyu account and does not use the
+owner's regular browser profile. The local browser bridge is currently supported
+on macOS; it must remain running for background requests. The bridge provides
+only a restricted set of platform read operations and never returns cookies.
+It accepts a BV ID or a supported share link,
+and returns metadata and available subtitles for the first part only. Subtitles
+are ignored when their video identity or timing cannot be reconciled with the
+first part. When a video preview exists, it
+creates a bounded contact sheet and passes it to a compatible speaking vision
+model; if the response has no inline preview index, the platform-provided binary
+timeline is used when available. The sheet is a few sampled stills, not continuous video or audio. Some
+videos have no subtitles or previews. No speech transcription,
+personalized recommendations, comments, or reactions are implemented.
+
+To try it, enable the browser tool in the selected Runtime's configuration. The
+optional `entertainment.bilibili_autonomous` flag starts one discovery attempt
+per local calendar day between 10:00 and 21:00 after a local session exists; enable it on only the designated
+home Runtime. Xiaoyu sees a local budget snapshot and decides whether to browse,
+skip, or reconsider later (at most three deferrals that day), how many candidates
+to inspect, and whether to fetch one video's subtitles and sampled frames. The
+model's planning runs separately from the conversation lane. The speaker chooses
+whether to share a candidate. Discovery uses
+the public popular list, not a personal feed. The persisted local budget permits
+at most twelve attempts per UTC day and requires 10 minutes between attempts;
+platform restrictions stop requests and impose a 24-hour cooldown. Limits are
+resource controls, not a guarantee of permission or account safety.
+
+`entertainment.bilibili_weixin_shares` additionally opts in to sending selected
+autonomous shares to the locally bound WeChat owner. A single-video recommendation
+and its link are sent as separate text messages, with no cover image. The link is
+attempted only after the recommendation is accepted. Manual WeChat browser replies
+also separate recognizable video links into their own messages. The share is recorded
+separately from replies, and failures do not block ordinary messages. It uses
+the latest context for that account and owner; WeChat may reject an expired
+context, and API acceptance does not confirm that a phone displayed the message.
+An interrupted or uncertain send is not automatically repeated. A share not
+sent within six hours expires. The canonical conversation remains the source;
+the separate WeChat delivery status is not yet synchronized to other clients.
+
+These are undocumented third-party interfaces and can fail or change. Review
+the platform's applicable terms and obtain any required permissions before use.
+The tool does not bypass login, regional, or access restrictions. Content,
+including image text, is untrusted input. Previews become task attachments and
+may be sent to the configured vision provider; they follow its retention and
+privacy practices. Background tasks must not delay regular conversation.

@@ -54,6 +54,15 @@ class TurnTimingTests(unittest.TestCase):
         one.start(); two.start(); one.join(); two.join()
         self.assertEqual({"a" * 32, "b" * 32}, {r["client_id"] for r in self.records()})
 
+    def test_hashed_weixin_client_id_can_correlate_timing(self):
+        from xiaoyu_runtime.channels.store import client_id
+        channel_id = client_id('weixin', 'private-account', 'private-message')
+        self.sink.mark(channel_id, 'b' * 32, 'model_first_text')
+        self.sink.mark('channel-private-message', 'b' * 32, 'model_first_text')
+        records = self.records()
+        self.assertEqual([r['client_id'] for r in records], [channel_id])
+        self.assertNotIn('private-', self.sink.path.read_text())
+
     def test_rotation_and_symlink_are_bounded(self):
         path = self.sink.path
         with patch.object(timing, "_LIMIT", 200):

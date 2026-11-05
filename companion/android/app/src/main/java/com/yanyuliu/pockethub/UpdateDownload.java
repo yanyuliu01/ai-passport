@@ -33,6 +33,50 @@ final class UpdateDownload {
         fetchExternal(address, sha, size, file, progress, PinnedRelayTLS::openDownload);
     }
 
+    static void fetchPrivate(String address, String account, String token, String sha, long size, File file,
+                             Progress progress) throws Exception {
+        fetchPrivate(address, account, token, sha, size, file, progress, PinnedRelayTLS::openDownload);
+    }
+
+    static void authorizePrivate(String address, String account, String token, String sha, long size) throws Exception {
+        authorizePrivate(address, account, token, sha, size, PinnedRelayTLS::openDownload);
+    }
+
+    static void authorizePrivate(String address, String account, String token, String sha, long size,
+                                 ConnectionFactory connections) throws Exception {
+        validatePrivate(address, account, token, sha);
+        if (size <= 0 || size > MAX_BYTES) throw new IOException("安装包信息不完整，请重新检查更新");
+        HttpURLConnection connection = connections.open(new URL(address));
+        try {
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(5000); connection.setReadTimeout(15000);
+            connection.setRequestMethod("HEAD");
+            connection.setRequestProperty("Authorization", "Bearer " + token);
+            connection.setRequestProperty("If-Match", "\"" + sha + "\"");
+            connection.setRequestProperty("Cache-Control", "no-cache");
+            int status = connection.getResponseCode();
+            if (status != 200 || !('"' + sha + '"').equals(connection.getHeaderField("ETag"))
+                || connection.getContentLengthLong() != size)
+                throw new IOException("私有更新授权或安装包已失效，请重新检查更新");
+        } finally { connection.disconnect(); }
+    }
+
+    static void validatePrivate(String address, String account, String token, String sha) throws IOException {
+        URL url;
+        try { url = new URL(address); } catch (Exception invalid) { throw new IOException("私有更新地址无效"); }
+        if (!PrivateReleaseRoute.matches(url, account, sha) || token == null || !token.matches("[A-Za-z0-9_-]{43}"))
+            throw new IOException("更新与当前账号或电脑不匹配，请重新检查更新");
+    }
+
+    static void fetchPrivate(String address, String account, String token, String sha, long size, File file,
+                             Progress progress, ConnectionFactory connections) throws Exception {
+        authorizePrivate(address, account, token, sha, size, connections);
+        // Cached APKs still require a live account session; verify bytes after authorization.
+        if (file.isFile() && file.length() == size && matches(file, sha)) return;
+        // Authenticated mode never follows redirects; resume uses the pinned hash/ETag.
+        fetch(address, token, sha, size, file, progress, false, connections);
+    }
+
     static void fetchExternal(String address, String sha, long size, File file, Progress progress,
                               ConnectionFactory connections) throws Exception {
         hostedUrl(address);

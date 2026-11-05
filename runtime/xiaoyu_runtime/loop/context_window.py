@@ -100,7 +100,8 @@ def _recent(turns, segments, agent, seed, max_chars, text_chars, reply_chars, *,
                          "selected": len(selected), "complete": len(receipts), "excerpts": excerpts, "retrieved": 0}}
 
 
-def render(turns, segments, agent, *, seed, max_chars, text_chars, reply_chars, query, lookup=None):
+def render(turns, segments, agent, *, seed, max_chars, text_chars, reply_chars, query, lookup=None,
+           evidence_after=0):
     recent = _recent(turns, segments, agent, seed, max_chars, text_chars, reply_chars)
     if not query:
         return recent
@@ -109,7 +110,8 @@ def render(turns, segments, agent, *, seed, max_chars, text_chars, reply_chars, 
     # evidence. Requoting them changes short-chat/helper-summary prompts and
     # duplicates what the provider already has.
     quoted.update(turn["_key"] for turn in turns[-(seed or 8):])
-    candidates = {turn["_key"]: turn for turn in turns if turn["_key"] not in quoted}
+    candidates = {turn["_key"]: turn for turn in turns if turn["_key"] not in quoted
+                  and (not evidence_after or float(turn.get('at') or 0) > evidence_after)}
     if not candidates:
         return recent
     # The normal recent window keeps at least three quarters of its budget.

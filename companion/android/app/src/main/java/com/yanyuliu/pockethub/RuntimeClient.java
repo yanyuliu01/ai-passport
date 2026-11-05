@@ -37,6 +37,7 @@ final class RuntimeClient {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     // 说的每句话各用一个线程等回复：回话途中主人又说了一句，不用排在上一句后面才发出去。
     private static final ExecutorService CHAT = Executors.newCachedThreadPool();
+    private static final Object HISTORY_BOOTSTRAP = new Object();
     private static final Map<String, java.util.Set<String>> SHARED_HISTORY = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 已经带给这个地址的对话编号（发送线程和后台带历史的线程都会写）。 */
@@ -53,11 +54,11 @@ final class RuntimeClient {
     private static volatile HttpURLConnection feedConnection;
     private static volatile MessageStream activeMessageStream;
     private static final RequestSync requestSync = new RequestSync();
-    private static volatile long syncWake;
+    private static final WakeableBackoff syncBackoff = new WakeableBackoff();
     private static final ThreadLocal<Long> syncReadWake = new ThreadLocal<>();
 
     static synchronized void wakeSync() {
-        ++syncWake;
+        syncBackoff.wake();
         HttpURLConnection pending = feedConnection;
         if (pending != null) pending.disconnect();
         RelayManager.cancelSyncReads();
@@ -168,6 +169,22 @@ final class RuntimeClient {
         return prefs(context).getString("rid:" + url, "");
     }
 
+    /** An artifact lives on its source Runtime, not necessarily the selected one. */
+    static Target artifactTarget(Context context, Presentation presentation) {
+        Target selected = selected(context);
+        if (selected == null || presentation == null) return selected;
+        String id = presentation.value("id");
+        int slash = id.indexOf('/');
+        if (slash <= 0) return selected;
+        String origin = id.substring(0, slash), subject = subjectId(context, selected.url);
+        if (subject.isEmpty()) return null;
+        for (Target candidate : targets(context)) {
+            if (origin.equals(runtimeId(context, candidate.url)) && subject.equals(subjectId(context, candidate.url)))
+                return candidate;
+        }
+        return null;
+    }
+
     /**
      * 聊天记录、同步缓存用的键：同一台 Runtime 的所有地址共用最早登记的那个地址，
      * 所以在局域网和 Funnel 之间切换，对话和卡都不会清空。认不出是谁时就用地址自己。
@@ -184,8 +201,18 @@ final class RuntimeClient {
     /** Reuse an archive only after both the Runtime and account subject have been authenticated. */
     static String retainedHistoryKey(String url,String runtime,String subject,List<String[]> known) {
         if(runtime.isEmpty() || subject.isEmpty())return url;
-        for(String[] route:known)if(runtime.equals(route[1]) && subject.equals(route[2]))return route[0];
+        String scope=historyAccountScope(url);
+        for(String[] route:known)if(scope.equals(historyAccountScope(route[0]))
+                && runtime.equals(route[1]) && subject.equals(route[2]))return route[0];
         return url;
+    }
+
+    /** A shared Runtime/subject does not make separately authenticated accounts one archive. */
+    static String historyAccountScope(String url) {
+        if(url==null)return "invalid:";
+        if(!url.startsWith("relay://"))return "legacy";
+        java.util.regex.Matcher match=java.util.regex.Pattern.compile("relay://[a-f0-9]{32}\\.([a-f0-9]{32})").matcher(url);
+        return match.matches()?"account:"+match.group(1):"invalid:"+url;
     }
 
     /** 这个地址上的小鱼是哪一个（小鱼网络里每台都一样，见 Runtime 的 mesh.py）；没加入网络是空串。 */
@@ -388,11 +415,11 @@ final class RuntimeClient {
         int failures = 0;
         boolean more = false;
         while (true) {
-            long wake = syncWake;
+            long wake = syncBackoff.generation();
             Target target = selected(app);
             if (target == null) {
                 watched = null;
-                pause(3);
+                pause(wake, 3);
                 continue;
             }
             if (!target.url.equals(watched)) {
@@ -402,12 +429,17 @@ final class RuntimeClient {
             try {
                 if (abilities == null) {
                     abilities = identify(app, target);
+                    // At cold start account discovery can finish after the Activity
+                    // first looked for a target. Initialize on this worker before
+                    // accepting feed updates or saving any new chat messages.
+                    if (!restoreChat(app, target)) { abilities = null; continue; }
                     String key = historyKey(app, target);
                     // 另一台电脑：摆出它自己的卡和同步进度（没见过就从头取）；同一台不动。
                     store.showComputer(key);
                     store.selectedRuntime(target.url, key);
                     restoreSync(app, key);
                     if (abilities.contains("presentation_v1")) store.syncCache().requirePresentation();
+                    if (abilities.contains("weixin_v1") || abilities.contains("weixin_bind_v1")) store.syncCache().requireWeixin();
                     final Target shared = target;
                     QUICK.execute(() -> shareHistory(app, shared));
                 }
@@ -415,7 +447,7 @@ final class RuntimeClient {
                 failures = 0;
                 complained = null;
             } catch (IOException | RuntimeException error) {
-                if (wake != syncWake) continue;
+                if (wake != syncBackoff.generation()) continue;
                 more = false;
                 Target now = selected(app);
                 if (now != null && !now.url.equals(watched)) {
@@ -425,7 +457,7 @@ final class RuntimeClient {
                 if (failures == 0) {
                     // 经中继连着时偶尔断一次是常事：先悄悄重连一次，连续失败才算离线。
                     failures++;
-                    pause(2);
+                    pause(wake, 2);
                     continue;
                 }
                 store.catchingUp(false);  // 连不上：不再画占位，交给离线提示
@@ -444,14 +476,14 @@ final class RuntimeClient {
                     complained = detail;
                     store.log("没取到 " + target.name + " 上的卡：" + detail);
                 }
-                pause(Math.min(30, 2 << Math.min(failures++, 4)));
+                pause(wake, Math.min(30, 2 << Math.min(failures++, 4)));
             }
         }
     }
 
-    private static void pause(int seconds) {
+    private static void pause(long wake, int seconds) {
         try {
-            Thread.sleep(seconds * 1000L);
+            syncBackoff.await(wake, seconds * 1000L);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
@@ -518,7 +550,7 @@ final class RuntimeClient {
         String expectedRuntime = runtimeId(app, target.url), expectedSubject = subjectId(app, target.url);
         List<String> requested;
         synchronized (RuntimeClient.class) {
-            syncReadWake.set(syncWake);
+            syncReadWake.set(syncBackoff.generation());
             requested = requestSync.ids(epoch);
         }
         if (requestSync.more(epoch)) wait = 0;
@@ -528,7 +560,7 @@ final class RuntimeClient {
                         + (cache.epoch().isEmpty() ? "" : "&epoch=" + java.net.URLEncoder.encode(cache.epoch(), "UTF-8"))
                         + (usageRev >= 0 ? "&usage=" + usageRev : "")
                         // 认得 unavailable（看不到状态的电脑会话、上报）：见 Card.from。
-                        + "&states=unavailable"
+                        + "&states=unavailable,weixin"
                         + (requested.isEmpty() ? "" : "&requests=" + java.net.URLEncoder.encode(String.join(",", requested), "UTF-8")),
                 target.token, null, null, wait + 15, interruptible);
         } finally { syncReadWake.remove(); }
@@ -557,6 +589,7 @@ final class RuntimeClient {
             }
             store.applyFeed(result.seq, result.cards, null);
             store.applyPending(result.pending);
+            store.weixinState(Json.string(Json.object(page.get("weixin")), "state"));
             if (result.usage != null) store.setUsage(Usage.from(result.usage), epoch);
             store.runtimeConnected(true);
             store.catchingUp(result.more);
@@ -582,11 +615,18 @@ final class RuntimeClient {
      * 不再挡在每次发消息前面。
      */
     private static void shareHistory(Context app, Target target) {
+        if (!historyShareAllowed(target.url)) return;
+        List<String> routes = new ArrayList<>();
+        synchronized (RuntimeClient.class) {
+            for (Target item : savedTargets(app)) routes.add(item.url);
+        }
+        boolean legacy = historyAccountScope(target.url).equals("legacy");
         java.util.Set<String> shared = sharedWith(target.url);
         List<ChatTurn> history = new ArrayList<>();
-        for (ChatTurn turn : HubStore.get().recentTurns(turns(app), TURNS_KEPT))
+        for (ChatTurn turn : HubStore.get().recentTurns(target.url, routes,
+                legacy ? turns(app) : java.util.Collections.emptyList(), TURNS_KEPT))
             if (!shared.contains(turn.id)) history.add(turn);
-        if (history.isEmpty()) return;
+        if (history.isEmpty() || !historyShareAllowed(target.url)) return;
         try {
             request("POST", target.url + "/v1/conversations/default/history", target.token,
                     ChatTurn.historyJson(history).getBytes(StandardCharsets.UTF_8),
@@ -596,6 +636,12 @@ final class RuntimeClient {
             // 旧版 Runtime 没有这个接口：照常聊，只是它接不上别处的话。
             HubStore.get().log("没能把之前的对话带给 " + target.name + "：" + error.getMessage());
         }
+    }
+
+    private static boolean historyShareAllowed(String url) {
+        String scope = historyAccountScope(url), account = AccountManager.accountId();
+        if (scope.equals("legacy")) return account.isEmpty();
+        return !account.isEmpty() && scope.equals("account:" + account) && AccountManager.allowed(url);
     }
 
     /** 回答 Runtime 上的一个授权。送不到时这个授权会重新拿出来问。 */
@@ -831,6 +877,61 @@ final class RuntimeClient {
         return null;
     }
 
+    /** Candidate old direct archives; merely listing them never reads or imports their contents. */
+    static synchronized List<Target> legacyHistoryCandidates(Context context, Target target) {
+        if(target==null || !AccountManager.allowed(target.url))return new ArrayList<>();
+        String runtime=runtimeId(context,target.url),subject=subjectId(context,target.url);
+        if(runtime.isEmpty() || subject.isEmpty())return new ArrayList<>();
+        SharedPreferences histories=context.getApplicationContext().getSharedPreferences("conversation_history",Context.MODE_PRIVATE);
+        List<Target> result=new ArrayList<>();
+        for(Target candidate:savedTargets(context)){
+            if(!legacySourceMatches(target.url,candidate.url,runtime,subject,runtimeId(context,candidate.url),subjectId(context,candidate.url)))continue;
+            String key=ArtifactDownload.key(candidate.url);
+            if(histories.contains(key) && new File(new File(context.getFilesDir(),"sync"),key+".json").isFile())result.add(candidate);
+        }
+        return result;
+    }
+
+    static boolean legacySourceMatches(String target,String source,String runtime,String subject,String sourceRuntime,String sourceSubject){
+        return target!=null && source!=null && !target.equals(source) && historyAccountScope(target).startsWith("account:")
+                && historyAccountScope(source).equals("legacy") && runtime!=null && !runtime.isEmpty() && runtime.equals(sourceRuntime)
+                && subject!=null && !subject.isEmpty() && subject.equals(sourceSubject);
+    }
+
+    /** Replay only into the archive belonging to this authenticated account and Runtime. */
+    static void reconcileAccepted(Context context, String url, Map<String,Object> receipt,
+                                  java.util.function.Consumer<Boolean> completed) {
+        String remote = Json.string(receipt, "runtime_id");
+        Target target = target(context, url);
+        if (target == null || !AccountManager.allowed(url) || !remote.matches("[a-f0-9]{32}")
+                || !remote.equals(runtimeId(context, url)) || subjectId(context, url).isEmpty()) {
+            completed.accept(false); return;
+        }
+        String client = Json.string(receipt, "client_id"), message = Json.string(receipt, "message_id");
+        String conversation = Json.string(receipt, "conversation");
+        String result = Json.string(receipt, "result"); boolean rejected = result.equals("rejected");
+        if (client.isEmpty() || conversation.isEmpty() || !(rejected || result.equals("accepted"))
+                || (!rejected && !message.matches("[a-f0-9]{32}"))) {
+            completed.accept(false); return;
+        }
+        String history = historyKey(context, target);
+        HubStore.get().reconcileAccepted(history, client, message, conversation, rejected,
+                () -> AccountManager.allowed(url) && remote.equals(runtimeId(context, url)), completed);
+    }
+
+    static void reconcileUncertain(Context context, String url, Map<String,Object> receipt,
+                                   java.util.function.Consumer<Boolean> completed) {
+        String remote=Json.string(receipt,"runtime_id"),client=Json.string(receipt,"client_id"),conversation=Json.string(receipt,"conversation");
+        Target target=target(context,url);
+        if(target==null || !AccountManager.allowed(url) || client.isEmpty() || conversation.isEmpty()
+                || !remote.matches("[a-f0-9]{32}") || !remote.equals(runtimeId(context,url)) || subjectId(context,url).isEmpty()){
+            completed.accept(false);return;
+        }
+        String history=historyKey(context,target);
+        HubStore.get().reconcileUncertain(history,client,conversation,
+                ()->AccountManager.allowed(url) && remote.equals(runtimeId(context,url)),completed);
+    }
+
     private static synchronized void rename(Context context, String url, String name) {
         List<Target> list = targets(context);
         Target current = selected(context);
@@ -883,8 +984,38 @@ final class RuntimeClient {
 
     /** App 刚启动时把存着的对话放回聊天框。 */
     static void restoreChat(Context context) {
-        Target target = selected(context);
-        HubStore.get().initializeHistory(context, historyKey(context, target), turns(context));
+        Context app=context.getApplicationContext();
+        QUICK.execute(()->{Target target=selected(app);if(target!=null)restoreChat(app,target);});
+    }
+
+    /** Prepare off the UI thread and install only while the captured account and target still match. */
+    private static boolean restoreChat(Context context, Target target) {
+        synchronized (HISTORY_BOOTSTRAP) { return restoreChatLocked(context,target); }
+    }
+
+    private static boolean restoreChatLocked(Context context, Target target) {
+        // No selected authenticated source: never interpret the empty key as an archive.
+        if (target == null) return false;
+        long generation = AccountManager.historyGeneration();
+        String account = AccountManager.accountId();
+        if (!historyShareAllowed(target.url)) return false;
+        // Unscoped legacy turns are never automatically adopted into an account.
+        boolean legacy = HistorySharing.allowsLegacy(target.url, account);
+        String key = historyKey(context, target);
+        HubStore.PreparedHistory prepared = HubStore.get().historyInitialized() ? null : HubStore.prepareHistory(context, key,
+                legacy ? turns(context) : java.util.Collections.emptyList());
+        boolean[] installed={false};
+        boolean accepted=AccountManager.installHistory(generation, account, target.url, () -> {
+            synchronized (RuntimeClient.class) {
+                Target now = selected(context);
+                if (now != null && now.url.equals(target.url) && now.token.equals(target.token)
+                        && key.equals(historyKey(context, now))) {
+                    if(prepared!=null)HubStore.get().installHistory(prepared, target.url);
+                    installed[0]=true;
+                }
+            }
+        });
+        return accepted && installed[0];
     }
 
     static final String VOICE_PLACEHOLDER = "（语音）";
@@ -1145,11 +1276,13 @@ final class RuntimeClient {
 
     /** Retries go back to the conversation the message was written in, not the main chat. */
     static void retryImages(Context context, String id, String text, List<Attachment> images, String conversation) {
+        if ("weixin".equals(conversation)) return;
         String client = HubStore.get().retryMessage(id);
         if (client != null) submitScoped(context, text, null, null, false, null, null, client, images, conversation, true, false);
     }
 
     static void retry(Context context, String id, String text, String card, String conversation) {
+        if ("weixin".equals(conversation)) return;
         if (HubStore.get().busy()) return;
         String client = HubStore.get().retryMessage(id);
         if (client != null) submitScoped(context, text, null, card, card != null, null, null, client, null, conversation, card == null, false);
@@ -1173,6 +1306,11 @@ final class RuntimeClient {
         submitScoped(context, text, null, card, card != null, null, null, null, images, conversation, true, false);
     }
 
+    static void sendChat(Context context, String text, String conversation, String card, List<Attachment> images,
+                         java.util.function.Consumer<Boolean> persisted) {
+        submitScoped(context, text, null, card, card != null, null, null, null, images, conversation, true, false, persisted);
+    }
+
     /**
      * 在帮手电脑上的原会话里接着说：走 Runtime 的 /v1/sessions/<card>/continue，回话照常回到这段聊天。
      * 原会话正在跑或等确认时 Runtime 会拒绝（不开第二个写入者），拒绝的原因会写在这句话下面。
@@ -1184,6 +1322,15 @@ final class RuntimeClient {
     private static void submitScoped(Context context, String text, byte[] wav, String card,
                                boolean pin, String effort, String agent, String retryId, List<Attachment> images,
                                String conversation, boolean fromChat, boolean resume) {
+        submitScoped(context,text,wav,card,pin,effort,agent,retryId,images,conversation,fromChat,resume,null);
+    }
+
+    private static void submitScoped(Context context, String text, byte[] wav, String card,
+                               boolean pin, String effort, String agent, String retryId, List<Attachment> images,
+                               String conversation, boolean fromChat, boolean resume, java.util.function.Consumer<Boolean> persisted) {
+        // The channel is a read-only mirror; never create even a local queued
+        // phone message for it, regardless of which UI initiated the request.
+        if ("weixin".equals(conversation)) { if (persisted != null) persisted.accept(false); return; }
         final Context app = context.getApplicationContext();
         final Target target = selected(app);
         final HubStore store = HubStore.get();
@@ -1192,10 +1339,40 @@ final class RuntimeClient {
         // 电脑上的会话也能从这里接着聊（Runtime 0.8.1 起）：是否接得上由 Runtime 判断并回答。
         if (target == null) {
             store.chatFailed(text, "还没有设置 Runtime 的连接串");
+            if(persisted!=null)persisted.accept(false);
             return;
         }
         final String clientId = retryId == null ? UUID.randomUUID().toString().replace("-", "") : retryId;
         TurnTiming.sent(clientId, android.os.SystemClock.uptimeMillis());
+        if (!store.historyInitialized()) {
+            TurnTiming.stage(clientId, TurnTiming.Stage.BOOTSTRAP_WAIT);
+            // No chat intent or feed is accepted into an uninitialized history.
+            // Parse the retained archive off the UI thread, then resume only if
+            // the same account and target still own this exact request.
+            final long generation=AccountManager.historyGeneration();
+            final String account=AccountManager.accountId();
+            QUICK.execute(()->{
+                boolean[] resumed={false};
+                try {
+                    if(restoreChat(app,target))AccountManager.installHistory(generation,account,target.url,()->{
+                        synchronized(RuntimeClient.class){
+                            Target now=selected(app);
+                            if(now!=null && now.url.equals(target.url) && now.token.equals(target.token)){
+                                resumed[0]=true;
+                                submitScoped(app,text,wav,card,pin,effort,agent,clientId,images,conversation,fromChat,resume,persisted);
+                            }
+                        }
+                    });
+                } catch(RuntimeException ignored) { /* The original input is reported below. */ }
+                if(!resumed[0]){
+                    if(AccountManager.historyCurrent(generation,account,target.url))
+                        store.chatFailed(text,"对话记录还未准备好，请重试");
+                    if(persisted!=null)new android.os.Handler(android.os.Looper.getMainLooper()).post(()->persisted.accept(false));
+                }
+            });
+            return;
+        }
+        TurnTiming.stage(clientId, TurnTiming.Stage.BOOTSTRAP_READY);
         // A cold send can precede feed initialization; establish the same shelf
         // before capturing its generation so the accepted reply is not discarded.
         String history = historyKey(app, target);
@@ -1205,15 +1382,28 @@ final class RuntimeClient {
         store.chatAsked(text, clientId, pin ? card : null);
         store.messageScope(clientId, conversation, fromChat);
         if (images != null && !images.isEmpty()) store.chatImages(clientId, images);
+        final long ownerGeneration=AccountManager.historyGeneration();
+        final String owner=AccountManager.accountId();
+        java.util.concurrent.CompletableFuture<Boolean> durableIntent=new java.util.concurrent.CompletableFuture<>();
+        TurnTiming.stage(clientId, TurnTiming.Stage.INTENT_START);
+        store.persistIntent(history,clientId,conversation,
+                ()->AccountManager.historyCurrent(ownerGeneration,owner,url),durableIntent::complete);
         // 这句话在聊天记录里的编号：回话途中主人又说了一句时，几句各写各的（HubStore 的 key 版本）。
         final String[] key = {clientId};
         CHAT.execute(() -> {
             MessageStream events = null;
             String watchedRequest = null;
             boolean unified = false;
+            boolean networkStarted = false;
             try {
+                TurnAdmission.await(durableIntent,2500,()->AccountManager.historyCurrent(ownerGeneration,owner,url),
+                        ()->store.hasIntent(history,clientId,conversation));
+                TurnTiming.stage(clientId, TurnTiming.Stage.INTENT_READY);
+                if(persisted!=null)new android.os.Handler(android.os.Looper.getMainLooper()).post(()->persisted.accept(true));
                 // 别处的对话在连上时已经在后台带过去了（shareHistory），这里不再等它。
                 Map<String, String> message;
+                networkStarted = true;
+                TurnTiming.stage(clientId, TurnTiming.Stage.REQUEST_START);
                 if (wav != null) {
                     message = request("POST", url + "/v1/voice?conversation=" + java.net.URLEncoder.encode(conversation, "UTF-8") + (fromChat && card != null ? "&reply_scope=main" : "") + "&client_id=" + clientId
                                     + (BuddyProtocol.cardId(card) ? "&card=" + card + (pin ? "&pin=1" : "")
@@ -1233,6 +1423,7 @@ final class RuntimeClient {
                 if (id == null) {
                     throw new IOException("Runtime 没有返回消息编号");
                 }
+                TurnTiming.stage(clientId, TurnTiming.Stage.REQUEST_ACCEPTED);
                 if (store.cardsEpoch() != epoch) return;
                 store.chatAccepted(clientId, id);
                 key[0] = id;  // 聊天记录里这句话从此按 Runtime 给的编号记
@@ -1319,9 +1510,16 @@ final class RuntimeClient {
                             + (rev == null ? "" : "&rev=" + rev), token, null, null, wait + 15);
                 }
             } catch (IOException | RuntimeException error) {
+                if(!networkStarted && persisted!=null)
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(()->persisted.accept(false));
                 if (store.cardsEpoch() != epoch) return;
+                if (url.startsWith("relay://") && key[0].equals(clientId)
+                        && (error instanceof java.net.SocketTimeoutException || error instanceof RelayOutcomeUnknownException)) {
+                    store.chatUncertain(key[0]); return;
+                }
                 String detail = error.getMessage();
-                store.chatFailed(key[0], null, "连不上 Runtime：" + (detail == null ? error.toString() : detail));
+                store.chatFailed(key[0], null, (networkStarted ? "连不上 Runtime：" : "")
+                        + (detail == null ? error.toString() : detail));
             } finally {
                 if (watchedRequest != null) requestSync.close(watchedRequest, epoch);
                 if (events != null) {
@@ -1489,7 +1687,7 @@ final class RuntimeClient {
             if (progress != null && body != null) progress.sent(0, body.length);
             Long wake = feed ? syncReadWake.get() : null;
             String result = RelayManager.request(method, address, body, contentType, timeoutSeconds,
-                    wake == null ? null : () -> wake == syncWake);
+                    wake == null ? null : () -> wake == syncBackoff.generation());
             if (progress != null && body != null) progress.sent(body.length, body.length);
             return result;
         }

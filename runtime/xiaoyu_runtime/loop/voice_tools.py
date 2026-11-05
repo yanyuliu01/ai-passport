@@ -45,7 +45,7 @@ LATER_PROMISE = re.compile(
     r"(到时候(我|再)|我(会|来|再)提醒|提醒你|晚点(我|再)|回头(我|再)|等.{1,12}(了|后|以后)(我|再)(去|发|做|弄|提醒|告诉))")
 MEMORY_TOOLS = ("remember", "replace", "forget")
 
-ACTION_TOOLS = ("start_task", "amend_task", "cancel_task", "continue_session")
+ACTION_TOOLS = ("start_task", "amend_task", "cancel_task", "continue_session", "browse_content")
 
 # 给模型看的工具结果：办得了的事先记下，提醒她不用再说一遍。
 RECORDED = "好，这一轮说完就去办：%s。用一句话告诉主人交给了谁、在做什么；前面已经说过就不用再说，直接结束。"
@@ -65,7 +65,9 @@ class Toolbox:
                  recall: Optional[Callable[[str], str]] = None, promises: Any = None,
                  conversation: str = "default", only: Optional[Iterable[str]] = None,
                  before_effect: Optional[Callable[[], None]] = None, effects=None,
-                 guard: Optional[Callable[[], None]] = None, session_search=None):
+                 guard: Optional[Callable[[], None]] = None, session_search=None, browser_enabled=False,
+                 browser_budget=None, browser_defer=False, standing_reader=None, expected_memory_revision=None,
+                 recent_chat=None, announce_reads=False, observe_read=None):
         self._helpers = helpers
         self._memory = memory  # memory.OwnerMemory；None 就没有 remember / replace / forget
         self._recall = recall  # recall(query) → 给她看的结果；None 就没有 recall
@@ -80,6 +82,14 @@ class Toolbox:
         self._check = check
         self._lookup = lookup
         self._session_search = session_search
+        self._recent_chat = recent_chat
+        self._observe_read = observe_read
+        self.announce_reads = announce_reads is True
+        self._browser_enabled = browser_enabled
+        self._browser_budget = browser_budget
+        self._browser_defer = browser_defer
+        self._standing_reader = standing_reader
+        self._expected_memory_revision = expected_memory_revision
         self._session_reads = {}
         self.action: Optional[Dict[str, Any]] = None
         self.card: Optional[str] = None
@@ -90,6 +100,22 @@ class Toolbox:
         """Anthropic Messages 接口格式的工具清单（name、description、input_schema）。"""
         card = {"type": "string", "description": "那件事的编号，连同前面的字母，比如 c3"}
         tools: List[Dict[str, Any]] = []
+        if self._browser_enabled:
+            if self._browser_budget is not None:
+                tools.append({"name": "browse_budget", "description": "查看自己浏览 B 站的剩余次数、下一次可访问等待时间、平台限制及自主探索安排；只读本地记录，不访问网络。",
+                              "input_schema": {"type": "object", "properties": {}}})
+            tools.append({"name": "browse_content",
+                "description": "使用你自己的独立浏览器探索内容或查看主人发来的链接。你可以自主少看，额度只是上限；操作在后台执行，结果会回到本对话。目前支持 B 站，只读，不互动。",
+                "input_schema": {"type": "object", "properties": {
+                    "platform": {"type": "string", "enum": ["bilibili"]},
+                    "url": {"type": "string", "description": "要看的 B 站视频链接或 BV 号；探索热门内容时留空"},
+                    "max_items": {"type": "integer", "minimum": 1, "maximum": 8, "description": "探索时最多查看多少条候选，默认 8；可选择更少"},
+                    "read_video": {"type": "boolean", "description": "是否进一步读取一条视频的字幕和可用画面，默认 true；主人要求理解视频画面时保持 true"}},
+                    "required": ["platform"]}})
+            if self._browser_defer:
+                tools.append({"name": "defer_browsing", "description": "这次你不想现在逛，可以安排今天稍后再自己决定；每天最多延期三次，只在本地 10:00 到 21:00 之间，无需告诉主人。",
+                              "input_schema": {"type": "object", "properties": {
+                                  "minutes": {"type": "integer", "minimum": 10, "maximum": 180}}, "required": ["minutes"]}})
         if self._session_search is not None:
             tools.extend([
                 {"name": "find_sessions", "description": "通过统一 gateway 查找原任务和电脑会话。主人说继续、昨晚、某个目录里的活时先查；多个候选不能猜。跨执行端共用。",
@@ -138,11 +164,20 @@ class Toolbox:
             tools.append({
                 "name": "recall",
                 "description": "翻以前的记录：跟主人聊过的话、记忆的修改记录、最近的事和帮手交回的结果。"
-                               "主人提到“上次”“之前说的”、或者你记不清的时候用。",
+                               "主人提到“上次”“之前说的”、或者你记不清的时候用；可按关键词查主对话和微信的留存。"
+                               "问另一边最近聊了什么而没有关键词时，先用 read_recent_chat。",
                 "input_schema": {"type": "object", "properties": {
                     "query": {"type": "string", "description": "要找的关键词，几个词用空格分开"},
                 }, "required": ["query"]},
             })
+        if self._recent_chat is not None:
+            tools.append({"name": "read_recent_chat",
+                "description": "只读查看微信或 App 主对话本机可读留存。问最近消息时默认读最近一页；问最早记录时用 earliest=true；需要继续向前时传工具实际返回的向前游标。不能从消息内容或自己的话编造游标；没有游标时可从最近页或最早页重新读。范围有限，不代表全部历史。",
+                "input_schema": {"type": "object", "properties": {
+                    "channel": {"type": "string", "enum": ["main", "weixin"], "description": "main 是 App 主对话，weixin 是微信"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "before": {"type": "string", "description": "上一页返回的向前游标"},
+                    "earliest": {"type": "boolean", "description": "从本机可读留存的最早一页开始"}}, "required": ["channel"]}})
         if self._memory is not None:
             quote = {"type": "string", "description": "主人的原话（出处），一句就够"}
             tools.append({
@@ -193,16 +228,20 @@ class Toolbox:
                     "outcome": {"type": "string", "description": "怎么了结的，一句话"},
                 }, "required": ["id"]},
             })
+        if self._standing_reader is not None:
+            tools.append({"name": "read_standing", "description": "按常驻资料里话题索引的文件名读取一个话题背景；只读，不是当前指令或授权。",
+                          "input_schema": {"type": "object", "properties": {"name": {"type": "string", "description": "话题索引中的完整文件名"}}, "required": ["name"]}})
         if self._only is not None:
             tools = [tool for tool in tools if tool["name"] in self._only]
-        readers = [tool["name"] for tool in tools if tool["name"] in ("task_detail", "recall", "find_sessions")]
+        readers = [tool["name"] for tool in tools if tool["name"] in ("task_detail", "recall", "find_sessions", "read_recent_chat")]
         if readers and (self._only is None or "read_context" in self._only):
             tools.append({"name": "read_context",
                 "description": "一次读取所有互不依赖的任务详情、历史记录和会话查询。已知多个查询时优先用此工具，不要分多轮询问模型。只读，不能投递或修改。",
                 "input_schema": {"type": "object", "properties": {"queries": {
                     "type": "array", "minItems": 1, "maxItems": 8, "items": {
                         "type": "object", "properties": {"name": {"type": "string", "enum": readers},
-                        "args": {"type": "object", "properties": {"card": card, "query": {"type": "string"}}}},
+                        "args": {"type": "object", "properties": {"card": card, "query": {"type": "string"},
+                            "channel": {"type": "string", "enum": ["main", "weixin"]}, "limit": {"type": "integer"}}}},
                         "required": ["name", "args"]}}}, "required": ["queries"]}})
         return tools
 
@@ -211,6 +250,15 @@ class Toolbox:
         return self.guarded_call(name, args, lambda: None)
 
     def guarded_call(self, name: str, args: Any, guard: Callable[[], None]) -> Tuple[str, bool]:
+        result = self._execute_guarded(name, args, guard)
+        if self._observe_read is not None and name in ('task_detail', 'recall', 'find_sessions', 'read_recent_chat'):
+            # A stale turn must not create new context after cancellation.
+            self._guard()
+            guard()
+            self._observe_read(name, args, result[0], result[1])
+        return result
+
+    def _execute_guarded(self, name: str, args: Any, guard: Callable[[], None]) -> Tuple[str, bool]:
         def check():
             self._guard()
             guard()
@@ -219,9 +267,11 @@ class Toolbox:
         self.calls.append((name, args))
         if self._only is not None and name not in self._only:
             return "这一轮没有 %s 这个工具" % name, True
+        if name == 'read_standing' and self._standing_reader is not None:
+            return self._standing_reader(args.get('name')), False
         if name == "read_context":
             queries = args.get("queries")
-            allowed = {tool["name"] for tool in self.definitions()} & {"task_detail", "recall", "find_sessions"}
+            allowed = {tool["name"] for tool in self.definitions()} & {"task_detail", "recall", "find_sessions", "read_recent_chat"}
             if (not isinstance(queries, list) or not 1 <= len(queries) <= 8 or any(
                     not isinstance(item, dict) or item.get("name") not in allowed
                     or not isinstance(item.get("args"), dict) for item in queries)):
@@ -237,8 +287,11 @@ class Toolbox:
             if problem:
                 return problem, True
         if name in ("remember", "replace", "forget", "track", "resolve"):
-            if name in ("replace", "forget") and self._memory is not None and self._effects is not None:
-                args = dict(args, _memory_revision=self._memory.revision())
+            if name in ("remember", "replace", "forget") and self._memory is not None:
+                if self._expected_memory_revision is not None:
+                    args = dict(args, _memory_revision=self._expected_memory_revision)
+                elif name in ("replace", "forget") and self._effects is not None:
+                    args = dict(args, _memory_revision=self._memory.revision())
             def invoke():
                 if self._before_effect is not None:
                     self._before_effect()
@@ -254,6 +307,43 @@ class Toolbox:
         return result
 
     def _call(self, name: str, args: Any) -> Tuple[str, bool]:
+        def advanced(revision):
+            self._expected_memory_revision = revision
+
+        revision_args = ({'expected': args['_memory_revision']} if '_memory_revision' in args else {})
+        if self._expected_memory_revision is not None:
+            revision_args['on_revision'] = advanced
+        if name == "browse_budget" and self._browser_enabled and self._browser_budget is not None:
+            try:
+                return json.dumps(self._browser_budget(), ensure_ascii=False), False
+            except (OSError, ValueError, RuntimeError):
+                return "浏览额度暂不可读取，先不要访问。", True
+        if name == "defer_browsing" and self._browser_enabled and self._browser_defer:
+            minutes = args.get("minutes")
+            if self.action is not None or not isinstance(minutes, int) or isinstance(minutes, bool) or not 10 <= minutes <= 180:
+                return "请只选择一次 10 到 180 分钟后的时机。", True
+            action = {"type": "browse_defer", "minutes": minutes}
+            problem = self._check({"card": "new", "action": action})
+            if problem:
+                return "暂时不能延期：%s" % problem, True
+            self.action, self.card = action, None
+            return "已记下这个稍后的探索时机；这不是主人要求，不需要发消息。", False
+        if name == "browse_content" and self._browser_enabled:
+            if self.action is not None:
+                return "这一轮已经有一件要办的事了，请下一轮再试。", True
+            url = args.get("url", "")
+            count, read_video = args.get("max_items", 8), args.get("read_video", True)
+            if (args.get("platform") != "bilibili" or not isinstance(url, str) or len(url) > 2048
+                    or not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 8
+                    or not isinstance(read_video, bool)):
+                return "浏览工具的站点或链接无效，没有执行。", True
+            action = {"type": "browse", "platform": "bilibili", "task": url.strip(),
+                      "max_items": count, "read_video": read_video}
+            problem = self._check({"card": "new", "action": action})
+            if problem:
+                return "这次没法浏览：%s" % problem, True
+            self.action, self.card = action, None
+            return "已记下浏览请求，这一轮说完后会在后台执行；用自己的口吻告诉主人你要去看。", False
         if name == "find_sessions" and self._session_search is not None:
             query = args.get("query", "")
             if not isinstance(query, str):
@@ -269,16 +359,22 @@ class Toolbox:
         if name == "recall" and self._recall is not None:
             query = str(args.get("query") or "").strip()
             return (self._recall(query), False) if query else ("要写想找什么", True)
+        if name == 'read_recent_chat' and self._recent_chat is not None:
+            try:
+                options = {key: args[key] for key in ('before', 'earliest') if key in args}
+                return json.dumps(self._recent_chat(args.get('channel'), args.get('limit', 12), **options), ensure_ascii=False), False
+            except (ValueError, OSError, RuntimeError) as error:
+                return '暂时无法读取指定聊天：%s' % error, True
         if name == "remember" and self._memory is not None:
             note = str(args.get("note") or "").strip()
             said = self._memory.remember(note, kind=str(args.get("kind") or ""),
-                                         quote=str(args.get("quote") or ""))
+                                         quote=str(args.get("quote") or ""), **revision_args)
             return said, not said.startswith(("记下了", "这条之前"))
         if name == "replace" and self._memory is not None:
             try:
                 said = self._memory.replace(int(args.get("number")), str(args.get("note") or ""),
                                             quote=str(args.get("quote") or ""),
-                                            **({"expected": args["_memory_revision"]} if "_memory_revision" in args else {}))
+                                            **revision_args)
             except (TypeError, ValueError):
                 return "number 要写记着的那条的编号", True
             return said, not said.startswith("改好了")
@@ -310,7 +406,7 @@ class Toolbox:
         if name == "forget" and self._memory is not None:
             try:
                 return self._memory.forget(int(args.get("number")),
-                    **({"expected": args["_memory_revision"]} if "_memory_revision" in args else {})), False
+                    **revision_args), False
             except (TypeError, ValueError):
                 return "number 要写记着的那条的编号", True
         if name not in ACTION_TOOLS:
@@ -361,7 +457,7 @@ class Toolbox:
             return {"reply": said, "card": self._looked or "new", "action": {"type": "none"},
                     "mood": "happy"}
         return {"reply": said, "card": self.card or "new", "action": self.action,
-                "mood": "busy" if self.action["type"] in ("start", "amend", "resume") else "happy"}
+                "mood": "busy" if self.action["type"] in ("start", "amend", "resume", "browse") else "happy"}
 
 
 class SpeakingTools:
@@ -371,7 +467,7 @@ class SpeakingTools:
         self.parent = parent
         self.calls: List[Tuple[str, Dict[str, Any]]] = []
         self.action = None
-        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall", "find_sessions", "read_context"}
+        self.allowed = {tool["name"] for tool in parent.definitions()} & {"task_detail", "recall", "find_sessions", "read_context", "read_standing"}
 
     def definitions(self) -> List[Dict[str, Any]]:
         return [tool for tool in self.parent.definitions() if tool["name"] in self.allowed]

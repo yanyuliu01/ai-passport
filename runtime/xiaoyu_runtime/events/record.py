@@ -79,6 +79,26 @@ class Record:
         self._cards.catalog_seq = self.sequence()
         return result
 
+    def conversation_create_weixin(self):
+        result = self._cards.conversations.create_weixin()
+        self._cards.catalog_seq = self.sequence()
+        return result
+
+    def conversation_observe_weixin(self):
+        result, changed = self._cards.conversations.observe_weixin()
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return result
+
+    def conversation_claim_weixin(self, grant):
+        result, changed = self._cards.conversations.claim_weixin(grant)
+        if changed:
+            self._cards.catalog_seq = self.sequence()
+        return result
+
+    def channel_delivery(self, message_id, block_id, text, state, revision):
+        return self._cards.channel_delivery(message_id, block_id, text, state, revision)
+
     def conversation_rename(self, name, title, expected=None, source="owner"):
         result = self._cards.conversations.rename(name, title, expected, source)
         self._cards.catalog_seq = self.sequence()

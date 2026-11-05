@@ -50,6 +50,7 @@ final class SyncCache {
     private String epoch = "";
     private String cursor = "0";
     private int presentationVersion;
+    private boolean weixinSnapshot;
     private final Set<String> erased = new LinkedHashSet<>();
     private final Map<String, Map<String, Object>> tasks = new HashMap<>();
     private final Map<String, Map<String, Object>> messages = new HashMap<>();
@@ -59,6 +60,9 @@ final class SyncCache {
     String cursor() { return cursor; }
     String epoch() { return epoch; }
     void requirePresentation() { if (presentationVersion != 1) cursor = "0"; }
+    // Older clients advanced their cursor while the gateway hid channel messages.
+    // Retain the offline cache while requesting a fresh snapshot exactly once.
+    void requireWeixin() { if (!weixinSnapshot) { cursor = "0"; weixinSnapshot = true; } }
 
     Result apply(Map<String, Object> page) {
         String next = Json.string(page, "epoch");
@@ -123,6 +127,7 @@ final class SyncCache {
         Map<String, Object> root = new HashMap<>();
         root.put("version", 1); root.put("conversation", conversation); root.put("epoch", epoch);
         root.put("cursor", cursor); root.put("presentation", presentationVersion);
+        root.put("weixin_snapshot", weixinSnapshot);
         root.put("erased",new ArrayList<>(erased));
         root.put("tasks", new ArrayList<>(tasks.values())); root.put("messages", new ArrayList<>(messages.values()));
         return new Snapshot(root);
@@ -142,6 +147,7 @@ final class SyncCache {
         if (cursor.isEmpty() || epoch.isEmpty()) return null;
         SyncCache cache = new SyncCache(conversation);
         cache.cursor = cursor; cache.epoch = epoch;
+        cache.weixinSnapshot = Json.flag(root, "weixin_snapshot");
         for(Object item:Json.list(root,"erased"))if(item instanceof String)cache.erased.add((String)item);
         cache.presentationVersion = (int) Json.number(root, "presentation");
         for (Object item : Json.list(root, "tasks")) {

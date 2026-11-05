@@ -259,7 +259,7 @@ def _format_sessions(label: str, sessions: List[Dict[str, Any]], now: float) -> 
 def _when(at: float, now: float) -> str:
     then = time.localtime(at)
     if time.localtime(now).tm_yday == then.tm_yday:
-        return time.strftime("今天 %H:%M", then)
+        return "今天 " + time.strftime("%H:%M", then)
     return time.strftime("%m-%d %H:%M", then)
 
 

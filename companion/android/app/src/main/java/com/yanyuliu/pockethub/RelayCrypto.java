@@ -4,6 +4,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.*;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
 import org.bouncycastle.crypto.hpke.HPKE;
 
@@ -11,6 +13,7 @@ import org.bouncycastle.crypto.hpke.HPKE;
 final class RelayCrypto {
     static final int MAX_BYTES = 4 * 1024 * 1024;
     private static final byte[] INFO = "xiaoyou/endpoint-envelope/v1".getBytes(StandardCharsets.UTF_8);
+    private static final String RELAY_PROOF_INFO = "xiaoyou/relay-device-proof/v1";
     private final HPKE suite = new HPKE(HPKE.mode_auth, HPKE.kem_X25519_SHA256, HPKE.kdf_HKDF_SHA256, HPKE.aead_AES_GCM128);
     private final AsymmetricCipherKeyPair keys;
     final String seed;
@@ -34,6 +37,34 @@ final class RelayCrypto {
     }
     static void validateDevice(Map<String,Object> peer) throws Exception {
         if (peer == null || !deviceId(Json.string(peer,"publicKey")).equals(Json.string(peer,"id")) || !(peer.get("name") instanceof String) || Json.string(peer,"name").length()>80) throw new Exception("设备身份不匹配");
+    }
+    /** Prove possession of this device's key for one relay-issued, single-use challenge. */
+    synchronized String relayProof(String room, String encoded) throws Exception {
+        String device = Json.string(identity, "id");
+        if (!room.matches("[a-f0-9]{32}") || !device.matches("[a-f0-9]{32}")
+                || encoded == null || encoded.length() > 1024) throw new Exception("中继挑战无效");
+        byte[] raw = decode(encoded, -1);
+        if (raw.length > 768) throw new Exception("中继挑战过大");
+        Map<String,Object> challenge = Json.parseObject(new String(raw, StandardCharsets.UTF_8));
+        if (challenge == null || !challenge.keySet().equals(new HashSet<>(Arrays.asList("v", "id", "expires", "enc", "ct")))
+                || !(challenge.get("v") instanceof Number) || ((Number)challenge.get("v")).doubleValue() != 1
+                || !(challenge.get("expires") instanceof Number)) throw new Exception("中继挑战格式无效");
+        String id = Json.string(challenge, "id");
+        double timestamp = ((Number)challenge.get("expires")).doubleValue();
+        long expires = ((Number)challenge.get("expires")).longValue();
+        if (!id.matches("[a-f0-9]{32}") || timestamp != (double)expires || expires <= 0)
+            throw new Exception("中继挑战格式无效");
+        byte[] info = RELAY_PROOF_INFO.getBytes(StandardCharsets.UTF_8);
+        byte[] aad = (RELAY_PROOF_INFO + "\0" + room + "\0" + device + "\0" + id + "\0" + expires).getBytes(StandardCharsets.UTF_8);
+        HPKE base = new HPKE(HPKE.mode_base, HPKE.kem_X25519_SHA256, HPKE.kdf_HKDF_SHA256, HPKE.aead_AES_GCM128);
+        byte[] secret = base.open(decode(Json.string(challenge, "enc"),32), keys, info, aad,
+                decode(Json.string(challenge, "ct"),48), null, null, null);
+        if (secret.length != 32) throw new Exception("中继挑战长度无效");
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret, "HmacSHA256"));
+            return id + "." + encode(mac.doFinal(aad));
+        } finally { Arrays.fill(secret, (byte)0); }
     }
     static Map<String,Object> map(Object... items) {
         Map<String,Object> value = new LinkedHashMap<>(); for(int i=0;i<items.length;i+=2)value.put((String)items[i],items[i+1]); return value;

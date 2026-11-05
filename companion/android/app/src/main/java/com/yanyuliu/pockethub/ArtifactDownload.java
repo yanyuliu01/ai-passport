@@ -20,12 +20,24 @@ final class ArtifactDownload {
         if (!file.getParentFile().isDirectory() && !file.getParentFile().mkdirs()) throw new java.io.IOException("无法建立附件缓存");
         if (address.startsWith("relay://")) {
             if (relayBytes == null) throw new java.io.IOException("加密附件连接未就绪");
-            byte[] data = relayBytes.read(address + "/v1/artifacts/" + item.id + (thumb ? "/thumbnail" : "/content"));
-            if (data.length > 2_800_000) throw new java.io.IOException("附件超过加密传输上限");
-            if (!thumb && item.size > 0 && data.length != item.size) throw new java.io.IOException("附件下载不完整");
-            if (!thumb && item.sha256.matches("[0-9a-f]{64}") && !hex(MessageDigest.getInstance("SHA-256").digest(data)).equals(item.sha256)) throw new java.io.IOException("附件校验失败");
             File partial = File.createTempFile("relay-", ".part", file.getParentFile());
-            try { try (OutputStream output = new FileOutputStream(partial)) { output.write(data); }
+            try { try (OutputStream output = new FileOutputStream(partial)) {
+                    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                    String path = address + "/v1/artifacts/" + item.id + (thumb ? "/thumbnail" : "/content");
+                    boolean chunks = !thumb && item.size > 2_800_000;
+                    if (chunks && item.size > 64L * 1024 * 1024) throw new java.io.IOException("附件超过加密传输上限");
+                    long offset = 0;
+                    do {
+                        int length = chunks ? (int) Math.min(1024 * 1024, item.size - offset) : 0;
+                        byte[] data = relayBytes.read(path + (chunks ? "?offset=" + offset + "&length=" + length : ""));
+                        if ((chunks && data.length != length) || (!chunks && data.length > 2_800_000))
+                            throw new java.io.IOException("电脑暂不支持大文件传输，请先更新电脑端");
+                        output.write(data); digest.update(data); offset += data.length;
+                    } while (chunks && offset < item.size);
+                    if (!thumb && item.size > 0 && offset != item.size) throw new java.io.IOException("附件下载不完整");
+                    if (!thumb && item.sha256.matches("[0-9a-f]{64}") && !hex(digest.digest()).equals(item.sha256))
+                        throw new java.io.IOException("附件校验失败");
+                }
                 if (!partial.renameTo(file)) throw new java.io.IOException("无法保存附件");
             } finally { partial.delete(); }
             return;

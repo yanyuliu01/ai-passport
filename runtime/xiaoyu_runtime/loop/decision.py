@@ -31,7 +31,8 @@ def choose(spec, job, env, model, opener=urllib.request.urlopen):
     body = {"model": model, "stream": False, "max_tokens": 512,
             "thinking": {"type": "disabled"}, "tools": definitions,
             "system": (job.system or "") + "\n\n" + RULES,
-            "messages": history + [{"role": "user", "content": job.text}]}
+            "messages": dsh_stream.request_messages(history + [{"role": "user", "content": job.text}],
+                                                    job.system, len(history))}
     # Prompt plus server-side validation works even when a provider ignores tool_choice.
     # Do not assume support for tool_choice=any without a live capability probe.
     base = (env.get("DEEPSEEK_BASE_URL") or dsh_stream.BASE_URL).rstrip("/")

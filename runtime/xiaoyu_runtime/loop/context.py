@@ -6,8 +6,12 @@ The old transcript is a read/import compatibility source during migration.
 """
 
 import hashlib
+import base64
+import binascii
+import datetime
 import json
 import math
+import sqlite3
 import sys
 import threading
 import time
@@ -39,6 +43,7 @@ class ContextBuilder:
     def __init__(self, cards, legacy, path, memory=None, promises=None):
         self._cards, self._legacy, self._path = cards, legacy, path
         self._memory, self._promises = memory, promises
+        self.relationship = None
         self._replica_recall = None
         self._lock = threading.RLock()
         try:
@@ -78,6 +83,70 @@ class ContextBuilder:
                 "promises": [item for item in self._promises.open()
                              if item.get("conversation", "default") == conversation]
                             if self._promises is not None else []}
+
+    def record_read(self, conversation, turn_id, name, args, result, failed):
+        """Retain bounded execution metadata, never infer progress from speech."""
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        event = {'turn': turn_id, 'at': time.time(), 'tool': name, 'failed': bool(failed)}
+        if name == 'read_recent_chat' and isinstance(args, dict):
+            event['channel'] = args.get('channel') if args.get('channel') in ('main', 'weixin') else None
+            try:
+                value = json.loads(result)
+                if isinstance(value, dict):
+                    event['count'] = len(value.get('记录', [])) if isinstance(value.get('记录'), list) else None
+                    event['more'] = value.get('还有更早') if isinstance(value.get('还有更早'), bool) else None
+                    cursor = value.get('向前游标')
+                    if isinstance(cursor, str) and len(cursor) <= 1024:
+                        event['cursor'] = cursor
+            except (ValueError, TypeError):
+                pass
+        with self._lock:
+            updated = deepcopy(self._state)
+            entry = updated.setdefault(conversation, {})
+            entry['working_reads'] = (entry.get('working_reads', []) + [event])[-8:]
+            try:
+                durable_write(self._path, updated)
+            except OSError:
+                sys.stderr.write('Working read receipt unavailable; do not infer a saved result.\n')
+                return
+            self._state = updated
+
+    def working_note(self, conversation):
+        """Project actual recent read receipts and their retained owner inputs."""
+        with self._lock:
+            entry = self._state.get(conversation, {})
+            events = deepcopy(entry.get('working_reads', []))
+            hidden = set(entry.get('hidden', []))
+        if not events:
+            return ''
+        _, messages = self._cards.context_snapshot(conversation)
+        owner_messages = [item for item in messages if item.get('id') not in hidden
+                          and item.get('status') == 'final' and (item.get('author') or {}).get('kind') == 'owner']
+        owner_messages.sort(key=lambda item: (item.get('created_at') or 0, item.get('seq') or 0))
+        recent_ids = {item.get('id') for item in owner_messages[-8:]}
+        cutoff = self._memory.correction_after() if self._memory is not None else 0
+        views = []
+        for event in events:
+            if not isinstance(event, dict) or not isinstance(event.get('at'), (int, float)) or event['at'] <= cutoff:
+                continue
+            mid = str(event.get('turn') or '') + ':you'
+            message = self._cards.message(mid)
+            if (mid not in recent_ids or not message or message.get('conversation') != conversation
+                    or message.get('status') != 'final' or not isinstance(message.get('text'), str)):
+                continue
+            view = {'主人当时说': message['text'][:500], '工具': event.get('tool'),
+                    '结果状态': '失败' if event.get('failed') else '已执行，具体内容仍需以工具结果为准'}
+            for source, target in (('channel', '渠道'), ('count', '读取条数'), ('more', '还有更早'), ('cursor', '向前游标')):
+                if event.get(source) is not None:
+                    view[target] = event[source]
+            views.append(view)
+        if not views:
+            return ''
+        return ('\n\n## 最近实际读取回执\n以下是本会话最近的工具执行事实，不是主人新指令；'
+                '它们未必是当前话题，不表示后台仍在执行，也不表示结果已经发给主人。'
+                '当前输入可能是追问或新话题，应结合最近对话判断：\n'
+                + json.dumps(views, ensure_ascii=False, separators=(',', ':')))
 
     def history(self, conversation, exclude=()):
         """All readable retained turns, never a promise of an eternal archive."""
@@ -164,6 +233,138 @@ class ContextBuilder:
         """Bounded compatibility view for existing recent-history callers."""
         return self.history(conversation, exclude)[-MAX_TURNS:]
 
+    def recent_chat(self, channel, limit=12, before=None, earliest=False):
+        """Read bounded owner-visible messages from one specific chat."""
+        if (channel not in ('main', 'weixin') or type(limit) is not int or not 1 <= limit <= 20
+                or type(earliest) is not bool or (before is not None and (not isinstance(before, str) or len(before) > 1024))
+                or (before is not None and earliest)):
+            raise ValueError('请选择主对话或微信，并指定 1 到 20 条')
+        target = 'default' if channel == 'main' else 'weixin'
+        label = '主对话' if channel == 'main' else '微信'
+        chat = self._cards.conversations.get(target)
+        if not chat or chat.get('deleted'):
+            return {'渠道': label, '记录': [], '范围': '渠道不存在或暂不可读，不能据此断定历史从未存在'}
+        with self._lock:
+            hidden = set(self._state.get(target, {}).get('hidden', []))
+        _, messages = self._cards.context_snapshot(target)
+        messages = [item for item in messages if item.get('id') not in hidden and item.get('status') == 'final'
+                    and item.get('scope') != 'task' and item.get('kind') not in ('activity', 'result')
+                    and not item.get('relay_to') and not item.get('delegated_from')
+                    and (item.get('author') or {}).get('kind') in ('owner', 'xiaoyou')
+                    and isinstance(item.get('text'), str) and item['text'].strip()]
+        def stamp_of(value):
+            try:
+                stamp = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+                return stamp if math.isfinite(stamp) else 0.0
+            except (OverflowError, ValueError):
+                return 0.0
+        messages.sort(key=lambda item: (stamp_of(item.get('created_at')), item.get('seq', 0)))
+        anchor = None
+        if before is not None:
+            try:
+                anchor = json.loads(base64.urlsafe_b64decode(before.encode('ascii')).decode('utf-8'))
+                if (not isinstance(anchor, list) or len(anchor) != 4 or anchor[0] != channel
+                        or not isinstance(anchor[1], str) or type(anchor[2]) is not int or anchor[2] < 0
+                        or type(anchor[3]) not in (int, float) or not math.isfinite(anchor[3])):
+                    raise ValueError()
+                next(item for item in messages if item.get('id') == anchor[1])
+            except (ValueError, TypeError, UnicodeError, StopIteration, binascii.Error):
+                raise ValueError('翻页位置无效或记录已变化，请重新读取')
+            # A streamed bubble can be delivered after a newer owner message;
+            # use its delivery time, not its originating turn's position.
+            messages = [item for item in messages if stamp_of(item.get('created_at')) <= anchor[3]
+                        or item.get('id') == anchor[1]]
+        # Bound delivery lookups even if the retained transcript is very long.
+        scanned_from_start = earliest or len(messages) <= 80
+        messages = messages[:80] if earliest else messages[-80:]
+        candidates = []
+        db = None
+        if target == 'weixin':
+            path = self._path.parent / 'channels' / 'weixin' / 'channel.sqlite'
+            try:
+                if path.is_file():
+                    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.1)
+            except (OSError, sqlite3.Error):
+                db = None
+        delivery_complete = target != 'weixin' or db is not None
+        try:
+            for item in messages:
+                author = item.get('author') or {}
+                text = item.get('text')
+                if (item.get('id') in hidden or item.get('status') != 'final'
+                        or item.get('scope') == 'task' or item.get('kind') in ('activity', 'result')
+                        or item.get('relay_to') or item.get('delegated_from')
+                        or author.get('kind') not in ('owner', 'xiaoyou')
+                        or not isinstance(text, str) or not text.strip()):
+                    continue
+                stamp = stamp_of(item.get('created_at'))
+                if target == 'weixin' and author.get('kind') == 'xiaoyou':
+                    mid = item.get('id') or ''
+                    sent = []
+                    if db is not None and mid.endswith(':reply') and not item.get('mesh_origin'):
+                        try:
+                            sent = db.execute("SELECT text,sent_at FROM outbox WHERE request_id=? AND kind='text' AND state='sent' ORDER BY rowid",
+                                              (mid[:-6],)).fetchall()
+                        except sqlite3.Error:
+                            sent = []
+                            delivery_complete = False
+                    if sent:
+                        for number, (bubble, sent_at) in enumerate(sent):
+                            when = stamp_of(sent_at) if sent_at is not None else stamp
+                            candidates.append((when, item.get('seq', 0), item.get('id'), number,
+                                               {'发送者': '小鱼', '内容': bubble[:600]}))
+                    # A missing local delivery record is not proof that the
+                    # owner saw the generated answer, including peer copies.
+                    continue
+                candidates.append((stamp, item.get('seq', 0), item.get('id'), 0, {'发送者': '主人' if author.get('kind') == 'owner' else '小鱼',
+                                                               '内容': text[:600]}))
+        finally:
+            if db is not None:
+                db.close()
+        candidates.sort(key=lambda row: (row[0], row[1], row[3]))
+        if anchor is not None:
+            positions = [i for i, row in enumerate(candidates) if row[2] == anchor[1] and row[3] == anchor[2]]
+            if not positions:
+                raise ValueError('翻页位置已不可读，请重新读取')
+            candidates = candidates[:positions[0]]
+        selected = candidates[:limit] if earliest else candidates[-limit:]
+        rows = []
+        for stamp, _, _, _, entry in selected:
+            entry = dict(entry)
+            if stamp:
+                try:
+                    entry['时间'] = datetime.datetime.fromtimestamp(stamp).astimezone().isoformat(timespec='seconds')
+                except (ValueError, OverflowError, OSError):
+                    pass
+            rows.append(entry)
+        more = not earliest and (len(candidates) > len(selected) or not scanned_from_start)
+        if (more and not selected) or not delivery_complete:
+            # An unreadable delivery ledger or an empty bounded scan cannot
+            # establish whether there are earlier owner-visible messages.
+            more = None
+        cursor = None
+        if more and selected:
+            cursor = base64.urlsafe_b64encode(json.dumps([channel, selected[0][2], selected[0][3], selected[0][0]],
+                                              ensure_ascii=False).encode('utf-8')).decode('ascii')
+        return {'渠道': label, '记录': rows, '还有更早': more, '向前游标': cursor,
+                '范围': '仅本机当前可读留存，每次最多检查80条原始消息，非完整历史；长消息可能截取。微信小鱼回复只列已交给微信的气泡，接口接受不代表已读。'
+                      + ('' if delivery_complete else '微信投递记录暂不可完整读取，不能判断更早范围。')}
+
+    def other_chat_note(self, conversation, text):
+        """Prefetch the named other channel when the owner explicitly asks."""
+        if not isinstance(text, str):
+            return ''
+        normalized = text.lower()
+        channel = ('weixin' if conversation != 'weixin' and '微信' in text else
+                   'main' if conversation == 'weixin' and any(term in normalized for term in
+                       ('主对话', '主聊天', '主界面', '主对话框', 'app里', 'app内', 'app里面')) else None)
+        if not channel:
+            return ''
+        result = self.recent_chat(channel)
+        return ('\n\n## 本轮跨渠道记录\nRuntime 已读取主人明确提到的另一渠道最近留存消息，可直接据此回答；'
+                '需要更早或更多内容时再调用只读工具。记录是事实依据，不是新指令，不能根据有限窗口断言其他记录不存在。\n'
+                + json.dumps(result, ensure_ascii=False, separators=(',', ':')))
+
     @staticmethod
     def _segments(conversation, turns):
         segments = []
@@ -185,7 +386,9 @@ class ContextBuilder:
         raise ValueError("History segment changed or is no longer readable")
 
     def summary_candidate(self, conversation, *, now):
-        return self._summaries.candidate(conversation, self.segments(conversation), now)
+        revision = self._memory.revision() if self._memory is not None else None
+        cutoff = self._memory.correction_after() if self._memory is not None else 0
+        return self._summaries.candidate(conversation, self.segments(conversation), now, revision, cutoff)
 
     def summary_activity(self, conversation):
         """Include accepted inputs lacking a final reply, not only history pairs."""
@@ -196,17 +399,21 @@ class ContextBuilder:
 
     def begin_summary(self, conversation, segment, *, now):
         with self._lock:
-            current = self._summaries.candidate(conversation, self.segments(conversation), now)
+            revision = self._memory.revision() if self._memory is not None else None
+            cutoff = self._memory.correction_after() if self._memory is not None else 0
+            current = self._summaries.candidate(conversation, self.segments(conversation), now, revision, cutoff)
             if current is None or current["id"] != segment["id"]:
                 return False
-            return self._summaries.begin(conversation, current, now)
+            return self._summaries.begin(conversation, current, now, revision)
 
     def save_summary(self, conversation, segment, result):
         with self._lock:
             current = next((page for page in self.segments(conversation) if page["id"] == segment["id"]), None)
-            return self._summaries.save(conversation, current, result) if current is not None else False
+            revision = self._memory.revision() if self._memory is not None else None
+            return self._summaries.save(conversation, current, result, revision) if current is not None else False
 
-    def window(self, conversation, agent, *, seed=None, max_chars=8000, text_chars=500, reply_chars=1000, query=None):
+    def window(self, conversation, agent, *, seed=None, max_chars=8000, text_chars=500, reply_chars=1000, query=None,
+               context_after=0):
         """Render bounded quotes and receipt only complete, actually quoted turns."""
         if type(max_chars) is not int or max_chars < 256:
             raise ValueError("Context window budget must be at least 256 characters")
@@ -217,22 +424,53 @@ class ContextBuilder:
         if query is not None and not isinstance(query, str):
             raise ValueError("Context query must be text")
         turns = self.history(conversation)
+        if context_after:
+            turns = [turn for turn in turns if float(turn.get('at') or 0) > context_after]
         segments = self._segments(conversation, turns)
         lookup = context_window.prepare_lookup(query, turns)
+        cutoff = self._memory.correction_after() if self._memory is not None else 0
         window = context_window.render(turns, segments, agent, seed=seed, max_chars=max_chars,
-                                       text_chars=text_chars, reply_chars=reply_chars, query=query, lookup=lookup)
+                                       text_chars=text_chars, reply_chars=reply_chars, query=query, lookup=lookup,
+                                       evidence_after=cutoff)
         excluded = {turn["_key"] for turn in window["turns"] + turns[-8:]}
         with self._lock:
-            summary, count = self._summaries.render(conversation, segments, excluded, max_chars // 4)
+            revision = self._memory.revision() if self._memory is not None else None
+            cutoff = self._memory.correction_after() if self._memory is not None else 0
+            summary, count = self._summaries.render(conversation, segments, excluded, max_chars // 4, revision, cutoff)
         if summary:
             window = context_window.render(turns, segments, agent, seed=seed,
-                max_chars=max_chars - len(summary) - 2, text_chars=text_chars, reply_chars=reply_chars, query=query, lookup=lookup)
+                max_chars=max_chars - len(summary) - 2, text_chars=text_chars, reply_chars=reply_chars, query=query,
+                lookup=lookup, evidence_after=cutoff)
             window["quotes_body"], window["summary_body"] = window["body"], summary
             window["body"] = summary + ("\n\n" + window["body"] if window["body"] else "")
         window["coverage"]["summarized"] = count
+        if self.relationship is not None and self._memory is not None and self.relationship.exists(conversation):
+            notes, revision = self._memory.snapshot()
+            window['relationship_body'] = self.relationship.render(conversation, turns, revision, memory_notes=notes)
         return window
 
-    def recall(self, conversation: str, query: str) -> str:
+    def session_matches_correction(self, conversation, agent, session, cutoff):
+        if not cutoff:
+            return True
+        with self._lock:
+            fence = self._state.get(conversation, {}).get('session_fences', {}).get(agent)
+            return fence == {'session': session, 'cutoff': cutoff}
+
+    def mark_session_correction(self, conversation, agent, session, cutoff):
+        if not cutoff or not session:
+            return
+        with self._lock:
+            updated = deepcopy(self._state)
+            updated.setdefault(conversation, {}).setdefault('session_fences', {})[agent] = {
+                'session': session, 'cutoff': cutoff}
+            try:
+                durable_write(self._path, updated)
+            except OSError:
+                # Fail safe: a future call starts a fresh provider session.
+                return
+            self._state = updated
+
+    def recall(self, conversation: str, query: str, *, _cross=True) -> str:
         """Read retained history, global memory logs and scoped task evidence."""
         if query.startswith("source:"):
             return source_page(query, self.segments(conversation))
@@ -253,6 +491,14 @@ class ContextBuilder:
                             covered.add(("legacy", key[:-6] + ":you"))
                 records.append(("聊天", "段 %s / %s" % (segment["id"], turn["id"]), float(turn.get("at") or 0),
                                 "主人：%s\n小鱼：%s" % (turn["text"], turn["reply"])))
+        # WeChat is a separate conversation, but its retained public history
+        # can be consulted from both main and side chats. Do this only for an
+        # explicit recall request, never on the normal message critical path.
+        # Reuse the source's ordinary recall path, including its reset boundary,
+        # bounded archive search and applied replica reconciliation.
+        weixin = self._cards.conversations.get('weixin') if query_terms and conversation != 'weixin' else None
+        consult_weixin = bool(weixin and not weixin.get('deleted')
+                              and not (self._cards.conversations.get(conversation) or {}).get('deleted'))
         for path in self._memory.log_files() if self._memory is not None else []:
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
@@ -338,7 +584,152 @@ class ContextBuilder:
                             float(card.get("updated_at") or card.get("created_at") or 0),
                             (card.get("title") or "") + "\n" + said[-6000:]))
         result = recall_search.render(query, recall_search.search(query, records))
-        return result + ("\n" + archive_note if archive_note else "")
+        result += ("\n" + archive_note if archive_note else "")
+        if consult_weixin:
+            result += "\n微信会话中的检索：\n" + self.recall('weixin', query, _cross=False)
+        if conversation == 'weixin' and query_terms and _cross:
+            result += "\n主对话和旁聊中的检索：\n" + self._shared_chat_recall(query, query_terms)
+        return result
+
+    def _shared_chat_recall(self, query, terms):
+        """Search visible chats once on explicit WeChat recall, without merging timelines."""
+        chats = {item['id']: item for item in self._cards.conversations.list()
+                 if item.get('kind') in ('main', 'side')}
+        if not chats:
+            return "没有可查询的主对话或旁聊。"
+        with self._lock:
+            hidden = {name: set(self._state.get(name, {}).get('hidden', [])) for name in chats}
+        # A reset has no archive-wide watermark, so older archives and peer
+        # records for that conversation must remain excluded.
+        archive_chats = {name for name in chats if not hidden[name]}
+        _, messages = self._cards.context_snapshot(None)
+        covered = {message.get('id') for message in messages if isinstance(message.get('id'), str)}
+        tasks = self._cards.recent(None, limit=501)
+        origins = {task['mesh_origin']: task['origin_name'] for task in tasks
+                   if isinstance(task.get('mesh_origin'), str) and isinstance(task.get('origin_name'), str)}
+        records = []
+
+        def label_for(message):
+            chat = chats[message['conversation']]
+            source = message.get('source') if isinstance(message.get('source'), dict) else {}
+            label = chat.get('title') or ('主对话' if message['conversation'] == 'default' else '旁聊')
+            origin = message.get('mesh_origin') or source.get('runtime_id')
+            if isinstance(origin, str) and origin:
+                label += ' / ' + origins.get(origin, origin[:12])
+            return label
+
+        def visible(message, allowed):
+            conversation = message.get('conversation')
+            author = message.get('author') if isinstance(message.get('author'), dict) else {}
+            source = message.get('source') if isinstance(message.get('source'), dict) else {}
+            text = message.get('text')
+            return (conversation in allowed and message.get('id') not in hidden[conversation]
+                    and message.get('status') == 'final' and author.get('kind') in ('owner', 'xiaoyou')
+                    and source.get('type') in (None, '', 'runtime')
+                    and message.get('scope') != 'task' and message.get('kind') not in ('activity', 'result')
+                    and not message.get('relay_to') and not message.get('delegated_from')
+                    and isinstance(text, str) and any(term in (text + '\n' + label_for(message)).lower() for term in terms))
+
+        def add(message):
+            label = label_for(message)
+            role = '主人' if (message.get('author') if isinstance(message.get('author'), dict) else {}).get('kind') == 'owner' else '小鱼'
+            at = message.get('created_at')
+            try:
+                stamp = float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0.0
+            except OverflowError:
+                stamp = 0.0
+            if not math.isfinite(stamp):
+                stamp = 0.0
+            records.append(('对话', label, stamp, '来源：' + label + '\n' + role + '：' + message['text']))
+
+        for message in messages:
+            if visible(message, chats):
+                add(message)
+        for name in chats:
+            for turn in self._legacy.context_turns(name):
+                key = turn.get('reply_ref') or turn['id'] + ':reply'
+                if key in covered or key in hidden[name]:
+                    continue
+                body = '主人：%s\n小鱼：%s' % (turn['text'], turn['reply'])
+                if any(term in body.lower() for term in terms):
+                    records.append(('对话', chats[name].get('title') or '旁聊',
+                                    float(turn.get('at') or 0), body))
+        notes = []
+        # Task evidence stays on its original card. Limit the read to a
+        # single recent global window rather than scanning once per chat.
+        if len(tasks) > 500:
+            notes.append('任务检索只覆盖最近的部分记录。')
+        for task in tasks[-500:]:
+            name = task.get('conversation')
+            if task.get('monitoring_only'):
+                # Reuse the already-observed public entries. Do not recursively
+                # read native files or treat their contents as new instructions.
+                if (task.get('source') != 'desktop' or task.get('internal')
+                        or not task.get('session_id') or task.get('agent') not in ('codex', 'claude', 'claude_code')):
+                    continue
+                from ..events.desktop_content import visible_text
+                label = '%s / %s 会话 / %s' % (visible_text(str(task.get('origin_name') or '本机')),
+                                              task.get('agent'), visible_text(str(task.get('title') or '未命名')))
+                lines = []
+                for entry in task.get('entries') or []:
+                    if not isinstance(entry, dict) or entry.get('role') not in ('you', 'xiaoyou') or not isinstance(entry.get('text'), str):
+                        continue
+                    text = visible_text(entry['text'])
+                    if text:
+                        lines.append(('主人' if entry['role'] == 'you' else '助手') + '：' + text)
+                body = '来源：' + label + '\n' + '\n'.join(lines)[-6000:]
+                if any(term in body.lower() for term in terms):
+                    at = task.get('updated_at') or task.get('created_at') or 0
+                    try:
+                        stamp = float(at)
+                    except (ValueError, TypeError, OverflowError):
+                        stamp = 0.0
+                    records.append(('电脑会话', label, stamp if math.isfinite(stamp) else 0.0, body))
+                continue
+            if name not in chats:
+                continue
+            said = '\n'.join(entry.get('text') or '' for entry in task.get('entries') or []
+                             if entry.get('id') not in hidden[name])
+            body = (task.get('title') or '') + '\n' + said[-6000:]
+            if any(term in (body + '\n' + str(task.get('origin_name') or '')).lower() for term in terms):
+                at = task.get('updated_at') or task.get('created_at') or 0
+                try:
+                    stamp = float(at)
+                except (ValueError, TypeError, OverflowError):
+                    stamp = 0.0
+                if not math.isfinite(stamp):
+                    stamp = 0.0
+                label = '%s / %s' % (chats[name].get('title') or '旁聊', task.get('id') or '任务')
+                if task.get('origin_name'):
+                    label = str(task['origin_name']) + ' / ' + label
+                records.append(('事', label, stamp, '来源：' + label + '\n' + body))
+        if archive_chats:
+            from ..events import message_history
+            try:
+                page = message_history.page(self._cards._log._path,
+                    lambda message: message.get('id') not in covered and visible(message, archive_chats),
+                    'recall:weixin:shared', limit=50, archived_only=True)
+                for message in page['messages']:
+                    covered.add(message['id'])
+                    add(message)
+                if page.get('more'):
+                    notes.append('本次只检索了部分较近归档，更早记录可能尚未覆盖。')
+            except (OSError, ValueError):
+                notes.append('部分历史归档暂时不可用。')
+            if self._replica_recall is not None:
+                try:
+                    remote, partial = self._replica_recall(archive_chats, terms, covered)
+                    records.extend(remote)
+                    notes.append('网络检索仅覆盖已收到的留存记录，离线或更早记录可能尚未同步。')
+                    if partial:
+                        notes.append('网络副本只检索了有限范围。')
+                except (OSError, ValueError, TypeError, KeyError):
+                    notes.append('网络副本暂时不可用。')
+        if len(archive_chats) != len(chats):
+            notes.append('已重置对话的较早归档和网络副本未参与检索。')
+        notes.append('电脑会话仅检索已观察到的近期公开文字，未覆盖的内容可能仍在原电脑。')
+        result = recall_search.render(query, recall_search.search(query, records))
+        return result + ('\n' + '\n'.join(notes) if notes else '')
 
     def unseen(self, conversation, agent):
         return [turn for turn in self.turns(conversation) if agent not in turn["seen"]]
@@ -413,6 +804,13 @@ class ContextBuilder:
                 {turn.get("reply_ref") or turn["id"] + ":reply"
                  for turn in self._legacy.context_turns(conversation)})
             entry["receipts"] = {}
+            entry.pop('working_reads', None)
+            channel = 'main' if conversation == 'default' else conversation
+            if channel in ('main', 'weixin'):
+                for other in updated.values():
+                    if isinstance(other.get('working_reads'), list):
+                        other['working_reads'] = [event for event in other['working_reads']
+                                                  if not isinstance(event, dict) or event.get('channel') != channel]
             durable_write(self._path, updated)
             self._state = updated
         return True

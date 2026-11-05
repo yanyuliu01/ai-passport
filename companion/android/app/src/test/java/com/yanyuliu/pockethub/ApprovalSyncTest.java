@@ -6,6 +6,12 @@ import java.util.List;
 import java.util.Map;
 
 public class ApprovalSyncTest {
+    @Test public void backgroundApprovalSyncDeclaresChannelSupport() throws Exception {
+        assertTrue(new ApprovalSync().path().contains("states=unavailable,weixin"));
+        Card.Approval approval = new ApprovalSync().apply(page("e", 1,
+                "{\"id\":\"a\",\"seq\":1,\"status\":\"pending\",\"conversation\":\"weixin\"}"), "u", "n", 0).get(0);
+        assertEquals("weixin", approval.conversation);
+    }
     private static Map<String,Object> page(String epoch, int seq, String rows) {
         return Json.parseObject("{\"epoch\":\""+epoch+"\",\"seq\":"+seq+",\"approvals\":["+rows+"]}");
     }

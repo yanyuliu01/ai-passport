@@ -325,6 +325,7 @@ class Job:
     # 不再写 JSON。只交给 talks_with_tools() 为真的代理；None 表示这一次不给工具
     tools: Any = None
     decision_only: bool = False
+    ephemeral: bool = False  # Do not persist a provider session for derived background work.
     decision_messages: Any = None
     # 主人插话了（threading.Event 被设上）：边说边出的这一次马上停下，已经说出的部分照样交回。
     # 真的因此提前停下的代理把它的 took_effect 设为 True（见 Cut）。
@@ -337,8 +338,11 @@ class Job:
     images: tuple = ()  # trusted local immutable snapshots, supplied by Runtime only
     image_refs: tuple = ()  # stable Runtime attachment IDs, never public local paths
     image_resolver: Any = None  # Runtime-owned authenticated artifact resolver
+    artifact_dir: Optional[str] = None  # Runtime-selected private task inbox
+    scratch: Optional[str] = None  # Runtime-selected local state directory
     title: str = ""  # Runtime-owned display name, never an owner prompt
     require_session: bool = False  # Borrowed native session: never create a replacement
+    session_text: Optional[str] = None  # Original owner input when text includes transient recap.
 
 
 def workdir(spec: "AgentSpec", job: Job) -> Optional[Path]:

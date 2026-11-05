@@ -125,17 +125,38 @@ final class AppUpdate {
         WORKER.execute(() -> {
             File done = null;
             String error = null;
+            boolean privateRelease = PrivateReleaseRoute.looksPrivate(release.downloadUrl);
+            String account = privateRelease ? AccountManager.accountId() : "";
+            String session = privateRelease && target != null ? AccountManager.privateReleaseToken(target.url, account) : "";
             try {
                 if (target == null) throw new IOException("还没有连接电脑");
                 File file = file(app, release);
-                if (!verified(file, release)) fetch(target, release, external, file, percent -> {
-                    if (progress != null) main().post(() -> progress.at(percent));
-                });
+                Progress report = percent -> { if (progress != null) main().post(() -> progress.at(percent)); };
+                if (privateRelease) UpdateDownload.fetchPrivate(release.downloadUrl, account, session, release.sha256,
+                        release.size, file, report::at);
+                else if (!verified(file, release)) fetch(target, release, external, file, report);
+                if (privateRelease) {
+                    RuntimeClient.Target current = RuntimeClient.selected(app);
+                    if (!PrivateReleaseRoute.completionAllowed(target.url, target.token, session,
+                            current == null ? null : current.url, current == null ? null : current.token,
+                            AccountManager.privateReleaseToken(target.url, account)))
+                        throw new IOException("账号或电脑已切换，请重新检查更新");
+                }
                 done = file;
-            } catch (Exception failure) { error = failure.getMessage(); }
+            } catch (Exception failure) { error = failure.getMessage() == null ? "更新下载失败，请重试" : failure.getMessage(); }
             File result = done;
             String detail = error;
-            main().post(() -> callback.done(result, detail));
+            main().post(() -> {
+                if (privateRelease && detail == null) {
+                    RuntimeClient.Target current = RuntimeClient.selected(app);
+                    if (!PrivateReleaseRoute.completionAllowed(target.url, target.token, session,
+                            current == null ? null : current.url, current == null ? null : current.token,
+                            AccountManager.privateReleaseToken(target.url, account))) {
+                        callback.done(null, "账号或电脑已切换，请重新检查更新"); return;
+                    }
+                }
+                callback.done(result, detail);
+            });
         });
     }
 

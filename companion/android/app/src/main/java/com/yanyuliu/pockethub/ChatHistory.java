@@ -26,8 +26,10 @@ final class ChatHistory {
     }
 
     private final Map<String, Message> messages = new LinkedHashMap<>();
+    java.util.Set<String> ids() { return new java.util.HashSet<>(messages.keySet()); }
 
     private final java.util.Set<String> erased = new java.util.HashSet<>();
+    boolean erased(String conversation) { return erased.contains(conversation); }
     boolean eraseConversation(String id) {
         boolean changed = erased.add(id);
         return messages.values().removeIf(message -> message.conversation.equals(id)) || changed;
@@ -75,15 +77,152 @@ final class ChatHistory {
         for (String role : new String[]{"you", "reply"}) {
             Message message = messages.remove(local + ":" + role);
             if (message == null) continue;
+            Message existing = messages.get(remote + ":" + role);
+            if (existing != null && (existing.synced || existing.status.equals("done"))) {
+                existing.clientId = message.clientId;
+                existing.at = message.at;
+                continue;
+            }
             message.id = remote + ":" + role;
             message.status = role.equals("you") ? "sent" : "thinking";
+            if (role.equals("reply") && message.text != null && !message.text.isEmpty()) message.text = "";
             put(message);
         }
+    }
+
+    /** Bind a confirmed request only in its original conversation; safe to replay after a crash. */
+    boolean reconcileAccepted(String local, String remote, String conversation) {
+        if (erased.contains(conversation)) return true;
+        Message user = messages.get(local + ":you");
+        if (user == null) {
+            Message existing = messages.get(remote + ":you");
+            return existing != null && existing.conversation.equals(conversation)
+                    && (existing.clientId.equals(local) || existing.clientId.isEmpty());
+        }
+        if (!user.clientId.equals(local) || !user.conversation.equals(conversation)) return false;
+        for (String role : new String[]{"you", "reply"}) {
+            Message other = messages.get(remote + ":" + role);
+            if (other != null && !other.conversation.equals(conversation)) return false;
+        }
+        accepted(local, remote);
+        return true;
+    }
+
+    boolean reconcileRejected(String local, String conversation) {
+        if (erased.contains(conversation)) return true;
+        Message user = messages.get(local + ":you");
+        if (user == null) {
+            for (Message message : messages.values())
+                if (message.role.equals("you") && message.clientId.equals(local) && message.conversation.equals(conversation)) return true;
+            return false;
+        }
+        if (!user.clientId.equals(local) || !user.conversation.equals(conversation) || user.synced) return false;
+        finish(local, null, "Runtime 未受理，请检查后重试", true, null);
+        return true;
     }
 
     void heard(String id, String text) {
         Message message = messages.get(id + ":you");
         if (message != null) message.text = text;
+    }
+
+    boolean hasIntent(String client,String conversation) {
+        Message user=messages.get(client+":you");
+        return user!=null && user.role.equals("you") && user.clientId.equals(client)
+                && user.conversation.equals(conversation) && !user.synced;
+    }
+
+    /** Capture only this unsent turn; serializing it must not walk the archive. */
+    ChatHistory intentSnapshot(String client, String conversation) {
+        if (!hasIntent(client, conversation)) return null;
+        Message user = messages.get(client + ":you"), reply = messages.get(client + ":reply");
+        if (reply == null || !reply.role.equals("xiaoyou") || !reply.clientId.equals(client)
+                || !reply.conversation.equals(conversation)) return null;
+        ChatHistory result = new ChatHistory();
+        result.put(copyMessage(user)); result.put(copyMessage(reply));
+        return result;
+    }
+
+    /** The journal must not replace a newer acknowledgement or revive a deleted chat. */
+    boolean mergeIntent(ChatHistory intent, String client) {
+        Message user = intent.messages.get(client + ":you"), reply = intent.messages.get(client + ":reply");
+        if (intent.messages.size() != 2 || !intent.erased.isEmpty() || user == null || reply == null
+                || !user.role.equals("you") || !reply.role.equals("xiaoyou")
+                || !client.equals(user.clientId) || !client.equals(reply.clientId)
+                || !user.conversation.equals(reply.conversation))
+            throw new IllegalArgumentException("Invalid saved message intent");
+        Message local = messages.get(client + ":you"), localReply = messages.get(client + ":reply");
+        // A background snapshot can race between begin() and scope()/images().
+        // The journal was captured afterwards, but may only replace that same
+        // unresolved local turn, never an acknowledged or different message.
+        boolean early = local != null && localReply != null && !local.synced && !localReply.synced
+                && local.role.equals("you") && localReply.role.equals("xiaoyou")
+                && client.equals(local.clientId) && client.equals(localReply.clientId)
+                && local.at == user.at && local.text.equals(user.text)
+                && (local.status.equals("sending") || local.status.equals("interrupted"))
+                && (localReply.status.equals("thinking") || localReply.status.equals("interrupted"))
+                && localReply.text.isEmpty();
+        if (erased.contains(user.conversation)) {
+            if (early) { messages.remove(local.id); messages.remove(localReply.id); return true; }
+            return false;
+        }
+        if (early) { put(copyMessage(user)); put(copyMessage(reply)); return true; }
+        for (Message current : messages.values())
+            if (current.role.equals("you") && current.clientId.equals(client)) {
+                if (current.conversation.equals(user.conversation)) return false;
+                throw new IllegalArgumentException("Message identity belongs to another conversation");
+            }
+        if (messages.containsKey(client + ":you") || messages.containsKey(client + ":reply"))
+            throw new IllegalArgumentException("Message identity is already in use");
+        put(copyMessage(user)); put(copyMessage(reply));
+        return true;
+    }
+
+    /** True only when a durable snapshot already contains this exact intent or its tombstone. */
+    boolean coversIntent(ChatHistory intent, String client) {
+        Message user = intent.messages.get(client + ":you");
+        if (user == null || !client.equals(user.clientId)) return false;
+        if (erased.contains(user.conversation)) return true;
+        for (Message current : messages.values()) {
+            if (!current.role.equals("you") || !current.clientId.equals(client)
+                    || !current.conversation.equals(user.conversation) || current.at != user.at
+                    || !current.text.equals(user.text) || current.attachments.size() != user.attachments.size()) continue;
+            boolean same = true;
+            for (int i = 0; i < current.attachments.size(); i++)
+                if (!current.attachments.get(i).json().equals(user.attachments.get(i).json())) { same = false; break; }
+            if (same) return true;
+        }
+        return false;
+    }
+
+    boolean sameIntent(ChatHistory other, String client) {
+        Message left = messages.get(client + ":you"), right = other.messages.get(client + ":you");
+        if (left == null || right == null || !left.clientId.equals(right.clientId)
+                || !left.conversation.equals(right.conversation) || !left.card.equals(right.card)
+                || !left.scope.equals(right.scope) || !left.text.equals(right.text)
+                || left.attachments.size() != right.attachments.size()) return false;
+        for (int i = 0; i < left.attachments.size(); i++)
+            if (!left.attachments.get(i).json().equals(right.attachments.get(i).json())) return false;
+        return true;
+    }
+
+    void uncertain(String id) {
+        Message user = messages.get(id + ":you"), reply = messages.get(id + ":reply");
+        if (user != null && !user.synced) user.status = "uncertain";
+        if (reply != null && !reply.synced) { reply.status = "uncertain"; reply.text = ""; }
+    }
+
+    boolean reconcileUncertain(String client, String conversation) {
+        if (erased.contains(conversation)) return true;
+        Message user=messages.get(client+":you");
+        if(user==null){
+            for(Message item:messages.values())
+                if(item.role.equals("you") && item.clientId.equals(client) && item.conversation.equals(conversation))return true;
+            return false;
+        }
+        if(!user.clientId.equals(client) || !user.conversation.equals(conversation))return false;
+        if(!user.synced)uncertain(client);
+        return true;
     }
 
     void streaming(String id, String text) {
@@ -278,14 +417,45 @@ final class ChatHistory {
      */
     ChatHistory copy() {
         ChatHistory result = new ChatHistory();
-        for (Message message : messages.values()) {
-            Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
-                    message.status, message.kind, message.at, message.synced);
-            copy.clientId = message.clientId; copy.conversation = message.conversation;
-            copy.attachments = message.attachments; copy.presentation = message.presentation;
-            result.put(copy);
-        }
+        result.erased.addAll(erased);
+        for (Message message : messages.values()) result.put(copyMessage(message));
         return result;
+    }
+
+    private static Message copyMessage(Message message) {
+        Message copy = new Message(message.id, message.card, message.scope, message.role, message.text,
+                message.status, message.kind, message.at, message.synced);
+        copy.clientId = message.clientId; copy.conversation = message.conversation;
+        copy.attachments = message.attachments; copy.presentation = message.presentation;
+        return copy;
+    }
+
+    /** Preserve newer in-memory edits if they raced with reading an initial archive. */
+    void overlay(ChatHistory newer) {
+        ChatHistory snapshot = newer.copy();
+        for (String conversation : snapshot.erased) eraseConversation(conversation);
+        for (Message message : snapshot.messages.values()) put(message);
+    }
+
+    static final class ImportCounts {
+        int added, existing, conflicts, deleted;
+    }
+
+    /** Import source rows by stable ID without letting old tombstones affect this archive. */
+    ImportCounts importLegacy(ChatHistory source) {
+        ImportCounts counts=new ImportCounts();
+        for(Message incoming:source.copy().messages.values()){
+            if(erased.contains(incoming.conversation)){counts.deleted++;continue;}
+            Message current=messages.get(incoming.id);
+            if(current!=null){
+                counts.existing++;
+                if(!current.conversation.equals(incoming.conversation) || !current.role.equals(incoming.role)
+                        || !current.text.equals(incoming.text))counts.conflicts++;
+                continue;
+            }
+            put(incoming);counts.added++;
+        }
+        return counts;
     }
 
     /** Adds the other history's messages this one does not have (same id = same message). */
@@ -305,6 +475,8 @@ final class ChatHistory {
     List<Message> main(String conversation) {
         List<Message> result = select("main", null, false);
         result.removeIf(m -> !conversation.equals(m.conversation) || m.presentation != null && !m.presentation.inChat());
+        if ("weixin".equals(conversation)) result.removeIf(m -> m.presentation != null
+                && !java.util.Arrays.asList("owner", "xiaoyou").contains(Json.string(Json.object(m.presentation.raw.get("author")), "kind")));
         return result;
     }
     List<Message> pending(String card) { return select("task", card, true); }

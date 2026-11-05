@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { once } from 'node:events';
+import { EndpointCrypto } from '../core/crypto.js';
+import { RelayAccounts } from '../relay/accounts.js';
+import { createRelay } from '../relay/server.js';
+
+test('private releases bind revocable login sessions to their account and preserve range checks', async t => {
+  const folder = await mkdtemp(join(tmpdir(), 'xiaoyu-private-releases-'));
+  const master = 'test-relay-master-secret-at-least-32-characters';
+  const accounts = new RelayAccounts(join(folder, 'accounts.json'), master);
+  const server = createRelay(master, undefined, accounts, { releases: join(folder, 'releases') });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(folder, { recursive: true, force: true }); });
+  const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
+  const identity = (await EndpointCrypto.create('phone')).identity;
+  const register = async (username: string) => {
+    const reply = await fetch(base + '/v1/account/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: 'a synthetic test password', device: identity }) });
+    assert.equal(reply.status, 200); return await reply.json() as { id: string; token: string; relayToken: string };
+  };
+  const owner = await register('owner'), stranger = await register('stranger');
+  const bytes = Buffer.from('PK\x03\x04synthetic-private-apk');
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const directory = join(folder, 'private-releases', owner.id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, sha + '.apk'), bytes);
+  await symlink('/etc/passwd', join(directory, 'a'.repeat(64) + '.apk'));
+  const url = base + '/v1/private-releases/apps/' + owner.id + '/' + sha + '.apk';
+  const auth = (token: string) => ({ Authorization: 'Bearer ' + token });
+  let response = await fetch(url); assert.equal(response.status, 401); assert.match(response.headers.get('cache-control')!, /no-store/);
+  response = await fetch(url, { headers: auth(owner.relayToken) }); assert.equal(response.status, 401);
+  response = await fetch(url, { headers: auth(stranger.token) }); assert.equal(response.status, 404); assert.match(response.headers.get('cache-control')!, /no-store/);
+  await symlink(directory, join(folder, 'private-releases', stranger.id));
+  response = await fetch(base + '/v1/private-releases/apps/' + stranger.id + '/' + sha + '.apk', { headers: auth(stranger.token) });
+  assert.equal(response.status, 404);
+  response = await fetch(url, { headers: auth(owner.token) }); assert.equal(response.status, 200);
+  assert.match(response.headers.get('cache-control')!, /private.*no-store/); assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  response = await fetch(url, { method: 'HEAD', headers: auth(owner.token) }); assert.equal(response.headers.get('content-length'), String(bytes.length));
+  response = await fetch(url, { headers: { ...auth(owner.token), Range: 'bytes=4-8' } });
+  assert.equal(response.status, 206); assert.equal(response.headers.get('content-range'), `bytes 4-8/${bytes.length}`);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(4, 9));
+  response = await fetch(url, { headers: { ...auth(owner.token), Range: 'bytes=999-' } }); assert.equal(response.status, 416); assert.match(response.headers.get('cache-control')!, /no-store/);
+  assert.equal((await fetch(url, { headers: { ...auth(owner.token), 'If-Match': 'wrong' } })).status, 412);
+  assert.equal((await fetch(base + '/v1/private-releases/apps/' + owner.id + '/' + 'a'.repeat(64) + '.apk', { headers: auth(owner.token) })).status, 404);
+  const me = await fetch(base + '/v1/account/me', { method: 'POST', headers: auth(owner.token) });
+  assert.deepEqual(await me.json(), { id: owner.id });
+  assert.equal((await fetch(base + '/v1/account/logout', { method: 'POST', headers: auth(owner.token) })).status, 200);
+  assert.equal((await fetch(url, { headers: auth(owner.token) })).status, 401);
+});

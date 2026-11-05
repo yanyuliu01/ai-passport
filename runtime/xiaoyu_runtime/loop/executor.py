@@ -141,9 +141,9 @@ class Executor:
         if not reply and not defer_reply:
             if kind == "none":
                 raise AgentError("%s 返回了空的回复" % lead.name)
-            reply = {"start": "交给 %s 了", "amend": "好，告诉 %s 了",
+            reply = ("好，我去看看。" if plan.get("tool") else {"start": "交给 %s 了", "amend": "好，告诉 %s 了",
                      "cancel": "好，这件事不做了%s"}[kind] % (
-                         plan.get("agent") or (target or {}).get("agent") or "")
+                         plan.get("agent") or (target or {}).get("agent") or ""))
         started = False
         worker = lead.name
         if kind == "none":
@@ -181,7 +181,7 @@ class Executor:
                          target["id"], True)
         else:
             helper = self._agents[plan["agent"]]
-            worker = helper.name
+            worker = lead.name if plan.get("tool") else helper.name
             if target is None:
                 target = self._ports.writer.task_open(
                     conversation, plan.get("title") or text, "working", helper.name,
@@ -189,7 +189,7 @@ class Executor:
             exchange(target["id"], said=text, say=reply, turn_id=turn_id, scope="task" if pinned else "main", state="working",
                                agent=helper.name, mood="busy",
                                brief=clip(reply, self._ports.brief_limit()))
-            say("handoff", helper.name, reply)
+            say("tool" if plan.get("tool") else "handoff", worker, reply)
             if images:
                 self._ports.launch(target["id"], helper, plan["task"], conversation, hop,
                              plan.get("effort") or effort, plan.get("model") or model, images=tuple(images))
@@ -197,7 +197,7 @@ class Executor:
                 self._ports.launch(target["id"], helper, plan["task"], conversation, hop,
                              plan.get("effort") or effort, plan.get("model") or model)
             started = True
-            turn = self._ports.shape(reply, brief, "busy", self._ports.brief_limit(), helper.name,
+            turn = self._ports.shape(reply, brief, "busy", self._ports.brief_limit(), worker,
                          target["id"], True)
         if not defer_reply:
             self._ports.delivered(conversation, turn_id, [lead.name] if seen is None else seen, worker)

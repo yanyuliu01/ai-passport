@@ -3,8 +3,17 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { RuntimeHost } from '../core/runtime-host.js';
+import { RuntimeHost, availableRuntimeHost } from '../core/runtime-host.js';
 import { HTTPRuntimeTransport } from '../core/runtime-client.js';
+
+test('a missing saved VPN address falls back to loopback without changing valid bindings', () => {
+  const addresses = ['127.0.0.1', '100.64.0.2', '::1'];
+  assert.equal(availableRuntimeHost('100.88.53.14', addresses), '127.0.0.1');
+  assert.equal(availableRuntimeHost('100.64.0.2', addresses), '100.64.0.2');
+  assert.equal(availableRuntimeHost('0.0.0.0', addresses), '0.0.0.0');
+  assert.equal(availableRuntimeHost('localhost', addresses), 'localhost');
+  assert.equal(availableRuntimeHost('::1', addresses), '::1');
+});
 
 async function fixture(t: { after(callback: () => Promise<void>): void }, shutdownDelay = 0) {
   const dir = await mkdtemp(join(tmpdir(), 'xiaoyou-host-'));

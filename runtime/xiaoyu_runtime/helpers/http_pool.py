@@ -25,6 +25,11 @@ _DRAIN_LIMIT = 32768
 class AmbiguousSendError(urllib.error.URLError):
     """A POST may have reached its destination; do not submit it again."""
 
+    def __init__(self, reason, *, stage='unknown', reused=None):
+        super().__init__(reason)
+        self.stage = stage
+        self.reused = reused
+
 
 def _same_origin(url, origin):
     try:
@@ -66,12 +71,13 @@ def direct_official(request):
 class _Lease:
     """Own one response and its connection until closed or cancelled."""
 
-    def __init__(self, pool, origin, connection, response, deadline):
+    def __init__(self, pool, origin, connection, response, deadline, reused=False):
         self._pool, self._origin, self._connection = pool, origin, connection
         self._response, self._deadline = response, deadline
         self._guard = threading.Lock()
         self._closed = False
         self._cancelled = False
+        self._reused = reused
 
     def __enter__(self):
         return self
@@ -86,7 +92,7 @@ class _Lease:
         try:
             line = self._response.readline()
         except (OSError, http.client.HTTPException) as error:
-            raise AmbiguousSendError(error) from error
+            raise AmbiguousSendError(error, stage='read_body', reused=self._reused) from error
         if not line:
             raise StopIteration
         return line
@@ -204,6 +210,7 @@ class ConnectionPool:
         url = urllib.parse.urlsplit(request.full_url)
         origin = (url.scheme, url.hostname, url.port)
         connection = self._take(origin)
+        reused = connection is not None
         if connection is None:
             if url.scheme == "https":
                 connection = http.client.HTTPSConnection(url.hostname, url.port, timeout=timeout,
@@ -251,12 +258,14 @@ class ConnectionPool:
         timer = threading.Timer(remaining, expire_headers)
         timer.daemon = True
         timer.start()
+        stage = 'send_request'
         try:
             connection.request(request.get_method(), path, body=request.data, headers=headers)
             remaining = deadline - time.monotonic()
             if remaining <= 0 or expired.is_set():
                 raise socket.timeout("streaming request deadline expired")
             connection.sock.settimeout(remaining)
+            stage = 'read_headers'
             response = connection.getresponse()
             if expired.is_set():
                 response.close()
@@ -265,12 +274,12 @@ class ConnectionPool:
             connection.close()
             # Once writing starts, neither a broken pipe nor a lost response
             # proves that the server did not process this request.
-            raise AmbiguousSendError(error) from error
+            raise AmbiguousSendError(error, stage=stage, reused=reused) from error
         finally:
             with timer_guard:
                 active[0] = False
             timer.cancel()
-        lease = _Lease(self, origin, connection, response, deadline)
+        lease = _Lease(self, origin, connection, response, deadline, reused=reused)
         if response.status >= 300:
             location = response.getheader("Location")
             if response.status in (301, 302, 303, 307, 308) and location:

@@ -9,6 +9,28 @@ import java.util.*;
 import static org.junit.Assert.*;
 
 public class PresentationPolicyTest {
+    @Test public void channelDeliveryProblemSurvivesPresentationSerialization() {
+        Presentation view = Presentation.restore("{\"version\":1,\"channel_delivery\":{\"media\":\"unknown\"}}");
+        assertTrue(view.channelDeliveryProblem());
+        assertTrue(Presentation.restore(view.json()).channelDeliveryProblem());
+        assertFalse(Presentation.restore("{\"version\":1,\"channel_delivery\":{\"media\":\"sent\"}}").channelDeliveryProblem());
+    }
+    @Test public void channelBubblesWaitForDeliveryAndKeepRunIndexesAligned() {
+        String base = "{\"version\":1,\"channel_delivery_tracked\":true,"
+                + "\"channel_delivery\":{\"a\":\"waiting\",\"b\":\"sent\",\"c\":\"unknown\"},"
+                + "\"blocks\":[{\"id\":\"a\",\"text\":\"早到的草稿\",\"complete\":true,\"runs\":[{\"text\":\"早到的草稿\"}]},"
+                + "{\"id\":\"b\",\"text\":\"已发送\",\"complete\":true,\"runs\":[{\"text\":\"已发送\"}]},"
+                + "{\"id\":\"c\",\"text\":\"待核对\",\"complete\":true,\"runs\":[{\"text\":\"待核对\"}]}]}";
+        Presentation view = Presentation.restore(base);
+        assertEquals(List.of("已发送", "待核对"), view.blocks());
+        assertEquals("已发送", Json.string(Json.object(view.runs(0).get(0)), "text"));
+        assertEquals("待核对", Json.string(Json.object(view.runs(1).get(0)), "text"));
+        assertEquals("已发送\n\n待核对", Presentation.plain(view, "旧字段"));
+        assertEquals(List.of("旧消息"), Presentation.restore("{\"version\":1,\"blocks\":[{\"text\":\"旧消息\",\"complete\":true}]}").blocks());
+        Presentation media = Presentation.restore("{\"version\":1,\"id\":\"origin/reply\",\"channel_delivery_tracked\":true,\"channel_delivery\":{\"origin/reply#media:x\":\"waiting\",\"origin/reply#media:y\":\"sent\"}}");
+        assertFalse(media.visibleAttachment("x"));
+        assertTrue(media.visibleAttachment("y"));
+    }
     private List<Object> cases() throws Exception {
         Path root = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (root != null && !Files.isRegularFile(root.resolve("tests/fixtures/presentation-v1.json"))) root = root.getParent();

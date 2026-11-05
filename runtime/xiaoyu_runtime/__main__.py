@@ -342,8 +342,12 @@ def main(argv=None) -> int:
         return 2
     # 小鱼网络：配置里有 mesh.secret 就加入（同一个主人的几台 Runtime 互相同步，见 mesh.py）。
     mesh = Mesh(config, service, xiaoyu) if config.mesh_secret else None
+    channel_session = None
+    if mesh is not None:
+        from .channels.session import ChannelSession
+        channel_session = service.enable_channel_hosting(ChannelSession)
     try:
-        server = make_server(config, service, FirmwareStore(config.state_dir))
+        server = make_server(config, service, FirmwareStore(config.state_dir), channel_session=channel_session)
     except OSError as error:
         print("没法监听 %s:%d：%s" % (config.host, config.port, error), file=sys.stderr)
         service.close()
@@ -356,6 +360,15 @@ def main(argv=None) -> int:
         print("已加入小鱼网络：先去找 %s；告诉别人从 %s 连这台" % (
             "、".join(config.mesh_peers) or "（没写，等别人来连）",
             "、".join(config.mesh_advertise) or "（不对外，只往外连）"), file=sys.stderr)
+        if channel_session is not None and channel_session.needs_recovery:
+            def recover_channel():
+                try:
+                    channel_session.recover()
+                except Exception:
+                    # Details can contain private upstream data. A later
+                    # explicit bind can retry authority reconciliation.
+                    sys.stderr.write('微信连接暂未恢复，等待核对\n')
+            threading.Thread(target=recover_channel, name='weixin-recovery', daemon=True).start()
     xiaoyu.start_pulse()
     desktop = None
     if args.desktop_sync or config.desktop_sync:
@@ -410,6 +423,8 @@ def main(argv=None) -> int:
             desktop.close()
         if iterator is not None:
             iterator.close()
+        if channel_session is not None:
+            channel_session.shutdown(timeout=1)
         if mesh is not None:
             mesh.close()
         service.close()

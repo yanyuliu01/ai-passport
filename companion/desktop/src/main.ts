@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, shell, Tray } from 'electron';
-import { mkdir, readFile } from 'node:fs/promises';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, safeStorage, session, shell, Tray } from 'electron';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,12 +14,14 @@ import { bundledAgents } from './core/bundled-agents.js';
 import { agentDescriptors, scanAgents } from './core/agent-catalog.js';
 import { Setup } from './core/setup.js';
 import { FirstRun } from './core/first-run.js';
+import { checkDeepSeekKey } from './core/model-check.js';
 import { legacyProfile } from './core/profile.js';
 import { bindLegacyModelKey } from './core/model-key.js';
 import { PairingPrompts } from './core/pairing-prompts.js';
 import { accountRoute } from './core/connection-policy.js';
 import { AccountConnection } from './core/account.js';
 import { keepAwakeWhileRunning } from './core/keep-awake.js';
+import { startBrowserBridge } from './core/browser-bridge.js';
 import type { Json } from './shared.js';
 
 let window: BrowserWindow | undefined, tray: Tray | undefined, client: DesktopClient;
@@ -31,6 +34,32 @@ let accountFocused = false;
 let currentAccountSpace: () => string | undefined = () => undefined;
 let quitting = false, connecting = false;
 let releaseSleepProtection = () => {};
+let browserWindow: BrowserWindow | undefined;
+let browserBridgeReady = false;
+function isolatedBrowserSession() {
+  const space = account?.view().signedIn ? currentAccountSpace() : undefined;
+  if (!space) return undefined;
+  const id = createHash('sha256').update(space).digest('hex').slice(0, 32);
+  return session.fromPartition('persist:xiaoyu-browser-' + id);
+}
+function openIsolatedBrowser(): void {
+  const browser = isolatedBrowserSession();
+  if (!browser) throw new Error('请先登录小鱼账号');
+  if (!browserBridgeReady) throw new Error('独立浏览器连接暂不可用，请重启小鱼后重试');
+  if (browserWindow && !browserWindow.isDestroyed()) { browserWindow.show(); browserWindow.focus(); return; }
+  browser.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  browserWindow = new BrowserWindow({ width: 1100, height: 780, minWidth: 760, minHeight: 560,
+    title: '小鱼的浏览器', webPreferences: { session: browser, contextIsolation: true, nodeIntegration: false,
+      sandbox: true, webSecurity: true, devTools: false } });
+  const contents = browserWindow.webContents;
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//i.test(url)) void contents.loadURL(url);
+    return { action: 'deny' };
+  });
+  contents.on('will-navigate', (event, url) => { if (!/^https:\/\//i.test(url)) event.preventDefault(); });
+  browserWindow.on('closed', () => { browserWindow = undefined; });
+  void browserWindow.loadURL('https://www.bilibili.com/');
+}
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const ui = resolve(directory, '../dist-ui/index.html');
 const rendererURL = pathToFileURL(ui).href;
@@ -188,7 +217,7 @@ async function main(): Promise<void> {
     },
     save(key, value) { db.set('vault:' + key, safeStorage.encryptString(JSON.stringify(value)).toString('base64')); },
   };
-  const local = new HTTPRuntimeTransport();
+  const local = new HTTPRuntimeTransport(net.fetch as typeof fetch);
   currentAccountSpace = () => secrets.load<string>('account-space');
   bindLegacyModelKey(secrets);
   const localCandidate = () => [...client.endpoints.values()].find(endpoint => !endpoint.url.startsWith('peer://')
@@ -236,7 +265,7 @@ async function main(): Promise<void> {
     () => Boolean(!quitting && account?.view().signedIn && account.view().provisioned && !account.view().busy), endpoint => {
       client.add(endpoint); client.select(endpoint.spaceId);
       client.runtime = { state: 'ready', message: '首次回复已验证，可以开始聊天' }; void account.refresh();
-    }, notify);
+    }, notify, (key, signal) => checkDeepSeekKey(key, signal, net.fetch as typeof fetch));
   // An isolated QA profile may use a synthetic pinned account service; normal launches use the fixed server.
   const testServer = process.env.XIAOYU_DESKTOP_TEST_DATA && process.env.XIAOYU_ACCOUNT_TEST_SERVER
     ? JSON.parse(process.env.XIAOYU_ACCOUNT_TEST_SERVER) as { url: string; tlsFingerprint: string } : undefined;
@@ -246,7 +275,20 @@ async function main(): Promise<void> {
     if (!current || current.url.startsWith('peer://')) client.add(endpoint);
     if (!accountFocused) { client.select(endpoint.spaceId); accountFocused = true; }
   }, (space, values) => client.mergeConversations(space, values), hostname(), testServer, () => { void connectAccountLocal(); });
+  // Failure here must not prevent the desktop app or the existing WeChat channel from starting.
+  try { browserBridgeReady = Boolean(await startBrowserBridge(isolatedBrowserSession)); }
+  catch { browserBridgeReady = false; }
+  const promptImageBinding = async (request: { name: string; fingerprint: string; imageRuntimeId?: string }): Promise<boolean> => {
+    if (!request.imageRuntimeId) throw new Error('没有需要核对的图片互通身份');
+    showWindow();
+    const result = await dialog.showMessageBox(window!, { type: 'question', title: '核对图片互通身份',
+      message: `允许向「${request.name}」传送图片吗？`,
+      detail: `请在另一台电脑的“小鱼 → 设置 → 图片互通身份”核对以下信息，完全一致才确认。\n\n设备指纹：${request.fingerprint}\nRuntime 编号：${request.imageRuntimeId}\n\n两台电脑都需要分别确认。`,
+      buttons: ['确认一致', '稍后核对'], defaultId: 1, cancelId: 1, noLink: true });
+    return result.response === 0;
+  };
   pairingPrompts = new PairingPrompts(() => snapshot().pairing.requests, async request => {
+    if (request.imageRuntimeId) return promptImageBinding(request);
     showWindow();
     const result = await dialog.showMessageBox(window!, { type: 'question', title: request.computer ? '电脑请求连接' : '手机请求连接',
       message: `允许「${request.name}」连接这台电脑吗？`,
@@ -255,9 +297,11 @@ async function main(): Promise<void> {
     return result.response === 0;
   }, async (request, allowed) => {
     const id = request.id.replace(/^account:/, '');
+    if (request.imageRuntimeId) { if (allowed) account.approveImageBinding(id); return; }
     if (allowed) await account.accept(id); else await account.reject(id);
   });
   ipc('snapshot', snapshot);
+  ipc('open-isolated-browser', openIsolatedBrowser);
   ipc('account-login', async value => { const input = object(value);
     if (typeof input.register !== 'boolean') throw new Error('登录方式无效');
     if (account.view().signedIn) throw new Error('请先退出当前账号');
@@ -265,8 +309,25 @@ async function main(): Promise<void> {
     await account.login(requiredString(input.username, 40), requiredString(input.password, 256), input.register);
     await connectAccountLocal();
   });
-  ipc('account-logout', async () => { firstRun.suspend(); await account.logout(); client.suspendConnections(); notify(); });
+  ipc('account-logout', async () => { browserWindow?.destroy(); firstRun.suspend(); await account.logout(); client.suspendConnections(); notify(); });
   ipc('account-refresh', () => account.refresh());
+  ipc('confirm-image-binding', async value => {
+    const id = requiredString(value, 160);
+    const request = snapshot().pairing.requests.find(item => item.id === id && item.imageRuntimeId);
+    if (!request) throw new Error('该电脑身份已变化，请等待重新连接');
+    if (await promptImageBinding(request)) account.approveImageBinding(id.replace(/^account:/, ''));
+  });
+  ipc('revoke-image-binding', async value => {
+    const input = object(value), peer = requiredString(input.peer, 32), runtime = requiredString(input.runtime, 32);
+    const binding = account.view().pairing.imageBindings?.find(item => item.peer === peer && item.runtime === runtime);
+    if (!binding) throw new Error('该绑定不存在或已变化');
+    showWindow();
+    const result = await dialog.showMessageBox(window!, { type: 'question', title: '撤销图片互通绑定',
+      message: `撤销与「${binding.name}」的图片互通绑定？`,
+      detail: `设备：${peer}\nRuntime：${runtime}\n撤销后需要重新核对才能传图。`,
+      buttons: ['撤销绑定', '取消'], defaultId: 1, cancelId: 1, noLink: true });
+    if (result.response === 0) account.revokeImageBinding(peer, runtime);
+  });
   ipc('scan-local', () => setup.discover());
   ipc('first-run-start', value => { const input = object(value);
     if (input.agents !== undefined && (!Array.isArray(input.agents) || input.agents.length > 3 || input.agents.some(id => typeof id !== 'string'))) throw new Error('帮手选择无效');
@@ -300,6 +361,19 @@ async function main(): Promise<void> {
     if (!Object.keys(fields).length || Object.entries(fields).some(([key,value]) => ['pinned','archived'].includes(key) ? typeof value!=='boolean' : !['title','project'].includes(key) || typeof value!=='string' || value.length>200)) throw new Error('目录字段无效');
     return client.directoryEdit(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100),Number(input.revision),fields); });
   ipc('directory-history', value => { const input=object(value); return client.directoryHistory(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100),input.cursor === undefined ? undefined : requiredString(input.cursor,1024)); });
+  ipc('channel-artifact-preview', async value => { const input = object(value);
+    if (typeof input.thumbnail !== 'boolean') throw new Error('附件预览请求无效');
+    const result = await client.channelArtifact(requiredString(input.space,100), requiredString(input.runtime,100), requiredString(input.message,128), requiredString(input.artifact,33), input.thumbnail);
+    const mime = String(result.content_type).split(';')[0].toLowerCase();
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) throw new Error('此图片无法预览');
+    return 'data:' + mime + ';base64,' + Buffer.from(String(result._relay_binary), 'base64url').toString('base64');
+  });
+  ipc('channel-artifact-save', async value => { const input = object(value);
+    const name = requiredString(input.name,255).replace(/[\\/\x00-\x1f]/g, '_');
+    const result = await client.channelArtifact(requiredString(input.space,100), requiredString(input.runtime,100), requiredString(input.message,128), requiredString(input.artifact,33), false);
+    const choice = await dialog.showSaveDialog({ defaultPath: name });
+    if (!choice.canceled && choice.filePath) await writeFile(choice.filePath, Buffer.from(String(result._relay_binary), 'base64url'));
+  });
   ipc('directory-open', value => { const input=object(value); return client.directoryOpen(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100)); });
   ipc('directory-metadata', value => { const input=object(value); return client.directoryMetadata(requiredString(input.space,100),requiredString(input.runtime,100),requiredString(input.id,100)); });
   ipc('helper-options', value => { const input=object(value); return client.helperOptions(requiredString(input.space,100), input.runtime === undefined ? undefined : requiredString(input.runtime,100)); });
@@ -324,6 +398,18 @@ async function main(): Promise<void> {
   ipc('open-native', value => { const input = object(value); return shell.openExternal(client.nativeSession(requiredString(input.space, 100), requiredString(input.id, 128), requiredString(input.runtime, 100))); });
 
   ipc('select-conversation', value => { const input = object(value); client.selectConversation(requiredString(input.space, 100), requiredString(input.conversation, 100)); });
+  ipc('weixin-bind', value => { const input = object(value);
+    return client.weixinBind(requiredString(input.space, 100), requiredString(input.runtime, 100)); });
+  ipc('weixin-status', value => { const input = object(value);
+    return client.weixinStatus(requiredString(input.space, 100), requiredString(input.runtime, 100)); });
+  ipc('weixin-poll', value => { const input = object(value);
+    return client.weixinPoll(requiredString(input.space, 100), requiredString(input.runtime, 100),
+      requiredString(input.attempt, 128), input.code === undefined ? undefined : requiredString(input.code, 16)); });
+  ipc('weixin-cancel', value => { const input = object(value);
+    return client.weixinCancel(requiredString(input.space, 100), requiredString(input.runtime, 100), requiredString(input.attempt, 128)); });
+  ipc('weixin-resend', value => { const input = object(value);
+    if (!Number.isSafeInteger(input.revision) || Number(input.revision) < 1 || typeof input.confirm !== 'boolean') throw new Error('微信重发请求无效');
+    return client.weixinResend(requiredString(input.space, 100), requiredString(input.block, 512), Number(input.revision), input.confirm); });
   ipc('create-conversation', value => { const input = object(value); return client.createConversation(requiredString(input.space, 100), typeof input.title === 'string' ? input.title : '', input.message === undefined ? undefined : requiredString(input.message, 128), input.runtime === undefined ? undefined : requiredString(input.runtime, 100)); });
   ipc('send', value => { const input = object(value); return client.send(requiredString(input.space, 100),
     requiredString(input.text), input.card === undefined ? undefined : requiredString(input.card, 128),

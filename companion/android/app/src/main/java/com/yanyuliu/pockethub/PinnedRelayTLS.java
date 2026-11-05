@@ -62,7 +62,8 @@ final class PinnedRelayTLS {
         URI origin=URI.create(AccountManager.SERVER);
         return "https".equals(url.getProtocol()) && origin.getHost().equalsIgnoreCase(url.getHost())
             && (url.getPort()==-1 || url.getPort()==443) && url.getUserInfo()==null
-            && url.getPath().matches("/v1/releases/apps/[a-f0-9]{64}\\.apk");
+            && (url.getPath().matches("/v1/releases/apps/[a-f0-9]{64}\\.apk")
+                || url.getPath().matches("/v1/private-releases/apps/[a-f0-9]{32}/[a-f0-9]{64}\\.apk"));
     }
 
 }

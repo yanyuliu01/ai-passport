@@ -90,11 +90,22 @@ class Speaker:
                 raise AgentError("主人已打断这一轮，停止旧工具调用")
         check()
         session = None if ephemeral else self._store.session(conversation, agent.name)
+        cutoff = self._context._memory.correction_after() if self._context._memory is not None else 0
+        reset_for_correction = bool(not ephemeral and cutoff and (not session or not self._context.session_matches_correction(
+            conversation, agent.name, session, cutoff)))
+        if reset_for_correction:
+            session = None
         # A replacement tool session needs recent context, without falsely
         # marking the rest of the retained history as delivered.
-        seed = not ephemeral and tools is not None and not (session or "").startswith(TOOL_SESSION_PREFIX)
+        seed = not ephemeral and (reset_for_correction or
+               tools is not None and not (session or "").startswith(TOOL_SESSION_PREFIX))
         window = self._context.window(conversation, agent.name, seed=seed_turns if seed else None,
-            max_chars=max_chars, text_chars=text_chars, reply_chars=reply_chars, query=text
+            max_chars=max_chars, text_chars=text_chars, reply_chars=reply_chars,
+            # Tool-capable foreground speech can request old evidence when it
+            # needs it. A lexical match on a follow-up is not evidence that the
+            # old topic is what the owner is referring to.
+            query=None if tools is not None else text,
+            context_after=cutoff if reset_for_correction else 0
             ) if not ephemeral and (catch_up or seed) else {"body": "", "receipts": []}
         missed = window["receipts"]
         # Derived summaries are current-call evidence, not another owner turn.
@@ -102,6 +113,8 @@ class Speaker:
         # summary there would accumulate the same cache again on every call.
         if window.get("summary_body"):
             system = (system or "") + "\n\n" + window["summary_body"]
+        if window.get("relationship_body"):
+            system = (system or "") + window["relationship_body"]
         quotes = window.get("quotes_body", window["body"])
         context = (self._cards.conversations.get(conversation) or {}).get("context")
         if context:
@@ -118,16 +131,19 @@ class Speaker:
         try:
             outcome = agent.run(Job(
                 text=self._recap([], text, body=quotes) if quotes else text,
+                session_text=text if quotes else None,
                 session_id=session,
                 conversation=conversation, system=system, schema=schema, hop=hop, plain=True,
                 timeout=timeout if budget is None else min(timeout, budget.remaining()),
                 on_text=on_text, tools=tools, interrupt=interrupt,
-                decision_only=decision_only, decision_messages=decision_messages, images=images,
+                decision_only=decision_only, decision_messages=decision_messages, ephemeral=ephemeral, images=images,
                 image_refs=image_refs, image_resolver=image_resolver,
             ))
             check()
             if outcome.session_id and not ephemeral:
                 self._store.remember(conversation, agent.name, outcome.session_id)
+                if self._context._memory is None or self._context._memory.correction_after() == cutoff:
+                    self._context.mark_session_correction(conversation, agent.name, outcome.session_id, cutoff)
             if missed and not decision_only:
                 check()
                 self._context.mark(conversation, agent.name, missed)

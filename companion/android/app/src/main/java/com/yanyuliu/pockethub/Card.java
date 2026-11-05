@@ -50,6 +50,7 @@ final class Card {
         final String source;
         final boolean remoteActionable;
         final String runtimeUrl, runtimeName, remoteId;
+        final String conversation;
         final double expiresAt;
 
         Approval(String id, String card, String agent, String tool, String detail, long createdAt) {
@@ -58,12 +59,12 @@ final class Card {
 
         Approval(String id, String card, String agent, String tool, String detail, long createdAt,
                  String source, boolean remoteActionable) {
-            this(id, card, agent, tool, detail, createdAt, source, remoteActionable, "", "", id, 0);
+            this(id, card, agent, tool, detail, createdAt, source, remoteActionable, "", "", id, 0, "");
         }
 
         private Approval(String id, String card, String agent, String tool, String detail, long createdAt,
                  String source, boolean remoteActionable, String runtimeUrl, String runtimeName,
-                 String remoteId, double expiresAt) {
+                 String remoteId, double expiresAt, String conversation) {
             this.id = id;
             this.card = card;
             this.agent = agent;
@@ -74,6 +75,7 @@ final class Card {
             this.remoteActionable = remoteActionable;
             this.runtimeUrl = runtimeUrl; this.runtimeName = runtimeName; this.remoteId = remoteId;
             this.expiresAt = expiresAt;
+            this.conversation = conversation;
         }
 
         boolean actionable(boolean monitoringCard) {
@@ -84,7 +86,7 @@ final class Card {
         Approval origin(String url, String name) {
             String scoped = ArtifactDownload.key(url + "\n" + remoteId + "\n" + createdAt);
             return new Approval(scoped, card, agent, tool, detail, createdAt, source, remoteActionable,
-                    url, name, remoteId, expiresAt);
+                    url, name, remoteId, expiresAt, conversation);
         }
 
         static Approval from(Map<String, Object> raw) {
@@ -95,7 +97,7 @@ final class Card {
             return new Approval(id, Json.string(raw, "card"), Json.string(raw, "agent"),
                     Json.string(raw, "tool"), Json.string(raw, "detail"),
                     (long) Json.number(raw, "created_at"), Json.string(raw, "source"),
-                    Json.flag(raw, "remote_actionable"), "", "", id, Json.number(raw, "expires_at"));
+                    Json.flag(raw, "remote_actionable"), "", "", id, Json.number(raw, "expires_at"), Json.string(raw, "conversation"));
         }
     }
 

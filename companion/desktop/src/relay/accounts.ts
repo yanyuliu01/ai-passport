@@ -63,6 +63,10 @@ export class RelayAccounts {
     if (!session || !account) throw new Failure(401, '登录已过期，请重新登录小鱼账号');
     return { session, account };
   }
+  /** Resolve only live, revocable account sessions, never the shared relay credential. */
+  sessionAccount(req: IncomingMessage): string | undefined {
+    try { return this.session(req).account.id; } catch { return undefined; }
+  }
   private async body(req: IncomingMessage): Promise<Record<string, unknown>> {
     if (!String(req.headers['content-type']).startsWith('application/json')) throw new Failure(400, '请求格式无效');
     let bytes = 0; const chunks: Buffer[] = [];
@@ -111,6 +115,10 @@ export class RelayAccounts {
         this.state.sessions.push({ hash: digest(token), account: account.id, device: identity, expires }); this.save();
         result = { id: account.id, username, token, expires, relayToken: this.relayToken(account.id),
           primary: account.primary, space: account.space, vault: account.vault };
+      } else if (path === '/v1/account/me') {
+        const { session, account } = this.session(req);
+        this.limit('me:' + session.hash, 60);
+        result = { id: account.id, space: account.space };
       } else if (path === '/v1/account/vault') {
         const { session, account } = this.session(req); this.limit('vault:' + session.hash, 12);
         const body = await this.body(req);

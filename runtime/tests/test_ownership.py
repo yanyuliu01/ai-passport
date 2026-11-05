@@ -111,13 +111,18 @@ class OwnershipMeshTests(TempDirCase):
 
     def test_an_unreachable_owner_means_the_message_waits_with_its_id(self):
         self.offline(self.mac)
-        sent = self.win.service.submit("Mac 合盖时说的", client_id="w2")
-        self.assertTrue(until(lambda: "连不上" in (self.win.get(sent["id"]).get("stage") or ""), 10))
-        waiting = self.win.get(sent["id"])
-        self.assertEqual((waiting["status"], waiting["operation_state"]), ("queued", "pending"))
-        self.assertEqual(self.win.agent.texts, [])
-        # 同一个 client_id 重试还是这一句，不会变成第二句。
-        self.assertEqual(self.win.service.submit("Mac 合盖时说的", client_id="w2")["id"], sent["id"])
+        # Hold the offline observation while testing the queued state; a
+        # previously started fake exchange can otherwise refresh the peer.
+        online = self.win.mesh._online
+        with mock.patch.object(self.win.mesh, '_online', side_effect=lambda peer, now:
+                               False if peer.runtime_id == self.mac.id else online(peer, now)):
+            sent = self.win.service.submit("Mac 合盖时说的", client_id="w2")
+            self.assertTrue(until(lambda: "连不上" in (self.win.get(sent["id"]).get("stage") or ""), 10))
+            waiting = self.win.get(sent["id"])
+            self.assertEqual((waiting["status"], waiting["operation_state"]), ("queued", "pending"))
+            self.assertEqual(self.win.agent.texts, [])
+            # 同一个 client_id 重试还是这一句，不会变成第二句。
+            self.assertEqual(self.win.service.submit("Mac 合盖时说的", client_id="w2")["id"], sent["id"])
         # Mac 回来了：按原编号交过去，由 Mac 答。
         self.network.down.discard(self.mac.url)
         self.assertTrue(until(lambda: self.win.get(sent["id"]).get("status") == "done", 30))
@@ -163,8 +168,15 @@ class OwnershipMeshTests(TempDirCase):
         self.assertEqual(self.mac.service.handoff("default", "Windows")["status"], "applied")
 
     def test_an_offline_target_is_not_handed_to(self):
-        self.offline(self.win)
-        result = self.mac.service.handoff("default", "Windows")
+        # Hold the same locks used by handoff while simulating an aged-out
+        # peer. An already in-flight fake exchange can otherwise refresh its
+        # timestamp between the reset and this assertion.
+        self.network.down.add(self.win.url)
+        with self.mac.service._changed, self.mac.mesh._lock:
+            peer = self.mac.mesh._peers.get(self.win.id)
+            if peer is not None:
+                peer.seen = peer.heard = 0
+            result = self.mac.service.handoff("default", "Windows")
         self.assertEqual(result["status"], "refused")
         self.assertEqual(self.mac.service.owner("default")["owner"], self.mac.id)
 

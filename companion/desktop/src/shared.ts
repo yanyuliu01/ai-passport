@@ -18,6 +18,8 @@ export interface DisplayProjection {
   complete: boolean;
   /** Final text the owner cut into: only part of the reply was said. */
   interrupted?: boolean;
+  channel_delivery_tracked?: boolean;
+  channel_delivery?: Record<string, 'waiting' | 'sent' | 'failed' | 'unknown' | 'cancelled'>;
   blocks: DisplayBlock[];
   order: [number, string, number, string];
 }
@@ -45,6 +47,8 @@ export interface Message extends Json {
   author?: { kind?: string; name?: string };
   source?: { type?: string; runtime_id?: string };
   presentation?: DisplayProjection;
+  delivery?: Record<string, 'waiting' | 'sent' | 'failed' | 'unknown' | 'cancelled'>;
+  delivery_revisions?: Record<string, number>;
 }
 
 export interface SyncPage extends Json {
@@ -86,9 +90,9 @@ export interface SpaceView {
   approvals: Json[];
   pending: Pending[];
   helpers?: HelperView[];
-  connections?: { runtime: string; name: string; local: boolean; connected: boolean; capabilities: string[] }[];
+  connections?: { runtime: string; name: string; local: boolean; channelLocal?: boolean; connected: boolean; capabilities: string[] }[];
 }
-export interface Conversation { id: string; title: string; createdAt: number; updatedAt?: number; revision?: number;
+export interface Conversation { id: string; title: string; kind?: 'main' | 'side' | 'weixin'; createdAt: number; updatedAt?: number; revision?: number;
   metadataAt?: number; metadataRevision?: number; directoryId?: string; pinned?: boolean; archived?: boolean; deleted?: boolean; origin?: string; context?: Json; unread?: boolean; pending?: boolean }
 export interface HelperView {
   members?: HelperView[];
@@ -124,13 +128,15 @@ export interface ClientView {
   relayHost?: RelayHostView;
   runtime: { state: string; message: string };
   pairing: { invitation?: string; joined: number; relayState: string;
-    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] };
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean; imageRuntimeId?: string }[];
+    imageIdentity?: { device: string; runtime: string }; imageBindings?: { peer: string; name: string; runtime: string }[] };
 }
 export interface AccountView {
   signedIn: boolean; username: string; busy: boolean; message: string; canInvite: boolean;
   provisioned: boolean; requiresProvisioning?: boolean;
   pairing: { invitation?: string; joined: number; relayState: string;
-    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] };
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean; imageRuntimeId?: string }[];
+    imageIdentity?: { device: string; runtime: string }; imageBindings?: { peer: string; name: string; runtime: string }[] };
 }
 
 export interface RelayHostView {
@@ -148,6 +154,8 @@ export interface DesktopAPI {
   accountLogin(input: { username: string; password: string; register: boolean }): Promise<void>;
   accountLogout(): Promise<void>;
   accountRefresh(): Promise<void>;
+  confirmImageBinding(id: string): Promise<void>;
+  revokeImageBinding(value: { peer: string; runtime: string }): Promise<void>;
   startRelayHost(input: { port: number; publicURL: string }): Promise<void>;
   stopRelayHost(): Promise<void>;
   checkRelayHost(): Promise<void>;
@@ -164,6 +172,13 @@ export interface DesktopAPI {
   send(input: { space: string; text: string; card?: string; runtime?: string; mainReply?: boolean }): Promise<void>;
   select(space: string): Promise<void>;
   selectConversation(input: { space: string; conversation: string }): Promise<void>;
+  weixinBind(input: { space: string; runtime: string }): Promise<{ id: string; qrImage: string }>;
+  weixinStatus(input: { space: string; runtime: string }): Promise<Json>;
+  weixinPoll(input: { space: string; runtime: string; attempt: string; code?: string }): Promise<Json>;
+  weixinCancel(input: { space: string; runtime: string; attempt: string }): Promise<void>;
+  weixinResend(input: { space: string; block: string; revision: number; confirm: boolean }): Promise<Json>;
+  channelArtifactPreview(input: { space: string; runtime: string; message: string; artifact: string; thumbnail: boolean }): Promise<string>;
+  channelArtifactSave(input: { space: string; runtime: string; message: string; artifact: string; name: string }): Promise<void>;
   createConversation(input: { space: string; title: string; message?: string; runtime?: string }): Promise<void>;
   markRead(input: { space: string; conversation: string }): Promise<void>;
   taskDetail(input: { space: string; id: string; runtime: string; before?: number }): Promise<Json>;
@@ -175,6 +190,7 @@ export interface DesktopAPI {
   directoryMetadata(input: { space: string; runtime: string; id: string }): Promise<Json>;
   openNative(input: { space: string; id: string; runtime: string }): Promise<void>;
   openLink(href: string): Promise<void>;
+  openIsolatedBrowser(): Promise<void>;
   helperOptions(input: { runtime?: string; space: string }): Promise<Json>;
   helperModels(input: { runtime?: string; space: string; gateway_url: string; key?: string }): Promise<Json>;
   helperModel(input: { runtime?: string; space: string; name: string; model: string }): Promise<Json>;

@@ -72,6 +72,7 @@
 import gzip
 import hmac
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
@@ -90,6 +91,7 @@ from ..helpers import model_gateway
 from ..iterate.pipeline import settings_of as iterate_settings_of
 from ..firmware import MAX_FILE_BYTES, FirmwareError, FirmwareStore
 from ..delivery.mesh import MAX_BODY_BYTES as MESH_BODY_BYTES, MeshError
+from ..channels.weixin import WeixinError
 
 # 比这小的回答不值得压。
 GZIP_MIN_BYTES = 2048
@@ -116,7 +118,8 @@ def _cancel_actor(body: Any, agent: str) -> str:
 
 def make_server(config: Config, service: Service,
                 firmware: Optional[FirmwareStore] = None,
-                artifacts: Optional[ArtifactStore] = None) -> ThreadingHTTPServer:
+                artifacts: Optional[ArtifactStore] = None,
+                channel_session=None) -> ThreadingHTTPServer:
     expected = ("Bearer " + config.token).encode("utf-8")
     if firmware is None:
         firmware = FirmwareStore(config.state_dir)
@@ -137,6 +140,9 @@ def make_server(config: Config, service: Service,
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt: str, *args: Any) -> None:
+            if self.path.startswith('/v1/weixin/bind'):
+                sys.stderr.write('本机微信绑定请求已处理\n')
+                return
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
         def _send(self, status: int, body: Dict[str, Any]) -> None:
@@ -189,6 +195,23 @@ def make_server(config: Config, service: Service,
             mesh = getattr(service, "mesh", None)
             if not local or mesh is None or not mesh.authorized(self.headers.get("Authorization", "")):
                 self._fail(403, "图片传输仅供本机已授权的电脑桥使用")
+                return False
+            return True
+
+        def _local_channel_binding(self) -> bool:
+            # A paired phone or a forwarded request must not obtain a QR or
+            # operate a binding even when a relay connects to loopback.
+            import ipaddress
+            try:
+                local = ipaddress.ip_address(self.client_address[0]).is_loopback
+            except ValueError:
+                local = False
+            forwarded = any(self.headers.get(name) for name in
+                            ('Forwarded', 'X-Forwarded-For', 'X-Real-IP'))
+            local_desktop = isinstance(self.device, dict) and self.device.get('kind') == 'desktop'
+            shared_key = hmac.compare_digest(self.headers.get('Authorization', '').encode('utf-8'), expected)
+            if not local or forwarded or not (local_desktop or shared_key):
+                self._fail(403, '请在连接微信的电脑本机扫码')
                 return False
             return True
 
@@ -290,13 +313,30 @@ def make_server(config: Config, service: Service,
             except FirmwareError as error:
                 self._fail(404 if len(parts) == 4 else 500, str(error))
 
-        def _artifact_get(self, artifact_id: str, thumbnail: bool) -> None:
+        def _artifact_get(self, artifact_id: str, thumbnail: bool, query=None) -> None:
+            query = query or {}
+            chunked = bool(query)
+            if chunked:
+                if (thumbnail or set(query) != {'offset', 'length'} or any(len(query[k]) != 1 for k in query)
+                        or not all(re.fullmatch(r'[0-9]{1,8}', query[k][0]) for k in query)):
+                    self._fail(400, '附件分块请求无效')
+                    return
+                offset, length = int(query['offset'][0]), int(query['length'][0])
+                if length < 1 or length > 1024 * 1024 or offset >= 64 * 1024 * 1024:
+                    self._fail(400, '附件分块范围无效')
+                    return
             try:
                 stream, meta, mime, size = artifacts.open_content(artifact_id, thumbnail)
             except ArtifactError as error:
                 self._fail(404, str(error))
                 return
             with stream:
+                if chunked:
+                    if offset >= size:
+                        self._fail(416, '附件分块范围无效')
+                        return
+                    stream.seek(offset)
+                    size = min(length, size - offset)
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
                 self.send_header("Content-Length", str(size))
@@ -305,11 +345,13 @@ def make_server(config: Config, service: Service,
                 self.send_header("ETag", '"' + meta["sha256"] + '"')
                 self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(meta["name"], safe=""))
                 self.end_headers()
-                while True:
-                    chunk = stream.read(COPY_CHUNK)
+                remaining = size
+                while remaining:
+                    chunk = stream.read(min(COPY_CHUNK, remaining))
                     if not chunk:
                         break
                     self.wfile.write(chunk)
+                    remaining -= len(chunk)
 
         def _app_apk(self, query: Dict[str, Any]) -> None:
             try:
@@ -432,6 +474,25 @@ def make_server(config: Config, service: Service,
             if not self._authorized():
                 return
             query = parse_qs(url.query)
+            if parts == ['v1', 'weixin']:
+                if not self._local_channel_binding():
+                    return
+                if channel_session is None:
+                    self._fail(404, '微信渠道暂不可用')
+                    return
+                self._send(200, channel_session.status())
+                return
+            if len(parts) == 4 and parts[:3] == ['v1', 'weixin', 'bind']:
+                if not self._local_channel_binding():
+                    return
+                if channel_session is None:
+                    self._fail(404, '微信渠道暂不可用')
+                    return
+                try:
+                    self._send(200, channel_session.poll(parts[3]))
+                except (ValueError, OSError, WeixinError):
+                    self._fail(409, '微信连接暂不可用，请稍后重试')
+                return
             if parts == ["v1", "sessions"]:
                 try:
                     result = service.session_search(query.get("conversation", ["default"])[0],
@@ -463,7 +524,7 @@ def make_server(config: Config, service: Service,
                     self._fail(400, str(error))
                 return
             if len(parts) == 4 and parts[:2] == ["v1", "artifacts"] and parts[3] in ("content", "thumbnail"):
-                self._artifact_get(parts[2], parts[3] == "thumbnail")
+                self._artifact_get(parts[2], parts[3] == "thumbnail", query)
                 return
             if parts == ["v1", "app"]:
                 self._send(200, release.info(query.get("abi", [""])[0]))
@@ -494,13 +555,15 @@ def make_server(config: Config, service: Service,
                 return
             if parts == ["v1", "directory"]:
                 try:
-                    self._send(200, service.directory_page(query.get('cursor', [None])[0], query.get('q', [''])[0]))
+                    self._send(200, service.directory_page(query.get('cursor', [None])[0], query.get('q', [''])[0],
+                        include_weixin='weixin' in query.get('states', [''])[0].split(',')))
                 except RequestError as error:
                     self._fail(400, str(error))
                 return
             if len(parts) == 4 and parts[:2] == ['v1', 'directory'] and parts[3] == 'history':
                 try:
-                    self._send(200, service.directory_history(parts[2], query.get('cursor', [None])[0]))
+                    self._send(200, service.directory_history(parts[2], query.get('cursor', [None])[0],
+                        include_weixin='weixin' in query.get('states', [''])[0].split(',')))
                 except RequestError as error:
                     self._fail(400, str(error))
                 return
@@ -546,6 +609,9 @@ def make_server(config: Config, service: Service,
                 info = service.info(query.get("nonce", [None])[0], getattr(self, "key_hash", None))
                 info.update(name=config.name, version=__version__)
                 info["capabilities"] = list(info.get("capabilities", [])) + ["events_v1", "session_gateway_v1"]
+                if channel_session is not None:
+                    info["capabilities"].append('weixin_bind_v1')
+                    info["capabilities"].append('weixin_resend_v1')
                 info["events"] = event_types.describe()
                 info["iterate"] = iterate_lease.capabilities(iterate_settings, iterate_gateway)
                 self._send(200, info)
@@ -722,7 +788,32 @@ def make_server(config: Config, service: Service,
             ok, body = self._body(MAX_HISTORY_BODY_BYTES if history else MAX_BODY_BYTES)
             if not ok:
                 return
+            if parts[:3] == ['v1', 'weixin', 'bind']:
+                if not self._local_channel_binding():
+                    return
+                if channel_session is None:
+                    self._fail(404, '微信渠道暂不可用')
+                    return
+                try:
+                    if parts == ['v1', 'weixin', 'bind'] and body == {}:
+                        self._send(200, channel_session.begin())
+                    elif len(parts) == 5 and parts[4] == 'cancel' and body == {}:
+                        cancelled = channel_session.cancel(parts[3])
+                        self._send(200, {'state': 'cancelled' if cancelled else 'expired'})
+                    elif (len(parts) == 5 and parts[4] == 'code' and isinstance(body, dict)
+                          and set(body) == {'code'}):
+                        self._send(200, channel_session.poll(parts[3], body['code']))
+                    else:
+                        self._fail(400, '微信连接请求格式无效')
+                except (ValueError, OSError, WeixinError):
+                    self._fail(409, '微信连接暂不可用，请稍后重试')
+                return
             try:
+                if parts == ['v1', 'weixin', 'resend']:
+                    if not isinstance(body, dict) or set(body) != {'block', 'operation', 'revision', 'confirm'}:
+                        raise RequestError('微信重发请求格式无效')
+                    self._send(200, service.channel_resend(body['block'], body['operation'], body['revision'], body['confirm']))
+                    return
                 if history:
                     if not isinstance(body, dict):
                         raise RequestError("请求体应该是一个对象")

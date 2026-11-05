@@ -168,6 +168,15 @@ final class CardViews {
 
     // ---- 设备（三屏的固件）：第二屏只翻对话，第三屏是任务 ----
 
+    static List<Card> deviceVisibleCards(List<Card> cards) {
+        List<Card> visible = new ArrayList<>();
+        for (Card card : cards) if (!"weixin".equals(card.conversation)) visible.add(card);
+        return visible;
+    }
+    static boolean deviceVisibleApproval(Card.Approval approval, Card card) {
+        return !"weixin".equals(approval.conversation) && (card == null || !"weixin".equals(card.conversation));
+    }
+
     /**
      * 设备第三屏的单子：还在做的任务（按开始的先后，多了留最近的），ended 为 true 时后面
      * 接着最近做完的（新的在前），一共最多 limit 件。

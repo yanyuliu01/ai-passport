@@ -256,6 +256,8 @@ export class AccountConnection {
   }
   async invite(): Promise<string> { if (!this.view().canInvite || !this.network) throw new Error('请先配置同空间的本机 Runtime'); return this.network.invite(true); }
   async accept(id: string): Promise<void> { if (!this.network) throw new Error('请先登录'); await this.network.accept(id); await this.refresh(); }
+  approveImageBinding(id: string): void { if (!this.network) throw new Error('请先登录'); this.network.approveImageBinding(id); }
+  revokeImageBinding(peer: string, runtime: string): void { if (!this.network) throw new Error('请先登录'); this.network.revokeImageBinding(peer, runtime); }
   async reject(id: string): Promise<void> { await this.network?.reject(id); }
   reconnect(): void {
     this.network?.reconnect(); void this.refresh();

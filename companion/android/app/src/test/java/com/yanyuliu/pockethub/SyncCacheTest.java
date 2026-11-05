@@ -6,6 +6,20 @@ import java.util.List;
 import java.util.Map;
 
 public class SyncCacheTest {
+    @Test public void enablingChannelReplaysSnapshotOnceWithoutDiscardingCachedHistory() {
+        SyncCache cache = new SyncCache("*");
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":42,\"messages\":[{\"id\":\"old\",\"rev\":1,\"conversation\":\"default\",\"text\":\"cached\"}]}"));
+        cache = SyncCache.restore(cache.save(), "*");
+        cache.requireWeixin();
+        assertEquals("0", cache.cursor());
+        assertTrue(cache.save().contains("cached"));
+        cache.apply(page("{\"epoch\":\"e1\",\"seq\":43,\"messages\":[{\"id\":\"wx\",\"rev\":1,\"conversation\":\"weixin\",\"text\":\"channel\"}]}"));
+        cache = SyncCache.restore(cache.save(), "*");
+        cache.requireWeixin();
+        assertEquals("43", cache.cursor());
+        assertTrue(cache.save().contains("cached"));
+        assertTrue(cache.save().contains("channel"));
+    }
     @Test public void backgroundSnapshotKeepsItsOwnCursorAndRecordsAcrossChangesAndReset() {
         SyncCache cache = new SyncCache("*");
         cache.apply(page("{\"epoch\":\"e1\",\"seq\":1,\"messages\":[{\"id\":\"m1\",\"rev\":1,\"conversation\":\"side-one\",\"text\":\"before\"}]}"));

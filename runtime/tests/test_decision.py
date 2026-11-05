@@ -47,6 +47,13 @@ class DecisionTests(TempDirCase):
         self.assertNotIn("recall", {item["name"] for item in body["tools"]})
         self.assertEqual(result.fields["action"]["type"], "start")
 
+    def test_decision_receives_current_time_without_changing_owner_text(self):
+        opener = FakeOpener(selected())
+        self.choose(opener, system='## 本轮上下文\n现在是 2026-11-04 16:06（周三）。')
+        message = opener.requests[0][1]['messages'][-1]['content']
+        self.assertTrue(message.startswith('查日志'))
+        self.assertIn('当前本地时间 2026-11-04 16:06', message)
+
     def test_refused_action_is_a_fact_and_is_not_committed(self):
         result = self.choose(FakeOpener(selected("start_task", {"agent": "codex", "task": "x"})), self.box("队列满了"))
         self.assertEqual(result.fields["action"]["type"], "none")

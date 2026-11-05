@@ -28,12 +28,13 @@ class SpeakerTests(TempDirCase):
             self.speak(timeout_seconds=.75)
         job = provider.call_args.args[0]
         self.assertIn("saved question", job.text)
+        self.assertEqual("new question", job.session_text)
         self.assertEqual(.75, job.timeout)
         self.assertEqual("side", job.conversation)
         self.assertEqual("new-session", self.store.session("side", "voice"))
         self.assertEqual([], self.x.context.unseen("side", "voice"))
 
-    def test_current_question_selects_old_evidence_without_an_extra_provider_call(self):
+    def test_tool_capable_speech_keeps_recent_context_and_reads_old_evidence_on_demand(self):
         card = self.x.record.task_open("side", "older plan")
         self.x.record.exchange(card["id"], "quartz-anchor", "original code ORCHID-472", turn_id="anchor")
         for index in range(12):
@@ -42,8 +43,9 @@ class SpeakerTests(TempDirCase):
             self.x._speak(self.voice, "quartz-anchor 的原始代号？", "side", "system", None, 0,
                           catch_up=True, tools=object())
         self.assertEqual(1, provider.call_count)
-        self.assertIn("original code ORCHID-472", provider.call_args.args[0].text)
+        self.assertNotIn("original code ORCHID-472", provider.call_args.args[0].text)
         self.assertIn("unrelated 11", provider.call_args.args[0].text)
+        self.assertIn("original code ORCHID-472", self.x.context.recall('side', 'quartz-anchor'))
 
     def test_provider_failure_does_not_save_session_or_receipts(self):
         with mock.patch.object(self.voice, "run", side_effect=AgentError("provider unavailable")), \

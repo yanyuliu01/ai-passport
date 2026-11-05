@@ -10,5 +10,9 @@ public class ReleaseOriginTest {
   assertFalse(PinnedRelayTLS.isReleaseURL(new URL("http://150.158.176.23"+path)));
   assertFalse(PinnedRelayTLS.isReleaseURL(new URL("https://150.158.176.23:444"+path)));
   assertFalse(PinnedRelayTLS.isReleaseURL(new URL("https://150.158.176.23/v1/account/login")));
+  String privatePath="/v1/private-releases/apps/"+"b".repeat(32)+"/"+"a".repeat(64)+".apk";
+  assertTrue(PinnedRelayTLS.isReleaseURL(new URL("https://150.158.176.23"+privatePath)));
+  assertFalse(PinnedRelayTLS.isReleaseURL(new URL("https://example.com"+privatePath)));
+  assertFalse(PinnedRelayTLS.isReleaseURL(new URL("https://150.158.176.23:444"+privatePath)));
  }
 }

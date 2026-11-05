@@ -14,6 +14,7 @@ final class AccountManager {
     private static volatile Set<String> allowed=Collections.emptySet();
     private static volatile String message="登录小鱼账号，连接自己的电脑",username="";
     private static volatile boolean busy,signedIn;
+    private static final AccountHistoryFence HISTORY_FENCE=new AccountHistoryFence();
     private static Context app;
     private static SharedPreferences storage;
     private static volatile Map<String,Object> session;
@@ -30,13 +31,32 @@ final class AccountManager {
         AccountAPI nextAPI=new AccountAPI(SERVER,PIN);
         crypto=identity;api=nextAPI;storage=prefs;app=next;
         String saved=prefs.getString("session","");
-        if(!saved.isEmpty())try{session=Json.parseObject(RelayManager.decrypt(saved));validate(session);signedIn=true;username=Json.string(session,"username");}
+        if(!saved.isEmpty())try{
+            Map<String,Object> restored=Json.parseObject(RelayManager.decrypt(saved));validate(restored);
+            HISTORY_FENCE.change(()->{session=restored;signedIn=true;username=Json.string(restored,"username");});
+        }
         catch(Exception failure){session=null;message="登录已过期或暂不可恢复，请重新登录；原记录保留";}
         worker.scheduleWithFixedDelay(()->{try{refresh();}catch(Exception ignored){}},0,5,TimeUnit.SECONDS);
     }
     static String status(){return message;}
     static String username(){return username;}
     static String accountId(){Map<String,Object> current=session;return signedIn && current!=null?Json.string(current,"id"):"";}
+    static long historyGeneration(){return HISTORY_FENCE.capture();}
+    static boolean historyCurrent(long generation,String account,String url){
+        return HISTORY_FENCE.peek()==generation && !account.isEmpty() && account.equals(accountId())
+                && allowed(url) && HISTORY_FENCE.peek()==generation;
+    }
+    static boolean installHistory(long generation,String account,String url,Runnable install){
+        return HISTORY_FENCE.install(generation,()->!account.isEmpty() && account.equals(accountId()) && allowed(url),install);
+    }
+    /** Account sessions are sent only to the pinned private release origin. */
+    static String privateReleaseToken(String target,String account){
+        Map<String,Object> current=session;
+        if(!signedIn || current==null || !PrivateReleaseRoute.targetMatches(target,account)
+            || !account.equals(Json.string(current,"id")) || Json.number(current,"expires")<=System.currentTimeMillis())return "";
+        String token=Json.string(current,"token");
+        return signedIn && session==current && token.matches("[A-Za-z0-9_-]{43}")?token:"";
+    }
     static boolean signedIn(){return signedIn;}
     static boolean busy(){return busy;}
     static boolean allowed(String url){return signedIn && allowed.contains(url);}
@@ -50,7 +70,9 @@ final class AccountManager {
             AccountIdentity.verify(password,Json.string(value,"id"),Json.string(value,"space"),vault);
             value.put("seed",crypto.seed);
             if(!storage.edit().putString("session",RelayManager.encrypt(RelayCrypto.json(value))).commit())throw new IOException("登录凭据未能保存");
-            session=value;signedIn=true;username=Json.string(value,"username");message="已登录，正在发现自己的电脑";refresh();
+            HISTORY_FENCE.change(()->{session=value;signedIn=true;username=Json.string(value,"username");});
+            HubStore.get().accountChanged();
+            message="已登录，正在发现自己的电脑";refresh();
         }catch(Exception failure){problem="登录未完成："+safe(failure);}finally{busy=false;}deliver(callback,problem);});
     }
     static void logout(Callback callback){
@@ -77,7 +99,7 @@ final class AccountManager {
                 @SuppressWarnings("unchecked") Map<String,Object> device=(Map<String,Object>)((Map<?,?>)raw).get("device");
                 RelayCrypto.validateDevice(device);if(!device.get("id").equals(crypto.identity.get("id")))devices.put("relay://"+Json.string(device,"id")+"."+Json.string(session,"id"),device);
             }
-            Set<String> urls=Collections.unmodifiableSet(new HashSet<>(devices.keySet()));allowed=urls;
+            Set<String> urls=Collections.unmodifiableSet(new HashSet<>(devices.keySet()));HISTORY_FENCE.update(()->allowed=urls);
             RelayManager.retainAccount(urls);
             for(Map.Entry<String,Map<String,Object>> item:devices.entrySet())RelayManager.accountPeer(Json.string(session,"id"),RelayCrypto.map(
                 "device",item.getValue(),"relay",RelayCrypto.map("url",SERVER,"tlsFingerprint",PIN,"token",session.get("relayToken"),"room",session.get("id")),
@@ -89,7 +111,7 @@ final class AccountManager {
             else message="服务器连接暂未恢复，正在重试；原记录保留";
         }
     }
-    private static void pause(){signedIn=false;allowed=Collections.emptySet();RelayManager.retainAccount(allowed);RelayManager.cancelReads();}
+    private static void pause(){HISTORY_FENCE.change(()->{signedIn=false;allowed=Collections.emptySet();});HubStore.get().accountChanged();RelayManager.retainAccount(allowed);RelayManager.cancelReads();}
     private static Map<String,Object> call(String path,Map<String,Object> body,String token) throws Exception {return api.call(path,body,token);}
     private static String safe(Exception failure){return failure instanceof IOException?failure.getMessage():"账号互通身份验证失败，请检查账号和密码；原配置保留";}
 }

@@ -551,6 +551,10 @@ class DshAgent(Agent):
                 return dsh_stream.run(self.spec, replace(job, timeout=budget.remaining()), env, self.tier(job)[0],
                                       job.on_text, self._open)
             except AgentError as error:
+                if job.ephemeral:
+                    # Derived background work must not fall back to a CLI session
+                    # that may persist its private source as ordinary history.
+                    raise
                 if isinstance(error, dsh_stream.NoProviderFallback):
                     # A pooled request may already have reached the provider.
                     # Falling back to the CLI would submit the turn again.

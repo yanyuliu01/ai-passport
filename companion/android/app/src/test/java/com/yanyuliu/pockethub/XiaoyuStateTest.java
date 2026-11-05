@@ -8,6 +8,18 @@ import java.util.List;
 public class XiaoyuStateTest {
     private Card card(String fields) { return Card.from(Json.parseObject("{" + fields + "}")); }
 
+    @Test public void wearableNeverReceivesWeixinCards() {
+        Card main = card("\"id\":\"c1\",\"conversation\":\"default\",\"state\":\"working\"");
+        Card side = card("\"id\":\"c2\",\"conversation\":\"side-topic\",\"state\":\"working\"");
+        Card weixin = card("\"id\":\"c3\",\"conversation\":\"weixin\",\"state\":\"working\"");
+        assertEquals(Arrays.asList(main, side), CardViews.deviceVisibleCards(Arrays.asList(main, weixin, side)));
+        Card.Approval approval = Card.Approval.from(Json.parseObject("{\"id\":\"a\",\"conversation\":\"weixin\"}"));
+        assertEquals("weixin", approval.conversation);
+        assertFalse(CardViews.deviceVisibleApproval(approval, null));
+        assertFalse(CardViews.deviceVisibleApproval(Card.Approval.from(Json.parseObject("{\"id\":\"b\"}")), weixin));
+        assertTrue(CardViews.deviceVisibleApproval(Card.Approval.from(Json.parseObject("{\"id\":\"c\"}")), main));
+    }
+
     @Test public void queuedIdleAndDisconnectedHaveDistinctMeaning() {
         Card queued = card("\"id\":\"c1\",\"agent\":\"codex\",\"state\":\"working\",\"queued\":true");
         assertEquals("queued", XiaoyuState.state(queued, true));

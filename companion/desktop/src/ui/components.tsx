@@ -6,6 +6,8 @@ import xiaoyu from './images/xiaoyu.png';
 import codex from './images/codex.png';
 import claude from './images/claude.png';
 const paths: Record<string, React.ReactNode> = {
+  channel: <><circle cx="12" cy="12" r="2" /><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8" /></>,
+  weixin: <><path d="M3 14V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7l-4 3Z" /><path d="M19 9a2 2 0 0 1 2 2v9l-3.5-2.5H11a2 2 0 0 1-2-2v-.5" /></>,
   home: <><path d="m3 10 9-7 9 7v11H3Z" /><path d="M9 21v-8h6v8" /></>, phone: <><rect x="6" y="2" width="12" height="20" rx="3" /><path d="M10 18h4" /></>,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />, chat: <path d="M21 11a8 8 0 0 1-8 8H6l-4 3V11a9 9 0 0 1 19 0Z" />,
   work: <><rect x="3" y="7" width="18" height="14" rx="3" /><path d="M8 7V4h8v3M3 12c5 3 13 3 18 0M10 13h4" /></>,

@@ -199,10 +199,14 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_ownership.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_permissions.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_runtime.py
+    PYTHONPATH=runtime:runtime/tests PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p 'test_bilibili*.py'
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_usage_subscription.py
     PYTHONPATH=runtime PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p 'test_channel*.py'
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_identity_migration.py
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_prompt_rules.py
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_standing_context.py
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_relationship.py
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_shared_memory_context.py
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s runtime/tests -p test_helper_model_preferences.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_conversation_presentation.py
     PYTHONDONTWRITEBYTECODE=1 python3 runtime/tests/test_presentation_policy.py

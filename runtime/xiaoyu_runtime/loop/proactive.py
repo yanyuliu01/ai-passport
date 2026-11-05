@@ -15,6 +15,8 @@
 """
 
 import re
+import json
+import sqlite3
 import sys
 import threading
 import time
@@ -23,6 +25,7 @@ from typing import Any, List, Optional
 from ..helpers.agents import AgentError
 from ..helpers.deadline import Deadline
 from .context_summaries import RULES as SUMMARY_RULES, SegmentSummaries
+from .relationship import RULES as RELATIONSHIP_RULES
 from .effects import EffectFenceError, EffectUncertain
 from .voice_tools import Toolbox
 from .prompt_rules import with_runtime_rules
@@ -50,7 +53,7 @@ UPKEEP_RULES = (
     "看看下面这几轮对话里，主人有没有说过值得长期记住、而你还没记的：偏好、定下的规矩、长期的情况、"
     "长期的约定。有就用 remember 记（带上主人的原话）；主人改了以前的说法，用 replace 改那一条；"
     "主人明确不要了的用 forget。一次性的小事、进度、流水账不记；已经记着的不要重复记；密码、密钥、"
-    "验证码绝不记。整理完只回一行：（好了）。"
+    "验证码绝不记。新说法优先，旧对话与当前记忆冲突时不要把旧说法重新记回来。整理完只回一行：（好了）。"
 )
 
 
@@ -62,6 +65,9 @@ class Pulse:
         self._conversation = conversation
         self._pending = set()
         self._lock = threading.Lock()
+        self._browser_planning = False
+        self._upkeep_next = 'default'
+        self._relationship_next_check = {}
         self._stop = threading.Event()
         self._progress = ProgressWakes(
             lambda: self._xiaoyu.cards,
@@ -96,11 +102,25 @@ class Pulse:
             UpkeepPorts(
                 owner=lambda conversation: self._owner(conversation),
                 stopped=self._stop.is_set,
-                ask=lambda event, owner, effects: self._ask(
+                ask=lambda event, owner, effects, revision: self._ask(
                     event, ["remember", "replace", "forget"], UPKEEP_RULES,
-                    owner=owner, effects=effects),
+                    owner=owner, effects=effects, expected_memory_revision=revision),
                 policy=lambda: (UPKEEP_QUIET, UPKEEP_MIN_TURNS, UPKEEP_MAX_TURNS),
                 write=lambda path, state: durable_write(path, state)), conversation)
+        # Each conversation owns its durable cursor; both update the same
+        # OwnerMemory. Keep the legacy default marker untouched for rollback.
+        self._weixin_upkeep = MemoryUpkeep(
+            lambda: self._xiaoyu.context, lambda: self._xiaoyu.memory,
+            xiaoyu.memory.log_dir.parent / "upkeep-weixin.json",
+            UpkeepPorts(
+                owner=lambda scope: self._owner(scope),
+                stopped=self._stop.is_set,
+                ask=lambda event, owner, effects, revision: self._ask(
+                    event, ["remember", "replace", "forget"], UPKEEP_RULES,
+                    conversation="weixin", owner=owner, effects=effects, expected_memory_revision=revision),
+                policy=lambda: (UPKEEP_QUIET, UPKEEP_MIN_TURNS, UPKEEP_MAX_TURNS),
+                write=lambda path, state: durable_write(path, state)), "weixin", bootstrap_recent=20)
+        self._memory_upkeep_lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="xiaoyu-pulse", daemon=True)
 
     # Compatibility for existing review/fault callers; state is owned by upkeep.
@@ -127,10 +147,12 @@ class Pulse:
         self._stop.set()
 
     def unconfirmed(self, conversation):
-        return self._reminders.unconfirmed(conversation) or self._upkeep.unconfirmed(conversation)
+        return (self._reminders.unconfirmed(conversation) or self._upkeep.unconfirmed(conversation)
+                or self._weixin_upkeep.unconfirmed(conversation))
 
     def timer_entries(self, include_history=True):
-        return self._reminders.entries(include_history) + self._upkeep.entries(include_history)
+        return (self._reminders.entries(include_history) + self._upkeep.entries(include_history)
+                + self._weixin_upkeep.entries(include_history))
 
     def checkpoint_timer(self, entry, wake):
         if entry["archived"]:
@@ -138,13 +160,15 @@ class Pulse:
         if entry["kind"] == "promise":
             self._reminders.checkpoint(entry, wake)
         else:
-            self._upkeep.checkpoint(entry["target"], entry["wake"], wake)
+            upkeep = self._weixin_upkeep if entry.get("conversation") == "weixin" else self._upkeep
+            upkeep.checkpoint(entry["target"], entry["wake"], wake)
 
     def archive_timer_review(self, entry):
         if entry["kind"] == "promise":
             self._reminders.archive_review(entry)
         else:
-            self._upkeep.archive_review(entry)
+            upkeep = self._weixin_upkeep if entry.get("conversation") == "weixin" else self._upkeep
+            upkeep.archive_review(entry)
 
     # ---- 帮手报进展（在任务线程里调用）：只记下，不在这里叫她 ----
 
@@ -172,8 +196,149 @@ class Pulse:
         for item in self._reminders.due(wall):
             self._enqueue(item.get("conversation") or self._conversation, ("promise", item["id"]),
                           lambda item=item: self._wake_for_promise(item))
-        self._enqueue(self._conversation, ("upkeep", self._conversation),
-                      lambda: self._maybe_upkeep(time.time() if now is None else now))
+        # Only admit one memory-upkeep lane per tick. Starting both together
+        # made default consistently win the non-blocking shared-memory lock,
+        # starving WeChat; waiting on that lock would instead block its chat.
+        wx_exists = bool(self._xiaoyu.cards.conversations.get('weixin'))
+        if not self._memory_upkeep_lock.locked():
+            use_weixin = wx_exists and self._upkeep_next == 'weixin'
+            self._upkeep_next = 'default' if use_weixin else 'weixin'
+            if use_weixin:
+                self._enqueue('weixin', ('upkeep', 'weixin'),
+                              lambda: self._maybe_weixin_upkeep(time.time() if now is None else now))
+            else:
+                self._enqueue(self._conversation, ("upkeep", self._conversation),
+                              lambda: self._maybe_upkeep(time.time() if now is None else now))
+        for conversation in (self._conversation, 'weixin'):
+            if (wall >= self._relationship_next_check.get(conversation, 0)
+                    and self._xiaoyu.cards.conversations.get(conversation)
+                    and self._xiaoyu.relationship.due(conversation, wall)):
+                self._relationship_next_check[conversation] = wall + UPKEEP_QUIET
+                self._enqueue(conversation, ('relationship', conversation),
+                              lambda conversation=conversation: self._maybe_relationship(conversation, time.time() if now is None else now))
+        if self._xiaoyu.config.bilibili_autonomous:
+            self._start_bilibili(time.time() if now is None else now)
+
+    def _start_bilibili(self, now):
+        """Keep model planning off the conversation lane and admit only one planner."""
+        with self._lock:
+            if self._browser_planning or self._stop.is_set():
+                return
+            self._browser_planning = True
+        def run():
+            try:
+                self._maybe_bilibili(now)
+            except Exception as error:
+                sys.stderr.write("浏览探索决策未完成：%s\n" % type(error).__name__)
+            finally:
+                with self._lock:
+                    self._browser_planning = False
+        try:
+            threading.Thread(target=run, name="xiaoyu-browser-planner", daemon=True).start()
+        except RuntimeError:
+            with self._lock:
+                self._browser_planning = False
+
+    def _maybe_bilibili(self, now):
+        """Offer an exploration opportunity; Xiaoyu chooses whether and how to use it."""
+        from ..entertainment.schedule import claim, claim_test, defer, record_test_state
+        from ..entertainment.browser import logged_in
+        xiaoyu = self._xiaoyu
+        if self._stop.is_set() or self._owner(self._conversation) is None:
+            return
+        if xiaoyu.config.mesh_secret and xiaoyu.mesh is None:
+            return  # Never explore while this Runtime cannot verify mesh ownership.
+        if xiaoyu.mesh is not None and not xiaoyu.config.mesh_home:
+            return
+        worker = xiaoyu._browser_worker
+        if worker is None:
+            return
+        if not logged_in():
+            return
+        schedule = xiaoyu.config.state_dir / "entertainment" / "bilibili" / "schedule.sqlite3"
+        test_requested = claim_test(schedule, now)
+        if not test_requested and not claim(schedule, now):
+            return
+        def test_state(state):
+            if test_requested:
+                try:
+                    record_test_state(schedule, state)
+                except (OSError, sqlite3.Error):
+                    pass  # Diagnostics never change the decision or browsing.
+        owner = self._owner(self._conversation)
+        if owner is None or self._stop.is_set():
+            test_state('ownership_changed')
+            return
+        voice = self._voice()
+        if voice is None:
+            test_state('voice_unavailable')
+            return
+        status = xiaoyu._browser_budget(now)
+        def guard():
+            if self._stop.is_set() or self._owner(self._conversation) != owner:
+                raise EffectFenceError("浏览决策已过期")
+        def check(fields):
+            action = fields.get("action") or {}
+            if action.get("type") == "browse_defer":
+                schedule_view = status.get("self_schedule") or {}
+                later = now + action.get("minutes", 0) * 60
+                local_later = time.localtime(later)
+                if (not schedule_view.get("available") or not schedule_view.get("deferrals_remaining")
+                        or time.strftime("%Y-%m-%d", local_later) != time.strftime("%Y-%m-%d", time.localtime(now))
+                        or not 10 <= local_later.tm_hour < 21):
+                    return "今天没有可用的延期时机"
+                return None
+            if not status.get("available") or status.get("wait_seconds", 0) > 0:
+                return "当前仍在访问限制或等待期，可以稍后再决定"
+            return xiaoyu._plan(Outcome("", None, fields), self._conversation, None,
+                                xiaoyu._available(0), False)[1]
+        from ..helpers.base import Outcome
+        box = Toolbox([], [], [], check, lambda card: None, conversation=self._conversation,
+            only=["browse_budget", "browse_content", "defer_browsing"], guard=guard,
+            browser_enabled=True, browser_budget=lambda: xiaoyu._browser_budget(now), browser_defer=True)
+        system = (with_runtime_rules(xiaoyu.config.persona) + "\n\n" + "\n".join(xiaoyu.memory_lines())
+                  + "\n\n最近的交流：\n" + (self._recent_said(self._conversation) or "（暂无）")
+                  + "\n\n这是你自己的娱乐机会，不是主人发起的任务。"
+                  "你可以不逛、用 defer_browsing 稍后再决定，或者用 browse_content 浏览。"
+                  "自主决定候选数量和是否细看一条视频；不要为了用满额度而访问。"
+                  "本轮只做自己的决定，不向主人发消息。当前本地状态：" + json.dumps(status, ensure_ascii=False))
+        if test_requested:
+            system += "\n主人请你试一次自主发现和分享。你仍然自己决定逛不逛、看什么，以及是否值得分享。"
+        try:
+            xiaoyu._speak(voice, "现在有一个自主探索的机会，你想怎么安排？", self._conversation,
+                system, None, 0, catch_up=False, tools=box, ephemeral=True, guard=guard,
+                budget=Deadline(xiaoyu.config.voice_timeout_seconds))
+            guard()
+        except (AgentError, EffectFenceError, OSError, RuntimeError):
+            test_state('model_error')
+            return
+        action = box.action or {}
+        if action.get("type") == "browse_defer":
+            defer(schedule, action.get("minutes"), now)
+            test_state('deferred')
+            return
+        if action.get("type") != "browse":
+            test_state('no_browse')
+            return
+        plan, problem = xiaoyu._plan(Outcome("", None, {"action": action, "card": "new"}),
+                                    self._conversation, None, xiaoyu._available(0), False)
+        if problem is not None:
+            test_state('plan_rejected')
+            return
+        writer = xiaoyu.intake.writer("timer", actor="xiaoyou", cause="bilibili-discovery")
+        card = writer.task_open(self._conversation, "小鱼的B站探索", "working", worker.name)
+        if self._owner(self._conversation) != owner or self._stop.is_set():
+            test_state('ownership_changed')
+            writer.task(card["id"], state="failed", brief="对话负责人已变化，未开始探索")
+            return
+        try:
+            xiaoyu._autonomous_browser_cards.add(card['id'])
+            xiaoyu._launch(card["id"], worker, plan["task"], self._conversation, 0)
+            test_state('launched')
+        except (OSError, ValueError, AgentError):
+            xiaoyu._autonomous_browser_cards.discard(card['id'])
+            test_state('launch_failed')
+            writer.task(card["id"], state="failed", brief="这次探索没有启动")
 
     def _owner(self, conversation):
         mesh = self._xiaoyu.mesh
@@ -235,7 +400,7 @@ class Pulse:
         return "\n".join("- %s" % turn["reply"][:200].replace("\n", " ") for turn in turns if turn.get("reply"))
 
     def _ask(self, event: str, only: List[str], rules: str, conversation=None, before_effect=None,
-             owner=None, effects=None) -> Optional[str]:
+             owner=None, effects=None, expected_memory_revision=None) -> Optional[str]:
         voice = self._voice()
         if voice is None:
             return None
@@ -256,12 +421,17 @@ class Pulse:
                 raise EffectFenceError("决定阶段已结束，不能再执行旧工具回调。")
             if before_effect is not None:
                 before_effect()
+        memory_notes, memory_revision = xiaoyu.memory.snapshot()
+        if expected_memory_revision is not None and memory_revision != expected_memory_revision:
+            return None
+        from ..world.memory import prompt_section
         system = "\n\n".join(part for part in (
-            with_runtime_rules(xiaoyu.config.persona), xiaoyu.style(), "\n".join(xiaoyu.memory_lines()),
+            with_runtime_rules(xiaoyu.config.persona), xiaoyu.style(), "\n".join(prompt_section(memory_notes)),
             "\n".join(xiaoyu.promise_lines(conversation)), rules) if part)
         box = Toolbox([], [], [], lambda fields: "这一轮不能交办新的事", lambda card: xiaoyu.detail(card, conversation),
                       xiaoyu.memory, lambda query: xiaoyu.recall(conversation, query), xiaoyu.promises,
-                      conversation, only=only, before_effect=before_mutation, guard=guard, effects=effects)
+                      conversation, only=only, before_effect=before_mutation, guard=guard, effects=effects,
+                      expected_memory_revision=memory_revision if rules == UPKEEP_RULES else None)
         text = "%s\n\n（你最近跟主人说过的话：）\n%s" % (event, self._recent_said(conversation) or "（还没有）")
         messages = None
         try:
@@ -323,16 +493,32 @@ class Pulse:
     # ---- 整理记忆 ----
 
     def _maybe_upkeep(self, now):
-        self._upkeep.maybe(now)
+        if self._memory_upkeep_lock.acquire(blocking=False):
+            try:
+                self._upkeep.maybe(now)
+            finally:
+                self._memory_upkeep_lock.release()
+        else:
+            self._upkeep_next = 'default'
         self._maybe_summary(now)
+
+    def _maybe_weixin_upkeep(self, now):
+        if self._memory_upkeep_lock.acquire(blocking=False):
+            try:
+                self._weixin_upkeep.maybe(now)
+            finally:
+                self._memory_upkeep_lock.release()
+        else:
+            self._upkeep_next = 'weixin'
 
     def _maybe_summary(self, now):
         """One optional, interruptible read-only summary on the existing queue."""
         xiaoyu, conversation = self._xiaoyu, self._conversation
         owner, voice = self._owner(conversation), self._voice()
-        if owner is None or voice is None or self._stop.is_set() or self._upkeep.unconfirmed(conversation):
+        if owner is None or voice is None or self._stop.is_set() or self.unconfirmed(conversation):
             return
         activity = xiaoyu.context.summary_activity(conversation)
+        memory_notes, memory_revision = xiaoyu.memory.snapshot()
         if activity[2] or now - activity[1] < UPKEEP_QUIET:
             return
         turns = xiaoyu.context.history(conversation)
@@ -344,14 +530,17 @@ class Pulse:
         with xiaoyu.speaking_turn(conversation) as cut:
             def guard():
                 if (self._stop.is_set() or cut.is_set() or self._owner(conversation) != owner
-                        or xiaoyu.context.summary_activity(conversation) != activity):
+                        or xiaoyu.context.summary_activity(conversation) != activity
+                        or xiaoyu.memory.revision() != memory_revision):
                     raise EffectFenceError("历史摘要已过期，停止保存。")
             try:
                 guard()
                 if not xiaoyu.context.begin_summary(conversation, candidate, now=now):
                     return
                 budget = Deadline(min(10, xiaoyu.config.voice_timeout_seconds))
-                outcome = xiaoyu._speak(voice, SegmentSummaries.source(candidate), conversation,
+                source = json.dumps({'current_memory': memory_notes,
+                                     'historical_turns': json.loads(SegmentSummaries.source(candidate))}, ensure_ascii=False)
+                outcome = xiaoyu._speak(voice, source, conversation,
                     SUMMARY_RULES, None, 0, False, ephemeral=True, interrupt=cut,
                     on_text=lambda text: None, guard=guard, budget=budget)
                 guard()
@@ -360,6 +549,37 @@ class Pulse:
                 # No external effect, message or receipt exists to reconcile.
                 # The durable attempt limit/cooldown bounds background retries.
                 sys.stderr.write("历史摘要未保存；继续保留原文及检索。\n")
+
+    def _maybe_relationship(self, conversation, now):
+        """Quiet, scoped, interruptible synthesis; never sends a message."""
+        xiaoyu, owner, voice = self._xiaoyu, self._owner(conversation), self._voice()
+        if owner is None or voice is None or self._stop.is_set() or self.unconfirmed(conversation):
+            return
+        activity = xiaoyu.context.summary_activity(conversation)
+        if activity[2] or now - activity[1] < UPKEEP_QUIET:
+            return
+        turns = xiaoyu.context.history(conversation)
+        notes, revision = xiaoyu.memory.snapshot()
+        candidate = xiaoyu.relationship.candidate(conversation, turns, revision, now, memory_notes=notes,
+                                                  correction_after=xiaoyu.memory.correction_after())
+        if candidate is None:
+            return
+        with xiaoyu.speaking_turn(conversation) as cut:
+            def guard():
+                if (self._stop.is_set() or cut.is_set() or self._owner(conversation) != owner
+                        or xiaoyu.context.summary_activity(conversation) != activity
+                        or xiaoyu.memory.revision() != revision):
+                    raise EffectFenceError('关系摘要的来源已变化')
+            try:
+                guard()
+                xiaoyu.relationship.begin(conversation, candidate, now)
+                outcome = xiaoyu._speak(voice, json.dumps(candidate['source'], ensure_ascii=False), conversation,
+                    RELATIONSHIP_RULES, None, 0, False, ephemeral=True, interrupt=cut,
+                    on_text=lambda text: None, guard=guard, budget=Deadline(min(10, xiaoyu.config.voice_timeout_seconds)))
+                guard()
+                xiaoyu.relationship.save(conversation, candidate, outcome.text, now)
+            except (AgentError, OSError, RuntimeError):
+                sys.stderr.write('关系摘要未保存；原始对话和记忆不受影响。\n')
 
 
     def _checkpoint_upkeep(self, target, before, after):

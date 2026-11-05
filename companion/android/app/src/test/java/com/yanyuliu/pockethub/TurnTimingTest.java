@@ -42,6 +42,20 @@ public class TurnTimingTest {
         assertEquals(List.of("send key=k1 t=1000", "bubble key=k1 t=2350 elapsed_ms=1350"), lines);
     }
 
+    @Test public void firstVisibleBubbleIgnoresHiddenEmptyAndFailedRows() {
+        TurnTiming.sent("k", 1000);
+        assertTrue(TurnTiming.watching("k"));
+        TurnTiming.visibleBubble("k", 1200, false, true, true);  // queued GONE bubble
+        TurnTiming.visibleBubble("k", 1300, true, false, true);  // no assistant body
+        TurnTiming.visibleBubble("k", 1400, true, true, false);  // error is not a reply
+        assertTrue(TurnTiming.watching("k"));
+        assertEquals(List.of("send key=k t=1000"), lines);
+        TurnTiming.visibleBubble("k", 2500, true, true, true);
+        TurnTiming.visibleBubble("k", 3000, true, true, true);
+        assertFalse(TurnTiming.watching("k"));
+        assertEquals(List.of("send key=k t=1000", "bubble key=k t=2500 elapsed_ms=1500"), lines);
+    }
+
     @Test public void retryKeepsTheOriginalStart() {
         TurnTiming.sent("k1", 1000);
         TurnTiming.sent("k1", 5000);
@@ -63,5 +77,21 @@ public class TurnTimingTest {
         TurnTiming.firstBubble("k0", 100);  // The oldest turns were dropped.
         TurnTiming.firstBubble("k69", 100);
         assertEquals(List.of("bubble key=k69 t=100 elapsed_ms=31"), lines);
+    }
+
+    @Test public void stagesUseOneOriginalClockAndDoNotLogUnknownOrDuplicateTurns() {
+        TurnTiming.stage("missing", TurnTiming.Stage.RELAY_READY);
+        TurnTiming.sent("k1", 1000);
+        now = 1100; TurnTiming.stage("k1", TurnTiming.Stage.INTENT_START);
+        now = 1250; TurnTiming.stage("k1", TurnTiming.Stage.INTENT_READY);
+        now = 1400; TurnTiming.stage("k1", TurnTiming.Stage.INTENT_READY);
+        now = 1500; TurnTiming.stage("k1", TurnTiming.Stage.RELAY_QUEUED);
+        TurnTiming.firstBubble("k1", 2000);
+        now = 2100; TurnTiming.stage("k1", TurnTiming.Stage.RELAY_RESPONSE);
+        assertEquals(List.of("send key=k1 t=1000",
+                "phase key=k1 name=intent_start t=1100 elapsed_ms=100",
+                "phase key=k1 name=intent_ready t=1250 elapsed_ms=250",
+                "phase key=k1 name=relay_queued t=1500 elapsed_ms=500",
+                "bubble key=k1 t=2000 elapsed_ms=1000"), lines);
     }
 }

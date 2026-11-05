@@ -1,10 +1,11 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { ClientView, Conversation, Endpoint, Json, Message, Pending, SpaceView } from '../shared.js';
 import { ClientDatabase } from './database.js';
 import { orderMessages } from './message-order.js';
 import { conversationID, runtimeConversation, newerConversation, helperViews, unifiedHelpers, reviewBody } from './presentation.js';
 import { asSyncPage, isDeviceCredential, proofMatches, RuntimeError, syncPath, type RuntimeTransport } from './runtime-client.js';
+import { WeixinBinding, localWeixinEndpoint } from './weixin-binding.js';
 
 interface Link { connected: boolean; catchingUp: boolean; error: string }
 interface ReviewIdentity { version: 1; endpoint: Pick<Endpoint, 'runtimeId' | 'spaceId' | 'url' | 'token'>; body: Json }
@@ -40,6 +41,78 @@ export class DesktopClient {
     private secrets: SecretStore, private changed: () => void,
     private peerState?: (endpoint: Endpoint) => string) {}
 
+  private weixinBinding(space: string, runtime: string): WeixinBinding {
+    const endpoint = this.endpoints.get(runtime);
+    if (!endpoint || endpoint.spaceId !== space || !this.link(endpoint)?.connected)
+      throw new Error('本机小鱼未连接，暂时不能扫码');
+    return new WeixinBinding(endpoint, this.transport);
+  }
+  weixinBind(space: string, runtime: string): Promise<{ id: string; qrImage: string }> {
+    return this.weixinBinding(space, runtime).begin();
+  }
+  weixinStatus(space: string, runtime: string): Promise<Json> {
+    return this.weixinBinding(space, runtime).status();
+  }
+  weixinPoll(space: string, runtime: string, attempt: string, code?: string): Promise<Json> {
+    return this.weixinBinding(space, runtime).poll(attempt, code);
+  }
+  weixinCancel(space: string, runtime: string, attempt: string): Promise<void> {
+    return this.weixinBinding(space, runtime).cancel(attempt);
+  }
+  async channelArtifact(space: string, runtime: string, messageId: string, artifact: string, thumbnail: boolean): Promise<Json> {
+    if (!/^a[0-9a-f]{32}$/.test(artifact)) throw new Error('附件编号无效');
+    const record = this.db.records<Message>(space, 'message').find(item => item.conversation === 'weixin'
+      && item.id === messageId && item._runtimeId === runtime && !item._staleEpoch);
+    const attachments = Array.isArray(record?.attachments) ? record.attachments as Json[] : [];
+    const item = attachments.find(item => item.id === artifact && item.status === 'ready');
+    if (!item) throw new Error('附件不在这条微信记录中');
+    const endpoint = this.endpointForRecord(space, 'message', messageId, runtime);
+    const size = Number(item.size), sha = String(item.sha256 || '');
+    if (!thumbnail && (!Number.isSafeInteger(size) || size < 1 || size > 25 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(sha)))
+      throw new Error('附件信息不可用或超过大小限制');
+    const path = '/v1/artifacts/' + artifact + '/' + (thumbnail ? 'thumbnail' : 'content');
+    const chunks: Buffer[] = [];
+    let contentType = '';
+    const chunked = !thumbnail && size > 2_800_000;
+    for (let offset = 0; ; ) {
+      const length = chunked ? Math.min(1024 * 1024, size - offset) : 0;
+      const result = await this.transport.request(endpoint, 'GET', path + (chunked ? '?offset=' + offset + '&length=' + length : ''));
+      if (typeof result._relay_binary !== 'string' || typeof result.content_type !== 'string') throw new Error('附件暂时不可用');
+      const bytes = Buffer.from(result._relay_binary, 'base64url');
+      if (chunked && bytes.length !== length) throw new Error('电脑暂不支持大文件传输，请先更新电脑端');
+      if (contentType && contentType !== result.content_type) throw new Error('附件内容已变化');
+      contentType = result.content_type; chunks.push(bytes); offset += bytes.length;
+      if (!chunked || offset === size) break;
+    }
+    const bytes = Buffer.concat(chunks);
+    if (!thumbnail && (bytes.length !== size || createHash('sha256').update(bytes).digest('hex') !== sha)) throw new Error('附件校验失败，请重试');
+    return { _relay_binary: bytes.toString('base64url'), content_type: contentType };
+  }
+  async weixinResend(space: string, block: string, revision: number, confirm: boolean): Promise<Json> {
+    if (!/^[a-f0-9]{32}\/[A-Za-z0-9._:-]+#(?:[0-9]{1,8}|media:a[0-9a-f]{32})$/.test(block)
+        || !Number.isSafeInteger(revision) || revision < 1 || typeof confirm !== 'boolean')
+      throw new Error('微信重发请求无效');
+    const message = this.db.records<Message>(space, 'message').find(item => item.conversation === 'weixin'
+      && item.delivery?.[block] && item.delivery_revisions?.[block] === revision && !item._staleEpoch);
+    const state = message?.delivery?.[block];
+    if (!message || !state || !['failed', 'unknown'].includes(state)) throw new Error('回复状态已变化，请稍后再试');
+    if (state === 'unknown' && !confirm) throw new Error('请先确认微信里没有这条回复');
+    const owner = block.slice(0, 32);
+    const candidates = [...this.endpoints.values()].filter(item => item.spaceId === space
+      && item.capabilities.includes('weixin_resend_v1') && this.link(item)?.connected);
+    const endpoint = candidates.find(item => item.runtimeId === owner) || candidates[0];
+    if (!endpoint) throw new Error('微信连接暂不可用，请稍后再试');
+    const key = 'weixin-retry:' + space + '/' + block;
+    let saved = this.db.get<{ revision: number; operation: string; confirm: boolean } | null>(key, null);
+    if (!saved || saved.revision !== revision) {
+      saved = { revision, operation: randomUUID().replaceAll('-', ''), confirm };
+      this.db.set(key, saved); // Persist before the request can reach the host.
+    }
+    if (saved.confirm !== confirm) throw new Error('回复状态待核对，请稍后再试');
+    return this.transport.request(endpoint, 'POST', '/v1/weixin/resend',
+      { block, operation: saved.operation, revision: saved.revision, confirm: saved.confirm });
+  }
+
   restore(allowed: (endpoint: Endpoint) => boolean = () => true): void {
     for (const endpoint of this.secrets.load<Endpoint[]>('endpoints') || []) if (allowed(endpoint)) this.add(endpoint);
   }
@@ -56,6 +129,7 @@ export class DesktopClient {
     this.secrets.save('endpoints', [...saved.values()]);
     if (!this.db.get('selectedSpace', '')) this.db.set('selectedSpace', endpoint.spaceId);
     this.db.set('sync-mode:' + endpoint.runtimeId, endpoint.capabilities.includes('all_conversations') ? 'all' : 'per');
+    this.db.channelSyncCapability(endpoint.runtimeId, endpoint.capabilities.some(value => ['weixin_bind_v1', 'weixin_v1'].includes(value)));
     this.startSync(endpoint, 'default');
     const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
     if (lifetime) {
@@ -311,7 +385,7 @@ export class DesktopClient {
       try {
         const requestQuery = requested.length ? '&requests=' + encodeURIComponent(requested.map(item => item.messageId).join(',')) : '';
         const page = asSyncPage(await this.transport.request(endpoint, 'GET', syncPath(cursor,
-          more || accepted.length > 32 ? 0 : 20, conversation) + (all ? '&all_conversations=1' : '') + requestQuery, undefined, poll.signal));
+          more || accepted.length > 32 ? 0 : 20, conversation, endpoint.capabilities.some(value => ['weixin_bind_v1', 'weixin_v1'].includes(value))) + (all ? '&all_conversations=1' : '') + requestQuery, undefined, poll.signal));
         if (!this.current(endpoint, signal)) return;
         if (page.runtime_id !== endpoint.runtimeId || page.subject_id !== endpoint.spaceId)
           throw new RuntimeError('服务身份与已确认连接不符，请重新检查连接；原记录保留', 409);
@@ -319,6 +393,7 @@ export class DesktopClient {
           && this.db.get<number>('presentation-policy:' + endpoint.runtimeId, 0) !== 1 && cursor.cursor !== '0') {
           // Reproject existing records once; retain history/outbox and source identity.
           this.db.db.prepare('DELETE FROM cursors WHERE runtime=?').run(endpoint.runtimeId);
+          this.db.invalidateRecords();
           continue;
         }
         const applied = this.db.apply(endpoint.spaceId, endpoint.runtimeId, page, cursorConversation, cursor);
@@ -353,16 +428,25 @@ export class DesktopClient {
           }
         }
         if (Array.isArray(page.conversations)) this.mergeConversations(endpoint.spaceId, page.conversations as Conversation[]);
+        let usageChanged = false;
         if (page.usage && typeof page.usage === 'object') {
           const before = this.db.get<Json>('usage:' + endpoint.runtimeId, {});
-          this.db.set('usage:' + endpoint.runtimeId, page.usage);
+          const { at: _incomingAt, ...incomingUsage } = page.usage as Json;
+          const { at: _previousAt, ...previousUsage } = before;
+          usageChanged = JSON.stringify(incomingUsage) !== JSON.stringify(previousUsage);
+          if (usageChanged) this.db.set('usage:' + endpoint.runtimeId, page.usage);
           if (JSON.stringify((page.usage as Json).agents) !== JSON.stringify(before.agents)) void this.loadAgents(endpoint, signal);
         }
         more = page.more || Array.isArray(page.requests_more) && page.requests_more.length > 0;
         failures = 0;
+        const previousLink = this.links.get(key);
         this.links.set(key, { connected: true, catchingUp: more, error: '' });
         this.reconcile(endpoint);
-        this.changed();
+        // Empty heartbeat replies do not change the view; rendering them again
+        // repeatedly scans the entire history on the Electron main thread.
+        if (!previousLink?.connected || previousLink.catchingUp !== more || previousLink.error ||
+            page.reset || page.messages.length || page.tasks.length ||
+            page.approvals.length || (Array.isArray(page.removed) && page.removed.length) || requested.length || usageChanged) this.changed();
         const lifetime = this.loops.get(endpoint.runtimeId + '/default')?.signal;
         if (lifetime) void this.flush(endpoint, lifetime);
         // Back off only if the endpoint returned no progress. Changed pages can
@@ -383,9 +467,10 @@ export class DesktopClient {
     }
   }
   private reconcile(endpoint: Endpoint): void {
+    const pending = this.db.pending(endpoint.spaceId).filter(entry => entry.runtimeId === endpoint.runtimeId && entry.messageId);
+    if (!pending.length) return;
     const messages = this.db.records<Message>(endpoint.spaceId, 'message');
-    for (const entry of this.db.pending(endpoint.spaceId)) {
-      if (entry.runtimeId !== endpoint.runtimeId || !entry.messageId) continue;
+    for (const entry of pending) {
       const reply = messages.find(message => message._runtimeId === endpoint.runtimeId
         && message.conversation === entry.conversation
         && message.id === entry.messageId + ':reply');
@@ -395,6 +480,7 @@ export class DesktopClient {
   async send(space: string, text: string, card?: string, runtime?: string, mainReply = false): Promise<void> {
     const conversation = card ? String(this.db.records<Json>(space, 'task')
       .find(item => item.id === card && item._runtimeId === runtime)?.conversation || 'default') : this.selectedConversation(space);
+    if (conversation === 'weixin') throw new Error('请在微信里继续对话');
     const pending = this.db.pending(space).find(item => item.state !== 'blocked' && item.conversation === conversation);
     const endpoint = card ? this.endpointForRecord(space, 'task', card, runtime)
       : pending ? this.endpoints.get(pending.runtimeId)
@@ -676,32 +762,43 @@ export class DesktopClient {
       return { connected: false, catchingUp: false, error: state };
     return link;
   }
+  private readonly snapshotMessages = new Map<string, { version: number; dataVersion: number; records: Message[] }>();
   snapshot(): ClientView {
     const spaces = new Map<string, SpaceView>();
+    const messagesBySpace = new Map<string, Message[]>();
+    const dataVersion = this.db.dataVersion();
     for (const endpoint of this.endpoints.values()) {
       const link = this.link(endpoint);
       const current = spaces.get(endpoint.spaceId);
-      const records = this.db.records<Message>(endpoint.spaceId, 'message');
+      const selected = this.selectedConversation(endpoint.spaceId);
+      let records = messagesBySpace.get(endpoint.spaceId);
+      if (!records) {
+        const cached = this.snapshotMessages.get(endpoint.spaceId);
+        records = cached?.version === this.db.recordVersion && cached.dataVersion === dataVersion
+          ? cached.records : this.db.records<Message>(endpoint.spaceId, 'message', true);
+        this.snapshotMessages.set(endpoint.spaceId, { version: this.db.recordVersion, dataVersion, records });
+        messagesBySpace.set(endpoint.spaceId, records);
+      }
       const groups = new Map<string, Message[]>();
-      for (const row of records) { const group = groups.get(row.conversation) || []; group.push(row); groups.set(row.conversation, group); }
+      if (!current) for (const row of records) { const group = groups.get(row.conversation) || []; group.push(row); groups.set(row.conversation, group); }
       spaces.set(endpoint.spaceId, { id: endpoint.spaceId, name: this.db.get('name:' + endpoint.spaceId, '小鱼空间'),
         runtimeName: endpoint.name, connected: Boolean(current?.connected || link?.connected),
         catchingUp: Boolean(current?.catchingUp || link?.catchingUp),
         error: current?.connected ? '' : link?.error || '',
-        conversations: this.conversations(endpoint.spaceId).map(conversation => {
+        conversations: current?.conversations || this.conversations(endpoint.spaceId).map(conversation => {
           const rows = groups.get(conversation.id) || [];
           const read = new Set(this.db.get<string[]>('read:' + endpoint.spaceId + '/' + conversation.id, []));
           return { ...conversation, updatedAt: rows.reduce((latest, row) => Math.max(latest, Number(row.created_at) * 1000), Math.max(conversation.updatedAt || 0, conversation.createdAt)),
             unread: rows.slice(-5000).some(item => item.author?.kind !== 'owner' && ['final', 'done'].includes(item.status) && !read.has(String(item._canonical || item.id))) };
-        }), selectedConversation: this.selectedConversation(endpoint.spaceId),
+        }), selectedConversation: selected,
         helpers: [...(current?.helpers || []), ...helperViews(endpoint.runtimeId, endpoint.name, this.db.get<Json[]>('agents:' + endpoint.runtimeId, []), this.db.get<Json>('usage:' + endpoint.runtimeId, {}), Boolean(link?.connected))],
-        connections: [...(current?.connections || []), { runtime: endpoint.runtimeId, name: endpoint.name, local: !endpoint.url.startsWith('peer://'), connected: Boolean(link?.connected), capabilities: endpoint.capabilities }],
-        messages: orderMessages(records
-          .filter(item => item.conversation === this.selectedConversation(endpoint.spaceId)
+        connections: [...(current?.connections || []), { runtime: endpoint.runtimeId, name: endpoint.name, local: !endpoint.url.startsWith('peer://'), channelLocal: localWeixinEndpoint(endpoint.url), connected: Boolean(link?.connected), capabilities: endpoint.capabilities }],
+        messages: current?.messages || orderMessages(records
+          .filter(item => item.conversation === selected || item.conversation === 'weixin'
             || ['desktop', 'external'].includes(item.source?.type || ''))),
-        tasks: this.db.records<Json>(endpoint.spaceId, 'task'),
-        approvals: this.db.records<Json>(endpoint.spaceId, 'approval').filter(item => item.status === 'pending'),
-        pending: this.db.pending(endpoint.spaceId).filter(item => item.conversation === this.selectedConversation(endpoint.spaceId)),
+        tasks: current?.tasks || this.db.records<Json>(endpoint.spaceId, 'task'),
+        approvals: current?.approvals || this.db.records<Json>(endpoint.spaceId, 'approval').filter(item => item.status === 'pending'),
+        pending: current?.pending || this.db.pending(endpoint.spaceId).filter(item => item.conversation === selected),
       });
     }
     for (const space of spaces.values()) space.helpers = unifiedHelpers(space.helpers || []);

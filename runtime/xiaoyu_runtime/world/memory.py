@@ -26,11 +26,13 @@ MAX_NOTES = 60
 MAX_NOTE_CHARS = 200
 MAX_QUOTE_CHARS = 120
 MAX_TOTAL_CHARS = 8000
+UNKNOWN_CORRECTION = 253402300799.0
 KINDS = ("偏好", "规矩", "事实", "承诺")
 
 HEADER = "# 小鱼记得的关于主人的事\n\n一行一条：[日期][类型] 内容 —— 原话：「…」。可以直接改这个文件。\n\n"
 # - [2026-10-20][偏好] 内容 —— 原话：「…」     （类型和原话可以没有：早先记的就只有日期）
 _LINE = re.compile(r"^- (?:\[(\d{4}-\d\d-\d\d)\])?(?:\[([^\]]{1,4})\])? ?(.+?)(?: —— 原话：「(.*)」)?$")
+_CORRECTION = re.compile(r'^<!-- memory-correction-after: ([0-9]+(?:\.[0-9]+)?) -->$', re.M)
 
 # 像凭据的东西：常见密钥前缀、一长串字母数字混排、或者“密码/口令/验证码……”后面跟着值。
 _SECRET = re.compile(
@@ -69,13 +71,42 @@ class OwnerMemory:
         with self._lock:
             return [note.shown() for note in self._read()]
 
+    def snapshot(self):
+        """Return displayed notes and their revision under the same lock."""
+        with self._lock:
+            notes = self._read()
+            return [note.shown() for note in notes], self._revision(notes, self._correction_after())
+
+    def snapshot_with_cutoff(self):
+        with self._lock:
+            notes = self._read()
+            cutoff = self._correction_after()
+            return [note.shown() for note in notes], self._revision(notes, cutoff), cutoff
+
     @staticmethod
-    def _revision(notes):
-        return hashlib.sha256(json.dumps([note.shown() for note in notes], ensure_ascii=False).encode()).hexdigest()
+    def _revision(notes, correction_after=0.0):
+        value = [note.shown() for note in notes]
+        if correction_after:
+            value.append({'correction_after': correction_after})
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
 
     def revision(self):
         with self._lock:
-            return self._revision(self._read())
+            return self._revision(self._read(), self._correction_after())
+
+    def correction_after(self):
+        """A durable boundary against deriving old facts after explicit correction."""
+        with self._lock:
+            return self._correction_after()
+
+    def _correction_after(self):
+        try:
+            match = _CORRECTION.search(self._path.read_text(encoding='utf-8'))
+            return float(match.group(1)) if match else 0.0
+        except FileNotFoundError:
+            return 0.0
+        except (OSError, ValueError, UnicodeError):
+            return UNKNOWN_CORRECTION
 
     def texts(self) -> List[str]:
         """现行的记忆，只有内容（后台整理去重用）。"""
@@ -83,7 +114,7 @@ class OwnerMemory:
             return [note.text for note in self._read()]
 
     def remember(self, note: str, today: Optional[str] = None, kind: str = "",
-                 quote: str = "") -> str:
+                 quote: str = "", *, expected=None, on_revision=None) -> str:
         """记一条。和已有的一样就不重复记。返回给她看的结果。"""
         cleaned, problem = _checked(note, quote)
         if problem:
@@ -93,6 +124,8 @@ class OwnerMemory:
         kind = kind if kind in KINDS else ""
         with self._lock:
             notes = self._read()
+            if expected is not None and expected != self._revision(notes, self._correction_after()):
+                raise EffectUncertain('记忆已改变，不能根据旧上下文继续保存。')
             if any(item.text == text for item in notes):
                 return "这条之前就记着了"
             notes.append(Note(text, day, kind, said))
@@ -101,9 +134,11 @@ class OwnerMemory:
             self._log("记", text, said, day)
             for gone in dropped:
                 self._log("满了丢掉", gone.text, "", day)
+            if on_revision is not None:
+                on_revision(self._revision(notes, self._correction_after()))
         return "记下了：%s" % text
 
-    def replace(self, number: int, note: str, today: Optional[str] = None, quote: str = "", *, expected=None) -> str:
+    def replace(self, number: int, note: str, today: Optional[str] = None, quote: str = "", *, expected=None, on_revision=None) -> str:
         """第 number 条（从 1 数）改成新的说法：旧的从注入层拿掉，日志里记下“取代”。"""
         cleaned, problem = _checked(note, quote)
         if problem:
@@ -112,28 +147,32 @@ class OwnerMemory:
         day = today or time.strftime("%Y-%m-%d")
         with self._lock:
             notes = self._read()
-            if expected is not None and expected != self._revision(notes):
+            if expected is not None and expected != self._revision(notes, self._correction_after()):
                 raise EffectUncertain("记忆正文已改变，不能沿用旧编号修改。")
             if not 1 <= number <= len(notes):
                 return "没有第 %d 条" % number
             old = notes[number - 1]
             notes[number - 1] = Note(text, day, old.kind, said)
-            self._write(notes)
+            self._write(notes, correction_at=time.time())
             self._log("改", "%s（取代：%s）" % (text, old.text), said, day)
+            if on_revision is not None:
+                on_revision(self._revision(notes, self._correction_after()))
         return "改好了：%s（原来是：%s）" % (text, old.text)
 
-    def forget(self, number: int, today: Optional[str] = None, *, expected=None) -> str:
+    def forget(self, number: int, today: Optional[str] = None, *, expected=None, on_revision=None) -> str:
         """删掉第 number 条（从 1 数，跟提示里的编号一致）。日志里留着记录。"""
         day = today or time.strftime("%Y-%m-%d")
         with self._lock:
             notes = self._read()
-            if expected is not None and expected != self._revision(notes):
+            if expected is not None and expected != self._revision(notes, self._correction_after()):
                 raise EffectUncertain("记忆正文已改变，不能沿用旧编号删除。")
             if not 1 <= number <= len(notes):
                 return "没有第 %d 条" % number
             gone = notes.pop(number - 1)
-            self._write(notes)
+            self._write(notes, correction_at=time.time())
             self._log("删", gone.text, "", day)
+            if on_revision is not None:
+                on_revision(self._revision(notes, self._correction_after()))
         return "删掉了：%s" % gone.text
 
     def log_files(self) -> List[Path]:
@@ -161,9 +200,13 @@ class OwnerMemory:
                                   (found.group(4) or "").strip()))
         return notes
 
-    def _write(self, notes: List[Note]) -> None:
+    def _write(self, notes: List[Note], correction_at=None) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic(self._path, HEADER + "".join(note.line() + "\n" for note in notes))
+        cutoff = self._correction_after() if correction_at is None else correction_at
+        if cutoff >= UNKNOWN_CORRECTION:
+            raise EffectUncertain('记忆的纠正边界不可读，未改写记忆。')
+        marker = '<!-- memory-correction-after: %.6f -->\n\n' % cutoff if cutoff > 0 else ''
+        _atomic(self._path, HEADER + marker + "".join(note.line() + "\n" for note in notes))
 
     def _log(self, what: str, text: str, quote: str, day: str) -> None:
         self._log_dir.mkdir(parents=True, exist_ok=True)
@@ -217,7 +260,7 @@ def prompt_section(notes: List[str]) -> List[str]:
     if not notes:
         return []
     lines = ["## 你记得的关于主人的事",
-             "主人说过、要你一直照做的；有冲突以新的为准。说法变了用 replace 改，不要了用 forget 删，"
+             "主人说过、要你一直照做的；有冲突以新的为准。主人更新过的说话偏好优先于人设里的旧表达习惯。说法变了用 replace 改，不要了用 forget 删，"
              "新学到值得长期记的用 remember。记忆是以前的情况，不是现在的事实：会变的事（进度、价格、"
              "状态）说之前先核实；记得主人同意过某件事，不等于这次可以不问就做。"]
     lines += ["%d. %s" % (index + 1, item) for index, item in enumerate(notes)]

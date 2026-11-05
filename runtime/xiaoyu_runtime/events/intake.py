@@ -22,8 +22,8 @@ SOURCES = ("owner", "helper", "desktop", "mesh", "xiaoyou", "timer", "system")
 WRITES = frozenset({
     "task_open", "task", "execution_binding", "progress", "progress_checkpoint", "activity", "attach",
     "exchange", "reply", "observed_open", "observed", "replica_task", "replica_message",
-    "request_changed", "sequence",
-    "conversation_delete", "conversation_create", "conversation_rename", "conversation_replica", "conversation_touch",
+    "request_changed", "sequence", "channel_delivery",
+    "conversation_delete", "conversation_create", "conversation_create_weixin", "conversation_observe_weixin", "conversation_claim_weixin", "conversation_rename", "conversation_replica", "conversation_touch",
     "directory_edit", "directory_replica", "directory_sources",
     "directory_generated", "directory_generated_replica",
 })
@@ -52,6 +52,12 @@ class Writer:
         def call(*args: Any, **kwargs: Any) -> Any:
             provenance = {key: value for key, value in
                           {"source": self.source, "actor": self.actor, "cause": self.cause}.items() if value}
+            if write.__name__ == 'conversation_observe_weixin' and self.source != 'mesh':
+                raise ValueError('Channel observation is restricted to mesh replicas')
+            if write.__name__ == 'conversation_claim_weixin' and self.source != 'system':
+                raise ValueError('Channel ownership claims require an internal grant')
+            if write.__name__ == 'channel_delivery' and self.source != 'system':
+                raise ValueError('Channel delivery projection is internal')
             if self.source == "desktop" and write.__name__ not in {
                     "observed_open", "observed", "sequence", "directory_sources", "directory_generated"}:
                 raise ValueError("Desktop observation cannot modify owner tasks or messages")

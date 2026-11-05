@@ -147,9 +147,15 @@ class RuntimeConversationSyncTests(TempDirCase):
             peer = node.mesh._peers.get(mac.id)
             if peer is not None:
                 peer.seen = peer.heard = 0
-        sent = win.service.submit("offline question", client_id="offline-chat")
-        self.assertTrue(until(lambda: sent["id"] in win.service._parked, 10))
-        self.assertEqual([], win.agent.texts)
+        # A fake exchange that was already in flight can report a fresh
+        # heartbeat after the network switch. Hold the simulated offline
+        # observation for this phase, then restore the real online check.
+        online = win.mesh._online
+        with mock.patch.object(win.mesh, '_online', side_effect=lambda peer, now:
+                               False if peer.runtime_id == mac.id else online(peer, now)):
+            sent = win.service.submit("offline question", client_id="offline-chat")
+            self.assertTrue(until(lambda: sent["id"] in win.service._parked, 10))
+            self.assertEqual([], win.agent.texts)
         network.down.discard(mac.url)
         self.assertTrue(until(lambda: win.get(sent["id"]).get("status") == "done", 30))
         def one_each():

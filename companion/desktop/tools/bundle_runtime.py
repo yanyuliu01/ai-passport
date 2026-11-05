@@ -17,12 +17,14 @@ ROOT = DESKTOP.parents[1]
 def main():
     import PyInstaller  # Fail before creating output if the build dependency is absent.
     import PIL
+    import cryptography
 
     with tempfile.TemporaryDirectory(prefix="xiaoyu-runtime-build-") as folder:
         subprocess.run([
             sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
             "--name", "xiaoyu-runtime", "--paths", str(ROOT / "runtime"),
             "--collect-submodules", "xiaoyu_runtime", "--collect-submodules", "PIL",
+            "--collect-submodules", "cryptography",
             "--distpath", str(DESKTOP / "runtime-dist"), "--workpath", folder + "/work",
             "--specpath", folder, str(DESKTOP / "tools/runtime_entry.py"),
         ], check=True)
@@ -33,7 +35,8 @@ def main():
     shutil.copyfile(ROOT / "runtime/persona.txt", DESKTOP / "runtime-dist/persona.txt")
     manifest = {"platform": sys.platform, "architecture": platform.machine(),
                 "runtime_version": __version__, "python": platform.python_version(),
-                "pyinstaller": PyInstaller.__version__, "pillow": PIL.__version__}
+                "pyinstaller": PyInstaller.__version__, "pillow": PIL.__version__,
+                "cryptography": cryptography.__version__}
     digest = hashlib.sha256()
     package = ROOT / "runtime/xiaoyu_runtime"
     for path in sorted(package.rglob("*.py")):

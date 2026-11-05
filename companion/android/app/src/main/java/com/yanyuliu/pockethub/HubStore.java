@@ -170,49 +170,135 @@ public final class HubStore {
     /** 这一轮的卡已经到了：之后晚到的片段不再画，免得和卡上的回复重复。 */
     private ChatHistory history = new ChatHistory();
     private SharedPreferences historyPrefs;
+    private SharedPreferences intentPrefs;
     private boolean historyLoaded;
     private String historyRuntime = "", messageKey = "";
     private final Runnable historySave = () -> { synchronized (this) { saveHistory(); } };
     /** One writer keeps stores in order; building a multi-megabyte JSON never runs on the main thread. */
     private static final java.util.concurrent.ExecutorService HISTORY_WRITER =
             java.util.concurrent.Executors.newSingleThreadExecutor();
+    // A large history write must never hold a new message behind its JSON serialization.
+    private static final java.util.concurrent.ExecutorService INTENT_WRITER =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final Object INTENT_LOCK = new Object();
+    private static final HistoryWriteOrder HISTORY_ORDER = new HistoryWriteOrder();
+    private static final Set<String> BLOCKED_HISTORY = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Set<String> RECOVERED_HISTORY = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Early messages remain visible to a source reselected before its merge completes. */
+    private final Map<String,ChatHistory> pendingBootstrap = new HashMap<>();
     private boolean saveQueued;
 
-    public synchronized void initializeHistory(Context context, String runtime, List<ChatTurn> legacy) {
-        if (historyPrefs != null && historyRuntime.equals(runtime == null ? "" : runtime)) return;
-        if (historyPrefs == null) historyLoaded = false;
-        historyPrefs = context.getApplicationContext().getSharedPreferences("conversation_history", Context.MODE_PRIVATE);
-        loadHistory(runtime);
-        for (Card card : cards.values()) history.ingest(card);
-        if (history.main().isEmpty()) {
-            for (ChatTurn turn : legacy) {
-                history.importTurn(turn);
-            }
-            saveHistory();
+    static final class PreparedHistory {
+        final SharedPreferences prefs, intents; final String runtime; final ChatHistory value; final boolean imported,blocked,recovered,journal,invalidIntent;
+        PreparedHistory(SharedPreferences prefs,SharedPreferences intents,String runtime,ChatHistory value,boolean imported,boolean blocked,boolean recovered,boolean journal,boolean invalidIntent){
+            this.prefs=prefs;this.intents=intents;this.runtime=runtime;this.value=value;this.imported=imported;this.blocked=blocked;this.recovered=recovered;this.journal=journal;this.invalidIntent=invalidIntent;
         }
     }
+
+    /** Disk access and potentially large JSON parsing happen before taking the account fence. */
+    static PreparedHistory prepareHistory(Context context, String runtime, List<ChatTurn> legacy) {
+        SharedPreferences prefs=context.getApplicationContext().getSharedPreferences("conversation_history",Context.MODE_PRIVATE);
+        SharedPreferences intents=context.getApplicationContext().getSharedPreferences("conversation_intents",Context.MODE_PRIVATE);
+        String key=ArtifactDownload.key(runtime);
+        PendingHistoryStore.Recovery recovery=PendingHistoryStore.recover(prefs.getString(key,null),prefs.getString(PendingHistoryStore.key(key),null));
+        ChatHistory value=recovery.history;
+        boolean imported=value.main().isEmpty() && !legacy.isEmpty();
+        if(imported) for(ChatTurn turn:legacy)value.importTurn(turn);
+        boolean journal,invalidIntent;
+        synchronized(INTENT_LOCK){
+            Map<String,String> records=PendingIntents.records(intentStore(intents),key);
+            invalidIntent=PendingIntents.recover(value,records)<0 || PendingIntents.hasInvalid(records);journal=!records.isEmpty();
+        }
+        return new PreparedHistory(prefs,intents,runtime,value,imported,recovery.blocked,recovery.pending,journal,invalidIntent);
+    }
+
+    /** Caller holds the account fence and has rechecked the selected target. */
+    synchronized void installHistory(PreparedHistory prepared, String target) {
+        if(historyPrefs!=null) return;
+        String targetKey=ArtifactDownload.key(prepared.runtime);
+        if(prepared.blocked)BLOCKED_HISTORY.add(targetKey);else BLOCKED_HISTORY.remove(targetKey);
+        if(prepared.recovered && !prepared.blocked)RECOVERED_HISTORY.add(targetKey);
+        HistoryBootstrap.Plan plan=HistoryBootstrap.plan(historyLoaded,historyRuntime,history,prepared.runtime,prepared.value);
+        if(plan.previous!=null) {
+            // A send or feed page may have arrived before account discovery
+            // finished. Preserve that source before switching to the prepared one.
+            ChatHistory previous=plan.previous;String source=plan.previousKey,previousKey=ArtifactDownload.key(source);
+            long version=HISTORY_ORDER.next();SharedPreferences prefs=prepared.prefs;
+            pendingBootstrap.put(source,previous);
+            HISTORY_WRITER.execute(()->{
+                boolean saved=false;
+                try { saved=HISTORY_ORDER.write(previousKey,version,"",false,(ignored,durable)->{
+                    String pendingKey=PendingHistoryStore.key(previousKey);
+                    PendingHistoryStore.Recovery prior=PendingHistoryStore.recover(null,prefs.getString(pendingKey,null));
+                    prior.history.overlay(previous);
+                    if(!PendingHistoryStore.stage(previousKey,prior.history.json(),
+                            (key,value,remove)->commitHistory(prefs,key,value,remove)))return false;
+                    // A live source already marked corrupt must be reloaded before
+                    // writes return to its original key, even if it was repaired.
+                    if(BLOCKED_HISTORY.contains(previousKey))return true;
+                    PendingHistoryStore.Recovery merged=PendingHistoryStore.recover(prefs.getString(previousKey,null),prior.history.json());
+                    if(merged.blocked){BLOCKED_HISTORY.add(previousKey);return true;}
+                    boolean committed=PendingHistoryStore.finish(previousKey,merged.history.json(),
+                            (key,value,remove)->commitHistory(prefs,key,value,remove));
+                    if(committed){BLOCKED_HISTORY.remove(previousKey);RECOVERED_HISTORY.remove(previousKey);}
+                    return committed;
+                }); } catch(RuntimeException invalid) { /* Preserve original bytes and pending in-memory changes. */ }
+                if(saved)synchronized(this){if(pendingBootstrap.get(source)==previous)pendingBootstrap.remove(source);}
+                if(!saved)log("历史恢复记录保存失败，待合并消息暂留内存，请勿退出应用");
+                else if(BLOCKED_HISTORY.contains(previousKey))log("原历史暂不可读取，原记录保留；新消息已另存，等待恢复");
+            });
+        }
+        historyPrefs=prepared.prefs;intentPrefs=prepared.intents;historyRuntime=prepared.runtime;history=plan.current;historyLoaded=true;
+        if(target.equals(selectedRuntime)) for(Card card:cards.values())history.ingest(card);
+        if(prepared.blocked)appendLog("原历史暂不可读取，原记录保留；新消息将另存");
+        if(prepared.invalidIntent)appendLog("部分待发送记录暂不可读取，原记录保留");
+        if(prepared.imported || prepared.journal || plan.merged || (prepared.recovered && !prepared.blocked))saveHistory();
+        notifyChanged();
+    }
+
+    synchronized boolean historyInitialized(){return historyPrefs!=null;}
 
     private void loadHistory(String runtime) {
         main.removeCallbacks(historySave);
         if (historyLoaded) saveHistoryNow();  // Switching Runtime: the old key must be written first.
-        historyRuntime = runtime == null ? "" : runtime;
-        history = historyPrefs == null ? new ChatHistory() : ChatHistory.restore(
-                historyPrefs.getString(ArtifactDownload.key(historyRuntime), "{}"));
+        String next=runtime==null?"":runtime;
+        String key=ArtifactDownload.key(next);
+        String stored=historyPrefs==null?null:historyPrefs.getString(key,null);
+        String pending=historyPrefs==null?null:historyPrefs.getString(PendingHistoryStore.key(key),null);
+        ChatHistory early=pendingBootstrap.get(next);
+        PendingHistoryStore.Recovery recovery=PendingHistoryStore.recover(stored,pending);
+        ChatHistory loaded=recovery.history;
+        boolean journal=false,invalidIntent=false;
+        if(intentPrefs!=null)synchronized(INTENT_LOCK){
+            Map<String,String> records=PendingIntents.records(intentStore(intentPrefs),key);
+            invalidIntent=PendingIntents.recover(loaded,records)<0 || PendingIntents.hasInvalid(records);journal=!records.isEmpty();
+        }
+        if(early!=null)loaded.overlay(early);
+        if(recovery.blocked)BLOCKED_HISTORY.add(key);else BLOCKED_HISTORY.remove(key);
+        if(recovery.pending && !recovery.blocked)RECOVERED_HISTORY.add(key);
+        historyRuntime=next;history=loaded;
         historyLoaded = true;
+        if(recovery.blocked)appendLog("原历史暂不可读取，原记录保留；新消息将另存");
+        if(invalidIntent)appendLog("部分待发送记录暂不可读取，原记录保留");
+        if(journal || (recovery.pending && !recovery.blocked))saveHistory();
     }
 
     /**
      * Before addresses of one Runtime shared a history, each address kept its own. Fold the one
-     * kept under this address into the shared history once, then drop it.
+     * kept under this address into the shared history. Keep the original alias
+     * for recovery, including when the target save fails or the alias is damaged.
      */
     private void adoptHistory(String url) {
         if (historyPrefs == null || url == null || url.equals(historyRuntime)) return;
         String alias = ArtifactDownload.key(url);
         String stored = historyPrefs.getString(alias, null);
         if (stored == null) return;
-        history.absorb(ChatHistory.restore(stored));
-        saveHistoryNow();  // The alias is dropped next: the merged history must be stored first.
-        historyPrefs.edit().remove(alias).apply();
+        try {
+            if(!AliasHistory.adopt(stored,history,()->saveHistoryNow(true)))
+                appendLog("旧历史合并未能保存，原副本保留");
+        } catch(IllegalArgumentException invalid) {
+            appendLog("旧历史副本暂不可读取，原记录保留");
+        }
     }
 
     /**
@@ -227,30 +313,140 @@ public final class HubStore {
     }
 
     private void writeHistory() {
-        ChatHistory snapshot; String key; SharedPreferences prefs;
+        ChatHistory snapshot; String key; SharedPreferences prefs,intents; long version; boolean blocked,recovered;
         synchronized (this) {
             saveQueued = false;
             if (historyPrefs == null) return;
-            snapshot = history.copy(); key = ArtifactDownload.key(historyRuntime); prefs = historyPrefs;
+            snapshot = history.copy(); key = ArtifactDownload.key(historyRuntime); prefs = historyPrefs; intents=intentPrefs; version=HISTORY_ORDER.next();
+            blocked=BLOCKED_HISTORY.contains(key);recovered=RECOVERED_HISTORY.contains(key);
         }
-        store(prefs, key, snapshot);
+        Map<String,String> journal=new LinkedHashMap<>();
+        if(intents!=null)synchronized(INTENT_LOCK){journal=PendingIntents.records(intentStore(intents),key);}
+        boolean saved=store(prefs, key, snapshot, version, !journal.isEmpty(),blocked,recovered);
+        if(saved && intents!=null && !journal.isEmpty())synchronized(INTENT_LOCK){
+            final Map<String,String> captured=journal;
+            HISTORY_ORDER.ifCurrent(key,version,()->PendingIntents.clearCovered(intentStore(intents),key,snapshot,captured));
+        }
+        if(!saved)log("本机对话保存失败，待保存消息暂留内存，请勿退出应用");
     }
 
     /** Synchronous store for the rare Runtime switch, where ordering against other edits matters. */
-    private void saveHistoryNow() {
-        if (historyPrefs != null) store(historyPrefs, ArtifactDownload.key(historyRuntime), history);
+    private boolean saveHistoryNow() { return saveHistoryNow(false); }
+    private boolean saveHistoryNow(boolean durable) {
+        if (historyPrefs != null) {
+            String key=ArtifactDownload.key(historyRuntime);
+            boolean saved=store(historyPrefs,key,history,HISTORY_ORDER.next(),durable,BLOCKED_HISTORY.contains(key),RECOVERED_HISTORY.contains(key));
+            if(!saved)appendLog("本机对话保存失败，待保存消息暂留内存，请勿退出应用");
+            return saved;
+        }
+        return false;
     }
 
-    private static void store(SharedPreferences prefs, String key, ChatHistory value) {
+    private static boolean store(SharedPreferences prefs, String key, ChatHistory value, long version, boolean durable,
+                                 boolean blockedAtCapture,boolean recoveredAtCapture) {
         long began = android.os.SystemClock.uptimeMillis();
         String json = value.json();
         long built = android.os.SystemClock.uptimeMillis();
-        prefs.edit().putString(key, json).apply();
+        boolean saved=HISTORY_ORDER.write(key,version,json,durable,(document,commit)->{
+            PendingHistoryStore.Mode mode=PendingHistoryStore.mode(blockedAtCapture,BLOCKED_HISTORY.contains(key),
+                    recoveredAtCapture,RECOVERED_HISTORY.contains(key));
+            if(mode==PendingHistoryStore.Mode.STALE)return false;
+            boolean blocked=mode==PendingHistoryStore.Mode.PENDING,recovered=mode==PendingHistoryStore.Mode.FINALIZE;
+            String destination=blocked?PendingHistoryStore.key(key):key;
+            if(document==null){document=prefs.getString(destination,null);if(document==null)return false;}
+            if(blocked)return PendingHistoryStore.stage(key,document,(name,body,remove)->commitHistory(prefs,name,body,remove));
+            if(recovered){boolean ok=PendingHistoryStore.finish(key,document,(name,body,remove)->commitHistory(prefs,name,body,remove));if(ok)RECOVERED_HISTORY.remove(key);return ok;}
+            SharedPreferences.Editor editor=prefs.edit().putString(destination,document);
+            if(commit)return editor.commit();
+            editor.apply();return true;
+        });
         long stored = android.os.SystemClock.uptimeMillis() - built;
         // Diagnostics for main-thread stalls: sizes and times only, never content.
         if (built - began + stored >= 16)
             TurnTiming.sink.accept("history_save t=" + began + " build_ms=" + (built - began) + " apply_ms=" + stored
                     + " chars=" + json.length() + " main=" + (Looper.myLooper() == Looper.getMainLooper()));
+        return saved;
+    }
+
+    private static boolean commitHistory(SharedPreferences prefs,String key,String value,String remove){
+        SharedPreferences.Editor editor=prefs.edit().putString(key,value);
+        if(remove!=null)editor.remove(remove);
+        return editor.commit();
+    }
+
+    private static PendingIntents.Store intentStore(SharedPreferences prefs) {
+        return new PendingIntents.Store() {
+            public Map<String,?> all() { return prefs.getAll(); }
+            public boolean put(String key,String value) { return prefs.edit().putString(key,value).commit(); }
+            public boolean remove(String key) { return prefs.edit().remove(key).commit(); }
+        };
+    }
+
+    /** Persist the exact local intent before any transport can submit it. */
+    void persistIntent(String runtime,String client,String conversation,java.util.function.BooleanSupplier authorized,
+                       java.util.function.Consumer<Boolean> completed){
+        INTENT_WRITER.execute(()->{
+            boolean saved=false;
+            try {
+                ChatHistory snapshot;SharedPreferences prefs;String key;
+                synchronized(this){
+                    if(historyPrefs==null || intentPrefs==null || !historyLoaded || !historyRuntime.equals(runtime)
+                            || !authorized.getAsBoolean() || !history.hasIntent(client,conversation)){
+                        completed.accept(false);return;
+                    }
+                    snapshot=history.intentSnapshot(client,conversation);prefs=intentPrefs;key=ArtifactDownload.key(historyRuntime);
+                }
+                synchronized(INTENT_LOCK){saved=PendingIntents.save(intentStore(prefs),key,client,snapshot);}
+            } catch(RuntimeException ignored){ /* No remote action may occur on failed persistence. */ }
+            completed.accept(saved);
+        });
+    }
+
+    synchronized boolean hasIntent(String runtime,String client,String conversation){
+        return historyLoaded && historyRuntime.equals(runtime) && history.hasIntent(client,conversation);
+    }
+
+    /** Keep the encrypted receipt until this exact history is durably reconciled. */
+    void reconcileAccepted(String runtime, String client, String remote, String conversation, boolean rejected,
+                           java.util.function.BooleanSupplier authorized,
+                           java.util.function.Consumer<Boolean> completed) {
+        HISTORY_WRITER.execute(() -> {
+            boolean saved = false, changed = false;
+            try {
+                ChatHistory snapshot; SharedPreferences prefs; String key; long version; boolean blocked,recovered;
+                synchronized (this) {
+                    if (historyPrefs == null || !historyLoaded || !historyRuntime.equals(runtime)
+                            || !authorized.getAsBoolean()) { completed.accept(false); return; }
+                    if (!(rejected ? history.reconcileRejected(client, conversation) : history.reconcileAccepted(client, remote, conversation))) { completed.accept(false); return; }
+                    snapshot = history.copy(); prefs = historyPrefs; key = ArtifactDownload.key(historyRuntime); version=HISTORY_ORDER.next();
+                    blocked=BLOCKED_HISTORY.contains(key);recovered=RECOVERED_HISTORY.contains(key);
+                    changed = true;
+                }
+                saved = store(prefs,key,snapshot,version,true,blocked,recovered);
+            } catch (RuntimeException ignored) { /* Retain the receipt and retry later. */ }
+            if (changed) notifyChanged();
+            completed.accept(saved);
+        });
+    }
+
+    void reconcileUncertain(String runtime, String client, String conversation,
+                            java.util.function.BooleanSupplier authorized,
+                            java.util.function.Consumer<Boolean> completed) {
+        HISTORY_WRITER.execute(() -> {
+            boolean saved=false,changed=false;
+            try {
+                ChatHistory snapshot;SharedPreferences prefs;String key;long version;boolean blocked,recovered;
+                synchronized(this){
+                    if(historyPrefs==null || !historyLoaded || !historyRuntime.equals(runtime) || !authorized.getAsBoolean()
+                            || !history.reconcileUncertain(client,conversation)){completed.accept(false);return;}
+                    snapshot=history.copy();prefs=historyPrefs;key=ArtifactDownload.key(historyRuntime);version=HISTORY_ORDER.next();changed=true;
+                    blocked=BLOCKED_HISTORY.contains(key);recovered=RECOVERED_HISTORY.contains(key);
+                }
+                saved=store(prefs,key,snapshot,version,true,blocked,recovered);
+            }catch(RuntimeException ignored){/* Keep the request and retry notification. */}
+            if(changed)notifyChanged();
+            completed.accept(saved);
+        });
     }
 
     private void historyChanged() {
@@ -261,38 +457,45 @@ public final class HubStore {
      * 最近的 limit 轮完成的对话，从每台电脑存下的聊天记录里一起算（加上旧版单独存的那份），
      * 换到另一台电脑时带过去。同一轮只算一次。
      */
-    synchronized List<ChatTurn> recentTurns(List<ChatTurn> legacy, int limit) {
-        Map<String, ChatTurn> found = new java.util.LinkedHashMap<>();
-        for (ChatTurn turn : legacy) found.put(turn.id, turn);
-        if (historyPrefs != null) {
-            for (Map.Entry<String, ?> stored : historyPrefs.getAll().entrySet()) {
-                if (!(stored.getValue() instanceof String)) continue;
-                for (ChatTurn turn : ChatHistory.restore((String) stored.getValue()).turns()) found.put(turn.id, turn);
+    List<ChatTurn> recentTurns(String target, List<String> routes, List<ChatTurn> legacy, int limit) {
+        Set<String> keys=HistorySharing.keys(target,routes);
+        Map<String,String> snapshots=new LinkedHashMap<>();
+        ChatHistory active=null; String activeKey;
+        synchronized(this){
+            if(historyPrefs!=null) for(String key:keys){
+                String value=historyPrefs.getString(key,null);if(value!=null)snapshots.put(key,value);
             }
+            activeKey=historyRuntime;
+            if(keys.contains(ArtifactDownload.key(activeKey)))active=history.copy();
         }
-        for (ChatTurn turn : history.turns()) found.put(turn.id, turn);
-        List<ChatTurn> all = new ArrayList<>(found.values());
-        all.sort(java.util.Comparator.comparingLong((ChatTurn turn) -> turn.at));
-        return all.subList(Math.max(0, all.size() - limit), all.size());
+        // Multi-megabyte history parsing is never performed with the UI/store lock held.
+        return HistorySharing.recent(target,routes,snapshots::get,activeKey,active,legacy,limit);
     }
 
     private String activeConversation = "default";
     private final Set<String> deletedConversations = new HashSet<>();
     synchronized boolean conversationDeleted(String id) {return deletedConversations.contains(id);}
+    synchronized boolean archiveConversationDeleted(String id) {return deletedConversations.contains(id)||history.erased(id);}
+    synchronized Set<String> archiveMessageIds(){return visibleHistory()?history.ids():java.util.Collections.emptySet();}
     private List<Map<String, Object>> conversations = new ArrayList<>();
     synchronized void activeConversation(String id) { activeConversation = id; }
     synchronized String activeConversation() { return activeConversation; }
+    private boolean visibleHistory() { return HistorySharing.visible(historyRuntime,AccountManager.accountId()); }
+    /** Account logout/switch must repaint before cached rows from the old account can be shown. */
+    void accountChanged() { notifyChanged(); }
     synchronized String streamingFor(String conversation) {
+        if(!visibleHistory())return "";
         String value = ""; for (ChatHistory.Message message : history.main(conversation))
             if (!message.role.equals("you") && message.status.equals("streaming")) value = message.text;
         return value;
     }
     synchronized boolean busyIn(String conversation) {
+        if(!visibleHistory())return false;
         for (ChatHistory.Message message : history.main(conversation))
             if (message.status.equals("thinking") || message.status.equals("streaming") || message.status.equals("sending")) return true;
         return false;
     }
-    synchronized List<Map<String, Object>> conversations() { return new ArrayList<>(conversations); }
+    synchronized List<Map<String, Object>> conversations() { return visibleHistory()?new ArrayList<>(conversations):new ArrayList<>(); }
     synchronized void conversations(List<Object> items) {
         if (conversations.equals(items)) return;
         boolean historyChanged = false;
@@ -311,10 +514,10 @@ public final class HubStore {
         if (historyChanged) saveHistory();
     }
     synchronized void detachHistoryTasks() { history.detachTasks(); saveHistory(); }
-    synchronized List<ChatHistory.Message> mainMessages() { return history.main(activeConversation); }
-    synchronized List<ChatHistory.Message> mainMessages(String id) { return history.main(id); }
+    synchronized List<ChatHistory.Message> mainMessages() { return visibleHistory()?history.main(activeConversation):new ArrayList<>(); }
+    synchronized List<ChatHistory.Message> mainMessages(String id) { return visibleHistory()?history.main(id):new ArrayList<>(); }
     synchronized void messageScope(String id, String conversation, boolean mainScope) {
-        history.scope(id, conversation, mainScope); saveHistory();
+        history.scope(id, conversation, mainScope);
     }
     synchronized String retryMessage(String id) { return history.retry(id); }
     private long sequence;
@@ -329,6 +532,7 @@ public final class HubStore {
     /** 卡被整个换掉（换了 Runtime、Runtime 换了记录）一次加一：设备上的也要清掉重发。 */
     private long cardsEpoch;
     private boolean runtimeConnected;
+    private String weixinState = "unknown";
     private boolean catchingUp;
     /** 第一屏跟着的那张卡：我最近说的那句话归到的，或者刚刚有了结果的。 */
     private String turnCard;
@@ -482,6 +686,13 @@ public final class HubStore {
     public void dropApprovalRuntime(String runtime) { applyApprovals(runtime, java.util.Collections.emptyList()); }
 
     public synchronized boolean runtimeConnected() { return runtimeConnected; }
+    synchronized String weixinState() { return weixinState; }
+    void weixinState(String value) {
+        if (!java.util.Arrays.asList("connected", "binding", "unreachable", "relogin").contains(value)) value = "unknown";
+        boolean changed;
+        synchronized (this) { changed = !weixinState.equals(value); weixinState = value; }
+        if (changed) notifyChanged();
+    }
 
     /** 第一次连这台电脑、历史还没拉完（聊天页这时画几行占位，而不是先闪一下空页面）。 */
     public synchronized boolean catchingUp() { return catchingUp; }
@@ -596,7 +807,7 @@ public final class HubStore {
             if (!cardsKey.isEmpty())
                 shelves.put(cardsKey, new Shelf(new TreeMap<>(cards), new HashMap<>(cardOrder), feedSeq, usage, sync));
             Shelf shelf = shelves.remove(next);
-            cards.clear(); cardOrder.clear(); turnCard = null; runtimeConnected = false; ++cardsEpoch;
+            cards.clear(); cardOrder.clear(); turnCard = null; runtimeConnected = false; weixinState = "unknown"; ++cardsEpoch;
             if (shelf != null) {
                 cards.putAll(shelf.cards); cardOrder.putAll(shelf.order);
                 feedSeq = shelf.feedSeq; usage = shelf.usage; sync = shelf.sync;
@@ -617,6 +828,7 @@ public final class HubStore {
         synchronized (this) {
             cards.clear();
             runtimeConnected = false;
+            weixinState = "unknown";
             cardOrder.clear();
             sync = new SyncCache("*");
             // Approval origins have their own lifecycle; changing task Runtime must retain them.
@@ -654,7 +866,7 @@ public final class HubStore {
                 // 桌面活动状态的更新不改聊天记录，不必把整份记录重存一遍。
                 if (history.ingest(card)) historyChanged();
                 // 后台的一件事有了结果：第一屏说这件事。正在等小鱼回话时不打断那一轮。
-                if (!card.monitoringOnly && previous != null && previous.active()
+                if (!"weixin".equals(card.conversation) && !card.monitoringOnly && previous != null && previous.active()
                         && !card.active() && pending == 0) {
                     turnCard = card.id;
                 }
@@ -697,6 +909,7 @@ public final class HubStore {
             if (!left.get(index).id.equals(right.get(index).id)
                     || left.get(index).createdAt != right.get(index).createdAt
                     || left.get(index).remoteActionable != right.get(index).remoteActionable
+                    || !left.get(index).conversation.equals(right.get(index).conversation)
                     || !left.get(index).tool.equals(right.get(index).tool)
                     || !left.get(index).detail.equals(right.get(index).detail)
                     || !left.get(index).runtimeName.equals(right.get(index).runtimeName)) {
@@ -795,7 +1008,7 @@ public final class HubStore {
 
     /** 我说了一句话，小鱼开始想。语音在识别出来之前，说的是什么还不知道。 */
     void chatImages(String id, List<Attachment> items) {
-        synchronized (this) { history.images(id, items); saveHistory(); }
+        synchronized (this) { history.images(id, items); }
         notifyChanged();
     }
 
@@ -807,7 +1020,8 @@ public final class HubStore {
             turnCard = null;
             messageKey = clientId;
             history.begin(clientId, card, text, System.currentTimeMillis() / 1000.0);
-            saveHistory();
+            // RuntimeClient immediately queues one durable snapshot after scope
+            // and attachments are set; avoid a duplicate whole-history build.
             turn = new Turn("thinking", RuntimeClient.VOICE_PLACEHOLDER.equals(text) ? "" : text,
                     "", "", "", "busy");
         }
@@ -868,10 +1082,11 @@ public final class HubStore {
 
     /** 正在生成的那段回复；没有就是空串。 */
     public synchronized String streaming() {
-        return pending > 0 ? streaming : "";
+        return visibleHistory() && pending > 0 ? streaming : "";
     }
 
     public synchronized Turn turn() {
+        if(!visibleHistory())return new Turn("idle", "", "", "", "", "idle");
         int doing = 0;
         for (Card card : cards.values()) {
             if (card.active()) {
@@ -880,7 +1095,7 @@ public final class HubStore {
         }
         Long order = turnCard == null ? null : cardOrder.get(turnCard);
         Card card = order == null ? null : cards.get(order);
-        if (pending > 0 || card == null) {
+        if (pending > 0 || card == null || "weixin".equals(card.conversation)) {
             return new Turn(turn.phase, turn.said, turn.reply, turn.agent, turn.stage, turn.mood,
                     turn.card, doing);
         }
@@ -959,6 +1174,14 @@ public final class HubStore {
         chatFailed(null, asked, error);
     }
 
+    public void chatUncertain(String key) {
+        synchronized (this) {
+            pending = Math.max(0, pending - 1);
+            history.uncertain(key); saveHistory();
+        }
+        notifyChanged();
+    }
+
     public void chatFailed(String key, String asked, String error) {
         synchronized (this) {
             if (asked != null) {
@@ -1031,6 +1254,20 @@ public final class HubStore {
         for (Ask ask : asks.values()) {
             return ask;
         }
+        return null;
+    }
+
+    /** The wearable does not display WeChat conversations or their approval details. */
+    public synchronized Ask currentDeviceAsk() {
+        for (Card.Approval approval : approvals) {
+            Long order = cardOrder.get(approval.card);
+            Card card = order == null ? null : cards.get(order);
+            if (!CardViews.deviceVisibleApproval(approval, card)) continue;
+            if (!answered.contains(approval.id)) return new Ask(approvalAskId(approval),
+                    (approval.runtimeName.isEmpty() ? "" : approval.runtimeName + " · ") + approval.tool, approval.detail,
+                    approval.id, null, null, !approvalReadOnly(approval));
+        }
+        for (Ask ask : asks.values()) return ask;
         return null;
     }
 

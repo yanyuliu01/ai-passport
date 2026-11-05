@@ -12,7 +12,7 @@ final class ApprovalSync {
     private final Map<String, Map<String, Object>> pending = new LinkedHashMap<>();
 
     String path() throws IOException {
-        return "/v1/sync?conversation=default&all_conversations=1&states=unavailable&after="
+        return "/v1/sync?conversation=default&all_conversations=1&states=unavailable,weixin&after="
                 + java.net.URLEncoder.encode(cursor, "UTF-8") + "&epoch="
                 + java.net.URLEncoder.encode(epoch, "UTF-8") + "&wait=20";
     }

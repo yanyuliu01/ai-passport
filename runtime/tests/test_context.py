@@ -34,6 +34,223 @@ class ContextTests(TempDirCase):
         self.assertFalse((self.state / "context.json").exists())
         self.assertEqual(self.context.turns("other"), [])
 
+    def test_main_and_side_can_recall_weixin_without_mixing_timelines(self):
+        self.writer.conversation_create_weixin()
+        card = self.writer.task_open('weixin', '微信聊天')
+        self.writer.exchange(card['id'], '微信 jasmine 问题', '微信 jasmine 回复', turn_id='wx1')
+        for conversation in ('default', 'side'):
+            self.assertIn('微信 jasmine 回复', self.context.recall(conversation, 'jasmine'))
+            self.assertNotIn('微信 jasmine 回复', [turn['reply'] for turn in self.context.turns(conversation)])
+        self.context.clear('weixin')
+        self.assertNotIn('微信 jasmine 回复', self.context.recall('side', 'jasmine'))
+
+    def test_recent_chat_tool_reads_both_channels_and_only_sent_weixin_bubbles(self):
+        from xiaoyu_runtime.channels.store import ChannelStore
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        self.writer.conversation_create_weixin()
+        main = self.writer.task_open('default', '主对话')
+        self.writer.exchange(main['id'], '主对话提问', '主对话回答', turn_id='main1')
+        wx = self.writer.task_open('weixin', '微信聊天')
+        self.writer.exchange(wx['id'], '微信提问', '已发送\n\n---\n\n未发送', turn_id='wx1')
+        db = ChannelStore(self.state / 'channels/weixin/channel.sqlite')
+        self.addCleanup(db.close)
+        with db.db:
+            db.db.execute("INSERT INTO outbox(destination,block_id,text,state,request_id,kind,sent_at) VALUES(?,?,?,?,?,?,?)",
+                          ('owner', 'sent', '已发送', 'sent', 'wx1', 'text', 1))
+            db.db.execute("INSERT INTO outbox(destination,block_id,text,state,request_id,kind) VALUES(?,?,?,?,?,?)",
+                          ('owner', 'cancelled', '未发送', 'cancelled', 'wx1', 'text'))
+        tools = Toolbox([], [], [], lambda _: None, lambda _: None, recent_chat=self.context.recent_chat)
+        self.assertIn('read_recent_chat', [d['name'] for d in tools.definitions()])
+        result, failed = tools.call('read_recent_chat', {'channel': 'weixin'})
+        self.assertFalse(failed)
+        self.assertIn('微信提问', result)
+        self.assertIn('已发送', result)
+        self.assertNotIn('未发送', result)
+        result, failed = tools.call('read_recent_chat', {'channel': 'main'})
+        self.assertFalse(failed)
+        self.assertIn('主对话提问', result)
+        batch, failed = tools.call('read_context', {'queries': [{'name': 'read_recent_chat', 'args': {'channel': 'main'}}]})
+        self.assertFalse(failed)
+        self.assertIn('主对话回答', batch)
+        self.assertTrue(tools.call('read_recent_chat', {'channel': 'other'})[1])
+        self.assertIn('微信提问', self.context.other_chat_note('default', '总结刚才微信聊了什么'))
+        self.assertIn('主对话提问', self.context.other_chat_note('weixin', '看看主对话刚聊了什么'))
+        self.assertEqual('', self.context.other_chat_note('default', '你好呀'))
+        self.context.clear('weixin')
+        self.assertNotIn('微信提问', json.dumps(self.context.recent_chat('weixin'), ensure_ascii=False))
+
+    def test_recent_chat_pages_older_records_and_can_read_earliest(self):
+        self.writer.conversation_create_weixin()
+        main = self.writer.task_open('default', '主对话')
+        for i in range(45):
+            self.writer.exchange(main['id'], '提问%02d' % i, '回答%02d' % i, turn_id='page%02d' % i)
+        first = self.context.recent_chat('main', limit=7)
+        self.assertTrue(first['还有更早'])
+        self.assertTrue(all('时间' in item for item in first['记录']))
+        seen = [item['内容'] for item in first['记录']]
+        page = first
+        while page['还有更早']:
+            page = self.context.recent_chat('main', limit=7, before=page['向前游标'])
+            seen.extend(item['内容'] for item in page['记录'])
+        self.assertEqual(len(seen), 90)
+        self.assertEqual(len(set(seen)), 90)
+        earliest = self.context.recent_chat('main', limit=3, earliest=True)
+        self.assertEqual([item['内容'] for item in earliest['记录']], ['提问00', '回答00', '提问01'])
+        with self.assertRaises(ValueError):
+            self.context.recent_chat('weixin', before=first['向前游标'])
+        with self.assertRaises(ValueError):
+            self.context.recent_chat('main', before='not a cursor')
+
+    def test_working_read_receipts_survive_restart_but_not_conversation_reset(self):
+        self.writer.conversation_create_weixin()
+        wx = self.writer.task_open('weixin', '微信')
+        self.writer.exchange(wx['id'], '主对话最早到哪天', '我看看', turn_id='working1')
+        result = json.dumps({'记录': [{'内容': '不应存入工作回执的原文'}],
+                             '还有更早': True, '向前游标': 'cursor1'}, ensure_ascii=False)
+        self.context.record_read('weixin', 'working1', 'read_recent_chat', {'channel': 'main'}, result, False)
+        restored = bind_context(self.store, self.cards)
+        note = restored.working_note('weixin')
+        self.assertIn('主对话最早到哪天', note)
+        self.assertIn('cursor1', note)
+        self.assertNotIn('不应存入工作回执的原文', self.context._path.read_text())
+        self.assertIn('不表示后台仍在执行', note)
+        self.assertEqual('', restored.working_note('default'))
+        restored.clear('weixin')
+        self.assertEqual('', restored.working_note('weixin'))
+
+    def test_actual_tool_read_is_recorded_and_clearing_target_invalidates_cursor(self):
+        from xiaoyu_runtime.loop.voice_tools import Toolbox
+        self.writer.conversation_create_weixin()
+        wx = self.writer.task_open('weixin', '微信')
+        self.writer.exchange(wx['id'], '看看主对话', '我看看', turn_id='read1')
+        main = self.writer.task_open('default', '主对话')
+        self.writer.exchange(main['id'], '主对话问题', '主对话回答', turn_id='main1')
+        tools = Toolbox([], [], [], lambda _: None, lambda _: None, recent_chat=self.context.recent_chat,
+                        observe_read=lambda name, args, result, failed: self.context.record_read(
+                            'weixin', 'read1', name, args, result, failed))
+        self.assertFalse(tools.call('read_recent_chat', {'channel': 'main', 'limit': 1})[1])
+        note = self.context.working_note('weixin')
+        self.assertIn('read_recent_chat', note)
+        self.assertIn('还有更早', note)
+        self.context.clear('default')
+        self.assertEqual('', self.context.working_note('weixin'))
+
+    def test_weixin_page_order_uses_bubble_delivery_not_original_request_time(self):
+        from xiaoyu_runtime.channels.store import ChannelStore
+        self.writer.conversation_create_weixin()
+        wx = self.writer.task_open('weixin', '微信')
+        with mock.patch('time.time', return_value=100):
+            self.writer.exchange(wx['id'], '第一句', '第一答', turn_id='one')
+        with mock.patch('time.time', return_value=102):
+            self.writer.exchange(wx['id'], '第二句', '第二答', turn_id='two')
+        db = ChannelStore(self.state / 'channels/weixin/channel.sqlite')
+        self.addCleanup(db.close)
+        with db.db:
+            for tid, text, stamp in [('one', '第一答', 103), ('two', '第二答', 104)]:
+                db.db.execute("INSERT INTO outbox(destination,block_id,text,state,request_id,kind,sent_at) VALUES(?,?,?,?,?,?,?)",
+                              ('owner', tid, text, 'sent', tid, 'text', stamp))
+        page = self.context.recent_chat('weixin', limit=1)
+        items = [page['记录'][0]['内容']]
+        while page['还有更早']:
+            page = self.context.recent_chat('weixin', limit=1, before=page['向前游标'])
+            items.extend(item['内容'] for item in page['记录'])
+        self.assertEqual(items, ['第二答', '第一答', '第二句', '第一句'])
+
+    def test_side_recall_uses_weixin_applied_peer_history(self):
+        self.writer.conversation_create_weixin()
+        calls = []
+        def replicas(conversation, terms, covered):
+            calls.append(conversation)
+            if conversation == 'weixin':
+                return ([('网络对话', 'Windows', 10, '微信 lavender 来自已同步副本')], False)
+            return ([], False)
+        self.context._replica_recall = replicas
+        result = self.context.recall('side', 'lavender')
+        self.assertIn('微信 lavender 来自已同步副本', result)
+        self.assertEqual(calls[:2], ['side', 'weixin'])
+
+    def test_weixin_can_recall_main_and_side_without_mixing_timelines(self):
+        self.writer.conversation_create_weixin()
+        main = self.writer.task_open('default', '主对话')
+        self.writer.exchange(main['id'], 'main tangerine question', 'main tangerine reply', turn_id='main1')
+        self.writer.exchange(self.card['id'], 'side tangerine question', 'side tangerine reply', turn_id='side1')
+        result = self.context.recall('weixin', 'tangerine')
+        self.assertIn('main tangerine', result)
+        self.assertIn('side tangerine', result)
+        self.assertEqual([], self.context.turns('weixin'))
+        self.assertNotIn('main tangerine', self.context.recall('side', 'tangerine'))
+        self.context.clear('side')
+        result = self.context.recall('weixin', 'tangerine')
+        self.assertIn('main tangerine', result)
+        self.assertNotIn('side tangerine', result)
+
+    def test_weixin_recalls_applied_replicas_with_one_shared_scan(self):
+        self.writer.conversation_create_weixin()
+        self.writer.conversation_create('side')
+        calls = []
+        def replicas(conversation, terms, covered):
+            calls.append(conversation)
+            if isinstance(conversation, set):
+                return ([('网络对话', 'Windows', 10, 'remote peony history')], False)
+            return ([], False)
+        self.context._replica_recall = replicas
+        self.assertIn('remote peony history', self.context.recall('weixin', 'peony'))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], 'weixin')
+        self.assertIn('default', calls[1])
+        self.assertIn('side', calls[1])
+
+    def test_weixin_shared_archive_respects_reset_and_scans_once(self):
+        self.writer.conversation_create_weixin()
+        self.exchange('retained')
+        archive = self.cards._log._path.with_suffix('.history')
+        archive.mkdir()
+        records = [{'id': 'old-' + name, 'conversation': name, 'scope': 'main', 'seq': index,
+                    'created_at': index, 'status': 'final', 'text': name + ' old marigold',
+                    'author': {'kind': 'xiaoyou'}, 'source': {'type': 'runtime'}}
+                   for index, name in enumerate(('default', 'side'), 1)]
+        (archive / 'segment.jsonl').write_text('\n'.join(json.dumps(row) for row in records) + '\n')
+        from xiaoyu_runtime.events import message_history
+        with mock.patch.object(message_history, 'page', wraps=message_history.page) as read:
+            result = self.context.recall('weixin', 'marigold')
+            self.assertEqual(read.call_count, 2)  # one WeChat scan, one shared-chat scan
+        self.assertIn('default old marigold', result)
+        self.assertIn('side old marigold', result)
+        self.assertTrue(self.context.clear('side'))
+        result = self.context.recall('weixin', 'marigold')
+        self.assertIn('default old marigold', result)
+        self.assertNotIn('side old marigold', result)
+
+    def test_weixin_can_find_a_task_without_importing_worker_output_into_chat(self):
+        self.writer.conversation_create_weixin()
+        task = self.writer.task_open('default', 'riverstone background work', 'working', 'claude')
+        result = self.context.recall('weixin', 'riverstone')
+        self.assertIn('riverstone background', result)
+        self.assertIn(task['id'], result)
+        self.assertEqual([], self.context.turns('weixin'))
+
+    def test_weixin_can_search_by_task_source_name(self):
+        self.writer.conversation_create_weixin()
+        task = self.writer.task_open('default', 'building hardware', 'working', 'claude')
+        self.cards._cards[task['id']].update(origin_name='Windows', mesh_origin='b' * 32)
+        result = self.context.recall('weixin', 'Windows')
+        self.assertIn('Windows', result)
+        self.assertIn('building hardware', result)
+
+    def test_weixin_recall_reads_observed_desktop_text_without_importing_private_context(self):
+        self.writer.conversation_create_weixin()
+        desktop = self.intake.writer('desktop', actor='test')
+        card = desktop.observed_open('__desktop__', '同步问题', 'done', 'codex')
+        desktop.observed(card['id'], source='desktop', monitoring_only=True, session_id='native-1',
+                         origin_name='Windows', entries=[
+                             {'id': 'native-1:you', 'role': 'you', 'text': '排查 cedar 同步', 'at': 1},
+                             {'id': 'native-1:reply', 'role': 'xiaoyou', 'text': 'cedar 已定位 token=secret123', 'at': 2}])
+        result = self.context.recall('weixin', 'cedar')
+        self.assertIn('排查 cedar 同步', result)
+        self.assertIn('Windows', result)
+        self.assertNotIn('secret123', result)
+        self.assertEqual([], self.context.turns('weixin'))
+
     def test_journal_replay_rebuilds_context_without_model_or_transcript(self):
         self.exchange()
         # Simulate a checkpoint missing its final message/task update.

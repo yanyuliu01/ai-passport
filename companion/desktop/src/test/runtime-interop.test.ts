@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { join, resolve } from 'node:path';
@@ -23,6 +23,10 @@ function memory(): SecretStore {
 async function until(predicate: () => boolean, milliseconds = 12000) {
   const end = performance.now() + milliseconds;
   while (!predicate()) { if (performance.now() > end) assert.fail('Real Runtime interoperability timed out'); await new Promise(resolve => setTimeout(resolve, 25)); }
+}
+async function untilAsync(predicate: () => Promise<boolean>, milliseconds = 12000) {
+  const end = performance.now() + milliseconds;
+  while (!await predicate()) { if (performance.now() > end) assert.fail('Real Runtime interoperability timed out'); await new Promise(resolve => setTimeout(resolve, 25)); }
 }
 async function port(): Promise<number> {
   const server = createServer();
@@ -121,8 +125,12 @@ test('two real isolated Runtimes: encrypted mesh context, remote continuation an
   await until(() => readyB && clientB.endpoints.has(a.runtimeId));
   await clientA.send(a.spaceId, 'synthetic turn on A');
   await until(() => dbB.records<Message>(a.spaceId, 'message').some(item => item.text.includes('synthetic turn on A') && item.author?.kind !== 'owner' && item.status === 'final'));
-  const replicaTranscript = join(folder, 'Windows-fixture/state/transcript.json');
-  await until(() => existsSync(replicaTranscript) && readFileSync(replicaTranscript, 'utf8').includes('synthetic turn on A'));
+  // New turns live in the unified message log, not the legacy transcript.json.
+  // Check the second Runtime itself, not only the desktop's peer cache.
+  await untilAsync(async () => {
+    const replica = await transport.request(b, 'GET', '/v1/sync?conversation=default&all_conversations=1&after=0&wait=0&states=unavailable');
+    return Array.isArray(replica.messages) && replica.messages.some((item: any) => item.text === 'synthetic turn on A' && item.author?.kind === 'owner');
+  });
   assert.equal(dbB.records<Message>(a.spaceId, 'message').filter(item => item.author?.kind === 'owner' && item.text === 'synthetic turn on A').length, 1);
   await clientB.createConversation(a.spaceId, 'Shared synthetic topic');
   const conversation = clientB.selectedConversation(a.spaceId);
@@ -153,5 +161,5 @@ test('two real isolated Runtimes: encrypted mesh context, remote continuation an
   await until(() => dbA.records<Message>(a.spaceId, 'message').some(item => item.text === 'synthetic offline queued turn' && item.author?.kind === 'owner'));
   await until(() => dbB.pending().length === 0);
   assert.equal(dbA.records<Message>(a.spaceId, 'message').filter(item => item.text === 'synthetic offline queued turn' && item.author?.kind === 'owner').length, 1);
-  t.diagnostic('Real Runtime APIs and transcript replicas passed; echo provider used. No real-model TTFT claim.');
+  t.diagnostic('Real Runtime APIs and unified message replicas passed; echo provider used. No real-model TTFT claim.');
 });

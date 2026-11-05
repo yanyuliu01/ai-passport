@@ -18,6 +18,11 @@
     }
   },
   "persona_file": "persona.txt",
+  "entertainment": {
+    "browser_enabled": false,
+    "bilibili_autonomous": false,
+    "bilibili_weixin_shares": false
+  },
   "brief_max_chars": 120,
   "turn_timeout_seconds": 0,
   "idle_timeout_seconds": 600,

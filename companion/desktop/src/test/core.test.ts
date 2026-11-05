@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClientDatabase } from '../core/database.js';
@@ -20,6 +21,25 @@ test('quick review is reachable from the phone with bounded mode and batch input
   assert.equal(allowedRPC('POST', '/v1/review/batch', { ...batch, items: [{ id: 'a1', key: 'k1', command: 'rm' }] }), false);
 });
 
+test('channel QR binding never passes through a peer or phone relay', () => {
+  assert.equal(allowedRPC('POST', '/v1/weixin/bind', {}), false);
+  assert.equal(allowedRPC('GET', '/v1/weixin/bind/attempt'), false);
+  assert.equal(allowedRPC('POST', '/v1/weixin/bind/attempt/code', { code: '123' }), false);
+  assert.equal(allowedRPC('POST', '/v1/weixin/bind/attempt/cancel', {}), false);
+  const resend = { block: 'a'.repeat(32) + '/reply#0', operation: 'b'.repeat(32), revision: 3, confirm: false };
+  assert.equal(allowedRPC('POST', '/v1/weixin/resend', resend), true);
+  assert.equal(allowedRPC('POST', '/v1/weixin/resend', { ...resend, confirm: 'yes' }), false);
+  assert.equal(allowedRPC('POST', '/v1/weixin/resend', { ...resend, extra: true }), false);
+});
+
+test('attachment relay permits only bounded file chunks', () => {
+  const path = '/v1/artifacts/a' + '1'.repeat(32) + '/content';
+  assert.equal(allowedRPC('GET', path + '?offset=0&length=1048576'), true);
+  assert.equal(allowedRPC('GET', path + '?offset=0&length=1048577'), false);
+  assert.equal(allowedRPC('GET', path + '?offset=0&length=1&extra=1'), false);
+  assert.equal(allowedRPC('GET', path.replace('content', 'thumbnail') + '?offset=0&length=1'), false);
+});
+
 test('session gateway relay admits only bounded idempotent continuation inputs', () => {
   const body = { text: 'continue original work', client_id: 'a'.repeat(32), conversation: 'default' };
   assert.equal(allowedRPC('GET', '/v1/sessions?query=project'), true);
@@ -34,7 +54,7 @@ import { HTTPRuntimeTransport, RuntimeError, syncPath, validateRuntimeURL, type 
 import { validateRelay } from '../core/relay.js';
 import { orderMessages } from '../core/message-order.js';
 import { bundledRuntimeLaunch } from '../core/runtime-layout.js';
-import type { Endpoint, Message, SyncPage } from '../shared.js';
+import type { Endpoint, Json, Message, SyncPage } from '../shared.js';
 
 const runtime = '1'.repeat(32), space = '2'.repeat(32);
 const endpoint: Endpoint = { runtimeId: runtime, spaceId: space, name: 'Test', url: 'http://127.0.0.1:8765',
@@ -74,6 +94,21 @@ test('cache and opaque cursor survive restart; a partial page cannot advance the
   assert.deepEqual(reopened.cursor(runtime), before);
   reopened.close();
 });
+test('enabling channel sync replays its previously filtered history once without clearing records or outbox', t => {
+  const { db } = fixture(t);
+  db.apply(space, runtime, page({ seq: 12, messages: [message('original', 1)] }), '*');
+  db.enqueue(space, runtime, 'pending owner text');
+  db.channelSyncCapability(runtime, true);
+  assert.equal(db.cursor(runtime, '*').cursor, '0');
+  assert.equal(db.records(space, 'message').length, 1);
+  assert.equal(db.pending(space).length, 1);
+  db.apply(space, runtime, page({ seq: 24 }), '*');
+  db.channelSyncCapability(runtime, true);
+  assert.equal(db.cursor(runtime, '*').cursor, '24');
+  db.channelSyncCapability(runtime, false);
+  db.channelSyncCapability(runtime, true);
+  assert.equal(db.cursor(runtime, '*').cursor, '0');
+});
 test('a stale response cannot commit against a different base cursor', t => {
   const { db } = fixture(t);
   const base = db.cursor(runtime);
@@ -106,6 +141,88 @@ test('same text in different turns remains separate; origin and replica share on
   const messages = db.records<Message>(space, 'message');
   assert.equal(messages.length, 2);
   assert.equal(messages.find(item => item.id === 'a')?.text, 'hello');
+});
+test('WeChat delivery uses newer source revision from replica even when origin is cached offline', t => {
+  const { db } = fixture(t), peer = '3'.repeat(32), block = runtime + '/wx#0';
+  const presentation = { version: 1, author: { kind: 'xiaoyou', name: 'xiaoyou', label: '小鱼' },
+    blocks: [{ id: block, text: 'reply', complete: true }] };
+  const base = { conversation: 'weixin', status: 'final', text: 'reply', presentation };
+  db.apply(space, runtime, page({ messages: [message('wx', 10, { ...base,
+    delivery: { [block]: 'waiting' }, delivery_revisions: { [block]: 1 } })] }), '*');
+  db.apply(space, peer, page({ runtime_id: peer, messages: [message(runtime.slice(0, 12) + '.wx', 2,
+    { ...base, mesh_origin: runtime, source: { runtime_id: runtime },
+      delivery: { [block]: 'unknown' }, delivery_revisions: { [block]: 3 } })] }), '*');
+  let cached = db.records<Message>(space, 'message')[0];
+  assert.equal(cached.id, 'wx');
+  assert.equal(cached.delivery?.[block], 'unknown');
+  // A different body cannot borrow a status from an older copy.
+  db.apply(space, peer, page({ runtime_id: peer, messages: [message(runtime.slice(0, 12) + '.wx', 3,
+    { ...base, mesh_origin: runtime, source: { runtime_id: runtime },
+      presentation: { ...presentation, blocks: [{ id: block, text: 'changed', complete: true }] },
+      delivery: { [block]: 'sent' }, delivery_revisions: { [block]: 4 } })] }), '*');
+  cached = db.records<Message>(space, 'message')[0];
+  assert.equal(cached.delivery, undefined);
+});
+test('an uncertain WeChat retry reuses its durable operation after a lost response', async t => {
+  const { db, path } = fixture(t), block = runtime + '/wx#0';
+  const presentation = { version: 1, author: { kind: 'xiaoyou', name: 'xiaoyou', label: '小鱼' },
+    blocks: [{ id: block, text: 'reply', complete: true }] };
+  db.apply(space, runtime, page({ messages: [message('wx', 1, { conversation: 'weixin', status: 'final',
+    text: 'reply', presentation, delivery: { [block]: 'unknown' }, delivery_revisions: { [block]: 2 } })] }));
+  const calls: Json[] = [];
+  const client = new DesktopClient(db, { async request(_endpoint, _method, _path, body) {
+    calls.push(body as Json); if (calls.length === 1) throw new Error('lost response'); return { status: 'queued' };
+  } }, secrets(), () => {});
+  const available = { ...endpoint, capabilities: ['sync', 'weixin_resend_v1'] };
+  client.endpoints.set(runtime, available);
+  (client as unknown as { links: Map<string, { connected: boolean; catchingUp: boolean; error: string }> }).links
+    .set(runtime + '/default', { connected: true, catchingUp: false, error: '' });
+  await assert.rejects(() => client.weixinResend(space, block, 2, false), /确认/);
+  await assert.rejects(() => client.weixinResend(space, block, 2, true), /lost response/);
+  const reopened = new ClientDatabase(path);
+  assert.match(reopened.get<{ operation: string }>('weixin-retry:' + space + '/' + block, { operation: '' }).operation, /^[a-f0-9]{32}$/);
+  reopened.close();
+  assert.equal((await client.weixinResend(space, block, 2, true)).status, 'queued');
+  assert.equal(calls[0].operation, calls[1].operation);
+  await assert.rejects(() => client.weixinResend(space, block, 1, true), /状态已变化/);
+  client.stop();
+});
+
+test('attachment delivery revisions survive cache and newer replica updates', t => {
+  const { db } = fixture(t), peer = '3'.repeat(32), artifact = 'a' + '4'.repeat(32), block = runtime + '/wx#media:' + artifact;
+  const presentation = { version: 1, id: runtime + '/wx', complete: true,
+    author: { kind: 'xiaoyou', name: 'xiaoyou', label: '小鱼' }, blocks: [] };
+  const base = { conversation: 'weixin', status: 'final', text: '', presentation,
+    attachments: [{ id: artifact, status: 'ready', source: 'cc' }] };
+  db.apply(space, runtime, page({ messages: [message('wx', 1, { ...base,
+    delivery: { [block]: 'waiting' }, delivery_revisions: { [block]: 1 } })] }), '*');
+  db.apply(space, peer, page({ runtime_id: peer, messages: [message(runtime.slice(0, 12) + '.wx', 2,
+    { ...base, mesh_origin: runtime, source: { runtime_id: runtime },
+      delivery: { [block]: 'unknown' }, delivery_revisions: { [block]: 3 } })] }), '*');
+  assert.equal(db.records<Message>(space, 'message')[0].delivery?.[block], 'unknown');
+  assert.equal(db.records<Message>(space, 'message')[0].delivery_revisions?.[block], 3);
+});
+
+test('WeChat attachment downloads verify bounded chunks against the stored message', async t => {
+  const { db } = fixture(t), bytes = Buffer.alloc(3_200_000, 42), artifact = 'a' + '3'.repeat(32);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  db.apply(space, runtime, page({ messages: [message('wx-file', 1, { conversation: 'weixin', status: 'final',
+    attachments: [{ id: artifact, status: 'ready', size: bytes.length, sha256 }] })] }));
+  let calls = 0;
+  const client = new DesktopClient(db, { async request(_endpoint, _method, path) {
+    const params = new URL(path, 'http://localhost').searchParams;
+    const offset = Number(params.get('offset')), length = Number(params.get('length'));
+    calls++;
+    return { _relay_binary: bytes.subarray(offset, offset + length).toString('base64url'), content_type: 'application/octet-stream' };
+  } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  (client as unknown as { links: Map<string, { connected: boolean; catchingUp: boolean; error: string }> }).links
+    .set(runtime + '/default', { connected: true, catchingUp: false, error: '' });
+  const result = await client.channelArtifact(space, runtime, 'wx-file', artifact, false);
+  assert.deepEqual(Buffer.from(String(result._relay_binary), 'base64url'), bytes);
+  assert.equal(calls, 4);
+  await assert.rejects(() => client.channelArtifact(space, runtime, 'wx-file', 'a' + '4'.repeat(32), false), /不在/);
+  client.stop();
 });
 test('pending payload and chosen accepting Runtime survive restart', t => {
   const { db, path } = fixture(t);
@@ -327,6 +444,29 @@ test('conversation catalogs merge without idle notification feedback and persist
   assert.match(syncPath(db.cursor(runtime, created.id), 0, created.id), new RegExp('conversation=' + created.id));
   client.stop();
 });
+test('a channel record is available to its separate view without selecting it as the composer target', t => {
+  const { db } = fixture(t);
+  db.apply(space, runtime, page({ messages: [message('main', 1, { conversation: 'default', status: 'final' }),
+    message('wx', 2, { conversation: 'weixin', status: 'final' })] }));
+  const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  const view = client.snapshot().spaces[0];
+  assert.equal(view.selectedConversation, 'default');
+  assert.deepEqual(view.messages.map(item => item.id).sort(), ['main', 'wx']);
+  client.stop();
+});
+test('the desktop never queues a send into the read-only channel, even with a selected channel or task', async t => {
+  const { db } = fixture(t);
+  db.apply(space, runtime, page({ tasks: [{ id: 'wx-task', conversation: 'weixin', seq: 1 }] }));
+  const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  db.set('conversation:' + space, 'weixin');
+  await assert.rejects(() => client.send(space, 'not a channel send'), /微信里继续/);
+  db.set('conversation:' + space, 'default');
+  await assert.rejects(() => client.send(space, 'not a channel task send', 'wx-task', runtime, true), /微信里继续/);
+  assert.equal(db.pending(space).length, 0);
+  client.stop();
+});
 test('reset and epoch freshness are scoped to the conversation that was synchronized', t => {
   const { db } = fixture(t), conversation = 'c'.repeat(32);
   db.apply(space, runtime, page({ approvals: [{ id: 'default-approval', conversation: 'default', seq: 1, status: 'pending' }] }));
@@ -460,4 +600,91 @@ test('permanent side-chat deletion purges cache and outbox across endpoints and 
   assert.equal(db.records(space,'message').length,0);assert.equal(db.pending(space).length,0);
   db.apply(space,'remote',page({runtime_id:'remote',messages:[message('stale',1,{conversation:id,text:'stale private history'})]}));
   assert.equal(db.records(space,'message').length,0);
+});
+
+test('idle reconciliation avoids history scans and accepted replies still clear the outbox', t => {
+  const { db } = fixture(t);
+  const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  const reconcile = (client as unknown as { reconcile(endpoint: Endpoint): void }).reconcile.bind(client);
+  const records = db.records.bind(db); let scans = 0;
+  db.records = ((...args: Parameters<typeof db.records>) => { scans++; return records(...args); }) as typeof db.records;
+  reconcile(endpoint); assert.equal(scans, 0);
+  const pending = db.enqueue(space, runtime, 'hello'); pending.state = 'accepted'; pending.messageId = 'reply-test'; db.updatePending(pending);
+  db.apply(space, runtime, page({ messages: [message('reply-test:reply', 1, { status: 'final' })] }));
+  reconcile(endpoint); assert.equal(scans, 1); assert.equal(db.pending().length, 0);
+});
+
+test('snapshot reads each shared space once while retaining both routes and messages', t => {
+  const { db } = fixture(t);
+  db.apply(space, runtime, page({ messages: [message('retained', 1, { status: 'final' })] }));
+  const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  const peer = '3'.repeat(32); client.endpoints.set(peer, { ...endpoint, runtimeId: peer, name: 'peer' });
+  const records = db.records.bind(db), counts = new Map<string, number>();
+  db.records = ((...args: Parameters<typeof db.records>) => { counts.set(args[1], (counts.get(args[1]) || 0) + 1); return records(...args); }) as typeof db.records;
+  const get = db.get.bind(db); let selectionReads = 0;
+  db.get = ((...args: Parameters<typeof db.get>) => { if (args[0] === 'conversation:' + space) selectionReads++; return get(...args); }) as typeof db.get;
+  const view = client.snapshot().spaces[0];
+  assert.equal(counts.get('message'), 1); assert.equal(counts.get('task'), 1); assert.equal(counts.get('approval'), 1);
+  assert.equal(selectionReads, 4);
+  assert.equal(view.connections?.length, 2); assert.equal(view.messages[0].id, 'retained');
+});
+
+test('empty sync heartbeats with changing usage timestamps do not rerender, but new messages do', async t => {
+  const { db } = fixture(t); let polls = 0, updates = 0, sendMessage = false;
+  const client = new DesktopClient(db, { async request(_endpoint, _method, path, _body, signal) {
+    if (path.startsWith('/v1/sync')) {
+      await new Promise(resolve => { const timer = setTimeout(resolve, 10); signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(undefined); }, { once: true }); });
+      polls++;
+      return page({ seq: 'revision:' + polls, usage: { at: polls, rev: 1, agents: [], accounts: [] },
+        messages: sendMessage ? [message('new-visible', 1, { status: 'final' })] : [] });
+    }
+    return path === '/v1/agents' ? { agents: [] } : path === '/v1/usage' ? { at: 0, rev: 1, agents: [], accounts: [] } : {};
+  } }, secrets(), () => { updates++; });
+  t.after(() => client.stop()); client.add(endpoint);
+  await until(() => polls >= 3); const first = updates;
+  await until(() => polls >= 8); assert.equal(updates, first);
+  sendMessage = true; await until(() => updates > first);
+  assert.equal(client.snapshot().spaces[0].messages.some(item => item.id === 'new-visible'), true);
+});
+
+test('deletion cleanup retries after rollback and blocks stale history or pending resurrection', t => {
+  const { db } = fixture(t); const id = 'side-old';
+  db.apply(space, runtime, page({ messages: [message('old', 1, { conversation: id })] }));
+  db.set('deleted-conversations:' + space, [id]);
+  const restarted = new ClientDatabase(db.db.location('main')!); t.after(() => restarted.close());
+  assert.throws(() => restarted.apply(space, runtime, page({ messages: [{}] })));
+  restarted.apply(space, runtime, page());
+  assert.equal(restarted.records(space, 'message').length, 0);
+  restarted.enqueue(space, runtime, 'stale queued', undefined, id);
+  restarted.apply(space, runtime, page({ messages: [message('stale', 2, { conversation: id })] }));
+  assert.equal(restarted.records(space, 'message').length, 0);
+  assert.equal(restarted.pending(space).length, 0);
+});
+
+test('snapshot cache updates for new and deleted records, epoch resets and external writers', t => {
+  const { db, path } = fixture(t); const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  db.apply(space, runtime, page({ messages: [message('cache', 1, { text: 'old', status: 'final' })] }));
+  const records = db.records.bind(db); let scans = 0;
+  db.records = ((...args: Parameters<typeof db.records>) => { if (args[1] === 'message') scans++; return records(...args); }) as typeof db.records;
+  assert.equal(client.snapshot().spaces[0].messages[0].text, 'old');
+  client.snapshot(); assert.equal(scans, 1);
+  const other = new ClientDatabase(path); t.after(() => other.close());
+  other.apply(space, runtime, page({ messages: [message('cache', 2, { text: 'new', status: 'final' })] }));
+  assert.equal(client.snapshot().spaces[0].messages[0].text, 'new'); assert.equal(scans, 2);
+  db.apply(space, runtime, page({ epoch: 'new-epoch', reset: true, messages: [message('fresh', 1, { status: 'final' })] }));
+  assert.equal(client.snapshot().spaces[0].messages.some(item => item.id === 'fresh'), true);
+  db.apply(space, runtime, page({ epoch: 'new-epoch', removed: ['fresh'] }));
+  assert.equal(client.snapshot().spaces[0].messages.some(item => item.id === 'fresh'), false);
+});
+
+test('snapshot cache refreshes same-revision presentation upgrades', t => {
+  const { db } = fixture(t); const client = new DesktopClient(db, { async request() { return {}; } }, secrets(), () => {});
+  client.endpoints.set(runtime, endpoint);
+  db.apply(space, runtime, page({ messages: [message('present', 1, { status: 'final' })] }));
+  client.snapshot();
+  db.apply(space, runtime, page({ messages: [message('present', 1, { status: 'final', presentation: { version: 1 } })] }));
+  const item = client.snapshot().spaces[0].messages.find(x => x.id === 'present');
+  assert.equal((item?.presentation as { version?: number })?.version, 1);
 });

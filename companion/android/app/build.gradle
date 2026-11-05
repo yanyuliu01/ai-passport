@@ -10,8 +10,8 @@ android {
         applicationId "com.yanyuliu.pockethub"
         minSdk 26
         targetSdk 34
-        versionCode 95
-        versionName "0.40.5"
+        versionCode 101
+        versionName "0.41.1"
     }
 
     // The speech models are no longer packaged: they are published as the "speech" resource
@@ -80,6 +80,7 @@ dependencies {
     implementation files(layout.buildDirectory.file("phone-speech/sherpa-onnx-1.13.8.aar")).builtBy(preparePhoneSpeech)
     implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.20"
     testImplementation "junit:junit:4.13.2"
+    testImplementation "org.xerial:sqlite-jdbc:3.45.3.0"
 }
 
 def verifyScannerRuntime = tasks.register("verifyScannerRuntime", Exec) {

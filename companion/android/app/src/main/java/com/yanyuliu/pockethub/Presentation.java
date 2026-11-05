@@ -25,6 +25,11 @@ final class Presentation {
     boolean complete() { return supported && Json.flag(raw, "complete"); }
     /** Final text the owner cut into: only part of the reply was said. */
     boolean interrupted() { return complete() && Json.flag(raw, "interrupted"); }
+    boolean channelDeliveryProblem() {
+        for (Object value : Json.object(raw.get("channel_delivery")).values())
+            if ("failed".equals(value) || "unknown".equals(value)) return true;
+        return false;
+    }
     /** The status line under a message (same rule as desktop): unfinished, cut short, failed or stopped. */
     String statusLine() {
         if (!supported) return label();
@@ -35,15 +40,33 @@ final class Presentation {
     String plain() { return supported && raw.get("plain") instanceof String ? (String) raw.get("plain") : null; }
     /** Plain text, or the legacy local clean-up for records without a projection. */
     static String plain(Presentation view, String text) {
+        if (view != null && view.supported && Json.flag(view.raw, "channel_delivery_tracked")) {
+            List<String> visible = view.blocks();
+            List<String> clean = new ArrayList<>();
+            for (String part : visible) clean.add(Markdown.plain(part));
+            return String.join("\n\n", clean);
+        }
         String value = view == null ? null : view.plain();
         return value != null ? value : Markdown.plain(text);
+    }
+    private boolean visibleBlock(Map<String, Object> block) {
+        if (!Json.flag(block, "complete")) return false;
+        if (!Json.flag(raw, "channel_delivery_tracked")) return true;
+        String status = Json.string(Json.object(raw.get("channel_delivery")), Json.string(block, "id"));
+        return status.equals("sent") || status.equals("failed") || status.equals("unknown");
+    }
+    boolean visibleAttachment(String id) {
+        if (!supported || !Json.flag(raw, "channel_delivery_tracked")) return true;
+        String key = value("id") + "#media:" + id;
+        String status = Json.string(Json.object(raw.get("channel_delivery")), key);
+        return status.equals("sent") || status.equals("failed") || status.equals("unknown");
     }
     List<String> blocks() {
         List<String> result = new ArrayList<>();
         if (!supported) return result;
         for (Object value : Json.list(raw, "blocks")) {
             Map<String, Object> block = Json.object(value);
-            if (Json.flag(block, "complete")) result.add(Json.string(block, "text"));
+            if (visibleBlock(block)) result.add(Json.string(block, "text"));
         }
         return result;
     }
@@ -51,7 +74,7 @@ final class Presentation {
         int visible = 0;
         for (Object value : Json.list(raw,"blocks")) {
             Map<String,Object> block = Json.object(value);
-            if (Json.flag(block,"complete") && visible++ == index) return Json.list(block,"runs");
+            if (visibleBlock(block) && visible++ == index) return Json.list(block,"runs");
         }
         return java.util.Collections.emptyList();
     }

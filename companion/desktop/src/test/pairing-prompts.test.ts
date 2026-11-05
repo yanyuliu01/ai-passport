@@ -17,3 +17,16 @@ test('a stale dialog cannot approve an expired, removed or replaced invitation',
   pending=[];answers[1](true);await turn();assert.deepEqual(decisions,[]);
   pending=[{id:'legacy:expired',name:'Phone',fingerprint:'c',expires:Date.now()-1}];controller.update();await turn();assert.equal(answers.length,2);
 });
+test('an image binding dialog cannot approve a replacement account or connection', async () => {
+  let pending: PairingRequest[] = [{ id: 'account:image:instance-a:1:peer:runtime:local', name: '电脑', fingerprint: 'a', imageRuntimeId: 'runtime' }];
+  const answers: ((value: boolean) => void)[] = [], approved: string[] = [];
+  const controller = new PairingPrompts(() => pending, () => new Promise(resolve => answers.push(resolve)), async request => { approved.push(request.id); });
+  controller.update();
+  pending = [{ ...pending[0], id: 'account:image:instance-b:1:peer:runtime:local' }];
+  answers[0](true); await turn();
+  assert.deepEqual(approved, [], 'the previous account/connection must not be approved');
+  assert.equal(answers.length, 2);
+  pending = [];
+  answers[1](true); await turn();
+  assert.deepEqual(approved, []);
+});

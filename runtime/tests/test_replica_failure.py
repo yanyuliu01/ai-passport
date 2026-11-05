@@ -28,6 +28,18 @@ class ReplicaDurabilityTests(unittest.TestCase):
         self.assertEqual(restored.position(self.origin), ("epoch", 1))
         self.assertEqual(restored.get(self.origin, "message", "m1"), self.record["data"])
 
+    def test_applied_record_does_not_cross_a_pending_apply_or_epoch_reset(self):
+        replicas = Replicas(self.folder)
+        replicas.store(self.origin, 'epoch-a', [self.record], 1, track=True)
+        self.assertIsNone(replicas.applied_record(self.origin, 'message', 'm1'))
+        replicas.mark_applied(self.origin, 'epoch-a', 1)
+        self.assertEqual(replicas.applied_record(self.origin, 'message', 'm1')['text'], 'hello')
+        replacement = dict(self.record, data={'id': 'm1', 'text': 'new epoch'})
+        replicas.store(self.origin, 'epoch-b', [replacement], 1, track=True)
+        self.assertIsNone(replicas.applied_record(self.origin, 'message', 'm1'))
+        replicas.mark_applied(self.origin, 'epoch-b', 1)
+        self.assertEqual(replicas.applied_record(self.origin, 'message', 'm1')['text'], 'new epoch')
+
     def test_failed_incremental_write_preserves_previous_cursor_and_retry(self):
         replicas = Replicas(self.folder)
         replicas.store(self.origin, "epoch", [self.record], 1)

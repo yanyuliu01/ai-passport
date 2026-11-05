@@ -49,6 +49,6 @@ public class RuntimeRetryTest {
         assertFalse(RuntimeRetry.safe("POST", "https://runtime.test/v1/messages", "{\"text\":\"hello\"}".getBytes(StandardCharsets.UTF_8)));
         assertFalse(RuntimeRetry.safe("POST", "https://runtime.test/v1/approvals/a1", new byte[0]));
         assertFalse(RuntimeRetry.safe("POST", "https://runtime.test/v1/voice?client_id=", new byte[1]));
-        assertTrue(RuntimeRetry.safe("POST", "https://runtime.test/v1/voice?client_id=abc", new byte[1]));
+        assertFalse(RuntimeRetry.safe("POST", "https://runtime.test/v1/voice?client_id=abc", new byte[1]));
     }
 }

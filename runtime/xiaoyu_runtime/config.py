@@ -114,6 +114,9 @@ class Config:
     # 小鱼这条线上一次调用最长多久：她只负责听懂、马上答、把活派出去
     voice_timeout_seconds: int = 60
     decide_first: bool = False
+    browser_enabled: bool = False
+    bilibili_autonomous: bool = False
+    bilibili_weixin_shares: bool = False
     # 问了主人“还等不等”之后，这么久没人答就停掉；0 是一直等
     idle_answer_seconds: int = 1800
     router_type: str = "mention"
@@ -894,6 +897,13 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         if databases["bus_database"] is None:
             raise ConfigError("workspace.type 为 notion 时要设置 workspace.bus_database（总线）")
 
+    entertainment = _expect(raw.get("entertainment", {}), dict, "entertainment")
+    browser_enabled = _expect(entertainment.get("browser_enabled", False), bool,
+                              "entertainment.browser_enabled")
+    bilibili_autonomous = _expect(entertainment.get("bilibili_autonomous", False), bool,
+                                  "entertainment.bilibili_autonomous")
+    bilibili_weixin_shares = _expect(entertainment.get("bilibili_weixin_shares", False), bool,
+                                     "entertainment.bilibili_weixin_shares")
     return Config(
         name=name,
         host=host,
@@ -909,6 +919,9 @@ def load(path: Path, env: Optional[Mapping[str, str]] = None) -> Config:
         max_parallel=max_parallel,
         voice_timeout_seconds=voice_timeout,
         decide_first=decide_first,
+        browser_enabled=browser_enabled,
+        bilibili_autonomous=bilibili_autonomous,
+        bilibili_weixin_shares=bilibili_weixin_shares,
         idle_answer_seconds=idle_answer,
         router_type=router_type,
         router_command=router_command,

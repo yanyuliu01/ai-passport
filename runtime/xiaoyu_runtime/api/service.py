@@ -32,6 +32,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from ..helpers.agents import AgentError
+from ..helpers.dsh_stream import ProviderBusy
 from ..world.cards import ACTIVE
 from ..config import EFFORT_LEVELS
 from ..world.identity import CAPABILITIES, PROTOCOL, fingerprint, host_proof, runtime_id, subject_id
@@ -82,6 +83,25 @@ FINISHED = ("done", "failed")
 RESTART_NOTE = "Runtime 重启了，这句话没处理完，可以再说一次"
 RESTART_VOICE_NOTE = "Runtime 重启了，这段录音没来得及识别，再说一次吧"
 MESH_PREFIX = re.compile(r"^[0-9a-f]{12}\.(.+)$")
+
+# Select once per message, so projections and retries see the same wording.
+PROVIDER_BUSY_REPLIES = (
+    "我这边的服务正忙，这句暂时没法回答。过一会儿再试试～",
+    "服务这会儿有点挤，我没能答上。等会儿再叫我一声。",
+    "刚才请求被服务挡回来了，这次我没答成。稍后再试一下吧。",
+    "我连着的服务忙不过来了，这句先没答上。等会儿再问我～",
+    "唔，服务刚好在忙，我暂时接不上这句。过一阵再试试。",
+    "这次没答成，服务那边正忙着。稍后再发我一次吧。",
+    "服务现在有点忙，我这边没拿到回答。等一会儿再试。",
+    "我这句卡在服务那边了，暂时没法回。过会儿我们再接着聊。",
+    "服务那边刚刚忙不过来，我没接住这句话。过会儿再试试？",
+    "这会儿服务有点拥挤，我暂时答不了。晚点再找我聊吧～",
+)
+
+
+def _provider_busy_reply(message_id: str) -> str:
+    index = int.from_bytes(hashlib.sha256(message_id.encode("utf-8")).digest()[:8], "big")
+    return PROVIDER_BUSY_REPLIES[index % len(PROVIDER_BUSY_REPLIES)]
 
 
 class RequestError(Exception):
@@ -192,6 +212,11 @@ class Service:
         self._held: Dict[str, str] = {}
         # 小鱼网络（mesh.py）：加入了网络时由 Mesh 设上。在别的 Runtime 的事里说的话转交给那台。
         self.mesh: Optional[Any] = None
+        # Installed only after channel enrollment selects a stable authority;
+        # ordinary Runtime startup does not enable or expose WeChat.
+        self._channel_authority = None
+        self._channel_authority_lock = threading.RLock()
+        self._channel_enabled = False
         xiaoyu.defer = self._defer
         xiaoyu.sessions.authority = self.runtime_id
         xiaoyu.retry_effects = self.retry_effects
@@ -568,17 +593,41 @@ class Service:
                agent: Any = None, hop: Any = 0, card: Any = None,
                pin: Any = False, effort: Any = None, model: Any = None,
                mesh: Optional[Dict[str, Any]] = None, image_ids: Any = None, reply_scope: Any = None,
-               _trusted_mesh_images: bool = False) -> Dict[str, Any]:
+               _trusted_mesh_images: bool = False, _channel_authorized: bool = False,
+               _channel_file_ids: Any = None) -> Dict[str, Any]:
         """登记一条消息并立刻返回；client_id 相同的重复提交返回同一条，不会重做。
 
         pin 为 True 表示主人是打开 card 那件事、在它里面说的这句话：一定归到它。
         effort / model 是给这句话选的努力程度和模型，交给帮手时用。
         mesh 只由 mesh.py 给（网络里别的 Runtime 交来的话，不经 HTTP）：{"message_id"：用那台
         给的编号，两边同一句话同一个编号；"delegated_from"：那台的哪件事交来的}。"""
+        if conversation == 'weixin' and not _channel_authorized:
+            raise RequestError('微信对话只能在微信里说')
+        if conversation == 'weixin':
+            channel = self.card_store.conversations.get('weixin') or {}
+            if channel.get('kind') != 'weixin' or channel.get('deleted') or channel.get('owner') != self.runtime_id:
+                raise RequestError('微信渠道未绑定到这台电脑')
+            if self.mesh is not None:
+                view = self.mesh.owner_of('weixin')
+                if view.get('unresolved') or view.get('conflict') or view.get('owner') != self.runtime_id:
+                    raise RequestError('微信会话负责人尚未确认')
         from ..events.image_inputs import resolve
         from ..world.artifacts import ArtifactError
         try:
             attachments = resolve(self.artifacts, image_ids) if image_ids is not None else []
+            if _channel_file_ids is not None:
+                if (conversation != 'weixin' or not _channel_authorized or not isinstance(_channel_file_ids, list)
+                        or not 1 <= len(_channel_file_ids) <= 4 or len(set(_channel_file_ids)) != len(_channel_file_ids)
+                        or len(_channel_file_ids) + len(attachments) > 4):
+                    raise ArtifactError('微信文件信息不合法')
+                for identity in _channel_file_ids:
+                    stream, meta, _, size = self.artifacts.open_content(identity)
+                    stream.close()
+                    if meta.get('source') != 'owner' or size > 25 * 1024 * 1024:
+                        raise ArtifactError('微信文件不可用')
+                    # A file message may contain image bytes; preserve its file
+                    # semantics rather than adding it to the vision input.
+                    attachments.append(dict(meta, channel_file=True))
         except ArtifactError as error:
             raise RequestError(str(error)) from None
         if attachments:
@@ -586,7 +635,8 @@ class Service:
                 text = ""
             if pin or card is not None or (mesh and not _trusted_mesh_images):
                 raise RequestError("带图消息请从主对话发送；任务续聊和跨电脑转发暂不支持图片")
-            if not self._xiaoyu.image_agent(agent) and not _trusted_mesh_images:
+            if (conversation != 'weixin' and any(not item.get('channel_file') for item in attachments)
+                    and not self._xiaoyu.image_agent(agent) and not _trusted_mesh_images):
                 # A different Runtime may own the conversation and have the
                 # vision agent. Do not reject that route based on local agents.
                 # Explicit agent selection is still validated against this
@@ -600,7 +650,7 @@ class Service:
                     raise RequestError("这台 Runtime 没有可看图的代理，请先配置后再发送")
         if not isinstance(text, str) or (not text.strip() and not attachments):
             raise RequestError("text 不能为空")
-        text = text if text.strip() else "请看看这些图片"
+        text = text if text.strip() else ("请看看这些文件" if _channel_file_ids else "请看看这些图片")
         if len(text) > MAX_TEXT_CHARS:
             raise RequestError("text 不能超过 %d 个字符" % MAX_TEXT_CHARS)
         return self._enqueue("text", text, None, conversation, client_id, agent, hop, card,
@@ -611,6 +661,8 @@ class Service:
                      card: Any = None, pin: Any = False, effort: Any = None,
                      model: Any = None, reply_scope: Any = None) -> Dict[str, Any]:
         """登记一条语音消息：audio 是 16 位单声道 WAV 的全部字节。识别在排队处理时进行。"""
+        if conversation == 'weixin':
+            raise RequestError('微信对话只能在微信里说')
         if not isinstance(audio, (bytes, bytearray)) or not audio:
             raise RequestError("录音是空的")
         if len(audio) > MAX_AUDIO_BYTES:
@@ -796,12 +848,13 @@ class Service:
                 if message_id in self._messages:
                     self._owner_writer.by(cause=message["id"]).request_changed(message, revise=False)  # 序号、日志一起变
                     if not self._closed:
+                        if hop == 0 and not message.get("relay_to"):
+                            # Interrupt the previous speech before starting the
+                            # queued worker, never the newly accepted turn.
+                            self._xiaoyu.interrupt(conversation)
                         self._line_up(conversation, message_id)
                 snapshot = self._snapshot(message)
                 self._changed.notify_all()
-            if hop == 0 and not message.get("relay_to"):
-                # 主人插话：她要是还在说上一句，先停下来听这一句（说出的部分照样留着）。
-                self._xiaoyu.interrupt(conversation)
             return snapshot
 
     def _seen(self, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -895,6 +948,8 @@ class Service:
         epoch 是这份记录的编号：和客户端上次看到的不一样，说明 Runtime 换了一份记录，客户端
         应该丢掉游标从 0 重新拉。"""
         conversation = _name(conversation, "conversation")
+        if conversation == 'weixin':
+            raise RequestError('客户端不支持微信渠道')
         if isinstance(after, bool) or not isinstance(after, int) or after < 0:
             raise RequestError("after 应该是不小于 0 的整数")
         if usage is not None and (isinstance(usage, bool) or not isinstance(usage, int)):
@@ -936,10 +991,11 @@ class Service:
         except ReportError as error:
             raise RequestError(str(error))
 
-    def conversations(self):
+    def conversations(self, include_weixin=False):
         from ..world.conversation_directory import uid
         preferences = self.card_store.directory.snapshot()
-        values = self.card_store.conversations.list(include_deleted=True)
+        values = [item for item in self.card_store.conversations.list(include_deleted=True)
+                  if include_weixin or item.get('id') != 'weixin']
         for item in values:
             key = uid('chat', item['id'])
             metadata = preferences.get(key, {})
@@ -1069,14 +1125,17 @@ class Service:
             raise RequestError('原生打开请求失败，来源记录仍保留')
         return {'status':'launch_requested','uid':key,'native_session_id':sid,'verified_visible':False}
 
-    def directory_page(self, cursor=None, query='', limit=100):
+    def directory_page(self, cursor=None, query='', limit=100, include_weixin=False):
         import base64
         import hashlib
         import json
         if not isinstance(query, str) or len(query) > 200 or not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
             raise RequestError('Invalid directory query')
         query = query.strip().casefold()
-        scope = hashlib.sha256(json.dumps([self.runtime_id,self.card_store.epoch,'chat-task-native-v1',query]).encode()).hexdigest()
+        scope_parts = [self.runtime_id, self.card_store.epoch, 'chat-task-native-v1', query]
+        if include_weixin:
+            scope_parts.append('weixin')
+        scope = hashlib.sha256(json.dumps(scope_parts).encode()).hexdigest()
         last = ''
         if cursor:
             try:
@@ -1094,7 +1153,7 @@ class Service:
             # sources cannot displace the chats/goals the owner manages now.
             rank = 0 if key.startswith('chat-') else 1 if key.startswith('task-') else 2
             return rank, key
-        rows = sorted((r for r in result['entries'] if (not last or order(r['uid']) > order(last)) and
+        rows = sorted((r for r in result['entries'] if (include_weixin or r.get('conversation_id') != 'weixin') and (not last or order(r['uid']) > order(last)) and
                        (not query or query in ' '.join(str(r.get(k) or '') for k in ('title','original_title','project','source_name','agent')).casefold())), key=lambda r: order(r['uid']))
         more = len(rows) > limit
         result['entries'], result['more'] = [{k:v for k,v in row.items() if k != 'legacy_message_ids'} for row in rows[:limit]], more
@@ -1133,9 +1192,9 @@ class Service:
                             metadata_revision=row['metadata_revision'], native_sources=row.get('native_sources', []))
         return tasks
 
-    def directory_history(self, key, cursor=None):
+    def directory_history(self, key, cursor=None, include_weixin=False):
         row = next((item for item in self.directory()['entries'] if item['uid'] == key), None)
-        if row is None:
+        if row is None or (not include_weixin and row.get('conversation_id') == 'weixin'):
             raise RequestError('Directory source not found')
         if row['authority'] != self.runtime_id and row['kind'] != 'conversation':
             if self.mesh is None:
@@ -1288,6 +1347,129 @@ class Service:
             or authority[:6]
         return "「%s」不在线，拿不到最新的设备名单，现在不能做这件事" % name
 
+    def channel_authority_command(self, origin: str, args: Any) -> Dict[str, Any]:
+        """Apply one peer's channel request on the explicitly enrolled authority.
+
+        `origin` comes from Mesh's accepted record origin, not its payload.
+        The host must attest to stopping and draining its worker before release.
+        This internal method does not expose credentials or bind an account.
+        """
+        if not isinstance(args, dict):
+            raise RequestError('微信渠道请求格式无效')
+        action = args.get('action')
+        allowed = {'view': {'action'}, 'reserve': {'action'},
+                   'activate': {'action', 'generation'}, 'begin_release': {'action', 'generation'},
+                   'release': {'action', 'generation', 'worker_stopped'}}
+        if not isinstance(action, str) or action not in allowed or set(args) != allowed[action]:
+            raise RequestError('微信渠道请求格式无效')
+        if action not in ('view', 'reserve') and (type(args.get('generation')) is not int or args['generation'] < 1):
+            raise RequestError('微信渠道版本无效')
+        if action == 'release' and args.get('worker_stopped') is not True:
+            raise RequestError('微信连接尚未停止')
+        with self._channel_authority_lock:
+            mesh, authority = self.mesh, self._channel_authority
+            if self._closed or mesh is None:
+                raise RequestError('微信渠道权威尚未启用')
+            main = mesh.owner_of('default')
+            if (mesh.authority() != self.runtime_id
+                    or main.get('conflict') or main.get('unresolved')):
+                raise RequestError('微信渠道权威尚未确认')
+            if not isinstance(origin, str) or (origin != self.runtime_id and
+                    (self.devices.removed(origin) or mesh.peer_id(origin) != origin)):
+                raise RequestError('微信渠道来源不可用')
+            if authority is None and self._channel_enabled:
+                self._enable_channel_authority()
+                authority = self._channel_authority
+            if authority is None or authority.authority != self.runtime_id:
+                raise RequestError('微信渠道权威尚未启用')
+            try:
+                if action == 'view':
+                    result = authority.view()
+                elif action == 'reserve':
+                    result = authority.reserve(origin)
+                elif action == 'activate':
+                    result = authority.activate(origin, args['generation'])
+                elif action == 'begin_release':
+                    result = authority.begin_release(origin, args['generation'])
+                else:
+                    result = authority.release(origin, args['generation'], worker_stopped=True)
+            except ValueError as error:
+                raise RequestError(str(error)) from None
+            return {'channel_authority': result}
+
+    def _enable_channel_authority(self):
+        """Install the coordinator only on the confirmed configured home.
+
+        Startup does not call this until the channel integration is enabled.
+        """
+        from ..channels.authority import ChannelAuthority
+        with self._channel_authority_lock:
+            mesh = self.mesh
+            if self._closed or mesh is None or not getattr(mesh._config, 'mesh_home', False):
+                raise RequestError('这台不是配置的微信渠道权威')
+            main = mesh.owner_of('default')
+            if (mesh.authority() != self.runtime_id or main.get('conflict') or main.get('unresolved')):
+                raise RequestError('微信渠道权威尚未确认')
+            if self._channel_authority is None:
+                self._channel_authority = ChannelAuthority(
+                    self._store.state_dir / 'channels' / 'weixin' / 'authority.json',
+                    self.runtime_id, local_runtime=self.runtime_id)
+            return self._channel_authority.view()
+
+    def enable_channel_hosting(self, session_factory):
+        """Create a host session explicitly; do not start networking here."""
+        with self._channel_authority_lock:
+            if self._closed or self.mesh is None:
+                raise RequestError('小鱼网络尚未就绪')
+            if not self._channel_enabled:
+                self._channel_session = session_factory(self)
+                self._channel_enabled = True
+            return self._channel_session
+
+    def prepare_local_channel_authority(self):
+        """Initialize only the configured home, and only when still authoritative."""
+        mesh = self.mesh
+        if self._channel_enabled and mesh is not None and getattr(mesh._config, 'mesh_home', False):
+            self._enable_channel_authority()
+
+    def channel_resend(self, block: Any, operation: Any, revision: Any, confirm: Any = False, *, local_only=False):
+        """Queue one idempotent channel retry on the verified channel host."""
+        if (not isinstance(block, str) or len(block) > 512 or not isinstance(operation, str)
+                or not re.fullmatch(r'[a-f0-9]{32}', operation) or type(confirm) is not bool
+                or type(revision) is not int or revision < 1):
+            raise RequestError('微信重发请求格式无效')
+        problem = self.permission_problem()
+        if problem:
+            return {'status': 'refused', 'reason': problem}
+        mesh = self.mesh
+        if mesh is None:
+            return {'status': 'refused', 'reason': '微信渠道负责人暂不可用'}
+        owner, separator, local_block = block.partition('/')
+        if (not separator or not re.fullmatch(r'[a-f0-9]{32}', owner)
+                or not re.fullmatch(r'[A-Za-z0-9._:-]+#(?:[0-9]{1,8}|media:a[0-9a-f]{32})', local_block)):
+            return {'status': 'refused', 'reason': '微信回复编号无法确认'}
+        if owner != self.runtime_id:
+            if local_only or not mesh.online(owner):
+                return {'status': 'refused', 'reason': '连接微信的电脑暂不在线'}
+            try:
+                command = mesh.command(owner, 'weixin_resend', {'block': block, 'operation': operation, 'revision': revision, 'confirm': confirm})
+            except Exception:
+                return {'status': 'unknown', 'operation': operation}
+            return {'status': 'queued', 'host': owner, 'command': command}
+        host = mesh.owner_of('weixin')
+        if host.get('owner') != owner or host.get('conflict') or host.get('unresolved'):
+            return {'status': 'refused', 'reason': '微信渠道负责人无法确认'}
+        session = getattr(self, '_channel_session', None)
+        if session is None:
+            return {'status': 'refused', 'reason': '微信连接暂不可用'}
+        try:
+            result = session.retry_delivery(block, operation, revision, confirm_unknown=confirm)
+        except ValueError:
+            return {'status': 'refused', 'reason': '微信连接暂不可用，请稍后再试'}
+        except Exception:
+            return {'status': 'unknown', 'operation': operation}
+        return {'status': result}
+
     def device_add(self, name: Any, kind: Any = "phone") -> Dict[str, Any]:
         """配对一台设备：凭据在这里生成、只给这一次；名单由权威记下。"""
         name = _name(name, "name") if name is not None else "设备"
@@ -1390,6 +1572,8 @@ class Service:
         没声明的旧 App 照旧拿到卡上的状态（unknown 或最后知道的状态）和 stale，免得不认识的
         状态被当成做完了。"""
         conversation = _name(conversation, "conversation")
+        if conversation == 'weixin' and 'weixin' not in states:
+            raise RequestError('客户端不支持微信渠道')
         if requests is not None:
             if not isinstance(requests, (list, tuple)) or len(requests) > 32:
                 raise RequestError("requests must contain at most 32 request ids")
@@ -1412,6 +1596,9 @@ class Service:
         while True:
             seq, tasks, messages, floor = cards_store.sync_since(
                 None if all_conversations else conversation, after, unavailable="unavailable" in states)
+            if 'weixin' not in states:
+                tasks = [item for item in tasks if item.get('conversation') != 'weixin']
+                messages = [item for item in messages if item.get('conversation') != 'weixin']
             # Check requests after the history snapshot: a request-only update
             # before that snapshot can advance seq without adding a chat body.
             # Checking first would swallow its wakeup and wait a full poll.
@@ -1426,6 +1613,8 @@ class Service:
                 continue
             # 授权和消息、卡共用一个计数器：只是授权变了（比如电脑上答掉了）也要叫醒。
             approvals = self._xiaoyu.approvals.since(None if all_conversations else conversation, after)
+            if 'weixin' not in states:
+                approvals = [item for item in approvals if item.get('conversation') != 'weixin']
             remaining = deadline - time.monotonic()
             if (tasks or messages or approvals or reset or request_changed or cards_store.catalog_seq > after or remaining <= 0
                     or (usage is not None and meter.rev != usage)):
@@ -1444,7 +1633,21 @@ class Service:
             items, more = _page_items(items)
             if more:
                 seq = items[-1][1]["seq"]
-        request_page = self._sync_requests(requests, conversation, all_conversations) if requests is not None else {}
+        request_page = self._sync_requests(requests, conversation, all_conversations, 'weixin' in states) if requests is not None else {}
+        channel_page = {}
+        if 'weixin' in states:
+            session = getattr(self, '_channel_session', None)
+            if session is not None:
+                try:
+                    status = session.public_status()
+                except Exception:
+                    status = {}
+                # This is only the local host's observation. Another Runtime's
+                # host state is not inferred from an unbound local session.
+                state = status.get('state') if isinstance(status, dict) else None
+                if state not in ('connected', 'binding', 'unreachable', 'relogin'):
+                    state = 'unknown'
+                channel_page = {'weixin': {'state': state}}
         return {
             "protocol": PROTOCOL, "subject_id": self.subject_id, "runtime_id": self.runtime_id,
             "epoch": cards_store.epoch,
@@ -1452,7 +1655,7 @@ class Service:
             # 快照（after 为 0 或者被改成快照）：固定在 seq；truncated 说明更早的话没放进来。
             **({"snapshot": {"seq": seq, "truncated": truncated}} if after == 0 else {}),
             "presentation_policy": presentation.policy(),
-            "conversations": self.conversations()['conversations'],
+            "conversations": self.conversations(include_weixin='weixin' in states)['conversations'],
             "messages": [item for kind, item in items if kind == "message"],
             "tasks": self._directory_tasks([item for kind, item in items if kind == "task"]),
             # 序号比 after 大的授权变化，含已经有结局的（status：pending / allowed / denied / withdrawn）。
@@ -1460,10 +1663,11 @@ class Service:
             # 主动删除的消息（现在还没有会删消息的操作）；裁剪不算删除，不出现在这里。
             "removed": [],
             "usage": meter.snapshot(),
+            **channel_page,
             **request_page,
         }
 
-    def _sync_requests(self, requested, conversation, all_conversations):
+    def _sync_requests(self, requested, conversation, all_conversations, include_weixin=False):
         """Current request projection alongside sync; it never advances its cursor.
 
         Use an explicit public field list, not a private journal record. Current
@@ -1476,7 +1680,7 @@ class Service:
         with self._changed:
             for key in requested:
                 value = self._messages.get(key)
-                if value is None or (self.card_store.conversations.get(value.get('conversation')) or {}).get('deleted') or not (all_conversations or value["conversation"] == conversation):
+                if value is None or (not include_weixin and value.get('conversation') == 'weixin') or (self.card_store.conversations.get(value.get('conversation')) or {}).get('deleted') or not (all_conversations or value["conversation"] == conversation):
                     missing.append(key)
                     continue
                 if items and size >= 512 * 1024:
@@ -1530,8 +1734,11 @@ class Service:
         return self._xiaoyu.approvals.answer(approval_id, decision)
 
     def cards(self, conversation: Any = "default") -> List[Dict[str, Any]]:
+        name = _name(conversation, "conversation")
+        if name == 'weixin':
+            raise RequestError('客户端不支持微信渠道')
         return [presentation.card(card, self.runtime_id, self.card_store.message)
-                for card in self._xiaoyu.cards.recent(_name(conversation, "conversation"), 50,
+                for card in self._xiaoyu.cards.recent(name, 50,
                                                      include_desktop=True)]
 
     def cancel(self, card_id: str, actor: str = "client", reason: str = "",
@@ -1876,6 +2083,10 @@ class Service:
                 raise UnavailableError("核对尚未完整发布，请用相同身份和内容重试") from error
             return self.timer_effect_review(timer_id)
 
+    def _channel_delivery(self, message_id, block_id, text, state, revision):
+        """Internal channel projection; public clients cannot write this field."""
+        return self._system_writer.channel_delivery(message_id, block_id, text, state, revision)
+
     def _card_changed(self, card: Dict[str, Any]) -> None:
         if card["state"] in ACTIVE:
             return
@@ -1968,7 +2179,10 @@ class Service:
 
     def reset(self, conversation: Any) -> bool:
         """让一个对话从头开始：下一句话每个代理都会开新会话。"""
-        return self._xiaoyu.reset(_name(conversation, "conversation"))
+        conversation = _name(conversation, "conversation")
+        if conversation == 'weixin':
+            raise RequestError('微信渠道不支持通过此接口重置')
+        return self._xiaoyu.reset(conversation)
 
     def share(self, conversation: Any, turns: Any) -> int:
         """手机带来在别的 Runtime 上发生的对话；返回这台之前不知道的轮数。
@@ -1976,6 +2190,8 @@ class Service:
         不立刻打扰模型：等这个对话的下一句话到来时一并告诉接话的代理。
         """
         conversation = _name(conversation, "conversation")
+        if conversation == 'weixin':
+            raise RequestError('微信渠道不支持通过此接口导入记录')
         if (self.card_store.conversations.get(conversation) or {}).get('deleted'):
             return 0
         if not isinstance(turns, list) or len(turns) > MAX_SHARED_TURNS:
@@ -2002,12 +2218,19 @@ class Service:
         return self._xiaoyu.share(conversation, cleaned)
 
     def close(self) -> None:
+        session = getattr(self, '_channel_session', None)
+        if session is not None and not session.shutdown(timeout=1):
+            sys.stderr.write('微信渠道仍在停止，保留本机连接锁\n')
         self.discovery.close()
         self.metadata.pool.shutdown(wait=False, cancel_futures=True)
         self.review.close()
-        with self._changed:
-            self._closed = True
-            workers = self.loop.stop()
+        with self._channel_authority_lock:
+            with self._changed:
+                self._closed = True
+                workers = self.loop.stop()
+            if self._channel_authority is not None:
+                self._channel_authority.close()
+                self._channel_authority = None
         self._xiaoyu.close()
         for worker in workers:
             worker.join(timeout=5)
@@ -2211,6 +2434,8 @@ class Service:
     def handoff(self, conversation: Any, to: Any) -> Dict[str, Any]:
         """把一段对话交给另一台（两台都在线、这段对话空闲时）。返回 {"status", ...}。"""
         conversation = _name(conversation, "conversation")
+        if conversation == 'weixin':
+            raise RequestError('微信渠道负责人不能通过对话移交接口变更')
         if self.mesh is None:
             raise RequestError("这台不在小鱼网络里，没有别的电脑可以交")
         problem = self.permission_problem()
@@ -2366,10 +2591,15 @@ class Service:
             return
         try:
             scope = self._effects_for(message_id)
-            with self._xiaoyu.effects(scope), self._reply_writer.opening(**({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
+            with self._xiaoyu.effects(scope), self._xiaoyu.channel_delivery_context(
+                    message.get('client_id') if conversation == 'weixin' else None), self._reply_writer.opening(
+                    **({"delegated_from": delegated} if delegated else {}), reply_scope=message.get("reply_scope")):
                 if message.get("_resume_effects"):
                     turn = self._xiaoyu.resume_effects(scope, message,
                         lambda kind, agent, detail: self._report(message_id, kind, agent, detail))
+                elif any(item.get('channel_file') for item in message.get('attachments') or []):
+                    turn = self._xiaoyu.hear_channel_files(text, conversation, message_id,
+                        message["attachments"], asked=asked, hop=hop)
                 elif message.get("attachments"):
                     turn = self._xiaoyu.hear_images(text, conversation, message_id,
                         message["attachments"], asked=asked, hop=hop,
@@ -2391,7 +2621,11 @@ class Service:
             self._fail(message_id, conversation, text, "操作记录暂时无法保存，这轮没有开始新的操作。", pin)
             return
         except AgentError as error:
-            self._fail(message_id, conversation, text, str(error), pin)
+            if isinstance(error, ProviderBusy):
+                self._fail(message_id, conversation, text, _provider_busy_reply(message_id), pin,
+                           preserve_partial=True)
+            else:
+                self._fail(message_id, conversation, text, str(error), pin)
             return
         except Exception as error:  # 工作线程不能死：记下来，继续处理下一条
             self._fail(message_id, conversation, text,
@@ -2429,10 +2663,16 @@ class Service:
             writer.by(cause=message["id"]).attach(card["id"], attachments, index)
 
     def _fail(self, message_id: str, conversation: str, text: str, error: str, pin: bool = False,
-              unknown: bool = False) -> None:
+              unknown: bool = False, preserve_partial: bool = False) -> None:
         """这句话没接住：消息记成失败，并留一张卡，对话里看得到这句话和没成的原因。"""
         with self._changed:
             message = dict(self._messages.get(message_id) or {"id": message_id})
+
+        partial = message.get("partial")
+        if preserve_partial and isinstance(partial, str) and partial.strip():
+            partial = partial.rstrip()
+            separator = "\n\n" if re.search(r"(?:^|\n)---\s*$", partial) else "\n\n---\n\n"
+            error = partial + separator + error
 
         if unknown:
             original = self.card_store.message(message_id + ":you")

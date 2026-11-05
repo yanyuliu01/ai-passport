@@ -16,6 +16,7 @@
 这个类不带锁：由 Cards 在它自己的锁里调用，序号也由 Cards 发。
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -23,6 +24,7 @@ import uuid
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from .message_parts import parts
 
 MAX_MESSAGES = 5000
 MAX_ACTIVITIES = 2000
@@ -253,6 +255,59 @@ class MessageLog:
 
     # ---- 写 ----
 
+    def channel_delivery(self, message_id: str, block_id: str, text: str,
+                         state: str, revision: int) -> bool:
+        """Project one durable local delivery onto its exact canonical message.
+
+        The caller holds the Cards lock. Retain per-block revisions so replay
+        after a crash is idempotent and an older projection cannot win.
+        """
+        if (state not in ('waiting', 'sent', 'failed', 'unknown', 'cancelled')
+                or type(revision) is not int or revision < 1):
+            raise ValueError('invalid channel delivery projection')
+        record = self._messages.get(message_id)
+        if (not self.origin or record is None or record.get('mesh_origin') or record.get('relay_to')
+                or record.get('conversation') != 'weixin' or record.get('scope') == 'task'
+                or record.get('kind') == 'activity'
+                or record.get('author') != {'kind': 'xiaoyou', 'name': 'xiaoyou'}
+                or (record.get('source') or {}).get('type') != 'runtime'
+                or (record.get('source') or {}).get('runtime_id') != self.origin):
+            raise ValueError('channel message is not owned locally')
+        prefix = self.origin + '/' + message_id + '#'
+        index_text = block_id[len(prefix):] if block_id.startswith(prefix) else ''
+        if index_text.startswith('media:'):
+            artifact_id = index_text[len('media:'):]
+            if (text != artifact_id or record.get('status') not in ('final', 'done')
+                    or not any(item.get('id') == artifact_id and item.get('status') == 'ready'
+                               and item.get('source') != 'owner'
+                               for item in record.get('attachments', []) if isinstance(item, dict))):
+                raise ValueError('channel attachment requires reconciliation')
+        else:
+            if not index_text.isascii() or not index_text.isdigit() or str(int(index_text)) != index_text:
+                raise ValueError('invalid channel block identity')
+            index = int(index_text)
+            terminal = record.get('status') in ('final', 'done', 'failed', 'cancelled')
+            source_text = record.get('text') if terminal else record.get('partial')
+            blocks = parts(source_text or '', True)
+            if (index >= len(blocks) or not (terminal or blocks[index][1])
+                    or not isinstance(text, str) or blocks[index][0] != text):
+                raise ValueError('channel block requires reconciliation')
+        revisions = dict(record.get('_delivery_revisions') or {})
+        hashes = dict(record.get('_delivery_hashes') or {})
+        delivery = dict(record.get('delivery') or {})
+        digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        previous = revisions.get(block_id, 0)
+        if revision < previous:
+            raise ValueError('channel delivery revision went backwards')
+        if revision == previous:
+            if delivery.get(block_id) != state or hashes.get(block_id) != digest:
+                raise ValueError('conflicting channel delivery revision')
+            return False
+        revisions[block_id], delivery[block_id], hashes[block_id] = revision, state, digest
+        self._put(dict(record, delivery=delivery, _delivery_revisions=revisions,
+                       _delivery_hashes=hashes), strict=True)
+        return True
+
     def _put(self, record: Dict[str, Any], persist: bool = True, strict: bool = False) -> Dict[str, Any]:
         self._stamp(record)
         # 修订号就用序号：序号跨重启只增不减（Cards 预留号段），没落盘的生成中修订也不会
@@ -274,11 +329,17 @@ class MessageLog:
 
         卡上的条目是消息的副本：哪边先有都行，同一个编号就是同一条。卡上写着的文字就是
         定稿（status final）；Service 已经标成 failed 的保持 failed。"""
+        origin = card.get('origin_message') or ''
+        origin_reply = self._messages.get(origin[:-4] + ':reply') if origin.endswith(':you') else None
+        channel_tracked = card.get('conversation') == 'weixin' and bool(
+            origin_reply and origin_reply.get('channel_delivery_tracked') is True)
         for entry in card["entries"]:
             if not entry.get("id"):
                 # 没带编号的条目（比如重启提示）：配一个，以后它就固定叫这个。
                 entry["id"] = "%s-%s" % (card["id"], uuid.uuid4().hex[:12])
             wanted = entry_message(card, entry)
+            if channel_tracked and wanted.get('kind') in ('summary', 'result'):
+                wanted['channel_delivery_tracked'] = True
             current = self._messages.get(wanted["id"])
             status = "failed" if current is not None and current["status"] == "failed" else "final"
             if (current is not None and current["status"] == status and not current["partial"]
@@ -310,6 +371,8 @@ class MessageLog:
                         "author": {"kind": "xiaoyou", "name": "xiaoyou"}, "kind": "summary",
                         "reply_to": None, "text": "", "source": {"type": "runtime"},
                         "attachments": [], "created_at": card.get("updated_at") or 0}
+                    if channel_tracked:
+                        record['channel_delivery_tracked'] = True
                     record.update(status="streaming", partial=text)
                     self._put(record, persist=current is None)
 
@@ -439,6 +502,8 @@ class MessageLog:
             "kind": "user" if you else "reply",
             "reply_to": None if you else message["id"] + ":you",
             "text": "", "partial": "", "source": {"type": "runtime"},
+            **({'channel_delivery_tracked': True} if not you and message.get('conversation') == 'weixin'
+               and isinstance(message.get('client_id'), str) and message['client_id'].startswith('channel-') else {}),
             "attachments": [dict(item) for item in message.get("attachments", [])] if you else [],
             "created_at": message.get("created_at") or 0,
             "turn_at": message.get("created_at") or 0,

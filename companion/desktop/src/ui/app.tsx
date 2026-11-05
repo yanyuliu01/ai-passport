@@ -8,12 +8,16 @@ import { Directory } from './directory';
 import { HelperSettings } from './helpers';
 import { DisplayText } from './display-text';
 import { Onboarding } from './onboarding';
+import { WeixinConnect } from './weixin-connect';
+import { WeixinRecord } from './weixin-record';
+import { WeixinAttachment } from './weixin-attachment';
+import { weixinDelivery, weixinVisibleAttachments, weixinVisibleBlocks } from '../core/weixin';
 import './style.css';
 
 declare global { interface Window { xiaoyu: DesktopAPI } }
 const empty: ClientView = { version: '0.1.17', spaces: [], selectedSpace: '', background: true,
   runtime: { state: 'disconnected', message: '等待你确认连接方式' }, pairing: { joined: 0, relayState: '未设置跨网入口', requests: [] } };
-type Page = 'chat' | 'work' | 'settings' | 'native' | 'helper';
+type Page = 'chat' | 'work' | 'settings' | 'native' | 'helper' | 'weixin';
 type TaskRef = { id: string; runtime: string };
 function App() {
   const [directoryOpen,setDirectoryOpen]=useState(false);
@@ -28,6 +32,8 @@ function App() {
   const [quote, setQuote] = useState<string>(), [menu, setMenu] = useState<{ x: number; y: number; text: string; author: string }>();
   const [openHelper, setOpenHelper] = useState<string>(), [helperAll, setHelperAll] = useState(false), [manageHelpers, setManageHelpers] = useState(false);
   const [sessionText, setSessionText] = useState(''), [errorDetail, setErrorDetail] = useState<string>();
+  const [retryChoice, setRetryChoice] = useState<{ block: string; text: string; revision: number }>();
+  const [retryBusy, setRetryBusy] = useState('');
   const detailGeneration = useRef(0), selection = useRef('');
   const bottom = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
   const space = view.spaces.find(item => item.id === view.selectedSpace) || view.spaces[0];
@@ -50,9 +56,12 @@ function App() {
   const completed = work.filter(task => workSection(task) === 'ended').slice().reverse();
   const desktopNow = tasks.filter(task => desktopRunning(task));
   const connection = space?.catchingUp ? '正在同步' : connectionWord(Boolean(space), Boolean(space?.connected));
+  const weixinHost = space?.connections?.find(item => item.channelLocal && item.capabilities.some(value => ['weixin_bind_v1', 'weixin_v1'].includes(value)));
+  const hasWeixinHistory = Boolean(space?.conversations.some(item => item.id === 'weixin') || space?.messages.some(item => item.conversation === 'weixin'));
+  const canRetryWeixin = Boolean(space?.connections?.some(item => item.connected && item.capabilities.includes('weixin_resend_v1')));
   selection.current = space?.id + '/' + space?.selectedConversation;
   const title = page === 'chat' ? target?.legacy ? '任务续聊' : conversation?.id === 'default' ? '主对话' : conversation?.title || '主对话'
-    : page === 'work' ? '在做的事' : page === 'native' ? '原会话' : page === 'helper' ? '' : '设置';
+    : page === 'work' ? '在做的事' : page === 'native' ? '原会话' : page === 'weixin' ? '微信' : page === 'helper' ? '' : '设置';
   const messageVersion = messages.filter(message => ['final', 'done', 'failed', 'cancelled'].includes(message.status)).map(message => message.id + ':' + message.rev).join('|');
   useEffect(() => {
     void window.xiaoyu.snapshot().then(value => { setView(value); if (!value.setup?.confirmed) setSetupOpen(true); setLoaded(true); }).catch(() => setProblem('暂时无法连接后台服务'));
@@ -97,11 +106,30 @@ function App() {
   function go(next: Page) { setPage(next); setSidebarOpen(false); setAttachmentsOpen(false); }
   async function chooseConversation(id: string) {
     if (!space) return;
+    if (id === 'weixin') { setTarget(undefined); go('weixin'); return; }
     await run(() => window.xiaoyu.selectConversation({ space: space.id, conversation: id })); setTarget(undefined); go('chat');
+  }
+  async function retryWeixin(block: string, revision: number, confirm: boolean) {
+    if (!space || retryBusy) return;
+    setRetryBusy(block); setProblem('');
+    try {
+      const result = await window.xiaoyu.weixinResend({ space: space.id, block, revision, confirm });
+      if (result.status === 'confirm_required') setProblem('微信里可能已经收到，请先核对后再重发。');
+      else if (result.status === 'unknown') setProblem('重发结果待确认，请稍后查看微信和渠道记录。');
+      else if (result.status === 'stale') setProblem('这条回复的状态已变化，请刷新后再查看。');
+      else if (result.status === 'refused' || result.status === 'missing') setProblem(String(result.reason || '微信重发暂不可用，请稍后再试。'));
+    } catch (error) { setProblem(clean(error)); } finally { setRetryBusy(''); }
+  }
+  function requestWeixinRetry(message: Message, block: string, text: string) {
+    const revision = message.delivery_revisions?.[block], status = message.delivery?.[block];
+    if (!revision || !status || !canRetryWeixin) return;
+    if (status === 'unknown') setRetryChoice({ block, text, revision });
+    else if (status === 'failed') void retryWeixin(block, revision, false);
   }
   async function supplement(task: Json) {
     if (!space) return;
     const conversationId = String(task.conversation || 'default');
+    if (conversationId === 'weixin') { setProblem('这件事来自微信，请在微信里继续；主对话续聊正在接入。'); return; }
     const legacy = !space.connections?.find(item => item.runtime === task._runtimeId)?.capabilities.includes('task_audit');
     if (space.selectedConversation !== conversationId) await window.xiaoyu.selectConversation({ space: space.id, conversation: conversationId });
     setTimeout(() => { setTarget({ id: String(task.id), runtime: String(task._runtimeId), legacy }); setPage('chat'); input.current?.focus(); }, 0);
@@ -151,6 +179,7 @@ function App() {
       <div className="identity"><Avatar size={42} /><div><strong>小鱼</strong><small><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</small></div></div>
       <button className={'nav ' + (page === 'chat' && conversation?.id === 'default' && !target?.legacy ? 'selected' : '')} onClick={() => void chooseConversation('default')}><Icon name="chat" /><span>主对话</span>{space?.conversations.find(item => item.id === 'default')?.unread && page !== 'chat' && <i className="unread-dot" />}</button>
       <button className={'nav work-nav ' + (page === 'work' || page === 'native' ? 'selected' : '')} onClick={() => go('work')}><Icon name="work" /><span>在做的事</span>{awaiting.length > 0 ? <b className="badge waiting">{awaiting.length}</b> : running.length > 0 ? <b className="badge">{running.length}</b> : null}</button>
+      {(weixinHost || hasWeixinHistory) && <><div className="side-heading"><span>渠道</span></div><button className={'nav ' + (page === 'weixin' ? 'selected' : '')} onClick={() => go('weixin')}><Icon name="weixin" /><span>微信</span></button></>}
       <div className="side-heading"><span>旁聊</span><button className="icon-button" aria-label="新建旁聊" disabled={!space || working} onClick={() => space && void run(async () => { await window.xiaoyu.createConversation({ space: space.id, title: '' }); setTarget(undefined); go('chat'); })}><Icon name="plus" /></button></div>
       <div className="side-conversations">{space?.conversations.filter(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')).sort((a, b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).map(item => <button key={item.id} className={'side-chat ' + (page === 'chat' && space.selectedConversation === item.id ? 'selected' : '')} onClick={() => void chooseConversation(item.id)}><span>{item.title}</span>{item.unread && space.selectedConversation !== item.id ? <i className="unread-dot" /> : <small>{clock(item.updatedAt)}</small>}</button>)}
         {!space?.conversations.some(item => listedSideChat(item, page === 'chat' ? space.selectedConversation : '')) && <p className="side-empty">点 ＋ 开一段旁聊</p>}</div>
@@ -164,6 +193,11 @@ function App() {
     </aside>
     <main className="workspace"><header className="topbar"><div className="topbar-title"><button className={'icon-button ' + (page === 'native' ? '' : 'menu-toggle')} aria-label={page === 'native' ? '返回工作详情' : '打开侧边栏'} onClick={() => page === 'native' ? go('work') : setSidebarOpen(true)}><Icon name={page === 'native' ? 'back' : 'menu'} /></button><h1>{title}</h1></div>{(!space?.connected || space?.catchingUp) && <button className={'connection-status ' + (space?.connected ? 'ready' : '')} onClick={() => go('settings')}><i className={'dot ' + (space?.connected ? 'online' : '')} />{connection}</button>}</header>
       {problem && <div role="alert" className="alert"><span>{problem}</span><button className="quiet-button" onClick={() => setErrorDetail(problem)}>详情</button><button className="icon-button" aria-label="关闭提示" onClick={() => setProblem('')}><Icon name="close" /></button></div>}
+      {page === 'weixin' && space && weixinHost && <WeixinConnect key={space.id + '/' + weixinHost.runtime} space={space.id} runtime={weixinHost.runtime} computerName={weixinHost.name} connected={weixinHost.connected} messages={space.messages}
+        renderMessage={message => <Bubble key={String(message._canonical || message.id)} message={message} channelSpace={space.id} channelDelivery onChannelRetry={canRetryWeixin ? requestWeixinRetry : undefined} retryBusy={retryBusy} onTask={openTask} onMenu={() => {}} highlight={highlight === message.id || highlight + ':you' === message.id} />} />}
+      {page === 'weixin' && space && !weixinHost && hasWeixinHistory && <WeixinRecord
+        view={{ state: 'unknown', account: null, host: null, local: false, reason: null, undelivered: 0, rev: 0 }} offline={!space.connected} messages={space.messages} onRescan={() => {}}
+        renderMessage={message => <Bubble key={String(message._canonical || message.id)} message={message} channelSpace={space.id} channelDelivery onChannelRetry={canRetryWeixin ? requestWeixinRetry : undefined} retryBusy={retryBusy} onTask={openTask} onMenu={() => {}} highlight={highlight === message.id || highlight + ':you' === message.id} />} />}
       {page === 'chat' && <>
         <section className="companion-header"><Avatar size={64} /><div className="companion-intro"><div><strong>小鱼</strong><span>换个地方，接着聊。</span></div><div className="helper-pills">{helpers.map(item => <HelperPill key={item.id} helper={item} tasks={tasks} onUsage={() => setUsage(item.id)} onTask={openTask} />)}{!helpers.length && <small>帮手信息暂未上报</small>}</div></div></section>
         <section className="timeline" aria-label="聊天记录" aria-live="polite">
@@ -226,6 +260,11 @@ function App() {
     {menu && <BubbleMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)} onCopy={() => { void navigator.clipboard.writeText(menu.text); setMenu(undefined); }}
       onQuote={() => { setQuote(quoteSnippet(menu.author, menu.text)); setMenu(undefined); (page === 'work' ? null : input.current)?.focus(); }} />}
     {errorDetail && <ErrorDetail text={errorDetail} onClose={() => setErrorDetail(undefined)} />}
+    {retryChoice && <div className="modal-shade"><section className="usage-modal" role="dialog" aria-modal="true" aria-label="再发一遍？">
+      <header><h2>再发一遍？</h2><button className="icon-button" aria-label="关闭" onClick={() => setRetryChoice(undefined)}><Icon name="close" /></button></header>
+      <p className="weixin-retry-quote">{retryChoice.text}</p><p>这条发出去时没等到微信确认，微信里可能已经有了。先看一眼微信，没有再发。</p>
+      <footer><button onClick={() => setRetryChoice(undefined)}>算了</button><button className="primary" onClick={() => { const choice = retryChoice; setRetryChoice(undefined); void retryWeixin(choice.block, choice.revision, true); }}>再发一遍</button></footer>
+    </section></div>}
     {directoryOpen && space && <Directory key={space.id} space={space} onClose={()=>setDirectoryOpen(false)}/>}
     {review && space && <EffectReview key={review.runtime + '/' + review.record} space={space.id} target={review} onClose={() => { setReview(undefined); loadTimers(); }} />}
     {helper && <Usage helper={helper} tasks={tasks} disabled={working} onClose={() => setUsage(undefined)} onRefresh={() => space && void readAction(() => window.xiaoyu.refreshHelpers(space.id))} onTask={task => { setUsage(undefined); openTask(task); }} />}
@@ -237,14 +276,15 @@ function queueReveal(text: string): number {
   const now = Date.now(), at = lastRevealAt ? Math.max(now, lastRevealAt + bubbleDelay(text)) : now;
   lastRevealAt = at; return at;
 }
-function Bubble({ message, task, onTask, onReview, onMenu, highlight }: { message: Message; task?: Json; onTask(task: Json): void; onReview?: () => void; onMenu(event: React.MouseEvent, text: string, author: string): void; highlight: boolean }) {
+function Bubble({ message, task, onTask, onReview, onMenu, highlight, channelSpace, channelDelivery, onChannelRetry, retryBusy }: { message: Message; task?: Json; onTask(task: Json): void; onReview?: () => void; onMenu(event: React.MouseEvent, text: string, author: string): void; highlight: boolean; channelSpace?: string; channelDelivery?: boolean; onChannelRetry?: (message: Message, block: string, text: string) => void; retryBusy?: string }) {
   const mine = message.author?.kind === 'owner' || message.kind === 'user';
-  const blocks = messageBlocks(message), view = projection(message), issue = displayIssue(message), status = messageStatusText(message);
+  const view = projection(message), issue = displayIssue(message), status = messageStatusText(message);
+  const rawBlocks = messageBlocks(message), blocks = channelDelivery && !mine ? weixinVisibleBlocks(message, rawBlocks) : rawBlocks;
   // 刚到的回复气泡排队出，和手机一致：离上一条至少隔“打这条字”的时间（bubbleDelay），跨消息共用一个队列；
   // 没轮到的不占位置，其间显示“正在输入”。
   const fresh = useRef(!mine && Date.now() - Number(message.updated_at || message.created_at || 0) * 1000 < 15_000);
   const times = useRef<number[]>([]);
-  while (times.current.length < blocks.length) times.current.push(fresh.current ? queueReveal(String(blocks[times.current.length]?.text || '')) : 0);
+  while (times.current.length < blocks.length) times.current.push(!channelDelivery && fresh.current ? queueReveal(String(blocks[times.current.length]?.text || '')) : 0);
   const [, tick] = useState(0);
   const now = Date.now(), shown = times.current.filter(at => at <= now).length, next = times.current.find(at => at > now);
   useEffect(() => {
@@ -252,7 +292,9 @@ function Bubble({ message, task, onTask, onReview, onMenu, highlight }: { messag
     const timer = setTimeout(() => tick(value => value + 1), next - Date.now());
     return () => clearTimeout(timer);
   }, [next, shown]);
-  if (!mine && !blocks.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
+  const channelAttachments = channelSpace && Array.isArray(message.attachments) ? message.attachments as Json[] : [];
+  const attachments = channelDelivery && !mine ? weixinVisibleAttachments(message, channelAttachments) : channelAttachments;
+  if (!mine && !blocks.length && !attachments.length && !issue && !['failed', 'cancelled'].includes(view?.status || message.status)) return null;
   const author = mine ? '我' : authorLabel(message) || '小鱼';
   return <article data-message-id={message.id} className={'message-row ' + (mine ? 'mine' : '') + (highlight ? ' highlighted' : '')}>{!mine && <div className="reply-author"><Avatar size={25} /><span>{authorLabel(message)}</span></div>}
     {blocks.slice(0, shown).map(block => {
@@ -260,8 +302,10 @@ function Bubble({ message, task, onTask, onReview, onMenu, highlight }: { messag
       const quoted = mine ? splitQuote(String(block.text || '')) : { body: String(block.text || '') };
       const shown = quoted.quote ? { ...block, text: quoted.body } : block;
       return <div key={block.id} className="bubble-stack"><div className="message-bubble" data-block-id={block.id} onContextMenu={event => onMenu(event, quoted.body, author)}><DisplayText block={shown} /><div className="message-meta"><small>{shortTime(message.created_at * 1000)}</small></div></div>
-        {quoted.quote && <div className="quoted">{quoted.quote}</div>}</div>;
+        {quoted.quote && <div className="quoted">{quoted.quote}</div>}
+        {channelDelivery && message.delivery?.[block.id] && weixinDelivery(message.delivery[block.id]) && <small role="status" className="weixin-delivery">没确认发到微信 {onChannelRetry && <button className="quiet-button" disabled={Boolean(retryBusy)} onClick={() => onChannelRetry(message, block.id, String(block.text || ''))}>重发</button>}</small>}</div>;
     })}{shown < blocks.length && <div className="typing-dots" aria-label="正在输入"><i /><i /><i /></div>}
+    {channelSpace && attachments.map(item => <WeixinAttachment key={String(item.id)} space={channelSpace} message={message} item={item} onRetry={onChannelRetry} busy={retryBusy} />)}
     {status && <small role="status">{status}</small>}{onReview && <button className="quiet-button review-link" onClick={onReview}>核对这次操作 <Icon name="next" /></button>}{task && <button className={'inline-work ' + (task.state === 'waiting' ? 'waiting' : '')} onClick={() => onTask(task)}><Avatar type={String(task.worker_agent || task.agent)} size={22} /><span>{taskStatusLabel(task)}</span><Icon name="next" /></button>}</article>;
 }
 /** 右键气泡，照微信：深色小条，复制、引用；选中了一部分就只取那一部分。 */
@@ -421,6 +465,17 @@ function Settings({ view, space, disabled, onSetup, onRun, onSelect, onDirectory
     <div className="settings-group">这台电脑</div>
     <div className="settings-list">
       <Row label="本机服务" value={view.runtime.message} hint="关掉窗口也在后台；退出客户端才停" action={<button disabled={disabled} onClick={onSetup}>检测与配置</button>} />
+      <Row label="小鱼的浏览器" hint="独立保存网站登录；请在 B 站登录小鱼自己的账号并核对昵称" action={<button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.openIsolatedBrowser())}>打开浏览器</button>} />
+      <details className="settings-row developer"><summary>图片互通身份</summary><div>
+        {view.pairing.imageIdentity ? <><p>本机设备指纹：{view.pairing.imageIdentity.device.match(/.{1,4}/g)?.join(' ')}</p>
+          <p>本机 Runtime 编号：{view.pairing.imageIdentity.runtime}</p></> : <p>本机服务连接后可查看身份。</p>}
+        {view.pairing.requests.filter(item => item.imageRuntimeId).map(item => <p key={item.id}>
+          {item.name} 等待核对 <button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.confirmImageBinding(item.id))}>核对身份</button>
+        </p>)}
+        {(view.pairing.imageBindings || []).map(item => <p key={item.peer + item.runtime}>
+          {item.name} · {item.runtime} <button disabled={disabled} onClick={() => void onRun(() => window.xiaoyu.revokeImageBinding({ peer: item.peer, runtime: item.runtime }))}>撤销绑定</button>
+        </p>)}
+      </div></details>
       <Row label="开机时启动" hint="系统登录后在后台恢复连接" action={<button className={'switch ' + (loginStart ? 'on' : '')} role="switch" aria-checked={Boolean(loginStart)} aria-label="开机时启动" disabled={disabled || loginStart === undefined}
         onClick={() => void onRun(async () => { await window.xiaoyu.loginStart(!loginStart); setLoginStart(!loginStart); })}><i /></button>} />
     </div>

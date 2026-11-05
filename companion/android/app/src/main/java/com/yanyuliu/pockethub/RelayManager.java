@@ -2,6 +2,9 @@ package com.yanyuliu.pockethub;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Handler;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
@@ -21,6 +24,9 @@ final class RelayManager {
     private static final Map<String,RelayConnection> links=new ConcurrentHashMap<>();
     private static Context app;
     private static SharedPreferences storage;
+    private static ConnectivityManager connectivity;
+    private static ConnectivityManager.NetworkCallback networkCallback;
+    private static NetworkTransitions<Network> networkTransitions;
     private static final String ALIAS="xiaoyou-relay-v1";
     static synchronized void init(Context context) throws Exception {
         if(app!=null){AccountManager.init(context);return;}app=context.getApplicationContext();storage=app.getSharedPreferences("relay-v1",Context.MODE_PRIVATE);
@@ -32,18 +38,21 @@ final class RelayManager {
     }
     static synchronized void retainAccount(Set<String> urls) {
         for(String url:new ArrayList<>(links.keySet()))if(!urls.contains(url)){RelayConnection link=links.remove(url);if(link!=null)link.close();}
+        if(links.isEmpty())stopNetworkMonitor();
     }
     static synchronized void accountPeer(String account,Map<String,Object> config) throws Exception {
         String id=Json.string(cast(config.get("device")),"id");config.put("account",account);String url=RelayConnection.address(config);
-        if(links.containsKey(url))return;
+        RelayConnection previous=links.get(url);
+        if(previous!=null && (!previous.isClosed() || !previous.canRecover(cast(config.get("relay")))))return;
         String key="account:"+account+":peer:"+id;
         String sealed=storage.getString(key,"");
+        if(previous!=null && sealed.isEmpty())throw new IOException("原连接记录不可用，待确认请求保留");
         if(!sealed.isEmpty()){
             Map<String,Object> old=Json.parseObject(decrypt(sealed));
-            if(old==null || !Objects.equals(old.get("space"),config.get("space")) || !Objects.equals(old.get("seed"),config.get("seed"))
-                || !Objects.equals(cast(old.get("device")).get("publicKey"),cast(config.get("device")).get("publicKey")))throw new IOException("原电脑身份不一致，原记录保留");
-            old.put("relay",config.get("relay"));old.put("device",config.get("device"));config=old;
+            if(old==null)throw new IOException("原电脑身份不一致，原记录保留");
+            config=RelayAccountRecovery.merge(account,old,config);
         }
+        if(previous!=null)previous.close();
         open(config,key);
     }
     @SuppressWarnings("unchecked") private static Map<String,Object> cast(Object value){return (Map<String,Object>)value;}
@@ -53,7 +62,35 @@ final class RelayManager {
             public void save(Map<String,Object> state){try{if(!storage.edit().putString(key,encrypt(RelayCrypto.json(state))).commit())throw new IOException("配对未能持久化");}catch(Exception failure){throw new IllegalStateException("系统安全存储不可用");}}
             public void ready(String url,String name){new Handler(Looper.getMainLooper()).post(()->RuntimeClient.registerRelay(app,url,name));}
             public void state(String message){ if(message.contains("已过期") && RuntimeClient.selected(app)==null)app.stopService(new android.content.Intent(app,RuntimeWatchService.class)); }
-        });links.put(connection.url(),connection);
+            public void accepted(String url,Map<String,Object> receipt,java.util.function.Consumer<Boolean> completed){RuntimeClient.reconcileAccepted(app,url,receipt,completed);}
+            public void uncertain(String url,Map<String,Object> receipt,java.util.function.Consumer<Boolean> completed){RuntimeClient.reconcileUncertain(app,url,receipt,completed);}
+        });links.put(connection.url(),connection);startNetworkMonitor();
+    }
+    private static synchronized void startNetworkMonitor(){
+        if(networkCallback!=null || app==null)return;
+        ConnectivityManager manager=(ConnectivityManager)app.getSystemService(Context.CONNECTIVITY_SERVICE);
+        if(manager==null)return;
+        try{
+            Network current=manager.getActiveNetwork();
+            NetworkCapabilities capabilities=current==null?null:manager.getNetworkCapabilities(current);
+            NetworkTransitions<Network> transitions=new NetworkTransitions<>(current,
+                    capabilities!=null&&capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                    ()->{SharedRelaySocket.invalidateNetwork();for(RelayConnection link:links.values())link.networkChanged();RuntimeClient.wakeSync();});
+            ConnectivityManager.NetworkCallback callback=new ConnectivityManager.NetworkCallback(){
+                @Override public void onAvailable(Network network){transitions.available(network);}
+                @Override public void onLost(Network network){transitions.lost(network);}
+                @Override public void onCapabilitiesChanged(Network network,NetworkCapabilities value){
+                    transitions.capabilities(network,value.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+                }
+            };
+            manager.registerDefaultNetworkCallback(callback);
+            connectivity=manager;networkTransitions=transitions;networkCallback=callback;
+        }catch(RuntimeException ignored){/* Existing socket retry remains available. */}
+    }
+    private static synchronized void stopNetworkMonitor(){
+        if(networkTransitions!=null)networkTransitions.close();
+        if(connectivity!=null && networkCallback!=null)try{connectivity.unregisterNetworkCallback(networkCallback);}catch(RuntimeException ignored){}
+        connectivity=null;networkCallback=null;networkTransitions=null;
     }
     static boolean online(String url){RelayConnection link=links.get(url);return AccountManager.allowed(url) && link!=null && link.online();}
     static boolean hasConnections(){return links.values().stream().anyMatch(RelayConnection::isActive);}
@@ -77,7 +114,7 @@ final class RelayManager {
     }
     static void cancelReads(){for(RelayConnection link:links.values())link.cancelReads();}
     static void cancelSyncReads(){for(RelayConnection link:links.values())link.cancelSyncReads();}
-    static void remove(String url){RelayConnection link=links.remove(url);if(link!=null){link.close();String authority=URI.create(url).getRawAuthority();if(authority!=null && authority.matches("[a-f0-9]{32}"))storage.edit().remove("peer:"+authority).commit();}}
+    static synchronized void remove(String url){RelayConnection link=links.remove(url);if(link!=null){link.close();String authority=URI.create(url).getRawAuthority();if(authority!=null && authority.matches("[a-f0-9]{32}"))storage.edit().remove("peer:"+authority).commit();}if(links.isEmpty())stopNetworkMonitor();}
     private static void toast(String text){new Handler(Looper.getMainLooper()).post(()->Toast.makeText(app,text,Toast.LENGTH_LONG).show());}
     private static SecretKey key() throws Exception {
         KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);

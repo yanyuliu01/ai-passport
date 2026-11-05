@@ -2,10 +2,10 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { hostname, homedir } from 'node:os';
+import { hostname, homedir, networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
-import { createConnection } from 'node:net';
+import { createConnection, isIP } from 'node:net';
 import { identify, HTTPRuntimeTransport } from './runtime-client.js';
 import type { Endpoint, Json, LocalAgent } from '../shared.js';
 
@@ -35,6 +35,13 @@ export function runtimeEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS
     !key.startsWith('XIAOYU_') && !key.startsWith('XIAOYOU_') &&
     (process.platform === 'win32' ? key.toLowerCase() !== 'path' : key !== 'PATH'))),
     PATH: executablePaths(env).join(process.platform === 'win32' ? ';' : ':') };
+}
+
+/** A saved VPN address may disappear before login or after a network change. */
+export function availableRuntimeHost(host: string, addresses = Object.values(networkInterfaces()).flatMap(items =>
+  (items || []).map(item => item.address))): string {
+  if (!host || host === '0.0.0.0' || host === '::' || !isIP(host)) return host || '127.0.0.1';
+  return addresses.includes(host) ? host : '127.0.0.1';
 }
 
 export function managedAgents(dsh: string, helpers: LocalAgent[], dshCommand = [dsh], configDir = process.cwd()): Record<string, Json> {
@@ -222,7 +229,7 @@ export class RuntimeHost {
       cwd: this.launch.cwd, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...runtimeEnvironment(),
         ...(this.providerKey ? { DEEPSEEK_API_KEY: this.providerKey } : {}), PYTHONUNBUFFERED: '1', XIAOYU_CONFIG: configFile,
-        XIAOYU_HOST: this.externalConfig ? String((config.server as Json).host || '127.0.0.1') : '127.0.0.1', XIAOYU_PORT: String((config.server as Json).port),
+        XIAOYU_HOST: this.externalConfig ? availableRuntimeHost(String((config.server as Json).host || '127.0.0.1')) : '127.0.0.1', XIAOYU_PORT: String((config.server as Json).port),
         XIAOYU_TOKEN: String((config.server as Json).token),
         XIAOYU_STATE_DIR: resolve(configDir, String(config.state_dir || 'state')) },
     });

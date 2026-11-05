@@ -5,6 +5,51 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class ChatHistoryTest {
+    @Test public void channelHistoryIsSeparateAndOnlyShowsPublicOwnerAndAssistantMessages() {
+        String prefix = "{\"scope\":\"main\",\"status\":\"done\",\"role\":\"xiaoyou\",\"text\":\"text\",\"conversation\":\"weixin\",\"presentation\":{\"version\":1,\"placement\":\"chat\",\"author\":{\"kind\":\"";
+        String json = "{\"messages\":[" + prefix + "owner\"}},\"id\":\"owner\"}," + prefix + "xiaoyou\"}},\"id\":\"assistant\"}," + prefix + "agent\"}},\"id\":\"agent\"}]}";
+        ChatHistory history = ChatHistory.restore(json);
+        assertTrue(history.main("default").isEmpty());
+        assertEquals(2, history.main("weixin").size());
+        assertTrue(history.main("weixin").stream().noneMatch(m -> m.id.equals("agent")));
+        assertTrue(history.turns().isEmpty());
+    }
+    @Test public void lateAcceptanceMergesSnapshotWithoutTextMatchingOrDowngrade() {
+        ChatHistory history = new ChatHistory();
+        history.begin("client", null, "same", 10); history.scope("client", "side", true);
+        history.finish("client", null, "offline", true, null);
+        history.begin("other", null, "same", 11); history.scope("other", "side", true);
+        history.finish("other", null, "offline", true, null);
+        SyncCache.Pending user = new SyncCache.Pending("server:you", "", "main", "you", "same", "final", 20);
+        user.conversation = "side"; history.pending(user);
+        SyncCache.Pending reply = new SyncCache.Pending("server:reply", "", "main", "xiaoyou", "answer", "final", 21);
+        reply.conversation = "side"; history.pending(reply);
+        assertTrue(history.reconcileAccepted("client", "server", "side"));
+        assertEquals(4, history.main("side").size());
+        assertEquals("answer", history.main("side").stream().filter(m -> m.id.equals("server:reply")).findFirst().get().text);
+        assertTrue(history.main("side").stream().anyMatch(m -> m.id.equals("other:you") && m.status.equals("failed")));
+        assertTrue(ChatHistory.restore(history.json()).reconcileAccepted("client", "server", "side"));
+    }
+
+    @Test public void receiptBeforeSnapshotRekeysOnlyMatchingConversation() {
+        ChatHistory history = new ChatHistory();
+        history.begin("client", null, "same", 10); history.scope("client", "side", true);
+        history.finish("client", null, "offline", true, null);
+        assertFalse(history.reconcileAccepted("client", "server", "other"));
+        assertTrue(history.reconcileAccepted("client", "server", "side"));
+        assertEquals("sent", history.main("side").get(0).status);
+        assertEquals("", history.main("side").get(1).text);
+        assertTrue(ChatHistory.restore(history.json()).reconcileAccepted("client", "server", "side"));
+    }
+    @Test public void definitiveRejectionDoesNotUndoLaterAcceptance() {
+        ChatHistory history=new ChatHistory();history.begin("client",null,"same",10);history.scope("client","side",true);
+        history.uncertain("client");assertFalse(history.reconcileRejected("client","other"));
+        assertTrue(history.reconcileRejected("client","side"));
+        assertEquals("failed",history.main("side").get(0).status);
+        assertTrue(history.reconcileAccepted("client","server","side"));
+        assertTrue(history.reconcileRejected("client","side"));
+        assertEquals("sent",history.main("side").get(0).status);
+    }
     @Test public void repeatedDeletionDoesNotRequestAnotherHistoryWrite() {
         ChatHistory history = new ChatHistory();
         history.begin("retained", null, "preserved", 10);

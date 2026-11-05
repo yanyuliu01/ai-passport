@@ -25,17 +25,22 @@ export class HTTPRuntimeTransport implements RuntimeTransport {
   async request(endpoint: Endpoint, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Json> {
     const origin = validateRuntimeURL(endpoint.url);
     if (!path.startsWith('/v1/') && path !== '/healthz') throw new Error('不支持的 Runtime 路径');
+    if (path.startsWith('/v1/mesh/image-relays') &&
+        !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin).hostname))
+      throw new RuntimeError('图片转发只允许访问本机 Runtime', 403);
     const controller = new AbortController();
     const abort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
-    const timeout = setTimeout(abort, 30_000);
+    // WeChat's QR status request can be held upstream for 40 seconds.
+    const timeout = setTimeout(abort, method === 'GET' && /^\/v1\/weixin\/bind\/[A-Za-z0-9_-]{16,128}$/.test(path)
+      ? 50_000 : 30_000);
     try {
       const binary = body && typeof body === 'object' && typeof (body as Json)._relay_binary === 'string' ? body as Json : undefined;
       if (binary && (method !== 'POST' || !['/v1/images', '/v1/voice'].includes(new URL(path, origin).pathname))) throw new RuntimeError('二进制请求范围无效', 403);
       const response = await this.fetcher(origin + path, {
         method, signal: controller.signal, redirect: 'error',
-        headers: { Authorization: 'Bearer ' + (path === '/v1/mesh/exchange' ? endpoint.meshToken || '' : endpoint.token), Accept: 'application/json',
+        headers: { Authorization: 'Bearer ' + (path === '/v1/mesh/exchange' || path.startsWith('/v1/mesh/image-relays') ? endpoint.meshToken || '' : endpoint.token), Accept: 'application/json',
           ...(body === undefined ? {} : { 'Content-Type': binary ? String(binary.content_type) : 'application/json' }) },
         ...(body === undefined ? {} : { body: binary ? Buffer.from(String(binary._relay_binary), 'base64url') : JSON.stringify(body) }),
       });
@@ -112,9 +117,9 @@ export async function identify(transport: RuntimeTransport, url: string, token: 
     capabilities: info.capabilities.filter(item => typeof item === 'string') };
 }
 
-export function syncPath(cursor: { epoch: string; cursor: string }, wait = 20, conversation = 'default'): string {
+export function syncPath(cursor: { epoch: string; cursor: string }, wait = 20, conversation = 'default', weixin = false): string {
   const params = new URLSearchParams({ conversation, after: cursor.cursor,
-    epoch: cursor.epoch, wait: String(wait), states: 'unavailable' });
+    epoch: cursor.epoch, wait: String(wait), states: weixin ? 'unavailable,weixin' : 'unavailable' });
   return '/v1/sync?' + params;
 }
 

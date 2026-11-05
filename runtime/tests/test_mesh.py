@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 import urllib.error
+from unittest import mock
 
 import urllib.request
 from pathlib import Path
@@ -21,9 +22,9 @@ from xiaoyu_runtime.helpers import agents as agents_module
 from xiaoyu_runtime.helpers import factory
 from xiaoyu_runtime import config as config_module
 from xiaoyu_runtime.api import shared_history
-from xiaoyu_runtime.delivery.mesh import Mesh, local_id, subject_for
+from xiaoyu_runtime.delivery.mesh import Mesh, MeshError, local_id, subject_for
 from xiaoyu_runtime.api.server import make_server
-from xiaoyu_runtime.api.service import Service
+from xiaoyu_runtime.api.service import Service, RequestError
 from xiaoyu_runtime.world.store import Store
 from xiaoyu_runtime.loop.xiaoyu import Xiaoyu
 
@@ -61,7 +62,7 @@ class Network:
 
 
 class Node:
-    def __init__(self, case, network, name, peers=(), advertise=True, agents=None, secret=SECRET):
+    def __init__(self, case, network, name, peers=(), advertise=True, agents=None, secret=SECRET, home=False):
         folder = case.folder / name
         self.agent = agents[0] if agents else Scripted("claude")
         self.xiaoyu, self.store = make_xiaoyu(folder, agents or [self.agent])
@@ -69,7 +70,7 @@ class Node:
         self.url = "http://%s.test" % name.lower()
         config = dataclasses.replace(self.xiaoyu._config, name=name, mesh_secret=secret,
                                      mesh_peers=list(peers),
-                                     mesh_advertise=[self.url] if advertise else [])
+                                     mesh_advertise=[self.url] if advertise else [], mesh_home=home)
         self.mesh = Mesh(config, self.service, self.xiaoyu, opener=network.open)
         if advertise:
             network.nodes[self.url] = self.mesh
@@ -92,6 +93,365 @@ class Node:
 
 
 class MeshTests(TempDirCase):
+    def test_fake_weixin_full_round_trip_uses_one_host_and_shares_read_only_history(self):
+        from xiaoyu_runtime.channels.controller import Controller
+        from xiaoyu_runtime.channels.host_grant import HostGrant
+        from xiaoyu_runtime.channels.session import ChannelSession
+        home = self.node('RoundTripHome', home=True)
+        host = self.node('RoundTripHost', peers=[home.url])
+        home.service.enable_channel_hosting(ChannelSession)
+        self.assertIsNone(home.service._channel_authority)
+        self.assertTrue(until(lambda: host.mesh.authority() == home.service.runtime_id))
+        grant = HostGrant(host.service)
+        got_reply, release_poll = threading.Event(), threading.Event()
+        class FakeWeixin:
+            base = 'https://ilinkai.weixin.qq.com'
+            def __init__(self):
+                self.sent = []
+            def qr(self):
+                return {'qrcode': 'private-qr', 'qrcode_img_content': 'private-image'}
+            def qr_status(self, qr, verify_code=None):
+                return {'status': 'confirmed', 'bot_token': 'private-token',
+                        'ilink_bot_id': 'private-bot', 'ilink_user_id': 'private-owner'}
+            def updates(self, cursor):
+                if not cursor:
+                    return {'get_updates_buf': 'next', 'msgs': [{
+                        'message_type': 1, 'from_user_id': 'private-owner', 'message_id': 37,
+                        'context_token': 'private-context',
+                        'item_list': [{'type': 1, 'text_item': {'text': 'wechat-round-trip'}}]}]}
+                release_poll.wait(3)
+                return {'get_updates_buf': cursor, 'msgs': []}
+            def send_text(self, *args):
+                self.sent.append(args)
+                got_reply.set()
+                return {'ret': 0}
+        transport = FakeWeixin()
+        controller = Controller(host.service, host.store.state_dir, host_granted=grant.allowed,
+                                client_factory=lambda **_: transport)
+        session = ChannelSession(host.service, grant=grant, controller=controller)
+        http = make_server(dataclasses.replace(host.xiaoyu.config, host='127.0.0.1', port=0),
+                           host.service, channel_session=session)
+        threading.Thread(target=http.serve_forever, daemon=True).start()
+        self.addCleanup(http.server_close)
+        self.addCleanup(http.shutdown)
+        base = 'http://127.0.0.1:%d' % http.server_port
+        headers = {'Authorization': 'Bearer ' + host.xiaoyu.config.token, 'Content-Type': 'application/json'}
+        original_sync = host.service.sync
+        def fast_sync(*args, **kwargs):
+            if kwargs.get('wait'):
+                kwargs['wait'] = 0.1
+            return original_sync(*args, **kwargs)
+        try:
+            with mock.patch.object(host.service, 'sync', side_effect=fast_sync):
+                with urllib.request.urlopen(urllib.request.Request(base + '/v1/weixin/bind',
+                                            data=b'{}', headers=headers), timeout=6) as response:
+                    attempt = json.load(response)['id']
+                with urllib.request.urlopen(urllib.request.Request(base + '/v1/weixin/bind/' + attempt,
+                                            headers=headers), timeout=6) as response:
+                    self.assertEqual(json.load(response)['state'], 'confirmed')
+                self.assertTrue(got_reply.wait(5))
+                self.assertEqual(transport.sent[0][0:2], ('private-owner', 'private-context'))
+                self.assertEqual(transport.sent[0][3], 're:wechat-round-trip')
+                self.assertTrue(until(lambda: any('wechat-round-trip' in (message.get('text') or '')
+                    for message in home.service.sync('weixin', states=['weixin'])['messages'])))
+                def delivered_on(service):
+                    return any('sent' in (message.get('delivery') or {}).values()
+                               for message in service.sync('weixin', states=['weixin'])['messages'])
+                self.assertTrue(until(lambda: delivered_on(host.service)))
+                self.assertTrue(until(lambda: delivered_on(home.service)))
+                # A reader need not own the channel catalog: route by the
+                # source block identity, then let the host verify its grant.
+                block = host.service.runtime_id + '/retry:reply#0'
+                with mock.patch.object(host.service, '_channel_session', session, create=True), \
+                     mock.patch.object(session, 'retry_delivery', return_value='queued') as retry:
+                    result = home.service.channel_resend(block, 'e' * 32, 3, True)
+                    self.assertEqual('queued', result['status'])
+                    self.assertTrue(until(lambda: retry.called))
+                    retry.assert_called_once_with(block, 'e' * 32, 3, confirm_unknown=True)
+                shared = json.dumps([host.service.sync('weixin', states=['weixin']),
+                                     home.service.sync('weixin', states=['weixin']),
+                                     list(host.mesh._outbox.values())], ensure_ascii=False)
+                for secret in ('private-token', 'private-context', 'private-owner', 'private-qr'):
+                    self.assertNotIn(secret, shared)
+                self.assertFalse(any(message.get('conversation') == 'weixin' for message in
+                    home.service.sync('default', all_conversations=True)['messages']))
+                self.assertIsNone(home.mesh.owner_of('weixin')['owner'])
+                main = home.service.submit('main-not-for-weixin', client_id='main-isolated')
+                side_id = home.service.conversation_create({'id': 'side-not-for-weixin'})['id']
+                side = home.service.submit('side-not-for-weixin', conversation=side_id, client_id='side-isolated')
+                self.assertTrue(home.done(main['id']))
+                self.assertTrue(home.done(side['id']))
+                release_poll.set()
+                self.assertTrue(session.shutdown(timeout=2))
+                grant = HostGrant(host.service)
+                controller = Controller(host.service, host.store.state_dir, host_granted=grant.allowed,
+                                        client_factory=lambda **_: transport)
+                session = ChannelSession(host.service, grant=grant, controller=controller)
+                self.assertEqual(session.recover(), {'state': 'active'})
+                grant.begin_release()
+                self.assertEqual(grant.resolve(timeout=5)['status'], 'applied')
+                release_poll.set()
+                self.assertTrue(controller.prepare_release(timeout=2))
+                grant.release(controller)
+                self.assertEqual(grant.resolve(timeout=5)['status'], 'applied')
+                self.assertEqual(len(transport.sent), 1)
+        finally:
+            release_poll.set()
+            controller.close(timeout=2)
+            grant._host_lock.release()
+
+    def test_interrupted_channel_authority_request_reconciles_without_resending(self):
+        from xiaoyu_runtime.channels.authority_client import AuthorityUnavailable
+        from xiaoyu_runtime.channels.controller import Controller
+        from xiaoyu_runtime.channels.host_grant import HostGrant
+        home = self.node('ReconcileHome', home=True)
+        host = self.node('ReconcileHost', peers=[home.url])
+        home.service._enable_channel_authority()
+        self.assertTrue(until(lambda: host.mesh.authority() == home.service.runtime_id))
+        self.assertTrue(until(lambda: home.mesh.peer_id(host.service.runtime_id) is not None))
+        self.network.down.update({home.url, host.url})
+        grant = HostGrant(host.service)
+        controller = Controller(host.service, host.store.state_dir, host_granted=grant.allowed)
+        recovered = None
+        controller2 = None
+        third = None
+        controller3 = None
+        def deliver(sender, receiver, kind, key):
+            row = sender.mesh._outbox[(kind, key)]
+            receiver.mesh._take({sender.service.runtime_id: {
+                'epoch': sender.xiaoyu.cards.epoch, 'upto': row['oseq'], 'records': [dict(row)]}},
+                sender.service.runtime_id)
+        try:
+            request = grant.reserve()
+            self.assertEqual(request['status'], 'queued')
+            self.assertTrue(grant.shutdown(controller, timeout=1))
+            recovered = HostGrant(host.service)
+            with self.assertRaises(AuthorityUnavailable):
+                recovered.recover()
+            self.assertEqual(recovered.reconcile()['status'], 'queued')
+            deliver(host, home, 'command', request['command_id'])
+            deliver(home, host, 'result', request['command_id'] + ':accepted')
+            self.assertEqual(recovered.reconcile()['status'], 'applied')
+            view = recovered.recover()
+            deliver(host, home, 'command', view['command_id'])
+            deliver(home, host, 'result', view['command_id'] + ':accepted')
+            self.assertEqual(recovered.resolve()['status'], 'applied')
+            self.assertTrue(recovered.allowed())
+            self.assertEqual(home.service._channel_authority.view()['generation'], 1)
+            controller2 = Controller(host.service, host.store.state_dir, host_granted=recovered.allowed)
+            activate = recovered.activate()
+            deliver(host, home, 'command', activate['command_id'])
+            deliver(home, host, 'result', activate['command_id'] + ':accepted')
+            self.assertEqual(recovered.resolve()['status'], 'applied')
+            revoke = recovered.begin_release()
+            self.assertTrue(recovered.shutdown(controller2, timeout=1))
+            third = HostGrant(host.service)
+            with self.assertRaises(AuthorityUnavailable):
+                third.recover()
+            self.assertEqual(third.reconcile()['status'], 'queued')
+            deliver(host, home, 'command', revoke['command_id'])
+            deliver(home, host, 'result', revoke['command_id'] + ':accepted')
+            self.assertEqual(third.reconcile()['status'], 'applied')
+            view = third.recover()
+            deliver(host, home, 'command', view['command_id'])
+            deliver(home, host, 'result', view['command_id'] + ':accepted')
+            self.assertEqual(third.resolve()['channel_authority']['state'], 'revoking')
+            self.assertFalse(third.allowed())
+            controller3 = Controller(host.service, host.store.state_dir, host_granted=third.allowed)
+            release = third.release(controller3)
+            deliver(host, home, 'command', release['command_id'])
+            deliver(home, host, 'result', release['command_id'] + ':accepted')
+            self.assertEqual(third.resolve()['channel_authority']['state'], 'unbound')
+        finally:
+            self.network.down.clear()
+            controller.close(timeout=1)
+            if controller2 is not None:
+                controller2.close(timeout=1)
+            if controller3 is not None:
+                controller3.close(timeout=1)
+            if recovered is not None:
+                recovered._host_lock.release()
+            if third is not None:
+                third._host_lock.release()
+
+    def test_explicit_command_identity_cannot_be_reused_for_different_operation(self):
+        node = self.node('CommandIdentity')
+        target, command = 'a' * 32, 'b' * 32
+        first = node.mesh.command(target, 'weixin_authority', {'action': 'reserve'}, command_id=command)
+        sequence = node.mesh._outbox[('command', command)]['oseq']
+        self.assertEqual(first, command)
+        self.assertEqual(node.mesh.command(target, 'weixin_authority', {'action': 'reserve'}, command_id=command), command)
+        self.assertEqual(node.mesh._outbox[('command', command)]['oseq'], sequence)
+        with self.assertRaises(MeshError):
+            node.mesh.command(target, 'weixin_authority', {'action': 'view'}, command_id=command)
+        with self.assertRaises(MeshError):
+            node.mesh.command(target, 'weixin_authority', {}, command_id='')
+
+    def test_channel_host_grant_controls_binding_and_handoff_over_mesh(self):
+        from xiaoyu_runtime.channels.controller import Controller
+        from xiaoyu_runtime.channels.host_grant import HostGrant
+        from test_channel_controller import Client
+        home = self.node('GrantHome', home=True)
+        host = self.node('GrantHost', peers=[home.url])
+        home.service._enable_channel_authority()
+        self.assertTrue(until(lambda: host.mesh.authority() == home.service.runtime_id))
+        host.xiaoyu.intake.writer('mesh', actor='fixture').conversation_observe_weixin()
+        self.assertTrue(host.xiaoyu.cards.conversations.get('weixin')['observed_only'])
+        grant = HostGrant(host.service)
+        controller = Controller(host.service, host.store.state_dir, host_granted=grant.allowed,
+                                client_factory=lambda **_: Client())
+        self.addCleanup(controller.close)
+        self.assertFalse(grant.allowed())
+        grant.reserve()
+        self.assertEqual(grant.resolve(timeout=5)['status'], 'applied')
+        self.assertTrue(grant.allowed())
+        claimed = grant.prepare_host()
+        self.assertEqual(claimed['owner'], host.service.runtime_id)
+        self.assertNotIn('observed_only', claimed)
+        with mock.patch('xiaoyu_runtime.channels.controller.ChannelWorker') as worker:
+            worker.return_value.stop.return_value = True
+            attempt = controller.begin()['id']
+            self.assertEqual(controller.poll(attempt)['state'], 'confirmed')
+            grant.activate()
+            self.assertEqual(grant.resolve(timeout=5)['status'], 'applied')
+            self.assertTrue(grant.shutdown(controller, timeout=1))
+            self.assertFalse(grant.allowed())
+            recovered = HostGrant(host.service)
+            recovered.recover()
+            self.assertEqual(recovered.resolve(timeout=5)['status'], 'applied')
+            self.assertTrue(recovered.allowed())
+            self.assertEqual(recovered.prepare_host()['grant_generation'], claimed['grant_generation'])
+            controller = Controller(host.service, host.store.state_dir, host_granted=recovered.allowed,
+                                    client_factory=lambda **_: Client())
+            self.addCleanup(controller.close)
+            self.assertTrue(controller.resume())
+            recovered.begin_release()
+            self.assertFalse(recovered.allowed())
+            self.assertEqual(recovered.resolve(timeout=5)['status'], 'applied')
+            recovered.release(controller)
+            self.assertEqual(recovered.resolve(timeout=5)['status'], 'applied')
+            self.assertFalse(recovered.allowed())
+        # Channel credentials stay in the host's private file, never in mesh commands.
+        self.assertNotIn('private-token', json.dumps(list(host.mesh._outbox.values())))
+
+    def test_channel_authority_client_waits_for_mesh_result_and_drains_before_release(self):
+        from xiaoyu_runtime.channels.authority_client import AuthorityClient, AuthorityUnavailable
+        home = self.node('AuthorityClientHome', home=True)
+        host = self.node('AuthorityClientHost', peers=[home.url])
+        home.service._enable_channel_authority()
+        self.assertTrue(until(lambda: host.mesh.authority() == home.service.runtime_id))
+        client = AuthorityClient(host.service)
+        grant = client.wait(client.reserve(), timeout=5)
+        self.assertEqual(grant['status'], 'applied')
+        self.assertEqual(grant['channel_authority']['host'], host.service.runtime_id)
+        generation = grant['channel_authority']['generation']
+        self.assertEqual(client.wait(client.activate(generation), timeout=5)['status'], 'applied')
+        self.assertEqual(client.wait(client.begin_release(generation), timeout=5)['status'], 'applied')
+        controller = mock.Mock()
+        controller.prepare_release.return_value = False
+        with self.assertRaises(AuthorityUnavailable):
+            client.release(controller, generation)
+        self.assertEqual(home.service._channel_authority.view()['state'], 'revoking')
+        controller.prepare_release.return_value = True
+        controller.close.return_value = True
+        released = client.finish_release(client.release(controller, generation), controller, generation, timeout=5)
+        self.assertEqual(released['status'], 'applied')
+        self.assertEqual(released['channel_authority']['state'], 'unbound')
+        controller.close.assert_called_once_with(timeout=0)
+
+    def test_channel_authority_commands_use_record_origin_and_fail_closed_on_release(self):
+        home = self.node('ChannelAuthority', home=True)
+        one = self.node('FirstHost', peers=[home.url])
+        two = self.node('SecondHost', peers=[home.url])
+        self.assertTrue(until(lambda: one.mesh.authority() == home.service.runtime_id))
+        self.assertTrue(until(lambda: two.mesh.authority() == home.service.runtime_id))
+        self.assertTrue(until(lambda: home.mesh.peer_id(one.service.runtime_id) is not None))
+        self.assertTrue(until(lambda: home.mesh.peer_id(two.service.runtime_id) is not None))
+
+        def command(node, args):
+            key = node.mesh.command(home.service.runtime_id, 'weixin_authority', args)
+            self.assertTrue(until(lambda: node.mesh.outcome(key, home.service.runtime_id, 'accepted') is not None))
+            return node.mesh.outcome(key, home.service.runtime_id, 'accepted')
+
+        self.assertFalse(command(one, {'action': 'reserve'})['ok'])
+        home.service._enable_channel_authority()
+        self.assertEqual(home.service._enable_channel_authority()['state'], 'unbound')
+        with self.assertRaises(RequestError):
+            one.service._enable_channel_authority()
+        forged_id = 'f' * 32
+        home.mesh._command(one.service.runtime_id, {
+            'id': forged_id, 'target': home.service.runtime_id, 'from': two.service.runtime_id,
+            'kind': 'weixin_authority', 'args': {'action': 'reserve'}, 'expires_at': time.time() + 30})
+        self.assertFalse(home.mesh._outbox[('result', forged_id + ':accepted')]['data']['ok'])
+        self.assertEqual(home.service._channel_authority.view()['state'], 'unbound')
+        reserved = command(one, {'action': 'reserve'})
+        self.assertTrue(reserved['ok'], reserved)
+        state = reserved['channel_authority']
+        self.assertEqual(state['host'], one.service.runtime_id)
+        generation = state['generation']
+        self.assertEqual(command(two, {'action': 'view'})['channel_authority']['host'], one.service.runtime_id)
+        self.assertFalse(command(two, {'action': 'reserve'})['ok'])
+        self.assertFalse(command(two, {'action': 'reserve', 'host': one.service.runtime_id})['ok'])
+        self.assertTrue(command(one, {'action': 'activate', 'generation': generation})['ok'])
+        self.assertFalse(command(one, {'action': 'begin_release', 'generation': generation + 1})['ok'])
+        self.assertTrue(command(one, {'action': 'begin_release', 'generation': generation})['ok'])
+        self.assertFalse(command(one, {'action': 'release', 'generation': generation, 'worker_stopped': False})['ok'])
+        self.assertFalse(command(two, {'action': 'reserve'})['ok'])
+        self.assertTrue(command(one, {'action': 'release', 'generation': generation, 'worker_stopped': True})['ok'])
+        next_grant = command(two, {'action': 'reserve'})
+        self.assertTrue(next_grant['ok'], next_grant)
+        self.assertEqual(next_grant['channel_authority']['host'], two.service.runtime_id)
+        self.assertGreater(next_grant['channel_authority']['generation'], generation)
+
+    def test_weixin_replica_is_readable_but_never_grants_local_ownership(self):
+        a = self.node('ChannelHost')
+        b = self.node('ChannelViewer', peers=[a.url])
+        a.service._owner_writer.conversation_create_weixin()
+        sent = a.service.submit('wechat-fig-message', conversation='weixin', client_id='wx-one',
+                                _channel_authorized=True)
+        self.assertTrue(a.done(sent['id']))
+        self.assertTrue(until(lambda: bool(b.xiaoyu.cards.conversations.get('weixin'))))
+        self.assertTrue(until(lambda: any('wechat-fig-message' in (row.get('text') or '')
+                              for row in b.service.sync('weixin', states=['weixin'])['messages'])))
+        observed = b.xiaoyu.cards.conversations.get('weixin')
+        self.assertTrue(observed['observed_only'])
+        self.assertNotIn('owner', observed)
+        self.assertIsNone(b.mesh.owner_of('weixin')['owner'])
+        with self.assertRaisesRegex(RequestError, '未绑定'):
+            b.service.submit('must not send', conversation='weixin', _channel_authorized=True)
+        self.assertFalse(any(row.get('conversation') == 'weixin'
+                             for row in b.service.sync('default', all_conversations=True)['messages']))
+        self.assertIn('wechat-fig-message', b.xiaoyu.context.recall('default', 'wechat-fig-message'))
+        side = b.service.conversation_create({'id': 'side-channel-recall'})['id']
+        self.assertIn('wechat-fig-message', b.xiaoyu.context.recall(side, 'wechat-fig-message'))
+        self.assertFalse(any('wechat-fig-message' in turn['text']
+                             for turn in b.xiaoyu.context.turns(side)))
+
+    def test_weixin_recall_reads_received_main_and_side_records_without_mixing(self):
+        a = self.node('RecallMac')
+        b = self.node('RecallWindows', peers=[a.url])
+        b.service._owner_writer.conversation_create_weixin()
+        side = a.service.conversation_create({'id': 'side-recall-mesh'})['id']
+        first = a.service.submit('mesh-main-saffron', client_id='shared-main')
+        second = a.service.submit('mesh-side-saffron', conversation=side, client_id='shared-side')
+        self.assertTrue(a.done(first['id']))
+        self.assertTrue(a.done(second['id']))
+        self.assertTrue(until(lambda: b.xiaoyu.cards.conversations.get(side) is not None))
+        self.assertTrue(until(lambda: b.card_from(a, a.service.get(first['id'])['card']) is not None))
+        self.assertTrue(until(lambda: b.card_from(a, a.service.get(second['id'])['card']) is not None))
+        self.assertTrue(until(lambda: 'mesh-side-saffron' in b.xiaoyu.context.recall('weixin', 'saffron')))
+        result = b.xiaoyu.context.recall('weixin', 'saffron')
+        self.assertIn('mesh-main-saffron', result)
+        self.assertIn('mesh-side-saffron', result)
+        observed = a.xiaoyu.record.observed_open('__desktop__', '同步排查', 'done', 'codex')
+        a.xiaoyu.record.observed(observed['id'], monitoring_only=True, source='desktop',
+                                 session_id='native-mesh-history', entries=[
+                                     {'id': 'mesh-native:you', 'role': 'you', 'text': 'arbutus desktop request', 'at': 1.0}])
+        self.assertTrue(until(lambda: b.card_from(a, observed['id']) is not None))
+        self.assertTrue(until(lambda: 'arbutus desktop request' in b.xiaoyu.context.recall('weixin', 'arbutus')))
+        self.assertIn('RecallMac', b.xiaoyu.context.recall('weixin', 'arbutus'))
+        self.assertEqual([], b.xiaoyu.context.turns('weixin'))
+
     def test_side_chat_delete_converges_without_restoring_stale_history(self):
         network=Network();a=Node(self,network,'DeleteMac');b=Node(self,network,'DeleteWindows',peers=[a.url])
         chat=a.service.conversation_create({'id':'side-delete-mesh'})

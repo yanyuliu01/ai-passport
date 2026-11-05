@@ -356,7 +356,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
             link.send(BuddyProtocol.cardClear());
             images.clear();
         }
-        List<Card> all = store.cards();
+        List<Card> all = CardViews.deviceVisibleCards(store.cards());
         // 第三屏的单子：在做的任务，分开显示的固件上再接着最近做完的。把做完的事另列
         // 一张单子的固件（past），这张单子上只有在做的，做完的走下面那张。
         List<Card> listed = CardViews.deviceTasks(all, BuddyProtocol.TASK_COUNT,
@@ -462,7 +462,7 @@ public class LinkService extends Service implements BleLink.Listener, HubStore.L
         for (HubStore.Event event : recent) {
             entries.add(event.entry());
         }
-        HubStore.Ask ask = store.currentAsk();
+        HubStore.Ask ask = store.currentDeviceAsk();
         BuddyProtocol.Prompt prompt = ask == null ? null
                 : new BuddyProtocol.Prompt(ask.id, ask.source, ask.text, ask.actionable);
         boolean deviceCanAnswer = prompt != null && prompt.actionable;

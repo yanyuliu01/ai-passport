@@ -10,6 +10,7 @@ final class PeerAvailability {
     PeerAvailability(){this(System::nanoTime);}
     PeerAvailability(LongSupplier clock){this.clock=clock;}
     void observed(){lastSeen=clock.getAsLong();seen=true;}
+    void clear(){seen=false;lastSeen=0;}
     boolean online(boolean transportReady){
         long elapsed=clock.getAsLong()-lastSeen;
         return transportReady && seen && elapsed>=0 && elapsed<=TimeUnit.SECONDS.toNanos(10);

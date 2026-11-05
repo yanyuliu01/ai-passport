@@ -7,6 +7,8 @@ import hashlib
 import json
 import re
 
+from ..events.message_parts import parts as _parts
+
 VERSION = 1
 TERMINAL = frozenset(('final', 'done', 'failed', 'cancelled'))
 LABELS = {
@@ -61,35 +63,6 @@ def _author(message):
     }.get(name, name)
     return {'kind': kind, 'name': name, 'label': label}
 
-
-def _parts(text, split):
-    """Legacy Runtime message markers, never separators inside fenced code.
-
-    Native messages and owner input preserve their upstream item boundaries.
-    Newlines within an item do not create another message.
-    """
-    if not split:
-        return [(text, False)] if text else []
-    parts, lines, fence = [], [], None
-    for line in text.splitlines(keepends=True):
-        mark = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line.rstrip('\r\n'))
-        if mark:
-            token, rest = mark.groups()
-            if fence is None:
-                fence = (token[0], len(token))
-            elif token[0] == fence[0] and len(token) >= fence[1] and not rest.strip():
-                fence = None
-        if fence is None and re.fullmatch(r'[ \t]*-{3,}[ \t]*(?:\r?\n)?', line):
-            value = ''.join(lines).strip()
-            if value:
-                parts.append((value, True))
-            lines = []
-        else:
-            lines.append(line)
-    value = ''.join(lines).strip()
-    if value:
-        parts.append((value, False))
-    return parts
 
 
 def _run(text, style):
@@ -161,20 +134,51 @@ def plain(runs):
 
 def message(record, runtime_id=''):
     result = dict(record)
+    delivery_revisions = result.pop('_delivery_revisions', {})
+    delivery_hashes = result.pop('_delivery_hashes', {})
     key = identity(record, runtime_id)
     author = _author(record)
     source = (record.get('source') or {}).get('type', 'runtime')
     status = record.get('status') or 'final'
     terminal = status in TERMINAL
     text = record.get('text') or ''
+    hidden_empty_interrupt = (terminal and record.get('interrupted') is True and source == 'runtime'
+                              and author['kind'] == 'xiaoyou' and text.strip() == '……')
     if not terminal:
         text = record.get('partial') or ''
+    elif hidden_empty_interrupt:
+        # An empty interrupted provider turn uses this internal sentinel; it
+        # is not speech and must not become a bubble or an external send.
+        text = ''
     placement = ('source' if source in ('desktop', 'external') else
                  'work' if record.get('scope') == 'task' or record.get('kind') == 'activity'
                  else 'chat')
     split = source == 'runtime' and author['kind'] != 'owner' and record.get('kind') != 'activity'
     blocks = [{'id': key + '#%d' % index, 'text': part, 'complete': terminal or closed}
               for index, (part, closed) in enumerate(_parts(text, split))]
+    if isinstance(result.get('delivery'), dict):
+        delivery_items = [(block['id'], block['text']) for block in blocks if block['complete']]
+        if terminal:
+            delivery_items.extend((key + '#media:' + item['id'], item['id'])
+                                  for item in record.get('attachments', [])
+                                  if isinstance(item, dict) and isinstance(item.get('id'), str)
+                                  and item.get('status') == 'ready' and item.get('source') != 'owner')
+        result['delivery'] = {block_id: result['delivery'][block_id]
+                              for block_id, value in delivery_items if block_id in result['delivery']
+                              and isinstance(delivery_hashes, dict)
+                              and delivery_hashes.get(block_id) == hashlib.sha256(value.encode('utf-8')).hexdigest()}
+        if not result['delivery']:
+            result.pop('delivery')
+        elif isinstance(delivery_revisions, dict):
+            result['delivery_revisions'] = {block: delivery_revisions[block] for block in result['delivery']
+                                            if type(delivery_revisions.get(block)) is int
+                                            and delivery_revisions[block] > 0}
+    hidden_channel_blocks = []
+    if record.get('conversation') == 'weixin' and author['kind'] == 'xiaoyou':
+        delivery = result.get('delivery') or {}
+        hidden_channel_blocks = [block['id'] for block in blocks if delivery.get(block['id']) == 'cancelled']
+        if hidden_channel_blocks:
+            blocks = [block for block in blocks if block['id'] not in hidden_channel_blocks]
     for block in blocks:
         block['runs'] = _runs(block['text'], author['kind'] != 'owner' and record.get('kind') != 'activity')
     # Event kinds of the refactor design (1.2): what this record is, not how it is drawn.
@@ -188,6 +192,13 @@ def message(record, runtime_id=''):
     interrupted = terminal and record.get('interrupted') is True
     if interrupted:
         revision['interrupted'] = True  # Only when set, so existing revisions stay stable.
+    if hidden_empty_interrupt:
+        revision['hidden_empty_interrupt'] = True
+    if hidden_channel_blocks:
+        revision['hidden_channel_blocks'] = hidden_channel_blocks
+    channel_tracked = record.get('conversation') == 'weixin' and record.get('channel_delivery_tracked') is True
+    if channel_tracked:
+        revision['channel_delivery_tracked'] = True
     digest = hashlib.sha256(json.dumps(revision, sort_keys=True, ensure_ascii=False,
                                       separators=(',', ':')).encode()).hexdigest()[:20]
     reply_to = record.get('reply_to')
@@ -204,10 +215,16 @@ def message(record, runtime_id=''):
         'status_label': INTERRUPTED_LABEL if interrupted else LABELS.get(status, LABELS['unknown']),
         'complete': terminal, 'blocks': blocks,
         **({'interrupted': True} if interrupted else {}),
+        **({'channel_delivery_tracked': True} if channel_tracked else {}),
         # Unstyled text for one-line places (home card, device screen, copying).
         'plain': '\n\n'.join(plain(block['runs']) for block in blocks),
         'order': [record.get('turn_at', record.get('created_at')) or 0, turn, 0 if author['kind'] == 'owner' else 1, key],
     }
+    if record.get('conversation') == 'weixin' and result.get('delivery'):
+        # Older mobile clients retain the presentation contract on both task
+        # entries and standalone messages; keep the status with that view.
+        result['presentation']['channel_delivery'] = dict(result['delivery'])
+        result['presentation']['channel_delivery_revisions'] = dict(result.get('delivery_revisions') or {})
     return result
 
 

@@ -30,6 +30,13 @@ final class NavIconView extends View {
             canvas.drawRoundRect(new RectF(3, 4, 21, 19), 5, 5, paint);
             canvas.drawLine(4, 18, 3, 22, paint);
             canvas.drawLine(7, 9, 16, 9, paint); canvas.drawLine(7, 13, 13, 13, paint);
+        } else if (icon.equals("weixin")) {
+            Path first = new Path(); first.moveTo(3, 14); first.lineTo(3, 6); first.quadTo(3, 4, 5, 4);
+            first.lineTo(14, 4); first.quadTo(16, 4, 16, 6); first.lineTo(16, 11); first.quadTo(16, 13, 14, 13);
+            first.lineTo(7, 13); first.lineTo(3, 16); first.close(); canvas.drawPath(first, paint);
+            Path second = new Path(); second.moveTo(19, 9); second.quadTo(21, 9, 21, 11); second.lineTo(21, 20);
+            second.lineTo(17.5f, 17.5f); second.lineTo(11, 17.5f); second.quadTo(9, 17.5f, 9, 15.5f);
+            canvas.drawPath(second, paint);
         } else if (icon.equals("tasks")) {
             canvas.drawRoundRect(new RectF(4, 4, 20, 22), 4, 4, paint);
             canvas.drawRoundRect(new RectF(8, 2, 16, 7), 2, 2, paint);

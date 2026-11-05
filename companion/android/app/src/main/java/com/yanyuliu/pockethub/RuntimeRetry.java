@@ -22,10 +22,7 @@ final class RuntimeRetry {
             Map<String, String> fields = BuddyProtocol.parseFlatObject(new String(body, StandardCharsets.UTF_8));
             return fields != null && fields.get("client_id") != null && !fields.get("client_id").isEmpty();
         }
-        if ("/v1/voice".equals(uri.getPath()) && uri.getRawQuery() != null) {
-            for (String field : uri.getRawQuery().split("&"))
-                if (field.startsWith("client_id=") && field.length() > 10) return true;
-        }
+        // A lost voice acknowledgement can outlive the desktop receipt; retain it for review.
         return false;
     }
 

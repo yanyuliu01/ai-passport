@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 _UUID = re.compile(r"^[0-9a-f]{32}$")
+_CHANNEL_ID = re.compile(r"^channel-[A-Za-z0-9_-]{43}$")
 _PHASES = frozenset({"runtime_received", "runtime_accepted", "runtime_started",
     "runtime_partial", "runtime_processing_end", "model_start", "model_headers",
     "model_first_event", "model_first_text", "model_end"})
@@ -104,7 +105,8 @@ class TurnTiming:
         self.path = Path(state_dir) / "diagnostics" / "turn-timing.jsonl"
 
     def mark(self, client_id, request_id, phase, attempt=None):
-        if not isinstance(client_id, str) or not _UUID.fullmatch(client_id) or phase not in _PHASES:
+        if (not isinstance(client_id, str) or not (_UUID.fullmatch(client_id) or _CHANNEL_ID.fullmatch(client_id))
+                or phase not in _PHASES):
             return
         record = {"v": 1, "process": _PROCESS, "client_id": client_id,
                   "phase": phase, "monotonic_ns": time.monotonic_ns()}

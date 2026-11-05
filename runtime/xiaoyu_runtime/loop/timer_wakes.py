@@ -138,9 +138,10 @@ class ReminderWakes:
 
 
 class MemoryUpkeep:
-    def __init__(self, context, memory, marker, ports: UpkeepPorts, conversation="default"):
+    def __init__(self, context, memory, marker, ports: UpkeepPorts, conversation="default", bootstrap_recent=0):
         self._context, self._memory, self._marker = context, memory, marker
         self._ports, self._conversation = ports, conversation
+        self._bootstrap_recent = bootstrap_recent
         self._marker_lock = threading.RLock()
         self._marker_state = {}
         self._upkept: Optional[str] = self._load_marker()
@@ -196,22 +197,30 @@ class MemoryUpkeep:
         if not turns or now - float(turns[-1].get("at") or now) < quiet:
             return
         if self._upkept is None:
-            # 第一次：从现在开始算，不把以前所有的对话翻一遍。
+            # Default retains legacy no-backfill semantics. A new channel may
+            # opt into one bounded recent window; corrections still fence it.
             if not self._ports.stopped() and self._ports.owner(self._conversation) == owner:
-                self.save_marker(turns[-1]["id"])
+                if self._bootstrap_recent:
+                    start = max(0, len(turns) - self._bootstrap_recent)
+                    marker = turns[start - 1]['id'] if start else 'bootstrap-recent-v1'
+                    self.save_marker(marker)
+                else:
+                    self.save_marker(turns[-1]["id"])
             return
         start = 0
         if self._upkept is not None:
             ids = [turn["id"] for turn in turns]
             start = ids.index(self._upkept) + 1 if self._upkept in ids else 0
         fresh = turns[start:][-maximum:]
+        _, memory_revision, cutoff = self._memory().snapshot_with_cutoff()
+        fresh = [turn for turn in fresh if float(turn.get('at') or 0) > cutoff]
         if len(fresh) < minimum:
             return
         lines = "\n\n".join("主人：%s\n小鱼：%s" % (turn["text"][:400], turn["reply"][:400]) for turn in fresh)
         source = [[turn["_key"], turn["_version"]] for turn in fresh]
-        self.apply(owner, turns[-1]["id"], source, None, lines)
+        self.apply(owner, turns[-1]["id"], source, None, lines, memory_revision=memory_revision)
 
-    def apply(self, owner, target, source, saved, lines=None):
+    def apply(self, owner, target, source, saved, lines=None, memory_revision=None):
         def guard():
             if self._ports.stopped() or self._ports.owner(self._conversation) != owner:
                 raise EffectFenceError("Upkeep owner changed")
@@ -231,11 +240,18 @@ class MemoryUpkeep:
                 raise EffectUncertain("整理包含无法恢复的操作。")
             if "reply" not in wake.state:
                 if saved:
+                    # A legacy pending remember has no memory revision fence;
+                    # after a correction it must not resurrect an old preference.
+                    cutoff = self._memory().correction_after()
+                    if cutoff and any(effect.get('name') == 'remember' and effect.get('state') == 'pending'
+                                      and '_memory_revision' not in effect.get('args', {})
+                                      for effect in wake.effects.records):
+                        raise EffectUncertain('记忆已经纠正，旧整理操作不能自动重放。')
                     box = Toolbox([], [], [], lambda fields: "不能交办", lambda card: None,
                                   memory=self._memory(), only=["remember", "replace", "forget"], guard=guard)
                     result = wake.resume(box)
                 else:
-                    result = self._ports.ask("（最近这几轮对话：）\n" + lines, owner, wake.effects)
+                    result = self._ports.ask("（最近这几轮对话：）\n" + lines, owner, wake.effects, memory_revision)
                 if result is None:
                     return
                 wake.finish(result)

@@ -37,6 +37,7 @@ export function runtimeConversation(raw: unknown): Conversation | undefined {
   const row = raw as Json;
   if (typeof row.id !== 'string' || !conversationID(row.id) || typeof row.title !== 'string' || row.title.length > 200) return;
   return { id: row.id, title: row.id === 'default' ? '主对话' : row.title,
+    ...(row.kind === 'main' || row.kind === 'side' || row.kind === 'weixin' ? { kind: row.kind } : {}),
     createdAt: finite(row.createdAt) ?? (finite(row.created_at) || 0) * 1000,
     updatedAt: finite(row.updatedAt) ?? (finite(row.updated_at) || 0) * 1000,
     revision: finite(row.revision) || 0, metadataAt: finite(row.metadataAt) ?? (finite(row.metadata_at) || 0) * 1000,
@@ -83,7 +84,7 @@ export function connectionWord(paired: boolean, connected: boolean): string {
 }
 /** A side chat nobody has written in yet is not kept in the list, except the one open now. */
 export function listedSideChat(item: Conversation, open: string): boolean {
-  return item.id !== 'default' && !item.deleted && !item.archived && (!item.pending || item.id === open);
+  return item.id !== 'default' && item.id !== 'weixin' && item.kind !== 'weixin' && !item.deleted && !item.archived && (!item.pending || item.id === open);
 }
 /**
  * 在做的事 lists work handed to a helper. A "continue this computer session" card (desktop_card)

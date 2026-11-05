@@ -8,6 +8,8 @@ Snapshot: **2026-10-30, Asia/Shanghai**. This is a progress index, not a release
 or a claim of complete acceptance. The subsystem documents linked below remain
 authoritative for implementation and test evidence.
 
+Windows client source checkpoint and build instructions (2026-11-05): [handoff](windows-client-handoff-20261105.md).
+
 ## Integration candidate (2026-11-02)
 
 For the installed Mac Runtime 0.27.7 synchronization and performance fixes,

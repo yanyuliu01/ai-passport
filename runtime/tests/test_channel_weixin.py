@@ -1,8 +1,9 @@
 import io
 import json
 import unittest
+import urllib.error
 
-from xiaoyu_runtime.channels.weixin import WeixinClient, WeixinError
+from xiaoyu_runtime.channels.weixin import WeixinClient, WeixinError, WeixinPausedError, WeixinTransportError
 
 
 class Response(io.BytesIO):
@@ -24,6 +25,14 @@ class Opener:
 
 
 class WeixinTransportTests(unittest.TestCase):
+    def test_transport_errors_do_not_reveal_qr_or_network_error(self):
+        class Bad:
+            def open(self, request, timeout):
+                raise urllib.error.URLError('private-qr-secret')
+        with self.assertRaises(WeixinTransportError) as error:
+            WeixinClient(opener=Bad()).qr_status('private-qr-secret')
+        self.assertNotIn('private-qr-secret', str(error.exception))
+
     def test_qr_and_status_do_not_send_credentials(self):
         opener = Opener({'status': 'wait'})
         client = WeixinClient(token='secret', opener=opener)
@@ -31,7 +40,7 @@ class WeixinTransportTests(unittest.TestCase):
         req, timeout = opener.calls[-1]
         self.assertIn('qrcode=a%26b', req.full_url)
         self.assertIsNone(req.get_header('Authorization'))
-        self.assertEqual(timeout, 15)
+        self.assertEqual(timeout, 40)
         client.qr()
         self.assertIsNone(opener.calls[-1][0].get_header('Authorization'))
 
@@ -53,6 +62,6 @@ class WeixinTransportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 WeixinClient(base=endpoint)
         client = WeixinClient(token='secret', opener=Opener({'ret': -14, 'errmsg': 'secret'}))
-        with self.assertRaises(WeixinError) as error:
+        with self.assertRaises(WeixinPausedError) as error:
             client.updates('')
         self.assertNotIn('secret', str(error.exception))

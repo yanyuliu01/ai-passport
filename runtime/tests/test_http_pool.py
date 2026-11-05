@@ -254,6 +254,26 @@ class PoolTest(unittest.TestCase):
                     agent.run(Job(text="test", plain=True, on_text=lambda _: None))
                 fallback.assert_not_called()
 
+    def test_uncertain_send_writes_only_transport_diagnostics(self):
+        import json
+        from xiaoyu_runtime.helpers import dsh_stream
+        from xiaoyu_runtime.helpers.agents import DshAgent
+        from xiaoyu_runtime.helpers.base import Job
+        from runtime.tests.test_streaming import dsh_spec
+        with tempfile.TemporaryDirectory() as directory:
+            spec = dsh_spec(Path(directory))
+            error = http_pool.AmbiguousSendError(BrokenPipeError('private error text'), stage='read_headers', reused=True)
+            with patch.object(dsh_stream, 'direct_official', return_value=True), \
+                    patch.object(dsh_stream, 'open_direct', side_effect=error) as send:
+                with self.assertRaises(dsh_stream.NoProviderFallback):
+                    DshAgent(spec).run(Job(text='private message', plain=True, on_text=lambda _: None))
+            self.assertEqual(send.call_count, 1)
+            data = (Path(spec.config_dir) / 'xiaoyu-diagnostics' / 'deepseek-transport.jsonl').read_text()
+            entry = json.loads(data)
+            self.assertEqual((entry['stage'], entry['error_type'], entry['reused_connection']),
+                             ('read_headers', 'BrokenPipeError', True))
+            self.assertNotIn('private', data)
+
     def test_connect_and_response_headers_share_one_deadline(self):
         original = http_pool.http.client.HTTPConnection.connect
         def slow_connect(connection):

@@ -196,10 +196,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
     private String drawerKey = null;
     private String companionChoice = "ds";
     private String composerContext = "";
+    private boolean textIntentPending;
     private final Map<String, String> drafts = new HashMap<>();
     private final Map<String, Integer> scrollPositions = new HashMap<>();
     private String lastRuntime = "";
     private LinearLayout composer;
+    private TextView weixinReadonly;
     /** 聊天列表现在画着的：窗口、每行的消息编号和样子、每行的 View（ChatPlan 拿它们比）。 */
     private String chatHeader = "";
     private List<String> chatIds = new ArrayList<>(), chatLooks = new ArrayList<>();
@@ -481,6 +483,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         composer.addView(quoteBar, quoteParams);
         attachPanel = buildAttachPanel(); composer.addView(attachPanel);
         page.addView(composer);
+        weixinReadonly = text("在微信里接着说 · 这里只能看", 13, false);
+        weixinReadonly.setGravity(Gravity.CENTER); weixinReadonly.setTextColor(HINT);
+        weixinReadonly.setPadding(dp(16), dp(16), dp(16), dp(20));
+        weixinReadonly.setVisibility(View.GONE); page.addView(weixinReadonly);
         // 像微信：点输入框就回到键盘，附件面板收起。
         chatInput.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) setAttachPanel(false);
@@ -997,7 +1003,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (AnchoredMenu.showing()) { AnchoredMenu.afterClose("drawer", this::refreshDrawer); return; }
         if(!selectionRuntime.equals(runtimeUrl())) { selectionRuntime=runtimeUrl(); selectingSideChats=false; selectedSideChats.clear(); }
         if(selectingSideChats)selectedSideChats.retainAll(visibleSideChatIds());
-        String key = selectingSideChats + ":" + selectedSideChats + ":" + archivingSideChats + ":" + helpersTarget + ":" + tab + ":" + openAgent + ":" + navigation.size() + ":" + currentConversation + ":" + store.runtimeConnected() + ":" + store.cards().size();
+        boolean channelAvailable = store.can("weixin_v1") || store.can("weixin_bind_v1") || !store.mainMessages("weixin").isEmpty();
+        for (Map<String, Object> item : store.conversations()) if ("weixin".equals(Json.string(item, "id"))) channelAvailable = true;
+        String key = selectingSideChats + ":" + selectedSideChats + ":" + archivingSideChats + ":" + helpersTarget + ":" + tab + ":" + openAgent + ":" + navigation.size() + ":" + currentConversation + ":" + store.runtimeConnected() + ":" + store.cards().size() + ":" + channelAvailable;
         for (Map<String, Object> item : store.conversations()) key += item.toString();
         for (Card card : store.cards()) key += card.state;
         if (key.equals(drawerKey)) return; drawerKey = key; drawerList.removeAllViews(); drawerHelpers.removeAllViews();
@@ -1016,6 +1024,11 @@ public class MainActivity extends Activity implements HubStore.Listener {
         }
         drawerList.addView(drawerNav(groupRow("tasks", "在做的事", null, waiting > 0 ? String.valueOf(waiting) : doing > 0 ? String.valueOf(doing) : "",
                 waiting > 0 ? AMBER : BLUE, v -> topWork(), false), tab == TAB_WORK && navigation.isEmpty()));
+        if (channelAvailable) {
+            drawerList.addView(drawerHeading("渠道"));
+            drawerList.addView(drawerNav(groupRow("weixin", "微信", null, "", BLUE,
+                    v -> enterConversation("weixin", true), false), tab == TAB_CHAT && "weixin".equals(currentConversation)));
+        }
         LinearLayout side = new LinearLayout(this); side.setGravity(Gravity.CENTER_VERTICAL);
         TextView label = text(selectingSideChats ? "已选 " + selectedSideChats.size() + " 项" : "旁聊", 12, false); label.setTextColor(HINT); label.setPadding(dp(10), dp(14), 0, dp(6));
         side.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1181,7 +1194,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
         minePane.addView(looks);
         LinearLayout archive = group();
         int archivedItems = archivedCount();
-        archive.addView(groupRow(null, "已归档", "收起来的旁聊和任务", (archivedItems > 0 ? archivedItems + " " : "") + "›", HINT, view -> showArchived(), false));
+        archive.addView(groupRow(null, "已归档", "收起来的旁聊和任务", (archivedItems > 0 ? archivedItems + " " : "") + "›", HINT, view -> showArchived(), true));
+        archive.addView(groupRow(null, "旧聊天记录", "关联并只读查看旧连接记录", "›", HINT, view -> LegacyArchivePane.show(this), false));
         LinearLayout.LayoutParams archiveGap = new LinearLayout.LayoutParams(-1, -2); archiveGap.setMargins(0, dp(18), 0, 0);
         minePane.addView(archive, archiveGap);
         minePane.addView(groupHeading("关于"));
@@ -1387,6 +1401,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 else { toast("有新版 " + newer.label() + "，再点一次安装"); UsageEvents.update("available", newer.label()); }
                 mineKey = null; drawerKey = null; onHubChanged();
             });
+            return;
+        }
+        if (PrivateReleaseRoute.looksPrivate(update.downloadUrl)) {
+            UsageEvents.update("download_internet", update.label());
+            updateProgress = 0; mineKey = null; refreshMine();
+            downloadApp(target, update, true);
             return;
         }
         chooseSource(update.downloadUrl.isEmpty() ? null : "安装包 " + mb(update.size), external -> {
@@ -1854,6 +1874,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private void sendChat() {
+        if (tab == TAB_CHAT && "weixin".equals(currentConversation)) { toast("请在微信里继续对话"); return; }
         String message = chatInput.getText().toString().trim();
         if (tab == TAB_CHAT && imagesFailed()) { toast("请先重试上传，或移除没传上的图片"); return; }
         boolean withImage = !draftImages.isEmpty() && tab == TAB_CHAT;
@@ -1873,6 +1894,25 @@ public class MainActivity extends Activity implements HubStore.Listener {
         String helper = tab == TAB_AGENT ? agentName(openAgent) : null;
         if (tab == TAB_AGENT && helper == null) return;
         String targetCard = tab == TAB_TASKS ? openTask : null;
+        if(tab==TAB_CHAT && supplementCard==null){
+            if(textIntentPending){toast("正在保存上一条消息，请稍候");return;}
+            final RuntimeClient.Target ownerTarget=RuntimeClient.selected(this);
+            if(ownerTarget==null){toast("电脑连接已变化，请稍后重试");return;}
+            final long ownerGeneration=AccountManager.historyGeneration();final String ownerAccount=AccountManager.accountId();
+            final String entered=chatInput.getText().toString(),context=composerContext,quote=quoting;
+            textIntentPending=true;
+            RuntimeClient.sendChat(this,AppPresentation.withQuote(quote,message),currentConversation,null,null,saved->{
+                textIntentPending=false;
+                if(isFinishing() || isDestroyed())return;
+                if(ComposerAdmission.mayClear(saved && AccountManager.historyCurrent(ownerGeneration,ownerAccount,ownerTarget.url),
+                        context,composerContext,entered,chatInput.getText().toString())){
+                    chatInput.setText("");drafts.remove(context);
+                    if(java.util.Objects.equals(quote,quoting))clearQuote();
+                    updateSendState();scrollDown();
+                } else if(!saved && context.equals(composerContext))toast("消息未能保存，请保留输入后重试");
+            });
+            performHaptic(false);scrollDown();return;
+        }
         Card session = targetCard == null ? null : CardViews.find(HubStore.get().cards(), targetCard);
         if (session != null && session.monitoringOnly) {
             // 在电脑会话的页面里说的：直接送进那个会话，留在这一页看它回。
@@ -2006,7 +2046,9 @@ public class MainActivity extends Activity implements HubStore.Listener {
         // 别处上报来的会话（不在任何一台电脑上）只能看，不给输入框。
         boolean reported = opened != null && opened.source.equals("external");
         boolean sessionReady = opened != null && WorkRecords.session(opened, HubStore.get().runtimeConnected(), System.currentTimeMillis() / 1000.0).equals("ready");
-        composer.setVisibility(tab == TAB_CHAT || sessionReady ? View.VISIBLE : View.GONE);
+        boolean channel = tab == TAB_CHAT && "weixin".equals(currentConversation);
+        composer.setVisibility((tab == TAB_CHAT && !channel) || sessionReady ? View.VISIBLE : View.GONE);
+        weixinReadonly.setVisibility(channel ? View.VISIBLE : View.GONE);
         addImage.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
         if (frame != null) frame.reserveEdge();
         if (tab != TAB_CHAT && attachPanel != null) attachPanel.setVisibility(View.GONE);
@@ -2305,7 +2347,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
             chatAnchor = messages.isEmpty() ? null : messages.get(first).id;
         }
         boolean loading = messages.isEmpty() && store.catchingUp();
-        String header = currentConversation + ":" + companionChoice + ":" + chatAnchor + ":" + (first > 0) + ":" + messages.isEmpty() + ":" + loading;
+        String channelState = !store.runtimeConnected() ? "连不上，显示已保存的记录" : store.weixinState().equals("connected") ? "已连接" : store.weixinState().equals("binding") ? "连接中" : store.weixinState().equals("relogin") ? "需要在电脑上重新扫码" : store.weixinState().equals("unreachable") ? "微信暂时连不上" : "微信状态待同步";
+        String header = currentConversation + ":" + companionChoice + ":" + chatAnchor + ":" + (first > 0) + ":" + messages.isEmpty() + ":" + loading + ("weixin".equals(currentConversation) ? ":" + channelState : "");
         // 一件事的卡只挂在它最新的那条回复下面：交出去时那句话下面有卡，结果出来卡就跟着挪到结果下面，
         // 不在每条相关的话下面各挂一张。
         chatReceipts.clear();
@@ -2329,14 +2372,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
         Set<String> redrawn = new HashSet<>();
         if (plan.rebuild) {
             chatHeader = header; chatList.removeAllViews(); chatWords.clear(); chatQuotes.clear(); chatStatus.clear(); chatRows.clear(); chatGroups.clear();
+            if ("weixin".equals(currentConversation)) {
+                TextView channelStatus = text(channelState, 12, false); channelStatus.setTextColor(HINT);
+                channelStatus.setPadding(dp(8), dp(8), dp(8), dp(12)); chatList.addView(channelStatus);
+            }
             if (first > 0) chatList.addView(button("查看更早的对话", view -> {
                 int y = scroll.getScrollY(), height = body.getHeight();
                 chatWindow += 80; chatAnchor = null; chatHeader = ""; refreshChat(HubStore.get().cards(), HubStore.get());
                 scroll.post(() -> scroll.scrollTo(0, y + body.getHeight() - height));
             }));
             if (loading) chatList.addView(chatSkeleton());
-            else if (messages.isEmpty()) chatList.addView(emptyState(currentConversation.equals("default") ? "陪你聊，也帮你安排" : "想聊什么直接说",
-                    currentConversation.equals("default") ? "说说你今天的想法，或交给小鱼一件事。" : "标题会按你的第一句话自动起。"));
+            else if (messages.isEmpty()) chatList.addView(emptyState(currentConversation.equals("default") ? "陪你聊，也帮你安排" : "weixin".equals(currentConversation) ? "微信" : "想聊什么直接说",
+                    currentConversation.equals("default") ? "说说你今天的想法，或交给小鱼一件事。" : "weixin".equals(currentConversation) ? "还没有微信消息；如果尚未连接，请先在电脑上连接微信。" : "标题会按你的第一句话自动起。"));
             for (Map<String, Object> item : store.conversations()) if (currentConversation.equals(Json.string(item, "id")) && item.get("context") instanceof Map) {
                 Map<String, Object> context = Json.object(item.get("context"));
                 chatList.addView(text("引用背景 · 来自" + conversationTitle(Json.string(context, "conversation")) + "\n" + Json.string(context, "text"), 13, false));
@@ -2372,8 +2419,15 @@ public class MainActivity extends Activity implements HubStore.Listener {
             ChatHistory.Message message = messages.get(index);
             LinearLayout group = chatGroups.get(rowKey(message));
             if (group != null) {
-                changed |= setBubbles(group, shownBubbles(message), animate && !redrawn.contains(rowKey(message)), message.presentation);
-                if (group.getChildCount() > 0) TurnTiming.firstBubble(message.clientId, android.os.SystemClock.uptimeMillis());
+                VisibleBubbleTiming.Message timing = (VisibleBubbleTiming.Message) group.getTag();
+                timing.eligible = !message.status.equals("failed") && !message.status.equals("cancelled")
+                        && (message.presentation == null || (message.presentation.supported
+                        && !message.presentation.value("status").equals("failed")
+                        && !message.presentation.value("status").equals("cancelled")));
+                // WeChat already paces sends at the channel; don't delay the
+                // mirrored bubble a second time on the phone.
+                changed |= setBubbles(group, shownBubbles(message), animate && !"weixin".equals(message.conversation)
+                        && !redrawn.contains(rowKey(message)), message.presentation);
                 changed |= showStatus(chatStatus.get(rowKey(message)), message.status.equals("thinking") ? "" : statusText(message));
                 continue;
             }
@@ -2472,7 +2526,8 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 continue;
             }
             LinearLayout bubble = bubbleShell(false);
-            TextView words = bubbleWords(false, ""); bubbleGestures(words, bubble, () -> group.getTag() instanceof String ? (String) group.getTag() : null, companionName());
+            TextView words = bubbleWords(false, ""); bubbleGestures(words, bubble,
+                    () -> ((VisibleBubbleTiming.Message) group.getTag()).id, companionName());
             words.setTag(parts.get(index)); words.setText(presentation != null && presentation.supported
                     ? Markdown.projected(presentation,index) : Markdown.render(parts.get(index), dp(16)));
             bubble.addView(words); group.addView(bubble, bubbleParams(false)); changed = true;
@@ -2500,7 +2555,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (message.presentation != null) look.append(message.presentation.author());
         if (card != null && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
             look.append(card.title).append(AppPresentation.stateWord(card, store.runtimeConnected())).append(card.resultReady);
-        for (Attachment item : message.attachments) look.append(item.id).append(item.status);
+        for (Attachment item : message.attachments) {
+            look.append(item.id).append(item.status);
+            if (message.presentation != null) look.append(message.presentation.visibleAttachment(item.id));
+        }
         return look.toString();
     }
 
@@ -2513,7 +2571,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
                 author.setTextColor(HINT); row.addView(author);
             }
             // 小鱼的话像聊天那样一条一个气泡；写完一条弹出一条（setBubbles）。
-            LinearLayout group = column(); group.setTag(message.id); chatGroups.put(rowKey(message), group); row.addView(group);
+            LinearLayout group = column();
+            VisibleBubbleTiming.Message timing = new VisibleBubbleTiming.Message(message.id, message.clientId);
+            group.setTag(timing); VisibleBubbleTiming.watch(group, timing);
+            chatGroups.put(rowKey(message), group); row.addView(group);
         } else if (hasBubble(message)) {
             LinearLayout bubble = bubbleShell(mine);
             TextView words = bubbleWords(mine, ""); bubbleGestures(words, bubble, () -> message.id, "我");
@@ -2527,10 +2588,18 @@ public class MainActivity extends Activity implements HubStore.Listener {
             quotedParams.gravity = Gravity.END; quotedParams.setMargins(dp(64), dp(4), dp(4), 0);
             row.addView(quoted, quotedParams); chatQuotes.put(rowKey(message), quoted);
         }
-        for (Attachment item : message.attachments) row.addView(attachmentView(item, mine));
+        RuntimeClient.Target attachmentTarget = "weixin".equals(message.conversation)
+                ? RuntimeClient.artifactTarget(this, message.presentation) : RuntimeClient.selected(this);
+        for (Attachment item : message.attachments)
+            if (mine || message.presentation == null || message.presentation.visibleAttachment(item.id))
+                row.addView(attachmentView(item, mine, attachmentTarget));
+        if ("weixin".equals(message.conversation) && message.presentation != null && message.presentation.channelDeliveryProblem()) {
+            TextView delivery = text("没确认发到微信，请在电脑端查看", 12, false);
+            delivery.setTextColor(HINT); row.addView(delivery);
+        }
         TextView caption = statusCaption(mine);
         row.addView(caption, captionParams(mine)); chatStatus.put(rowKey(message), caption);
-        if (!mine && card != null && card.outstanding() && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
+        if (!"weixin".equals(currentConversation) && !mine && card != null && card.outstanding() && AppPresentation.dispatched(card) && chatReceipts.contains(rowKey(message)))
             row.addView(receipt(card));
         if (message.status.equals("failed") && mine && !message.synced) {
             row.addView(button("重试发送", view -> {
@@ -2594,6 +2663,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     /** 把最后那条回复之前你说的那句原样再发一次，让小鱼重新回答。语音发的那句没有原文，不重问。 */
     private void askAgain() {
+        if ("weixin".equals(currentConversation)) { toast("请在微信里继续对话"); return; }
         List<ChatHistory.Message> messages = HubStore.get().mainMessages();
         for (int index = messages.size() - 1; index >= 0; index--) {
             ChatHistory.Message message = messages.get(index);
@@ -2621,6 +2691,12 @@ public class MainActivity extends Activity implements HubStore.Listener {
      */
     private boolean refreshMarker() {
         if (marker == null) return false;
+        if ("weixin".equals(currentConversation)) {
+            boolean changed = markerRow.getVisibility() != View.GONE;
+            marker.state(ReplyMarker.HIDDEN); markerRow.setVisibility(View.GONE); replyActions.setVisibility(View.GONE);
+            markerRow.removeCallbacks(markerTick);
+            return changed;
+        }
         HubStore store = HubStore.get();
         List<ChatHistory.Message> messages = store.mainMessages();
         ChatHistory.Message last = messages.isEmpty() ? null : messages.get(messages.size() - 1);
@@ -2668,7 +2744,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
         if (message.role.equals("you")) return true;
         if (message.presentation != null && message.presentation.supported) return !message.presentation.blocks().isEmpty();
         if (message.status.equals("streaming")) return !AppPresentation.settledBubbles(message.text, false).isEmpty();
-        return !(message.status.equals("thinking") && message.text.isEmpty());
+        return !((message.status.equals("thinking") || message.status.equals("uncertain")) && message.text.isEmpty());
     }
 
     private String statusText(ChatHistory.Message message) {
@@ -2677,6 +2753,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             return message.status.equals("failed") ? message.presentation.label() : message.presentation.statusLine();
         switch (message.status) {
             case "sending": return message.role.equals("you") ? "发送中…" : "";
+            case "uncertain": return message.role.equals("you") ? "发送状态待确认，原消息已保留" : "";
             case "failed": return message.role.equals("you") ? "发送未成功" : "";
             case "thinking": return companionName() + " 正在想…";
             case "interrupted": return "连接中断，请重新发送或查看任务";
@@ -3731,7 +3808,10 @@ public class MainActivity extends Activity implements HubStore.Listener {
      * 点开全屏看；不再列文件名、大小和格式。文件是一张小卡片：名字和大小，点一下打开。
      */
     private View attachmentView(Attachment item, boolean mine) {
-        RuntimeClient.Target target = RuntimeClient.selected(this);
+        return attachmentView(item, mine, RuntimeClient.selected(this));
+    }
+
+    private View attachmentView(Attachment item, boolean mine, RuntimeClient.Target target) {
         long epoch = HubStore.get().cardsEpoch();
         LinearLayout.LayoutParams place;
         if (!item.image()) {
@@ -4164,6 +4244,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
 
     private String conversationTitle(String id) {
         if ("default".equals(id)) return "主对话";
+        if ("weixin".equals(id)) return "微信";
         for (Map<String, Object> item : HubStore.get().conversations())
             if (id.equals(Json.string(item, "id"))) return Json.string(item, "title");
         return "旁聊";
@@ -4344,6 +4425,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
             if (clipboard == null) return;
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", selected(words))); toast("已复制");
         });
+        if ("weixin".equals(currentConversation)) { menu.show(anchor); return; }
         menu.item("quote", "引用", () -> quote(AppPresentation.quoteSnippet(author, selected(words))));
         String request = EffectReview.requestId(id);
         if (!request.isEmpty() && HubStore.get().can("request_effect_review") && requestFailed(request))
@@ -4508,6 +4590,7 @@ public class MainActivity extends Activity implements HubStore.Listener {
     }
 
     private void supplement(Card card) {
+        if ("weixin".equals(card.conversation)) { toast("这件事来自微信，请在微信里继续；主对话续聊正在接入"); return; }
         if (card.monitoringOnly) {
             // 电脑会话：就在它自己的页面里说，不跳回主对话。
             if (tab != TAB_TASKS || !card.id.equals(openTask)) open(card.id);

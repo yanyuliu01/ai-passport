@@ -422,6 +422,13 @@ class Cards:
         with self._changed:
             return self._log.get(message_id)
 
+    def channel_delivery(self, message_id, block_id, text, state, revision):
+        with self._changed:
+            changed = self._log.channel_delivery(message_id, block_id, text, state, revision)
+            if changed:
+                self._changed.notify_all()
+            return changed
+
     def session_targets(self, conversation=None):
         """Gateway metadata only; searching must not copy every retained transcript."""
         fields = ('id', 'conversation', 'title', 'state', 'agent', 'seq', 'project', 'source',

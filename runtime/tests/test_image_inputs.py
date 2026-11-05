@@ -90,6 +90,62 @@ class ImageInputsTests(unittest.TestCase):
         owner = next(entry for entry in card["entries"] if entry["role"] == "you")
         self.assertEqual(owner["attachments"][0]["id"], item["id"])
 
+    def test_short_followup_reuses_immediately_previous_owner_image_in_app_and_weixin(self):
+        for conversation in ('default', 'weixin'):
+            with self.subTest(conversation=conversation), tempfile.TemporaryDirectory() as folder:
+                voice = DshVision()
+                config = dataclasses.replace(self.config, state_dir=Path(folder),
+                    agents=[voice.spec, self.agent.spec], default_agent=voice.name, voice_agent=voice.name)
+                disk = Store(config.state_dir)
+                runtime = Xiaoyu(config, [voice, self.agent], disk)
+                service = Service(runtime, disk)
+                try:
+                    if conversation == 'weixin':
+                        service._owner_writer.conversation_create_weixin()
+                    image = upload(runtime.artifacts, self.png)
+                    args = {'conversation': conversation, '_channel_authorized': conversation == 'weixin'}
+                    first = service.submit('', image_ids=[image['id']], **args)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline and service.get(first['id'])['status'] not in ('done', 'failed'):
+                        time.sleep(.01)
+                    self.assertEqual(service.get(first['id'])['status'], 'done')
+                    self.assertEqual(runtime._recent_owner_image_reference('这个任务咋样', conversation), [])
+                    self.assertEqual(runtime._recent_owner_image_reference('换这个咋样', 'other-chat'), [])
+                    second = service.submit('换这个咋样', **args)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline and service.get(second['id'])['status'] not in ('done', 'failed'):
+                        time.sleep(.01)
+                    self.assertEqual(service.get(second['id'])['status'], 'done')
+                    self.assertEqual(len(voice.jobs), 2)
+                    self.assertEqual(Path(voice.jobs[1].images[0]).read_bytes(), self.png)
+                    card = runtime.cards.get(service.get(second['id'])['card'])
+                    owner = next(entry for entry in card['entries'] if entry.get('id') == second['id'] + ':you')
+                    self.assertEqual(owner.get('attachments', []), [])
+                finally:
+                    service.close(); runtime.close()
+
+    def test_followup_with_missing_original_image_fails_instead_of_guessing(self):
+        voice = DshVision()
+        self.config = dataclasses.replace(self.config, agents=[voice.spec, self.agent.spec],
+                                          default_agent=voice.name, voice_agent=voice.name)
+        disk = Store(self.config.state_dir)
+        runtime = Xiaoyu(self.config, [voice, self.agent], disk); self.addCleanup(runtime.close)
+        service = Service(runtime, disk); self.addCleanup(service.close)
+        image = upload(runtime.artifacts, self.png)
+        first = service.submit('', image_ids=[image['id']])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and service.get(first['id'])['status'] not in ('done', 'failed'):
+            time.sleep(.01)
+        self.assertEqual(service.get(first['id'])['status'], 'done')
+        (runtime.artifacts._blobs / image['sha256']).unlink()
+        second = service.submit('换这个咋样')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and service.get(second['id'])['status'] not in ('done', 'failed'):
+            time.sleep(.01)
+        self.assertEqual(service.get(second['id'])['status'], 'failed')
+        self.assertIn('重新发送图片', service.get(second['id'])['error'])
+        self.assertEqual(len(voice.jobs), 1)
+
     def test_initial_image_resolver_limits_access_to_current_input(self):
         class ResolvingVision(DshVision):
             def run(inner, job):

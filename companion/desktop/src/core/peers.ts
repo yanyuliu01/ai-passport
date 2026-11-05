@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Conversation, Endpoint, Json } from '../shared.js';
 import type { SecretStore } from './client.js';
 import { ClientDatabase } from './database.js';
@@ -8,10 +8,13 @@ import { RuntimeError, type RuntimeTransport } from './runtime-client.js';
 
 interface Invitation { v: 1; space: string; device: DeviceIdentity; relay: RelayConfig; token: string; expires: number }
 interface JoinRequest { device: DeviceIdentity; token: string; expires: number; computer?: boolean }
+interface ImageBinding { peer: string; publicKey: string; runtime: string; space: string; ownDevice: string; ownRuntime: string }
 interface RPCWaiter { peer: string; resolve(value: Json): void; reject(error: Error): void }
 export interface PeerEvents {
   changed(state: { invitation?: string; joined: number; relayState: string;
-    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean }[] }): void;
+    requests: { id: string; name: string; fingerprint: string; expires?: number; computer?: boolean; imageRuntimeId?: string }[];
+    imageIdentity?: { device: string; runtime: string };
+    imageBindings?: { peer: string; name: string; runtime: string }[] }): void;
   endpoint(endpoint: Endpoint): void;
   conversations?(space: string, conversations: Conversation[]): void;
   provision?(meshSecret: string): void;
@@ -19,6 +22,47 @@ export interface PeerEvents {
 
 function publicRuntime(endpoint: Endpoint): Json {
   return { runtime_id: endpoint.runtimeId, subject_id: endpoint.spaceId, name: endpoint.name, capabilities: endpoint.capabilities };
+}
+
+const IMAGE_RELAY = '/v1/mesh/image-relays';
+const IMAGE_CHUNK = 256 * 1024;
+const runtimeId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const safeName = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+function meshPeerProof(secret: string, space: string, peer: string, runtime: string): string {
+  return createHmac('sha256', secret).update('xiaoyu-image-relay-peer-v1\0' + space + '\0' + peer + '\0' + runtime).digest('hex');
+}
+function sameProof(expected: string, candidate: unknown): boolean {
+  return typeof candidate === 'string' && /^[a-f0-9]{64}$/.test(candidate)
+    && timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(candidate, 'hex'));
+}
+function imageEnvelope(value: unknown): value is Json {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const x = value as Json;
+  return runtimeId(x.message_id) && runtimeId(x.source_runtime) && runtimeId(x.target_runtime)
+    && safeName(x.conversation) && Number.isSafeInteger(x.owner_generation) && Number(x.owner_generation) >= 0
+    && typeof x.text === 'string' && x.text.length <= 8000
+    && ['agent', 'effort', 'model'].every(key => x[key] == null || typeof x[key] === 'string' && String(x[key]).length <= 128)
+    && Array.isArray(x.attachments) && x.attachments.length >= 1 && x.attachments.length <= 4
+    && x.attachments.every(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      const a = item as Json;
+      return Object.keys(a).every(key => ['id', 'sha256', 'size', 'mime'].includes(key))
+        && safeName(a.id) && typeof a.sha256 === 'string' && /^[a-f0-9]{64}$/.test(a.sha256)
+        && Number.isSafeInteger(a.size) && Number(a.size) > 0 && Number(a.size) <= 8 * 1024 * 1024
+        && ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(a.mime));
+    });
+}
+function imageRelayRPC(path: string, value: unknown): boolean {
+  if (!imageEnvelope(value)) return false;
+  const x = value as Json;
+  const common = ['message_id', 'source_runtime', 'target_runtime', 'conversation', 'owner_generation', 'text', 'agent', 'effort', 'model', 'attachments'];
+  if (path === IMAGE_RELAY + '/finish') return Object.keys(x).every(key => common.includes(key));
+  if (path !== IMAGE_RELAY + '/receive' || !Object.keys(x).every(key => [...common, 'index', 'offset', 'data'].includes(key))) return false;
+  if (!Number.isSafeInteger(x.index) || Number(x.index) < 0 || Number(x.index) >= (x.attachments as unknown[]).length
+      || !Number.isSafeInteger(x.offset) || Number(x.offset) < 0 || typeof x.data !== 'string'
+      || x.data.length > Math.ceil(IMAGE_CHUNK * 4 / 3) || !/^[A-Za-z0-9_-]+$/.test(x.data)) return false;
+  const bytes = Buffer.from(x.data, 'base64url');
+  return bytes.length > 0 && bytes.length <= IMAGE_CHUNK && bytes.toString('base64url') === x.data;
 }
 export function allowedRPC(method: string, path: string, body?: Json): boolean {
   if (method === 'GET' && path === '/healthz') return true;
@@ -31,15 +75,28 @@ export function allowedRPC(method: string, path: string, body?: Json): boolean {
       && Number(length) > 0 && Number(length) <= 1024 * 1024;
   }
   if (method === 'GET' && ['/v1/firmware', '/v1/firmware/target'].includes(url.pathname)) return true;
+  if (method === 'GET' && /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/content$/.test(url.pathname) && url.search) {
+    const offset = url.searchParams.get('offset'), length = url.searchParams.get('length');
+    return [...url.searchParams.keys()].length === 2 && /^\d{1,8}$/.test(offset || '')
+      && Number(offset) < 64 * 1024 * 1024 && /^\d{1,8}$/.test(length || '')
+      && Number(length) > 0 && Number(length) <= 1024 * 1024;
+  }
   if (method === 'GET') return ['/v1/helpers/options', '/v1/info', '/v1/sync', '/v1/agents', '/v1/usage', '/v1/cards', '/v1/conversations', '/v1/feed', '/v1/app', '/v1/app/packs', '/v1/directory', '/v1/sessions'].includes(url.pathname)
     || /^\/v1\/directory\/(?:[A-Za-z0-9._:-]+(?:\/history)?|operations\/[A-Za-z0-9._:-]+)$/.test(url.pathname)
-    || /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
+    || !url.search && /^\/v1\/artifacts\/[a-zA-Z0-9._:-]+\/(content|thumbnail)$/.test(url.pathname)
     || /^\/v1\/tasks\/[a-zA-Z0-9._:-]+\/activity$/.test(url.pathname)
     || /^\/v1\/messages\/[a-zA-Z0-9._:-]+(?:\/effects)?$/.test(url.pathname)
     || /^\/v1\/timers\/(?:[a-zA-Z0-9._:-]+\/)?effects$/.test(url.pathname)
     // Quick review status for the phone; reading never changes the mode.
     || url.pathname === '/v1/review' && /^[A-Za-z0-9._:-]{1,128}$/.test(url.searchParams.get('conversation') || 'default');
   if (method !== 'POST') return false;
+  if (url.pathname === '/v1/weixin/resend') return Boolean(!url.search && body
+    && Object.keys(body).length === 4 && Object.keys(body).every(key => ['block', 'operation', 'revision', 'confirm'].includes(key))
+    && typeof body.block === 'string' && /^[a-f0-9]{32}\/[A-Za-z0-9._:-]+#(?:[0-9]{1,8}|media:a[0-9a-f]{32})$/.test(body.block)
+    && body.block.length <= 512 && typeof body.operation === 'string' && /^[a-f0-9]{32}$/.test(body.operation)
+    && Number.isSafeInteger(body.revision) && Number(body.revision) > 0 && typeof body.confirm === 'boolean');
+  if (url.pathname === IMAGE_RELAY + '/receive' || url.pathname === IMAGE_RELAY + '/finish')
+    return !url.search && imageRelayRPC(url.pathname, body);
   if (url.pathname === '/v1/firmware/target') {
     return Boolean(body && Object.keys(body).every(key => ['id', 'reason'].includes(key))
       && (body.id === null || typeof body.id === 'string' && /^(?:latest|previous|[a-f0-9]{12}|\d{1,8})$/.test(body.id))
@@ -145,6 +202,13 @@ export class PeerNetwork implements RuntimeTransport {
   private invitation?: string;
   private meshRounds = new Set<string>();
   private remoteRuntimes = new Map<string, Endpoint>();
+  private imageRounds = new Set<string>();
+  private imageSubmitted = new Set<string>();
+  private imagePeers = new Map<string, { runtime: string; proof: string }>();
+  private imagePending = new Map<string, { peer: string; runtime: string }>();
+  private imageUnavailableAt = new Map<string, number>();
+  private imageGeneration = 0;
+  private readonly imageInstance = randomBytes(16).toString('hex');
   constructor(private db: ClientDatabase, private secrets: SecretStore,
     private local: RuntimeTransport, private getLocal: () => Endpoint | undefined,
     private events: PeerEvents, private name: string) {}
@@ -166,22 +230,47 @@ export class PeerNetwork implements RuntimeTransport {
   }
   configure(config: RelayConfig): void { this.invitation = undefined; this.secrets.save('relay', validateRelay(config)); this.connect(config); }
   pauseRelay(): void {
+    this.imageGeneration++;
+    this.imagePeers.clear();
+    this.imagePending.clear();
     this.link?.stop(); this.link = undefined; this.relay = undefined; this.invitation = undefined;
     this.secrets.save('relay', null); this.state = '未设置跨网入口'; this.emit();
   }
   private connect(config: RelayConfig): void {
     if (!this.crypto) throw new Error('设备密钥尚未就绪');
+    this.imageGeneration++;
+    this.imagePeers.clear();
+    this.imagePending.clear();
     this.link?.stop(); this.relay = validateRelay(config);
     this.link = new RelayLink(this.relay, this.crypto.identity.id, packet => {
       this.incoming = this.incoming.then(() => this.receive(packet)).catch(() => { /* Drop unauthenticated or invalid data. */ });
-    }, state => { this.state = state; this.emit(); this.flush(); });
+    }, state => {
+      // RelayLink reconnects by itself. A prompt shown for a previous live
+      // channel must never authorize a new channel after it disconnects.
+      if (state !== '加密通信入口已连接' &&
+          (this.state === '加密通信入口已连接' || this.imagePeers.size || this.imagePending.size)) {
+        this.imageGeneration++;
+        this.imagePeers.clear();
+        this.imagePending.clear();
+      }
+      this.state = state; this.emit(); this.flush();
+    }, 10_000, this.crypto);
     this.link.start();
   }
   private emit(): void {
+    const local = this.getLocal();
+    const own = this.crypto && local?.spaceId === this.space ? { device: this.crypto.identity.id, runtime: local.runtimeId } : undefined;
+    let bindings: { peer: string; name: string; runtime: string }[] = [];
+    try { bindings = this.imageBindings().map(item => ({ peer: item.peer, name: this.trusted.get(item.peer)?.name || item.peer, runtime: item.runtime })); }
+    catch { /* Missing or inaccessible secure storage always fails closed. */ }
     this.events.changed({ invitation: this.invitation, joined: this.trusted.size, relayState: this.state,
-      requests: [...this.requests].filter(([, request]) => request.expires > Date.now()).map(([id, request]) => ({ id, name: request.device.name,
+      requests: [...[...this.requests].filter(([, request]) => request.expires > Date.now()).map(([id, request]) => ({ id, name: request.device.name,
         fingerprint: request.device.id.match(/.{1,4}/g)?.join(' ') || id, expires: request.expires,
-        ...(request.computer ? { computer: true } : {}) })) });
+        ...(request.computer ? { computer: true } : {}) })), ...[...this.imagePending].map(([id, item]) => ({
+          id, name: this.trusted.get(item.peer)?.name || item.peer,
+          fingerprint: item.peer.match(/.{1,4}/g)?.join(' ') || item.peer,
+          computer: true, imageRuntimeId: item.runtime }))],
+      ...(own ? { imageIdentity: own } : {}), imageBindings: bindings });
   }
   identity(): DeviceIdentity { if (!this.crypto) throw new Error('设备密钥尚未就绪'); return this.crypto.identity; }
   owns(endpoint: Endpoint): boolean { return endpoint.url.startsWith('peer://') && this.trusted.has(endpoint.url.slice(7)) && endpoint.spaceId === this.space; }
@@ -269,12 +358,20 @@ export class PeerNetwork implements RuntimeTransport {
     if (!this.space) return;
     const candidate = this.getLocal();
     const endpoint = candidate?.spaceId === this.space ? candidate : undefined;
+    const proof = endpoint?.meshToken && this.crypto
+      ? meshPeerProof(endpoint.meshToken, this.space, this.crypto.identity.id, endpoint.runtimeId) : undefined;
     for (const peer of this.trusted.values()) {
       await this.send(peer, this.space, 'hello', { ...(endpoint ? publicRuntime(endpoint) : { subject_id: this.space }),
+        ...(proof ? { image_relay_proof: proof } : {}),
         conversations: this.db.get<Conversation[]>('conversations:' + this.space,
           [{ id: 'default', title: '和小鱼聊天', createdAt: 0 }]) }, false);
       const remote = this.remoteRuntimes.get(peer.id);
       if (endpoint?.meshToken && remote?.capabilities.includes('mesh')) void this.exchange(peer.id, endpoint, remote);
+      if (endpoint?.meshToken && endpoint.capabilities.includes('mesh_image_relay_v1') && remote) {
+        if (remote.capabilities.includes('mesh_image_relay_v1') && this.boundImagePeer(peer.id, remote.runtimeId, endpoint))
+          void this.transferImages(peer.id, endpoint, remote);
+        else void this.reportImageUnavailable(peer.id, endpoint, remote);
+      }
     }
   }
   private async receive(packet: Packet): Promise<void> {
@@ -310,6 +407,13 @@ export class PeerNetwork implements RuntimeTransport {
     if (packet.space !== this.space || !this.trusted.has(packet.from)) return;
     if (packet.kind === 'ack') { if (typeof body.id === 'string') this.db.ackPacket(body.id, packet.from); return; }
     if (packet.kind === 'hello') { this.advertise(packet.from, body); return; }
+    if (packet.kind === 'image_binding') {
+      const local = this.getLocal(), remote = this.remoteRuntimes.get(packet.from);
+      if (local && remote && body.source_runtime === remote.runtimeId && body.target_runtime === local.runtimeId
+          && remote.capabilities.includes('mesh_image_relay_v1') && this.verifiedImagePeer(packet.from, remote.runtimeId, local))
+        this.requestImageBinding(packet.from, remote.runtimeId);
+      return;
+    }
     const digest = createHash('sha256').update(JSON.stringify(packet)).digest('hex');
     const seen = this.db.receipt('packet:' + packet.id);
     if (seen && seen.digest !== digest) throw new Error('加密消息编号冲突');
@@ -339,16 +443,21 @@ export class PeerNetwork implements RuntimeTransport {
     await this.send(this.trusted.get(packet.from)!, this.space, 'ack', { id: packet.id }, false);
   }
   private advertise(peer: string, info: Json): void {
-    if (info.subject_id !== this.space) return;
+    if (info.subject_id !== this.space) { this.imagePeers.delete(peer); return; }
     if (Array.isArray(info.conversations)) this.events.conversations?.(this.space, info.conversations as Conversation[]);
     if (typeof info.runtime_id !== 'string'
-      || !/^[a-f0-9]{32}$/.test(info.runtime_id) || !Array.isArray(info.capabilities)) return;
+      || !/^[a-f0-9]{32}$/.test(info.runtime_id) || !Array.isArray(info.capabilities)) { this.imagePeers.delete(peer); return; }
     const endpoint: Endpoint = { runtimeId: info.runtime_id, spaceId: this.space,
       name: String(info.name || this.trusted.get(peer)?.name || '其他设备'),
       url: 'peer://' + peer, token: '', capabilities: info.capabilities.filter(item => typeof item === 'string') };
+    const local = this.getLocal();
+    if (local?.meshToken && local.spaceId === this.space
+        && sameProof(meshPeerProof(local.meshToken, this.space, peer, endpoint.runtimeId), info.image_relay_proof))
+      this.imagePeers.set(peer, { runtime: endpoint.runtimeId, proof: String(info.image_relay_proof) });
+    else this.imagePeers.delete(peer);
     this.remoteRuntimes.set(peer, endpoint); this.events.endpoint(endpoint);
   }
-  async request(endpoint: Endpoint, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Json> {
+  async request(endpoint: Endpoint, method: string, path: string, body?: unknown, signal?: AbortSignal, durable = true): Promise<Json> {
     if (!endpoint.url.startsWith('peer://')) return this.local.request(endpoint, method, path, body, signal);
     const peerId = endpoint.url.slice('peer://'.length), peer = this.trusted.get(peerId);
     if (!peer || endpoint.spaceId !== this.space || !allowedRPC(method, path, body as Json))
@@ -363,7 +472,9 @@ export class PeerNetwork implements RuntimeTransport {
       signal?.addEventListener('abort', cancel, { once: true });
       this.waiters.set(request, { peer: peerId,
         resolve(value) { finish(); resolve(value); }, reject(error) { finish(); reject(error); } });
-      void this.send(peer, this.space, 'request', { request, runtime_id: endpoint.runtimeId, method, path, ...(body === undefined ? {} : { body }) })
+      // Image chunks already have a durable source queue and receiver offset;
+      // avoid retaining redundant encrypted image packets in the desktop DB.
+      void this.send(peer, this.space, 'request', { request, runtime_id: endpoint.runtimeId, method, path, ...(body === undefined ? {} : { body }) }, durable && !path.startsWith(IMAGE_RELAY + '/'))
         .catch(error => { finish(); reject(error); });
     });
   }
@@ -401,6 +512,14 @@ export class PeerNetwork implements RuntimeTransport {
       const remote = this.remoteRuntimes.get(peerId), from = payload?.from as Json;
       if (!endpoint.meshToken || !remote || from?.runtime_id !== remote.runtimeId || from?.subject_id !== this.space)
         throw new Error('Mesh 交换身份不匹配');
+    }
+    if (path === IMAGE_RELAY + '/receive' || path === IMAGE_RELAY + '/finish') {
+      const remote = this.remoteRuntimes.get(peerId);
+      if (!endpoint.meshToken || !endpoint.capabilities.includes('mesh_image_relay_v1')
+          || !remote || !remote.capabilities.includes('mesh_image_relay_v1')
+          || !this.boundImagePeer(peerId, remote.runtimeId, endpoint)
+          || payload?.source_runtime !== remote.runtimeId || payload?.target_runtime !== endpoint.runtimeId)
+        throw new Error('图片转发身份不匹配');
     }
     const hash = createHash('sha256').update(JSON.stringify({ method, path, payload })).digest('hex');
     const isVoice = method === 'POST' && path.startsWith('/v1/voice?');
@@ -474,6 +593,170 @@ export class PeerNetwork implements RuntimeTransport {
     } catch { /* Leave original cursors intact; next authenticated round retries the exchange. */ }
     finally { this.meshRounds.delete(peer); }
   }
+  /** Each Runtime owns its own durable transfer state. This bridge only
+   * carries bounded chunks between authenticated, paired computer peers. */
+  private verifiedImagePeer(peer: string, runtime: string, local: Endpoint): boolean {
+    const record = this.imagePeers.get(peer);
+    return Boolean(local.meshToken && record?.runtime === runtime
+      && sameProof(meshPeerProof(local.meshToken, this.space, peer, runtime), record.proof));
+  }
+  private imageBindings(): ImageBinding[] {
+    const stored = this.secrets.load<unknown>('image-runtime-bindings-v1');
+    if (stored === undefined || stored === null) return [];
+    if (!Array.isArray(stored) || stored.length > 256 || !stored.every(item => item && typeof item === 'object'
+        && runtimeId(item.peer) && runtimeId(item.runtime) && runtimeId(item.space) && runtimeId(item.ownDevice)
+        && runtimeId(item.ownRuntime) && typeof item.publicKey === 'string'))
+      throw new Error('图片互通身份记录不可用，请先恢复安全存储');
+    return stored as ImageBinding[];
+  }
+  private boundImagePeer(peer: string, runtime: string, local: Endpoint): boolean {
+    const device = this.trusted.get(peer);
+    if (!device || !this.crypto || !this.verifiedImagePeer(peer, runtime, local)) return false;
+    try { return this.imageBindings().some(item => item.peer === peer && item.publicKey === device.publicKey
+      && item.runtime === runtime && item.space === this.space && item.ownDevice === this.crypto!.identity.id
+      && item.ownRuntime === local.runtimeId); } catch { return false; }
+  }
+  private requestImageBinding(peer: string, runtime: string): void {
+    const local = this.getLocal();
+    if (!local || !this.verifiedImagePeer(peer, runtime, local) || this.boundImagePeer(peer, runtime, local)) return;
+    const id = this.imageRequestId(peer, runtime, local.runtimeId);
+    if (!this.imagePending.has(id)) { this.imagePending.set(id, { peer, runtime }); this.emit(); }
+  }
+  private imageRequestId(peer: string, runtime: string, ownRuntime: string): string {
+    return 'image:' + this.imageInstance + ':' + this.imageGeneration + ':' + peer + ':' + runtime + ':' + ownRuntime;
+  }
+  approveImageBinding(id: string): void {
+    const pending = this.imagePending.get(id), local = this.getLocal();
+    const device = pending && this.trusted.get(pending.peer);
+    if (!pending || !local || !device || !this.crypto || id !== this.imageRequestId(pending.peer, pending.runtime, local.runtimeId)
+        || this.remoteRuntimes.get(pending.peer)?.runtimeId !== pending.runtime
+        || !this.verifiedImagePeer(pending.peer, pending.runtime, local)) throw new Error('电脑身份已变化，请重新核对');
+    const bindings = this.imageBindings();
+    if (bindings.some(item => item.space === this.space && (item.peer === pending.peer || item.runtime === pending.runtime)
+        && !(item.peer === pending.peer && item.publicKey === device.publicKey && item.runtime === pending.runtime
+          && item.ownDevice === this.crypto!.identity.id && item.ownRuntime === local.runtimeId)))
+      throw new Error('该电脑或 Runtime 已有其他绑定，请先撤销原绑定再重新核对');
+    if (!this.boundImagePeer(pending.peer, pending.runtime, local)) bindings.push({ peer: pending.peer, publicKey: device.publicKey,
+      runtime: pending.runtime, space: this.space, ownDevice: this.crypto.identity.id, ownRuntime: local.runtimeId });
+    this.secrets.save('image-runtime-bindings-v1', bindings);
+    this.imagePending.delete(id); this.emit(); this.kick();
+  }
+  revokeImageBinding(peer: string, runtime: string): void {
+    const bindings = this.imageBindings();
+    this.secrets.save('image-runtime-bindings-v1', bindings.filter(item => !(item.peer === peer && item.runtime === runtime && item.space === this.space)));
+    this.imageGeneration++; this.imagePending.clear(); this.emit(); this.kick();
+  }
+  private async reportImageUnavailable(peer: string, local: Endpoint, remote: Endpoint): Promise<void> {
+    if (this.imageRounds.has(peer) || performance.now() < (this.imageUnavailableAt.get(peer) ?? 0)) return;
+    this.imageUnavailableAt.set(peer, performance.now() + 5000);
+    const generation = this.imageGeneration;
+    const reason = remote.capabilities.includes('mesh_image_relay_v1') ? 'unverified' : 'unsupported';
+    this.imageRounds.add(peer);
+    try {
+      const queue = await this.local.request(local, 'GET', IMAGE_RELAY + '?target=' + encodeURIComponent(remote.runtimeId));
+      if (generation !== this.imageGeneration || this.space !== local.spaceId || this.getLocal()?.runtimeId !== local.runtimeId
+          || this.getLocal()?.meshToken !== local.meshToken || !Array.isArray(queue.transfers)) return;
+      const transfer = queue.transfers.find(value => imageEnvelope(value) && value.source_runtime === local.runtimeId
+        && value.target_runtime === remote.runtimeId) as Json | undefined;
+      if (transfer) {
+        if (reason === 'unverified' && this.verifiedImagePeer(peer, remote.runtimeId, local)) {
+          this.requestImageBinding(peer, remote.runtimeId);
+          const device = this.trusted.get(peer);
+          if (device) await this.send(device, this.space, 'image_binding',
+            { source_runtime: local.runtimeId, target_runtime: remote.runtimeId }, false);
+        }
+        await this.local.request(local, 'POST', IMAGE_RELAY + '/unavailable',
+          { message_id: transfer.message_id, target_runtime: remote.runtimeId, reason });
+      }
+    } catch { /* Existing durable request remains available for later retry. */ }
+    finally { this.imageRounds.delete(peer); }
+  }
+  private async transferImages(peer: string, local: Endpoint, remote: Endpoint): Promise<void> {
+    if (this.imageRounds.has(peer)) return;
+    const generation = this.imageGeneration, space = this.space;
+    const active = () => generation === this.imageGeneration && this.space === space && space === local.spaceId
+      && this.getLocal()?.runtimeId === local.runtimeId && this.getLocal()?.meshToken === local.meshToken
+      && this.remoteRuntimes.get(peer)?.runtimeId === remote.runtimeId
+      && this.boundImagePeer(peer, remote.runtimeId, local) && this.trusted.has(peer);
+    this.imageRounds.add(peer);
+    let pendingId: string | undefined;
+    try {
+      const queue = await this.local.request(local, 'GET', IMAGE_RELAY + '?target=' + encodeURIComponent(remote.runtimeId));
+      if (!active() || !Array.isArray(queue.transfers)) return;
+      const prefix = local.runtimeId + '/' + remote.runtimeId + '/';
+      const queued = new Set(queue.transfers.filter(imageEnvelope).map(value =>
+        prefix + value.message_id + '/' + value.owner_generation));
+      for (const old of this.imageSubmitted) if (old.startsWith(prefix) && !queued.has(old)) this.imageSubmitted.delete(old);
+      const transfer = queue.transfers.find(value => imageEnvelope(value) && value.source_runtime === local.runtimeId
+        && value.target_runtime === remote.runtimeId) as Json | undefined;
+      if (!transfer || !imageEnvelope(transfer)) return;
+      pendingId = String(transfer.message_id);
+      const key = local.runtimeId + '/' + remote.runtimeId + '/' + transfer.message_id + '/' + transfer.owner_generation;
+      const envelope: Json = {};
+      for (const name of ['message_id', 'source_runtime', 'target_runtime', 'conversation', 'owner_generation', 'text', 'agent', 'effort', 'model', 'attachments'])
+        if (transfer[name] !== undefined) envelope[name] = transfer[name];
+      if (!this.imageSubmitted.has(key)) {
+        const attachments = envelope.attachments as Json[];
+        for (let index = 0; index < attachments.length; index++) {
+          let offset = 0;
+          const size = Number(attachments[index].size);
+          while (offset < size) {
+            if (!active()) return;
+            const chunk = await this.local.request(local, 'POST', IMAGE_RELAY + '/read',
+              { message_id: transfer.message_id, target_runtime: remote.runtimeId, index, offset });
+            if (!active() || chunk.offset !== offset || chunk.size !== size || typeof chunk.data !== 'string'
+                || !Number.isSafeInteger(chunk.next) || Number(chunk.next) <= offset || Number(chunk.next) > size)
+              throw new Error('本机图片分块无效');
+            const body = { ...envelope, index, offset, data: chunk.data };
+            if (!imageRelayRPC(IMAGE_RELAY + '/receive', body)) throw new Error('本机图片分块无效');
+            const received = await this.request(remote, 'POST', IMAGE_RELAY + '/receive', body);
+            if (!active() || !Number.isSafeInteger(received.next) || Number(received.next) <= offset || Number(received.next) > size)
+              throw new Error('图片分块确认无效');
+            offset = Number(received.next);
+          }
+        }
+        if (!active()) return;
+        const accepted = await this.request(remote, 'POST', IMAGE_RELAY + '/finish', envelope);
+        if (!active() || accepted.message_id !== transfer.message_id) throw new Error('图片消息确认不匹配');
+        this.imageSubmitted.add(key);
+      }
+      let rev: number | undefined;
+      const deadline = performance.now() + 25_000;
+      while (active() && performance.now() < deadline) {
+        const query = rev === undefined ? '' : '?wait=1&rev=' + rev;
+        // The durable source request is the recovery point, not a redundant
+        // long-poll packet; do not leave polls queued after a reconnect.
+        const current = await this.request(remote, 'GET', '/v1/messages/' + transfer.message_id + query, undefined, undefined, false);
+        if (!active()) return;
+        if (current.status === 'done' || current.status === 'failed' || current.status === 'cancelled') {
+          const status = current.status === 'done' ? 'done' : 'failed';
+          const reply = typeof current.reply === 'string' ? current.reply : '';
+          const error = typeof current.error === 'string' ? current.error : status === 'failed' ? '对端未完成图片消息' : '';
+          await this.local.request(local, 'POST', IMAGE_RELAY + '/ack',
+            { message_id: transfer.message_id, target_runtime: remote.runtimeId, status, reply, error });
+          this.imageSubmitted.delete(key);
+          return;
+        }
+        if (Number.isSafeInteger(current.rev) && Number(current.rev) >= 0 && Number(current.rev) !== rev) {
+          rev = Number(current.rev);
+          if (typeof current.partial === 'string' && current.partial.length <= 32000)
+            await this.local.request(local, 'POST', IMAGE_RELAY + '/progress',
+              { message_id: transfer.message_id, target_runtime: remote.runtimeId, rev, partial: current.partial });
+        } else if (rev === undefined) {
+          // A peer without revisions cannot provide a safe incremental view.
+          return;
+        }
+      }
+    } catch {
+      // Keep the request durable and make a stalled transfer visible, without
+      // claiming that an uncertain remote execution failed or never started.
+      if (pendingId && active()) try {
+        await this.local.request(local, 'POST', IMAGE_RELAY + '/unavailable',
+          { message_id: pendingId, target_runtime: remote.runtimeId, reason: 'retrying' });
+      } catch { /* Source Runtime retains the request for the next round. */ }
+    }
+    finally { this.imageRounds.delete(peer); }
+  }
   kick(): void {
     if (this.kickTimer) return;
     this.kickTimer = setTimeout(() => { this.kickTimer = undefined; void this.announce().catch(() => {}); }, 100);
@@ -481,6 +764,9 @@ export class PeerNetwork implements RuntimeTransport {
   }
   reconnect(): void { if (this.relay) this.connect(this.relay); }
   stop(): void {
+    this.imageGeneration++;
+    this.imagePeers.clear();
+    this.imagePending.clear();
     clearInterval(this.timer); clearTimeout(this.kickTimer); this.link?.stop();
     for (const waiter of this.waiters.values()) waiter.reject(new RuntimeError('客户端已退出', 499));
     this.waiters.clear();

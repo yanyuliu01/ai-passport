@@ -203,6 +203,15 @@ class Replicas:
             record = entry["records"].get((kind, item_id)) if entry else None
             return dict(record["data"]) if record else None
 
+    def applied_record(self, origin: str, kind: str, item_id: str, *, epoch: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Read a single record and its applied boundary from the same epoch."""
+        with self._lock:
+            entry = self._origins.get(origin)
+            record = entry['records'].get((kind, item_id)) if entry else None
+            if not record or (epoch is not None and entry['epoch'] != epoch) or record['oseq'] > entry.get('applied', entry['upto']):
+                return None
+            return dict(record['data'])
+
     def record_seq(self, origin: str, kind: str, item_id: str) -> int:
         with self._lock:
             entry = self._origins.get(origin)
@@ -851,6 +860,8 @@ class Mesh:
 
     def recall_messages(self, conversation: str, terms: List[str], covered: set) -> Tuple[List[Any], bool]:
         """Search already received, applied peer records only on explicit recall."""
+        conversations = {conversation} if isinstance(conversation, str) else set(conversation)
+        shared_chats = not isinstance(conversation, str)
         hits, remaining, partial = [], 5000, False
         origins = [origin for origin in self._replicas.origins() if origin != self.runtime_id]
         for origin in origins:
@@ -868,9 +879,11 @@ class Mesh:
                 author = data.get("author") if isinstance(data.get("author"), dict) else {}
                 source = data.get("source") if isinstance(data.get("source"), dict) else {}
                 text = data.get("text")
-                if (data.get("conversation") != conversation or data.get("status") != "final"
+                if (data.get("conversation") not in conversations or data.get("status") != "final"
                         or author.get("kind") not in ("owner", "xiaoyou") or source.get("type") not in (None, "", "runtime")
                         or not isinstance(text, str) or data.get("relay_to") or self._hidden(data)):
+                    continue
+                if shared_chats and (data.get('scope') == 'task' or data.get('kind') in ('activity', 'result')):
                     continue
                 body = (text + "\n" + label).lower()
                 if not any(term in body for term in terms):
@@ -899,7 +912,10 @@ class Mesh:
                 if not math.isfinite(stamp):
                     stamp = 0.0
                 role = "主人" if author.get("kind") == "owner" else "小鱼"
-                hits.append(("网络对话", label, stamp, "来源：" + label + "\n" + role + "：" + text))
+                chat = self._cards.conversations.get(data.get('conversation')) if shared_chats else None
+                chat_label = (chat or {}).get('title') or data.get('conversation') if shared_chats else ''
+                hits.append(("网络对话", label, stamp, "来源：" + label +
+                             (" / " + chat_label if chat_label else "") + "\n" + role + "：" + text))
                 if len(hits) >= 50:
                     partial = True
                     break
@@ -932,6 +948,8 @@ class Mesh:
     def _message(self, origin: str, epoch: str, data: Dict[str, Any]) -> Optional[str]:
         if self._hidden(data) or (self._cards.conversations.get(data.get('conversation')) or {}).get('deleted'):
             return None
+        if data.get('conversation') == 'weixin':
+            self._writer.by(actor='mesh:' + origin, cause=data['id']).conversation_observe_weixin()
         task = data.get("task")
         stored_task = self._replicas.get(origin, "task", task) if task else None
         if stored_task is not None and self._hidden(stored_task):
@@ -964,6 +982,8 @@ class Mesh:
     def _task(self, origin: str, epoch: str, data: Dict[str, Any]) -> None:
         if self._hidden(data) or (self._cards.conversations.get(data.get('conversation')) or {}).get('deleted'):
             return
+        if data.get('conversation') == 'weixin':
+            self._writer.by(actor='mesh:' + origin, cause=data['id']).conversation_observe_weixin()
         key = "%s|%s|%s" % (origin, epoch, data["id"])
         with self._lock:
             alias = self._aliases.get(key)
@@ -1035,12 +1055,22 @@ class Mesh:
                 raise
             self._changed.notify_all()
 
-    def command(self, target: str, kind: str, args: Dict[str, Any]) -> str:
-        command_id = uuid.uuid4().hex
+    def command(self, target: str, kind: str, args: Dict[str, Any], *, command_id: Optional[str] = None) -> str:
+        if command_id is None:
+            command_id = uuid.uuid4().hex
+        if not isinstance(command_id, str) or not ID.fullmatch(command_id):
+            raise MeshError('指令编号不对')
         now = self._clock()
-        self._post("command", command_id, {"id": command_id, "target": target, "kind": kind, "args": args,
-                                           "from": self.runtime_id, "created_at": now,
-                                           "expires_at": now + COMMAND_SECONDS}, strict=True)
+        with self._lock:
+            old = self._outbox.get(('command', command_id))
+            if old is not None:
+                data = old.get('data') or {}
+                if data.get('target') != target or data.get('kind') != kind or data.get('args') != args:
+                    raise MeshError('指令编号已用于不同操作')
+                return command_id
+            self._post("command", command_id, {"id": command_id, "target": target, "kind": kind, "args": args,
+                                               "from": self.runtime_id, "created_at": now,
+                                               "expires_at": now + COMMAND_SECONDS}, strict=True)
         return command_id
 
     def _reachable(self, target: str) -> Optional[str]:
@@ -1163,6 +1193,16 @@ class Mesh:
                 extra = {'history': self._service.directory_history(args.get('uid'), args.get('cursor'))}
             elif kind in ("device_add", "device_revoke", "member_remove"):
                 extra = self._service.permission_command(kind, args)
+            elif kind == 'weixin_authority':
+                if data.get('from') != origin or not isinstance(data.get('args'), dict):
+                    raise MeshError('微信渠道请求来源不匹配')
+                extra = self._service.channel_authority_command(origin, args)
+            elif kind == 'weixin_resend':
+                if data.get('from') != origin or set(args) != {'block', 'operation', 'revision', 'confirm'}:
+                    raise MeshError('微信重发请求来源或格式不匹配')
+                extra = self._service.channel_resend(args['block'], args['operation'], args['revision'], args['confirm'], local_only=True)
+                if extra.get('status') == 'refused':
+                    raise MeshError(extra.get('reason') or '微信重发未受理')
             elif kind == "handoff":
                 extra = self._service.handoff(args.get("conversation"), args.get("to"))
                 if extra.get("status") != "applied":
@@ -1338,7 +1378,11 @@ class Mesh:
             view = main
         else:
             item = self._cards.conversations.get(conversation)
-            if item is None and conversation.startswith('side-') and main['owner'] is not None:
+            if conversation == 'weixin' and not (item or {}).get('owner'):
+                # A read-only peer observation does not establish a host.
+                view = {'owner': None, 'generation': 0, 'conflict': False,
+                        'by': None, 'unresolved': True}
+            elif item is None and conversation.startswith('side-') and main['owner'] is not None:
                 # 目录里没有它不等于没有负责人的旧对话：创建者的目录可能比第一句话晚到。
                 view = {'owner': None, 'generation': 0, 'conflict': False,
                         'by': None, 'unresolved': True}
